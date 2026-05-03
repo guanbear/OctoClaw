@@ -183,6 +183,14 @@ describe("extractInboundMessageTimestamp", () => {
   it("falls back to prompt metadata JSON", () => {
     expect(extractInboundMessageTimestamp({}, {}, '{"message_ts":"1777333628.133229"}')).toBe("1777333628.133229");
   });
+
+  it("finds embedded Slack thread timestamps in session keys", () => {
+    expect(extractInboundMessageTimestamp(
+      { sessionKey: "agent:main:slack:channel:c0as4dappu3:thread:1777737951.706329" },
+      {},
+      "",
+    )).toBe("1777737951.706329");
+  });
 });
 
 describe("guardOutboundMessageForPolicyState", () => {

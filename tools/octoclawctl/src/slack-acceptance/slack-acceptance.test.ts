@@ -167,6 +167,7 @@ describe("parseSlackAcceptanceConfig — fail closed", () => {
   it("fills defaults for timeout/poll/max", () => {
     const config = parseSlackAcceptanceConfig(validConfig(), validEnv());
     expect(config.ackTimeoutMs).toBe(30_000);
+    expect(config.neutralAckTimeoutMs).toBe(5_000);
     expect(config.finalTimeoutMs).toBe(180_000);
     expect(config.pollIntervalMs).toBe(2_000);
     expect(config.maxTranscriptMessages).toBe(50);
@@ -364,6 +365,97 @@ describe("content assertions via runSlackAcceptanceHarness", () => {
     expect(delegatedCase.ack.status).toBe("pass");
     expect(delegatedCase.final.status).toBe("pass");
     expect(delegatedCase.status).toBe("pass");
+  });
+
+  it("records neutral reaction ACK separately from accepted ACK", async () => {
+    const client: SlackAcceptanceClient = {
+      async postMessage(params: { channel: string; text: string; threadTs?: string }): Promise<SlackPostMessageResult> {
+        return {
+          ok: true,
+          ts: "1234567890.000001",
+          threadTs: params.threadTs || "1234567890.000001",
+          channel: params.channel,
+        };
+      },
+      async fetchMessage(): Promise<SlackMessageRecord | null> {
+        return {
+          ts: "1234567890.000001",
+          text: "prompt",
+          reactions: [{ name: "eyes", count: 1 }],
+        };
+      },
+      async fetchReplies(): Promise<SlackMessageRecord[]> {
+        return [
+          { ts: "1234567890.090001", text: "任务已启动。" },
+          { ts: "1234567890.150001", text: "OpenClaw 总结\n\n• route=delegate | via=native_announce" },
+        ];
+      },
+    };
+    const config = parseSlackAcceptanceConfig(validConfig({
+      cases: [{
+        kind: "delegated_work",
+        prompt: "test",
+        neutralAckRequired: true,
+        expectNeutralReaction: ["eyes"],
+        ackRequired: true,
+        finalRequired: true,
+        expectAck: ["启动"],
+        expectFinalAll: ["OpenClaw", "via=native_announce"],
+      }],
+    }), validEnv());
+    config.neutralAckTimeoutMs = 100;
+    config.ackTimeoutMs = 100;
+    config.finalTimeoutMs = 100;
+    config.pollIntervalMs = 1;
+
+    const report = await runSlackAcceptanceHarness(client, config);
+    const delegatedCase = report.cases.find((c) => c.kind === "delegated_work")!;
+
+    expect(delegatedCase.neutralAck?.status).toBe("pass");
+    expect(delegatedCase.ack.status).toBe("pass");
+    expect(delegatedCase.neutralAckMs).toBeDefined();
+    expect(delegatedCase.acceptedAckMs).toBe(90);
+    expect(delegatedCase.ackMs).toBe(90);
+  });
+
+  it("does not count neutral text ACK as accepted delegate ACK", async () => {
+    const client = createMockClientSequence([
+      [{ ts: "1234567890.010001", text: "收到，正在判断并准备处理。" }],
+      [{ ts: "1234567890.010001", text: "收到，正在判断并准备处理。" }],
+      [
+        { ts: "1234567890.010001", text: "收到，正在判断并准备处理。" },
+        { ts: "1234567890.090001", text: "任务已启动。" },
+      ],
+      [
+        { ts: "1234567890.010001", text: "收到，正在判断并准备处理。" },
+        { ts: "1234567890.090001", text: "任务已启动。" },
+        { ts: "1234567890.150001", text: "OpenClaw 总结\n\n• route=delegate | via=native_announce" },
+      ],
+    ]);
+    const config = parseSlackAcceptanceConfig(validConfig({
+      cases: [{
+        kind: "delegated_work",
+        prompt: "test",
+        neutralAckRequired: true,
+        expectNeutralAck: ["正在判断"],
+        ackRequired: true,
+        finalRequired: true,
+        expectAck: ["任务已启动"],
+        expectFinalAll: ["OpenClaw", "via=native_announce"],
+      }],
+    }), validEnv());
+    config.neutralAckTimeoutMs = 100;
+    config.ackTimeoutMs = 100;
+    config.finalTimeoutMs = 100;
+    config.pollIntervalMs = 1;
+
+    const report = await runSlackAcceptanceHarness(client, config);
+    const delegatedCase = report.cases.find((c) => c.kind === "delegated_work")!;
+
+    expect(delegatedCase.neutralAck?.status).toBe("pass");
+    expect(delegatedCase.ack.status).toBe("pass");
+    expect(delegatedCase.neutralAckMs).toBe(10);
+    expect(delegatedCase.acceptedAckMs).toBe(90);
   });
 
 

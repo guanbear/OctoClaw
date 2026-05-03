@@ -3,9 +3,11 @@ import {
   buildDecisionPacket,
   markMainModelFirstToken,
   maybeSendLatencyAck,
+  NEUTRAL_INBOUND_ACK_TEXT,
   resolveAckTargetFromSessionKey,
   resolveRoutePhase,
   sendAckDirect,
+  sendNeutralInboundAck,
   startAckGuard,
   threadKeyFromSessionKey as threadKeyFn,
   updateAckTrackingState,
@@ -253,6 +255,99 @@ describe("ack-guard: decideAckAction runtime wiring", () => {
 
     expect(result).toBe(true);
     expect(adapter.react).toHaveBeenCalledWith(expect.objectContaining({ messageId: "111.222", emoji: "eyes" }));
+    expect(adapter.send).not.toHaveBeenCalled();
+  });
+
+  it("sends route-independent neutral inbound reaction ACK from the original Slack anchor", async () => {
+    adapter.resolveTarget.mockReturnValue({ target: "C123ABC" });
+    adapter.react.mockResolvedValue({ ok: true });
+    const stateKey = `neutral-reaction-state-${Date.now()}`;
+
+    const result = await sendNeutralInboundAck({
+      sessionKey: "slack:default:channel:C123ABC",
+      stateKey,
+      replyToMessageId: "1777737951.706329",
+      state: {
+        reactionAckSupported: true,
+        reactionAckEnabled: true,
+        reactionAckEmoji: "eyes",
+      },
+      cwd: process.cwd(),
+    });
+
+    expect(result).toEqual({ sent: true, reason: "reaction_ack_sent", mode: "reaction" });
+    expect(adapter.react).toHaveBeenCalledWith(expect.objectContaining({
+      messageId: "1777737951.706329",
+      emoji: "eyes",
+    }));
+    expect(adapter.send).not.toHaveBeenCalled();
+  });
+
+  it("falls back to neutral inbound text ACK when reaction ACK fails", async () => {
+    adapter.resolveTarget.mockReturnValue({ target: "C123ABC" });
+    adapter.react.mockResolvedValue({ ok: false, error: "operation_aborted" });
+    adapter.send.mockResolvedValue({ sent: true, delivered: true, threadTs: "1777737951.706329" });
+    const stateKey = `neutral-reaction-fallback-state-${Date.now()}`;
+
+    const result = await sendNeutralInboundAck({
+      sessionKey: "slack:default:channel:C123ABC",
+      stateKey,
+      replyToMessageId: "1777737951.706329",
+      state: {
+        reactionAckSupported: true,
+        reactionAckEnabled: true,
+        reactionAckEmoji: "eyes",
+      },
+      cwd: process.cwd(),
+    });
+
+    expect(result).toEqual({ sent: true, reason: "reaction_ack_failed_text_fallback_sent", mode: "text" });
+    expect(adapter.react).toHaveBeenCalledWith(expect.objectContaining({
+      messageId: "1777737951.706329",
+      emoji: "eyes",
+    }));
+    expect(adapter.send).toHaveBeenCalledWith(expect.objectContaining({
+      message: NEUTRAL_INBOUND_ACK_TEXT,
+      replyToMessageId: "1777737951.706329",
+    }));
+  });
+
+  it("sends neutral inbound text ACK when reaction is not configured", async () => {
+    adapter.resolveTarget.mockReturnValue({ target: "C123ABC" });
+    adapter.send.mockResolvedValue({ sent: true, delivered: true, threadTs: "1777737951.706329" });
+    const stateKey = `neutral-text-state-${Date.now()}`;
+
+    const result = await sendNeutralInboundAck({
+      sessionKey: "slack:default:channel:C123ABC",
+      stateKey,
+      replyToMessageId: "1777737951.706329",
+      state: {
+        reactionAckSupported: false,
+        reactionAckEnabled: false,
+      },
+      cwd: process.cwd(),
+    });
+
+    expect(result).toEqual({ sent: true, reason: "channel_message_sent", mode: "text" });
+    expect(adapter.send).toHaveBeenCalledWith(expect.objectContaining({
+      message: NEUTRAL_INBOUND_ACK_TEXT,
+      replyToMessageId: "1777737951.706329",
+    }));
+  });
+
+  it("fails closed when Slack neutral inbound ACK has no original thread target", async () => {
+    const result = await sendNeutralInboundAck({
+      sessionKey: "slack:default:channel:C123ABC",
+      stateKey: `neutral-missing-target-${Date.now()}`,
+      state: {
+        reactionAckSupported: true,
+        reactionAckEnabled: true,
+      },
+      cwd: process.cwd(),
+    });
+
+    expect(result).toEqual({ sent: false, reason: "no_valid_thread_target", mode: "not_sent" });
+    expect(adapter.react).not.toHaveBeenCalled();
     expect(adapter.send).not.toHaveBeenCalled();
   });
 

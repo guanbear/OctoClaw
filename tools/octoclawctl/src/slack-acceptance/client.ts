@@ -13,6 +13,13 @@ type SlackApiMessage = {
   user?: unknown;
   bot_id?: unknown;
   thread_ts?: unknown;
+  reactions?: unknown;
+};
+
+type SlackApiReaction = {
+  name?: unknown;
+  count?: unknown;
+  users?: unknown;
 };
 
 type SlackPostResponse = {
@@ -48,6 +55,13 @@ function normalizeMessage(message: SlackApiMessage): SlackMessageRecord {
     user: asString(message.user) || undefined,
     botId: asString(message.bot_id) || undefined,
     threadTs: asString(message.thread_ts) || undefined,
+    reactions: Array.isArray(message.reactions)
+      ? (message.reactions as SlackApiReaction[]).map((reaction) => ({
+          name: asString(reaction.name),
+          count: typeof reaction.count === "number" && Number.isFinite(reaction.count) ? reaction.count : undefined,
+          users: Array.isArray(reaction.users) ? reaction.users.map((user) => asString(user)).filter(Boolean) : undefined,
+        })).filter((reaction) => reaction.name)
+      : undefined,
   };
 }
 
@@ -120,6 +134,26 @@ export class SlackWebApiAcceptanceClient implements SlackAcceptanceClient {
       throw new Error(asString(body.error) || `slack_http_${response.status}`);
     }
     return (body.messages ?? []).map(normalizeMessage).filter((message) => message.ts && message.text);
+  }
+
+  async fetchMessage(params: { channel: string; ts: string }): Promise<SlackMessageRecord | null> {
+    const query = encodeQuery({
+      channel: params.channel,
+      latest: params.ts,
+      oldest: params.ts,
+      inclusive: "true",
+      limit: "1",
+    });
+    const response = await fetchWithTimeout(`https://slack.com/api/conversations.history?${query}`, {
+      method: "GET",
+      headers: { authorization: `Bearer ${this.token}` },
+    }, this.requestTimeoutMs);
+    const body = await this.parseJson<SlackRepliesResponse>(response);
+    if (!response.ok || body.ok !== true) {
+      throw new Error(asString(body.error) || `slack_http_${response.status}`);
+    }
+    const message = (body.messages ?? []).map(normalizeMessage).find((entry) => entry.ts === params.ts);
+    return message ?? null;
   }
 
   private async parseJson<T>(response: { json(): Promise<unknown>; text(): Promise<string> }): Promise<T> {

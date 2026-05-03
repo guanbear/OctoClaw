@@ -194,6 +194,7 @@ export function parseSlackAcceptanceConfig(raw: unknown, env: Record<string, str
     replayPath: asString(config.replayPath) || undefined,
     exposedTools: Array.isArray(config.exposedTools) ? config.exposedTools.map((tool) => asString(tool)).filter(Boolean) : [],
     ackTimeoutMs: asPositiveNumber(config.ackTimeoutMs, 30_000),
+    neutralAckTimeoutMs: asPositiveNumber(config.neutralAckTimeoutMs, 5_000),
     finalTimeoutMs: asPositiveNumber(config.finalTimeoutMs, 180_000),
     pollIntervalMs: asPositiveNumber(config.pollIntervalMs, 2_000),
     maxTranscriptMessages: Math.max(10, asPositiveNumber(config.maxTranscriptMessages, 50)),
@@ -329,9 +330,9 @@ async function checkNoSpawn(replayPath: string | undefined, sinceIso: string | u
   return { status: "pass", reason: "no spawn evidence observed in replay" };
 }
 
-function caseGate(ack: AssertionResult, final: AssertionResult, noSpawn: AssertionResult, errors: string[]): AcceptanceGate {
-  if (errors.length > 0 || [ack, final, noSpawn].some((result) => result.status === "fail")) return "fail";
-  if ([ack, final, noSpawn].some((result) => result.status === "unknown")) return "unknown";
+function caseGate(neutralAck: AssertionResult, ack: AssertionResult, final: AssertionResult, noSpawn: AssertionResult, errors: string[]): AcceptanceGate {
+  if (errors.length > 0 || [neutralAck, ack, final, noSpawn].some((result) => result.status === "fail")) return "fail";
+  if ([neutralAck, ack, final, noSpawn].some((result) => result.status === "unknown")) return "unknown";
   return "pass";
 }
 
@@ -364,6 +365,15 @@ function tsToMillis(ts: string | undefined): number | undefined {
   if (!ts) return undefined;
   const normalized = ts.includes(".") ? Number(ts) * 1000 : Date.parse(ts);
   return Number.isFinite(normalized) ? normalized : undefined;
+}
+
+function matchedReplyTs(messages: SlackMessageRecord[], assertion: AssertionResult): string | undefined {
+  const matchedText = asString(assertion.matchedText);
+  if (matchedText) {
+    const matched = messages.find((message) => message.text === matchedText || matchedText.includes(message.text));
+    if (matched?.ts) return matched.ts;
+  }
+  return messages.find((message) => message.text.trim())?.ts;
 }
 
 function shouldStopPolling(assertion: AssertionResult): boolean {
@@ -400,6 +410,38 @@ function timeoutAdjustedAssertion(assertion: AssertionResult, required: boolean,
   if (assertion.status === "pass" || assertion.status === "skipped") return assertion;
   const status = required ? "fail" : "unknown";
   return { status, reason: `${assertion.reason}; timed out after ${timeoutMs}ms` };
+}
+
+function hasConfiguredNeutralAck(caseConfig: SlackAcceptanceCaseConfig): boolean {
+  return caseConfig.neutralAckRequired === true
+    || (caseConfig.expectNeutralReaction?.length ?? 0) > 0
+    || (caseConfig.expectNeutralAck?.length ?? 0) > 0
+    || (caseConfig.expectNeutralAckAll?.length ?? 0) > 0
+    || (caseConfig.rejectNeutralAck?.length ?? 0) > 0;
+}
+
+function assertReaction(
+  message: SlackMessageRecord | null,
+  expectedReactions: string[] | undefined,
+  required: boolean,
+): AssertionResult {
+  const reactions = message?.reactions ?? [];
+  if (reactions.length === 0) {
+    return required
+      ? { status: "fail", reason: "required neutral reaction missing" }
+      : { status: "skipped", reason: "neutral reaction assertion not required" };
+  }
+  const patterns = compilePatterns(expectedReactions);
+  if (patterns.length === 0) {
+    return { status: "pass", reason: "neutral reaction observed", matchedText: reactions.map((reaction) => reaction.name).join(", ") };
+  }
+  const matched = reactions.find((reaction) => patterns.some((pattern) => pattern.test(reaction.name)));
+  if (!matched) {
+    return required
+      ? { status: "fail", reason: "required neutral reaction missing" }
+      : { status: "unknown", reason: "optional neutral reaction not observed" };
+  }
+  return { status: "pass", reason: "matched neutral reaction", matchedText: matched.name };
 }
 
 async function collectRepliesUntil(params: {
@@ -459,6 +501,120 @@ async function collectRepliesUntil(params: {
   return { replies: latest, assertion: timedOut, errors };
 }
 
+async function collectNeutralAckUntil(params: {
+  client: SlackAcceptanceClient;
+  channel: string;
+  threadTs: string;
+  promptTs: string;
+  timeoutMs: number;
+  requestTimeoutMs: number;
+  pollIntervalMs: number;
+  limit: number;
+  expectedReaction?: string[];
+  expectedAny?: string[];
+  expectedAll?: string[];
+  rejected?: string[];
+  required: boolean;
+  caseStartMs: number;
+  progress: SlackAcceptanceProgressEvent[];
+}): Promise<{ replies: SlackMessageRecord[]; assertion: AssertionResult; errors: string[]; observedAtMs?: number; matchedTs?: string }> {
+  const shouldCheckReaction = (params.expectedReaction?.length ?? 0) > 0 || params.required;
+  const shouldCheckText = (params.expectedAny?.length ?? 0) > 0
+    || (params.expectedAll?.length ?? 0) > 0
+    || (params.rejected?.length ?? 0) > 0;
+  if (!shouldCheckReaction && !shouldCheckText) {
+    return {
+      replies: [],
+      assertion: { status: "skipped", reason: "neutral ACK assertion not configured" },
+      errors: [],
+    };
+  }
+
+  const start = Date.now();
+  const errors: string[] = [];
+  let latest: SlackMessageRecord[] = [];
+  let assertion: AssertionResult = params.required
+    ? { status: "fail", reason: "required neutral ACK missing" }
+    : { status: "unknown", reason: "optional neutral ACK not observed" };
+  params.progress.push(progressEvent(params.caseStartMs, "neutral_ack_poll_started", `timeout_ms=${params.timeoutMs}`));
+
+  while (Date.now() - start <= params.timeoutMs) {
+    if (shouldCheckReaction) {
+      if (!params.client.fetchMessage) {
+        assertion = params.required
+          ? { status: "unknown", reason: "fetchMessage unavailable; cannot check neutral reaction" }
+          : { status: "skipped", reason: "fetchMessage unavailable; neutral reaction assertion skipped" };
+      } else {
+        try {
+          const rootMessage = await withPromiseTimeout(params.client.fetchMessage({
+            channel: params.channel,
+            ts: params.promptTs,
+          }), params.requestTimeoutMs, "neutral_ack_fetch_message");
+          const reaction = assertReaction(rootMessage, params.expectedReaction, params.required);
+          if (reaction.status === "pass") {
+            params.progress.push(progressEvent(params.caseStartMs, "neutral_ack_assertion_pass", reaction.reason));
+            return { replies: latest, assertion: reaction, errors, observedAtMs: Date.now() };
+          }
+          assertion = reaction;
+        } catch (error) {
+          const reason = `neutral ACK reaction fetch failed: ${errorMessage(error)}`;
+          errors.push(reason);
+          params.progress.push(progressEvent(params.caseStartMs, "neutral_ack_fetch_failed", reason));
+          return {
+            replies: latest,
+            assertion: { status: params.required ? "fail" : "unknown", reason },
+            errors,
+          };
+        }
+      }
+    }
+
+    if (shouldCheckText) {
+      try {
+        latest = (await withPromiseTimeout(params.client.fetchReplies({
+          channel: params.channel,
+          threadTs: params.threadTs,
+          oldestTs: params.promptTs,
+          limit: params.limit,
+        }), params.requestTimeoutMs, "neutral_ack_fetch_replies")).filter((message) => message.ts !== params.promptTs);
+      } catch (error) {
+        const reason = `neutral ACK text fetch failed: ${errorMessage(error)}`;
+        errors.push(reason);
+        params.progress.push(progressEvent(params.caseStartMs, "neutral_ack_fetch_failed", reason));
+        return {
+          replies: latest,
+          assertion: { status: params.required ? "fail" : "unknown", reason },
+          errors,
+        };
+      }
+      const textAssertion = assertText(latest, params.expectedAny, params.expectedAll, params.rejected, params.required && !shouldCheckReaction);
+      if (textAssertion.status === "pass" || (textAssertion.status === "fail" && !textAssertion.reason.includes("missing"))) {
+        params.progress.push(progressEvent(params.caseStartMs, `neutral_ack_assertion_${textAssertion.status}`, textAssertion.reason));
+        const matchedText = textAssertion.matchedText;
+        const matched = matchedText
+          ? latest.find((message) => message.text === matchedText || matchedText.includes(message.text))
+          : latest.find((message) => message.text.trim());
+        return {
+          replies: latest,
+          assertion: textAssertion,
+          errors,
+          observedAtMs: Date.now(),
+          matchedTs: matched?.ts,
+        };
+      }
+      if (textAssertion.status !== "skipped") {
+        assertion = textAssertion;
+      }
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, params.pollIntervalMs));
+  }
+
+  const timedOut = timeoutAdjustedAssertion(assertion, params.required, params.timeoutMs);
+  params.progress.push(progressEvent(params.caseStartMs, "neutral_ack_timed_out", timedOut.reason));
+  return { replies: latest, assertion: timedOut, errors };
+}
+
 function notRunCaseResult(caseConfig: SlackAcceptanceCaseConfig, reason: string): SlackAcceptanceCaseResult {
   const prompt = caseConfig.prompt || DEFAULT_CASES.find((item) => item.kind === caseConfig.kind)?.prompt || caseConfig.kind;
   return {
@@ -466,6 +622,7 @@ function notRunCaseResult(caseConfig: SlackAcceptanceCaseConfig, reason: string)
     kind: caseConfig.kind,
     prompt,
     status: "fail",
+    neutralAck: { status: "skipped", reason },
     ack: { status: "fail", reason },
     final: { status: "fail", reason },
     noSpawn: { status: "unknown", reason },
@@ -497,6 +654,7 @@ async function runCase(client: SlackAcceptanceClient, config: SlackAcceptanceRes
       sentPrompt,
       acceptanceRunId: config.acceptanceRunId,
       status: "unknown",
+      neutralAck: { status: "skipped", reason: "case disabled" },
       ack: { status: "skipped", reason: "case disabled" },
       final: { status: "skipped", reason: "case disabled" },
       noSpawn: { status: "skipped", reason: "case disabled" },
@@ -513,6 +671,7 @@ async function runCase(client: SlackAcceptanceClient, config: SlackAcceptanceRes
       sentPrompt,
       acceptanceRunId: config.acceptanceRunId,
       status: "unknown",
+      neutralAck: { status: "skipped", reason: "fixture missing" },
       ack: { status: "skipped", reason: "fixture missing" },
       final: { status: "unknown", reason: "fixture missing" },
       noSpawn: { status: "unknown", reason: "fixture missing" },
@@ -543,6 +702,7 @@ async function runCase(client: SlackAcceptanceClient, config: SlackAcceptanceRes
       acceptanceRunId: config.acceptanceRunId,
       status: "fail",
       sentAt: sentIso,
+      neutralAck: { status: "skipped", reason },
       ack: { status: "fail", reason },
       final: { status: "fail", reason },
       noSpawn: { status: "unknown", reason: "post failed" },
@@ -561,6 +721,7 @@ async function runCase(client: SlackAcceptanceClient, config: SlackAcceptanceRes
       acceptanceRunId: config.acceptanceRunId,
       status: "fail",
       sentAt: sentIso,
+      neutralAck: { status: "skipped", reason },
       ack: { status: "fail", reason },
       final: { status: "fail", reason },
       noSpawn: { status: "unknown", reason: "post failed" },
@@ -569,9 +730,36 @@ async function runCase(client: SlackAcceptanceClient, config: SlackAcceptanceRes
     });
   }
   const threadTs = posted.threadTs || posted.ts;
+  const promptPostedAtMs = Date.now();
   const ackTimeoutMs = asPositiveNumber(caseConfig.ackTimeoutMs, config.ackTimeoutMs);
+  const neutralAckTimeoutMs = asPositiveNumber(caseConfig.neutralAckTimeoutMs, config.neutralAckTimeoutMs);
   const finalTimeoutMs = asPositiveNumber(caseConfig.finalTimeoutMs, config.finalTimeoutMs);
   const pollIntervalMs = asPositiveNumber(caseConfig.pollIntervalMs, config.pollIntervalMs);
+  const neutralAckCollection = hasConfiguredNeutralAck(caseConfig)
+    ? await collectNeutralAckUntil({
+        client,
+        channel: posted.channel,
+        threadTs,
+        promptTs: posted.ts,
+        timeoutMs: neutralAckTimeoutMs,
+        requestTimeoutMs: config.requestTimeoutMs,
+        pollIntervalMs,
+        limit: config.maxTranscriptMessages,
+        expectedReaction: caseConfig.expectNeutralReaction,
+        expectedAny: caseConfig.expectNeutralAck,
+        expectedAll: caseConfig.expectNeutralAckAll,
+        rejected: caseConfig.rejectNeutralAck,
+        required: caseConfig.neutralAckRequired === true,
+        caseStartMs,
+        progress,
+      })
+    : {
+        replies: [] as SlackMessageRecord[],
+        assertion: { status: "skipped", reason: "neutral ACK assertion not configured" } as AssertionResult,
+        errors: [] as string[],
+      };
+  errors.push(...neutralAckCollection.errors);
+  const neutralAck = neutralAckCollection.assertion;
   const ackCollection = await collectRepliesUntil({
     client,
     channel: posted.channel,
@@ -620,24 +808,34 @@ async function runCase(client: SlackAcceptanceClient, config: SlackAcceptanceRes
   if (effectiveAck !== ack) {
     progress.push(progressEvent(caseStartMs, "ack_satisfied_by_fast_final", effectiveAck.reason));
   }
-  const ackAt = tsToMillis(ackReplies[0]?.ts) ?? tsToMillis(allReplies.find((message) => message.text.trim())?.ts);
+  const acceptedAckAt = tsToMillis(matchedReplyTs(ackReplies, ack));
+  const legacyAckAt = acceptedAckAt ?? tsToMillis(ackReplies[0]?.ts) ?? tsToMillis(allReplies.find((message) => message.text.trim())?.ts);
+  const neutralAckAt = tsToMillis(neutralAckCollection.matchedTs) ?? neutralAckCollection.observedAtMs;
   const finalAt = tsToMillis(allReplies[allReplies.length - 1]?.ts);
   const promptAt = tsToMillis(posted.ts);
+  const acceptedAckMs = acceptedAckAt && promptAt ? Math.max(0, Math.round(acceptedAckAt - promptAt)) : undefined;
+  const legacyAckMs = legacyAckAt && promptAt ? Math.max(0, Math.round(legacyAckAt - promptAt)) : undefined;
+  const neutralAckMs = neutralAckAt
+    ? Math.max(0, Math.round(neutralAckCollection.matchedTs && promptAt ? neutralAckAt - promptAt : neutralAckAt - promptPostedAtMs))
+    : undefined;
   return finish({
     id,
     kind: caseConfig.kind,
     prompt,
     sentPrompt,
     acceptanceRunId: config.acceptanceRunId,
-    status: caseGate(effectiveAck, final, noSpawn, errors),
+    status: caseGate(neutralAck, effectiveAck, final, noSpawn, errors),
     sentAt: sentIso,
     threadTs,
-    ackMs: ackAt && promptAt ? Math.max(0, Math.round(ackAt - promptAt)) : undefined,
+    ackMs: acceptedAckMs ?? legacyAckMs,
+    neutralAckMs,
+    acceptedAckMs,
     finalMs: finalAt && promptAt ? Math.max(0, Math.round(finalAt - promptAt)) : undefined,
+    neutralAck,
     ack: effectiveAck,
     final,
     noSpawn,
-    transcript: allReplies.slice(-config.maxTranscriptMessages),
+    transcript: allReplies.length > 0 ? allReplies.slice(-config.maxTranscriptMessages) : neutralAckCollection.replies.slice(-config.maxTranscriptMessages),
     errors,
   });
 }

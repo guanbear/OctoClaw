@@ -5,8 +5,8 @@
  * Two entry points:
  *  - fetchLatestUserMessageTs(channelId)  — use when you have the DM channel ID (D...)
  *  - fetchLatestUserMessageTsForSessionKey(sessionKey) — use when you only have the
- *    OpenClaw session key; extracts the Slack user ID and resolves the DM channel ID
- *    via conversations.open before querying history.
+ *    OpenClaw session key; extracts a Slack channel ID directly, or extracts the
+ *    Slack user ID and resolves the DM channel ID via conversations.open before querying history.
  *
  * Results are cached to avoid hammering the API on rapid messages.
  */
@@ -157,6 +157,14 @@ export async function fetchLatestUserMessageTsForSessionKey(
   sessionKey: string,
   timeoutMs = 2000,
 ): Promise<string> {
+  const channelMatch = sessionKey.match(/:slack:(?:[^:]+:)?(?:channel|group|room):([a-z0-9]+)/i);
+  if (channelMatch) {
+    const channelId = channelMatch[1].toUpperCase();
+    if (/^[CDG][A-Z0-9]{8,}$/.test(channelId)) {
+      return fetchLatestUserMessageTs(channelId, timeoutMs);
+    }
+  }
+
   // Parse pattern: ...:slack:{account}:direct:{userId}
   const match = sessionKey.match(/:slack:[^:]+:direct:([a-z0-9]+)/i);
   if (!match) return "";

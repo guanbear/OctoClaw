@@ -19,6 +19,7 @@ import {
   getAckTrackingState,
   maybeSendLatencyAck,
   notifyUserMessage,
+  sendNeutralInboundAck,
   startAckGuard,
   updateAckGuardDecision,
   updateAckTrackingState,
@@ -1388,8 +1389,8 @@ function findAnySlackTs(value: unknown, depth = 0, seen = new Set<object>()): st
   if (typeof value === "string") {
     // Only match strings that look like a standalone Slack ts (not embedded in a larger number)
     if (SLACK_MESSAGE_TS_PATTERN.test(value.trim())) return value.trim();
-    // Also match if the whole string IS the ts pattern
-    const m = value.match(/^(\d{10}\.\d{6})$/u);
+    // Also match embedded session-key / thread-key forms such as "...:thread:1777737951.706329".
+    const m = value.match(/(?:^|[:\s"'=,{[])(\d{10}\.\d{6})(?:$|[:\s"',}\]])/u);
     if (m) return m[1];
     return "";
   }
@@ -1727,6 +1728,60 @@ export const plugin = {
       if (!state) return;
       Object.assign(state, buildReactionAckState(sessionKey));
     };
+    const maybeSendNeutralInboundAckForContext = async (
+      hookName: string,
+      event: UnknownRecord,
+      ctx: UnknownRecord,
+      prompt = "",
+      overrides: { stateKey?: string; sessionKey?: string; inboundMessageTs?: string } = {},
+    ): Promise<void> => {
+      const mergedCtx = { ...asRecord(event), ...asRecord(ctx) };
+      const stateKey = stringValue(overrides.stateKey || resolvePolicyStateKey(mergedCtx));
+      const existingState = asRecord(getPolicyStateForContext(mergedCtx).state);
+      const metadata = buildPolicyMetadata(mergedCtx, { stateKey });
+      let sessionKey = stringValue(overrides.sessionKey)
+        || resolveAckDeliverySessionKey(metadata, stateKey, existingState, mergedCtx)
+        || stringValue(mergedCtx.sessionKey || event.sessionKey);
+      if (!/(?:^|:)slack:/u.test(sessionKey.toLowerCase())) {
+        return;
+      }
+      let inboundMessageTs = stringValue(overrides.inboundMessageTs)
+        || extractInboundMessageTimestamp(mergedCtx, event, [prompt, extractPromptText(event)].filter(Boolean).join("\n"));
+      if (!inboundMessageTs) {
+        inboundMessageTs = await fetchLatestUserMessageTsForSessionKey(sessionKey, 1200);
+      }
+      const result = await sendNeutralInboundAck({
+        sessionKey,
+        stateKey: stateKey || sessionKey,
+        replyToMessageId: inboundMessageTs,
+        cwd: stringValue(mergedCtx.cwd) || process.cwd(),
+        state: {
+          ...buildReactionAckState(sessionKey),
+          ...existingState,
+          inboundMessageTs,
+          replyToMessageId: inboundMessageTs,
+          message_id: inboundMessageTs,
+          channelTone: stringValue(existingState.channelTone || existingState.channel_tone) || "chat",
+        },
+        ctx: mergedCtx,
+        logger: pi.logger,
+        timeoutMs: 5000,
+      });
+      void recordPolicyReplay(
+        "neutral_inbound_ack",
+        {
+          hookName,
+          sessionKey,
+          stateKey: stateKey || sessionKey,
+          replyToMessageId: inboundMessageTs,
+          sent: result.sent,
+          mode: result.mode,
+          reason: result.reason,
+        },
+        pi.logger,
+        null,
+      ).catch(() => {});
+    };
 
     if (process.env.OCTOCLAW_JUDGE_DEBUG) {
       console.log(`[octoclaw-judge] pluginKeys=${Object.keys(judgeFastFromPlugin).length} envKeys=${Object.keys(judgeFastFromEnv).length} rawKeys=${Object.keys(judgeFastRaw).length} envVar="${process.env.OCTOCLAW_JUDGE_FAST?.slice(0, 50) ?? "(none)"}" modelId="${(judgeFastRaw as Record<string, unknown>).modelId ?? "(none)"}"`);
@@ -1781,6 +1836,13 @@ export const plugin = {
         pi.logger?.warn?.(`octoclaw compaction notice failed: ${String(error)}`);
       });
     }, 180);
+
+    registerLifecycleHook("before_dispatch", (event, ctx) => {
+      const prompt = extractPromptText(event);
+      void maybeSendNeutralInboundAckForContext("before_dispatch", event, ctx, prompt).catch((error) => {
+        pi.logger?.warn?.(`octoclaw neutral inbound ACK failed: ${String(error)}`);
+      });
+    }, 260);
 
     registerLifecycleHook("before_model_resolve", async (event, ctx) => {
       if (!isManagedAgentContext(ctx)) return;
@@ -1873,7 +1935,7 @@ export const plugin = {
       // via conversations.open, then query conversations.history for the latest ts.
       if (!inboundMessageTs) {
         const sessionKey = stringValue(ctx.sessionKey);
-        if (sessionKey.includes(":slack:") && sessionKey.includes(":direct:")) {
+        if (/(?:^|:)slack:/u.test(sessionKey) && sessionKey.includes(":direct:")) {
           inboundMessageTs = await fetchLatestUserMessageTsForSessionKey(sessionKey);
           if (inboundMessageTs && process.env.OCTOCLAW_ACK_DEBUG) {
             console.error(`[ack-dbg] thread anchor from Route C: sessionKey=${sessionKey.substring(0,60)} ts=${inboundMessageTs}`);
@@ -1887,6 +1949,13 @@ export const plugin = {
         inboundMessageTs = existingDeliveryReplyTo;
       }
       const immutableDeliveryTarget = buildImmutableDeliveryTarget(preSessionKey || stringValue(ctx.sessionKey), inboundMessageTs);
+      void maybeSendNeutralInboundAckForContext("before_prompt_build", event, ctx, prompt, {
+        stateKey: preStateKey,
+        sessionKey: preSessionKey,
+        inboundMessageTs,
+      }).catch((error) => {
+        pi.logger?.warn?.(`octoclaw neutral inbound ACK failed: ${String(error)}`);
+      });
 
       if (process.env.OCTOCLAW_ACK_DEBUG) {
         // Log what we extracted so we can debug thread anchor issues

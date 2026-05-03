@@ -192,8 +192,8 @@ Tasks:
 - [ ] Expired intent blocks `sessions_spawn`.
 - [ ] Args hash mismatch blocks `sessions_spawn`.
 - [ ] Accepted confirm without runId fails closed.
-- [ ] Confirm success writes native refs and sends one delegate ACK.
-- [ ] Child completion without `.completion.json` uses native announce and does not duplicate final message.
+- [x] Confirm success writes native refs and sends one delegate ACK.
+- [x] Child completion without `.completion.json` uses native announce and does not duplicate final message.
 - [ ] Status follow-up does not spawn.
 - [ ] Planner path does not write scheduler queue, completion binding, or delivery outbox.
 
@@ -225,9 +225,9 @@ Write scope:
 
 Tasks:
 
-- [ ] SR-P0 neutral inbound ACK: Slack reaction/text appears within 1-5s and does not claim delegation or spawn success.
-- [ ] SR-P0 neutral ACK is route-independent and does not depend on `decision.latency_ack.required`, route commit, or a non-OctoClaw tool name.
-- [ ] SR-P0 target resolution uses original inbound Slack anchor (`channel/message.ts/thread_ts`), not post-policy state; `no_valid_thread_target` is covered by tests.
+- [x] SR-P0 neutral inbound ACK: Slack reaction/text appears within 1-5s and does not claim delegation or spawn success.
+- [x] SR-P0 neutral ACK is route-independent and does not depend on `decision.latency_ack.required`, route commit, or a non-OctoClaw tool name.
+- [x] SR-P0 target resolution uses original inbound Slack anchor (`channel/message.ts/thread_ts`), not post-policy state; `no_valid_thread_target` is covered by tests.
 - [ ] SR-P1 startup-cost-aware delegation uses three explicit buckets: `must_reply/main_fast_path`, `must_delegate`, and `budgeted_main_then_delegate`.
 - [ ] SR-P1 short tasks, simple status/provenance follow-up, and one-step fresh lookup stay on main fast path by default.
 - [ ] SR-P1 `fresh_live_lookup`, `conversation_control.route_hint=delegate`, and `fast_first_response` are downgraded from hard delegate signals; none can force delegate alone.
@@ -244,8 +244,16 @@ Tasks:
 - [ ] SR-P2 child-start metrics are recorded for observation, but 0.5.0 does not block on accepted-to-stream-ready <= 10s.
 - [ ] SR-P2 SQLite/native refs are used as footer/status fast path; state transitions are atomic or covered by race tests.
 - [ ] SR-P2 NativeSpawnIntent authorization/confirm transitions surface SQLite busy/locked retry/backoff/replay evidence and do not silently fall back to no task/no spawn.
-- [ ] SR-P2 native child final debug footer shows `route=delegate` and `via=subagent` or `via=native_announce`, not `route=reply | via=policy`.
-- [ ] Real Slack smoke records neutral ACK latency, main-fast-path/delegate route decision, spawn allowed latency, accepted latency, child progress/final latency, and footer route/provenance.
+- [x] SR-P2 native child final debug footer shows `route=delegate` and `via=subagent` or `via=native_announce`, not `route=reply | via=policy`.
+- [x] Real Slack smoke records neutral ACK latency, main-fast-path/delegate route decision, spawn allowed latency, accepted latency, child progress/final latency, and footer route/provenance.
+
+Evidence 2026-05-03:
+
+- Real Slack planner-native smoke artifact: `/tmp/planner-native-neutral-20260503T000851Z/slack-acceptance-2026-05-03-00-18-27.{json,md}`.
+- Thread `1777767322.479309`, spawnIntentId `nsp_mop0t3hb_a0f02188`, WorkContract `wc-357d3206b1461735`, runId `d8b58add-079b-4453-bbb4-9cec485d1d14`, childSessionKey `agent:main:subagent:e6172361-6e2f-42ef-9bad-a13414aab216`.
+- Harness: overall `pass`; neutralAckMs `5215`; acceptedAckMs `93606`; finalMs `183847`; footer `route=delegate | ... | via=native_announce`.
+- Replay: `neutral_inbound_ack` before route commit, `sessions_spawn_intent_allowed`, `spawn_started`, `native_announce_completion_matched`, `native_announce_final_delivered`, and no `completion_file_timeout` for `wc-357d3206b1461735`.
+- SQLite native intent row is `accepted` with non-empty runId/childSessionKey; completion binding and scheduler queue have no row for this WorkContract after native announce.
 
 
 ## PC13 Slack Delivery Port

@@ -12,16 +12,17 @@ export function renderSlackAcceptanceMarkdown(report: SlackAcceptanceReport): st
   lines.push(`- **Cases**: pass=${report.pass} fail=${report.fail} unknown=${report.unknown} skipped=${report.skipped}`);
   lines.push(`- **Tool Exposure**: \`${report.toolExposureAudit.status}\` blocked=${report.toolExposureAudit.blockedTools.join(", ") || "none"}`);
   lines.push("");
-  lines.push("| Case | Status | ACK | Final | No Spawn | ACK ms | Final ms | Elapsed ms |");
-  lines.push("|------|--------|-----|-------|----------|--------|----------|------------|");
+  lines.push("| Case | Status | Neutral ACK | Accepted ACK | Final | No Spawn | Neutral ms | Accepted ms | Final ms | Elapsed ms |");
+  lines.push("|------|--------|-------------|--------------|-------|----------|------------|-------------|----------|------------|");
   for (const item of report.cases) {
-    lines.push(`| ${item.kind} | ${item.status} | ${item.ack.status} | ${item.final.status} | ${item.noSpawn.status} | ${item.ackMs ?? "N/A"} | ${item.finalMs ?? "N/A"} | ${item.elapsedMs ?? "N/A"} |`);
+    lines.push(`| ${item.kind} | ${item.status} | ${item.neutralAck?.status ?? "skipped"} | ${item.ack.status} | ${item.final.status} | ${item.noSpawn.status} | ${item.neutralAckMs ?? "N/A"} | ${item.acceptedAckMs ?? item.ackMs ?? "N/A"} | ${item.finalMs ?? "N/A"} | ${item.elapsedMs ?? "N/A"} |`);
   }
   lines.push("");
   for (const item of report.cases) {
     lines.push(`## ${item.kind}`);
     lines.push("");
     lines.push(`- status: \`${item.status}\``);
+    lines.push(`- neutralAck: ${item.neutralAck?.status ?? "skipped"} — ${item.neutralAck?.reason ?? "neutral ACK assertion not configured"}`);
     lines.push(`- ack: ${item.ack.status} — ${item.ack.reason}`);
     lines.push(`- final: ${item.final.status} — ${item.final.reason}`);
     lines.push(`- noSpawn: ${item.noSpawn.status} — ${item.noSpawn.reason}`);

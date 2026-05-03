@@ -71,6 +71,7 @@ export const STUCK_THRESHOLD_MIN = 15;
 const OBSERVE_ROUTE_NAMES = new Set(["observe", "observer", "status", "inspect", "probe", "scan"]);
 const ACK_CONTROLLER_LEASE_MS = DEFAULT_ACK_TIMING_CONFIG.tierDelaysMs[2] + 10_000;
 const MAIN_MODEL_LEASE_MS = DEFAULT_ACK_TIMING_CONFIG.tierDelaysMs[2] + 10_000;
+export const NEUTRAL_INBOUND_ACK_TEXT = "收到，正在判断并准备处理。";
 
 type UnknownRecord = Record<string, unknown>;
 type AckOwner = "" | "latency_ack" | "timer_ack";
@@ -99,6 +100,12 @@ export interface AckTrackingState extends UnknownRecord {
   reactionAckSupported?: boolean;
   reactionAckEnabled?: boolean;
   channelTone?: "chat" | "work" | "cli" | "unknown";
+}
+
+export interface NeutralInboundAckResult {
+  sent: boolean;
+  reason: string;
+  mode: "reaction" | "text" | "not_sent";
 }
 
 export interface AckTarget {
@@ -154,6 +161,7 @@ interface AckAttemptParams {
   stageHint?: string;
   replyToMessageId?: string;
   decision?: AckDecision;
+  allowReactionTextFallback?: boolean;
 }
 
 const ackStateByStateKey = new Map<string, AckTrackingState>();
@@ -760,7 +768,7 @@ function updateTaskStateCache(taskId: string, patch: Record<string, unknown>): v
   } catch { /* best effort */ }
 }
 
-async function attemptAckSend(params: AckAttemptParams): Promise<{ sent: boolean; reason: string } | null> {
+async function attemptAckSend(params: AckAttemptParams): Promise<{ sent: boolean; reason: string; mode?: "reaction" | "text" } | null> {
   const normalizedStateKey = asString(params.stateKey);
   const normalizedSessionKey = asString(params.sessionKey);
   const effectiveState: UnknownRecord = {
@@ -1006,15 +1014,34 @@ async function attemptAckSend(params: AckAttemptParams): Promise<{ sent: boolean
   let reactionTextFallbackSent = false;
   let deliveredMessage = message;
   if (isReactionAck && !reactionAckDelivered) {
-    result = {
-      ...result,
-      sent: false,
-      delivered: false,
-      error: result.error || "reaction_ack_failed",
-      reason: "reaction_ack_failed_no_text_fallback",
-      ack_delivery_state: "failed",
-      ack_target_resolution_state: result.attempted ? "resolved_send_failed" : "target_resolution_failed",
-    };
+    if (params.allowReactionTextFallback) {
+      const fallback = await sendAckMessage(
+        normalizedSessionKey,
+        message,
+        asString(effectiveCtx.cwd) || process.cwd(),
+        { timeoutMs: Math.max(500, Number(params.timeoutMs || 5000)), replyToMessageId: params.replyToMessageId },
+      );
+      reactionTextFallbackSent = Boolean(fallback.delivered || fallback.sent);
+      result = {
+        ...fallback,
+        error: reactionTextFallbackSent ? "" : fallback.error || result.error || "reaction_ack_failed",
+        reason: reactionTextFallbackSent ? "reaction_ack_failed_text_fallback_sent" : fallback.reason || "reaction_ack_failed_text_fallback_failed",
+        ack_delivery_state: reactionTextFallbackSent ? ackDeliveryState(fallback) : "failed",
+        ack_target_resolution_state: reactionTextFallbackSent
+          ? ackTargetResolutionState(fallback)
+          : fallback.attempted ? "resolved_send_failed" : "target_resolution_failed",
+      };
+    } else {
+      result = {
+        ...result,
+        sent: false,
+        delivered: false,
+        error: result.error || "reaction_ack_failed",
+        reason: "reaction_ack_failed_no_text_fallback",
+        ack_delivery_state: "failed",
+        ack_target_resolution_state: result.attempted ? "resolved_send_failed" : "target_resolution_failed",
+      };
+    }
   }
   const finalSent = Boolean(result.delivered || result.sent);
 
@@ -1060,10 +1087,10 @@ async function attemptAckSend(params: AckAttemptParams): Promise<{ sent: boolean
     if (params.ackOwner !== "timer_ack") {
       cancelAckGuardForState(normalizedStateKey);
     }
-    return { sent: true, reason: result.reason };
+    return { sent: true, reason: result.reason, mode: reactionAckDelivered ? "reaction" : reactionTextFallbackSent || !isReactionAck ? "text" : undefined };
   }
 
-  return { sent: false, reason: result.reason };
+  return { sent: false, reason: result.reason, mode: "text" };
 }
 export function latencyAckText(
   decision: UnknownRecord,
@@ -1156,6 +1183,7 @@ export function startAckGuard(sessionKey: string, cwd: string, options: UnknownR
   const stateKey = asString(options.stateKey || normalizedSessionKey);
   const decision = isRecord(options.decision) ? options.decision : {};
   const baseState = isRecord(options.state) ? options.state : {};
+  const existingTrackingState = ackState(stateKey);
   const ctx = isRecord(options.ctx) ? options.ctx as AckContext : { cwd };
   const logger = isRecord(options.logger) ? options.logger as AckLogger : {};
   const routePhase = resolveRoutePhase(decision, options);
@@ -1167,8 +1195,11 @@ export function startAckGuard(sessionKey: string, cwd: string, options: UnknownR
     ackOwner: "",
     ack_owner: "",
     _ackTurnTs: turnTs,
-    reactionAckSent: asBoolean(baseState.reactionAckSent),
-    reactionAckAttempted: asBoolean(baseState.reactionAckAttempted) || asBoolean(baseState.reaction_ack_attempted),
+    reactionAckSent: asBoolean(baseState.reactionAckSent) || asBoolean(existingTrackingState.reactionAckSent),
+    reactionAckAttempted: asBoolean(baseState.reactionAckAttempted)
+      || asBoolean(baseState.reaction_ack_attempted)
+      || asBoolean(existingTrackingState.reactionAckAttempted)
+      || asBoolean(existingTrackingState.reaction_ack_attempted),
     reactionAckSupported: asBoolean(baseState.reactionAckSupported),
     reactionAckEnabled: asBoolean(baseState.reactionAckEnabled),
     channelTone: normalizeChannelTone(baseState.channelTone || baseState.channel_tone),
@@ -1429,6 +1460,91 @@ export async function maybeSendLatencyAck(
     });
     return { sent: false, reason: String(error) };
   }
+}
+
+export async function sendNeutralInboundAck(params: {
+  sessionKey: string;
+  stateKey: string;
+  replyToMessageId?: string;
+  cwd?: string;
+  state?: UnknownRecord;
+  ctx?: AckContext;
+  logger?: AckLogger;
+  timeoutMs?: number;
+}): Promise<NeutralInboundAckResult> {
+  const sessionKey = asString(params.sessionKey);
+  const stateKey = asString(params.stateKey || sessionKey);
+  const baseState = isRecord(params.state) ? params.state : {};
+  const replyToMessageId = asString(
+    params.replyToMessageId
+      || baseState.inboundMessageTs
+      || baseState.message_id
+      || baseState.messageId
+      || baseState.replyToMessageId,
+  );
+  const isSlackSession = /(?:^|:)slack:/u.test(sessionKey.toLowerCase());
+  if (!sessionKey || !stateKey) {
+    return { sent: false, reason: "missing_session_key", mode: "not_sent" };
+  }
+  if (isSlackSession && !replyToMessageId) {
+    updateTrackingState(stateKey, {
+      ack_target_resolution_state: "no_valid_thread_target",
+      ack_delivery_state: "not_attempted",
+      ackSuppressedReason: "no_valid_thread_target",
+      ack_suppressed_reason: "no_valid_thread_target",
+    });
+    return { sent: false, reason: "no_valid_thread_target", mode: "not_sent" };
+  }
+
+  const reactionAckEnabled = asBoolean(baseState.reactionAckEnabled);
+  const reactionAckSupported = asBoolean(baseState.reactionAckSupported);
+  const useReactionAck = Boolean(replyToMessageId && reactionAckEnabled && reactionAckSupported);
+  const decision: AckDecision = useReactionAck
+    ? {
+        action: "send_reaction_ack",
+        reason: "neutral inbound reaction ACK from original Slack anchor",
+        ackStage: "ack0",
+        modality: "reaction",
+        templateKey: "ack0-reaction",
+      }
+    : {
+        action: "send_text_ack0",
+        reason: "neutral inbound text ACK from original Slack anchor",
+        modality: "text",
+        templateKey: "ack0",
+      };
+
+  const result = await attemptAckSend({
+    sessionKey,
+    stateKey,
+    ackOwner: "latency_ack",
+    ackStage: AckStage.PreRouteSoftAck,
+    routePhase: "pre_route",
+    message: NEUTRAL_INBOUND_ACK_TEXT,
+    state: {
+      ...baseState,
+      inboundMessageTs: replyToMessageId,
+      replyToMessageId,
+      message_id: replyToMessageId,
+      userInputActive: true,
+      reactionAckEnabled,
+      reactionAckSupported,
+    },
+    ctx: params.ctx ?? { cwd: params.cwd },
+    logger: params.logger ?? {},
+    timeoutMs: Math.max(500, Number(params.timeoutMs || 5000)),
+    ownerTag: "neutral_inbound_ack",
+    markLatencySent: true,
+    markMode: useReactionAck ? "reaction" : "channel_message",
+    replyToMessageId,
+    decision,
+    allowReactionTextFallback: useReactionAck,
+  });
+  return {
+    sent: Boolean(result?.sent),
+    reason: result?.reason || "not_sent",
+    mode: result?.sent ? result.mode || (useReactionAck ? "reaction" : "text") : "not_sent",
+  };
 }
 
 export function markMainModelFirstToken(stateKey: string): void {

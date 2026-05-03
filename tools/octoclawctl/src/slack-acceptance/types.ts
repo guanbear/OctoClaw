@@ -32,11 +32,17 @@ export interface SlackAcceptanceCaseConfig {
   prompt?: string;
   enabled?: boolean;
   ackRequired?: boolean;
+  neutralAckRequired?: boolean;
   finalRequired?: boolean;
   noSpawnExpected?: boolean;
   ackTimeoutMs?: number;
+  neutralAckTimeoutMs?: number;
   finalTimeoutMs?: number;
   pollIntervalMs?: number;
+  expectNeutralAck?: string[];
+  expectNeutralAckAll?: string[];
+  expectNeutralReaction?: string[];
+  rejectNeutralAck?: string[];
   expectAck?: string[];
   expectAckAll?: string[];
   rejectAck?: string[];
@@ -58,6 +64,7 @@ export interface SlackAcceptanceConfig {
   replayPath?: string;
   exposedTools?: string[];
   ackTimeoutMs?: number;
+  neutralAckTimeoutMs?: number;
   finalTimeoutMs?: number;
   pollIntervalMs?: number;
   maxTranscriptMessages?: number;
@@ -79,6 +86,7 @@ export interface SlackAcceptanceResolvedConfig {
   replayPath?: string;
   exposedTools: string[];
   ackTimeoutMs: number;
+  neutralAckTimeoutMs: number;
   finalTimeoutMs: number;
   pollIntervalMs: number;
   maxTranscriptMessages: number;
@@ -95,6 +103,13 @@ export interface SlackMessageRecord {
   user?: string;
   botId?: string;
   threadTs?: string;
+  reactions?: SlackMessageReactionRecord[];
+}
+
+export interface SlackMessageReactionRecord {
+  name: string;
+  count?: number;
+  users?: string[];
 }
 
 export interface SlackPostMessageResult {
@@ -108,6 +123,7 @@ export interface SlackPostMessageResult {
 export interface SlackAcceptanceClient {
   postMessage(params: { channel: string; text: string; threadTs?: string }): Promise<SlackPostMessageResult>;
   fetchReplies(params: { channel: string; threadTs: string; oldestTs?: string; limit?: number }): Promise<SlackMessageRecord[]>;
+  fetchMessage?(params: { channel: string; ts: string }): Promise<SlackMessageRecord | null>;
 }
 
 export interface AssertionResult {
@@ -133,7 +149,10 @@ export interface SlackAcceptanceCaseResult {
   sentAt?: string;
   threadTs?: string;
   ackMs?: number;
+  neutralAckMs?: number;
+  acceptedAckMs?: number;
   finalMs?: number;
+  neutralAck?: AssertionResult;
   ack: AssertionResult;
   final: AssertionResult;
   noSpawn: AssertionResult;
