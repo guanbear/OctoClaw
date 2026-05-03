@@ -585,6 +585,22 @@ describe("guardOutboundMessageForPolicyState", () => {
     expect(guarded?.content).toContain("route=reply | model=GLM-5.1 · thread");
   });
 
+  it("appends a footer for Slack account alias delivery hooks", () => {
+    const guarded = guardOutboundMessageForPolicyState(
+      { to: "guanbear", content: "你好，guan，我在。" },
+      {
+        channelId: "slack:default",
+        conversationId: "user:U0AL9T5U89Z",
+        sessionKey: "agent:main:slack:default:direct:u0al9t5u89z",
+        model: "GLM-5.1",
+      },
+      Date.now(),
+    );
+
+    expect(guarded?.content).toContain("你好，guan，我在。");
+    expect(guarded?.content).toContain("route=reply | model=GLM-5.1 · thread");
+  });
+
   it("appends footer for visible Slack delivery hooks even when OpenClaw omits message anchors", () => {
     const now = Date.now();
     const key = "agent:main:slack:default:direct:u0al9t5u89z";

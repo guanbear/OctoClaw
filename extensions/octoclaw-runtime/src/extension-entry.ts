@@ -370,8 +370,14 @@ function outboundTargetCandidates(event: UnknownRecord, ctx: UnknownRecord): unk
     metadata.to,
     metadata.conversationId,
     metadata.conversation_id,
+    metadata.sessionKey,
+    metadata.session_key,
     ctx.conversationId,
     ctx.conversation_id,
+    ctx.sessionKey,
+    ctx.session_key,
+    ctx.canonicalSessionKey,
+    ctx.canonical_session_key,
     ctx.to,
     ctx.channel,
     ctx.channelId,
@@ -1375,6 +1381,7 @@ function cancelNeutralAckTimersForContext(event: UnknownRecord, ctx: UnknownReco
 
 function hasThreadProjection(event: UnknownRecord, ctx: UnknownRecord): boolean {
   const metadata = asRecord(event.metadata);
+  const channelId = stringValue(ctx.channelId || ctx.channel || event.channel || metadata.channel).toLowerCase();
   return Boolean(
     stringValue(event.replyToMessageId)
     || stringValue(event.reply_to_id)
@@ -1385,7 +1392,8 @@ function hasThreadProjection(event: UnknownRecord, ctx: UnknownRecord): boolean 
     || stringValue(ctx.thread_ts)
     || stringValue(metadata.channel)
     || stringValue(metadata.channelId)
-    || stringValue(ctx.channelId) === "slack"
+    || channelId === "slack"
+    || channelId.startsWith("slack:")
   );
 }
 
@@ -1427,7 +1435,7 @@ function appendReplyProjectionFooter(content: string, state: UnknownRecord, even
 function resolveProjectionChannel(event: UnknownRecord, ctx: UnknownRecord): string {
   const metadata = asRecord(event.metadata);
   const direct = stringValue(ctx.channel || ctx.channelId || event.channel || metadata.channel);
-  if (direct.toLowerCase() === "slack") return "slack";
+  if (direct.toLowerCase() === "slack" || direct.toLowerCase().startsWith("slack:")) return "slack";
   const target = stringValue(event.to || metadata.channelId || metadata.channel_id || ctx.conversationId || ctx.conversation_id);
   if (outboundTargetLooksLikeSlack(target)) return "slack";
   return direct;
@@ -2257,6 +2265,7 @@ export const plugin = {
       const eventRecord = asRecord(event);
       const ctxRecord = asRecord(ctx);
       const visibleDelivery = outboundLooksLikeVisibleDeliveryHook(eventRecord, ctxRecord);
+      const content = outboundDeliveryContent(eventRecord);
       if (visibleDelivery && outboundDeliveryContent(eventRecord).trim().toUpperCase() !== "NO_REPLY") {
         const stateInfo = getPolicyStateForContext(ctxRecord);
         const cancellations = cancelNeutralAckTimersForContext(eventRecord, ctxRecord, asRecord(stateInfo.state));
@@ -2264,7 +2273,26 @@ export const plugin = {
           recordNeutralAckCancellations("message_sending", cancellations, "formal_reply_visible", stateInfo.key);
         }
       }
-      return guardOutboundMessageForPolicyState(eventRecord, ctxRecord);
+      const guarded = guardOutboundMessageForPolicyState(eventRecord, ctxRecord);
+      if (visibleDelivery) {
+        void recordPolicyReplay(
+          "outbound_message_sending_guard",
+          {
+            sessionKey: stringValue(ctxRecord.sessionKey || eventRecord.sessionKey || eventRecord.session_key),
+            channelId: stringValue(ctxRecord.channelId || ctxRecord.channel || eventRecord.channel || asRecord(eventRecord.metadata).channel),
+            conversationId: stringValue(ctxRecord.conversationId || ctxRecord.conversation_id || eventRecord.to),
+            target: stringValue(resolveOutboundPolicyTarget(eventRecord, ctxRecord)),
+            content_len: content.length,
+            returned: guarded ? true : false,
+            cancel: guarded?.cancel === true,
+            footer_appended: Boolean(guarded?.content && guarded.content !== content),
+            replacement_len: stringValue(guarded?.content).length,
+          },
+          pi.logger,
+          null,
+        ).catch(() => {});
+      }
+      return guarded;
     }, 220);
 
     registerLifecycleHook("message_received", (event, ctx) => {
