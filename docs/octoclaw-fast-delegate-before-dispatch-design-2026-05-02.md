@@ -233,11 +233,86 @@ Use normal reply when:
 - it is a follow-up/status/provenance question;
 - fast admission is uncertain.
 
+## 8.5 Feasibility Spike Before Implementation
+
+PC15 must start with a feasibility spike. This spike does not start child runs and does not change user-visible behavior. It only proves that the OpenClaw hook surface and OctoClaw state model can support the design.
+
+### Spike Questions
+
+| Question | Why It Matters | Pass Evidence | Fail Action |
+| --- | --- | --- | --- |
+| Can `before_dispatch` see enough inbound fields? | Fast delegate needs prompt, channel, session, sender, group/direct, timestamp, and Slack anchor hints before agent startup | Probe captures `content`, `body`, `channel`, `sessionKey`, `senderId`, `isGroup`, `timestamp`, and any message/thread ts fields needed for metadata | Keep PC15 design-only and ask upstream/API change or use Slack ingress path instead |
+| Can we build a managed ctx accepted by `isManagedAgentContext()`? | `resolvePolicyDecisionForContext()` returns null for unmanaged/subagent/cron contexts | Probe-created ctx passes `isManagedAgentContext()` for Slack channel/direct and explicit session cases | Add an adapter helper or stop; do not bypass the managed-context check |
+| Does `resolvePolicyStateKey()` match later lifecycle hooks? | Cache miss means double judge and inconsistent WorkContract | `before_dispatch`, `before_model_resolve`, and `before_prompt_build` produce the same key or documented aliases | Fix ctx adapter before any fast admission work |
+| Does prompt normalization match? | Cache miss can also come from `content` vs `bodyForAgent` vs prompt wrappers | `extractPromptText()`/normalizer outputs equivalent prompt across hook events | Add a shared prompt extractor for before-dispatch and lifecycle hooks |
+| Does `handled=true` really short-circuit main agent lifecycle? | Fast delegate only helps if main agent does not start | A probe handler returns `handled=true` and proves no `before_model_resolve` / `before_prompt_build` for that turn | Do not use `before_dispatch` for fast delegate; investigate earlier hook or upstream support |
+| Can the fast backend return accepted run evidence quickly? | Receipt must wait for real run id but should be much faster than planner/confirm | Dry-run or mocked backend contract shows run id, idempotency key, session key strategy, and error behavior | Keep planner/confirm as the only execution path until backend contract is solved |
+
+### Probe Shape
+
+The first runtime probe should be explicitly non-invasive:
+
+```text
+before_dispatch probe mode
+  -> collect event/context fields
+  -> construct candidate managed ctx
+  -> compute stateKey/session aliases
+  -> normalize prompt
+  -> optionally call resolvePolicyDecisionForContext() behind a flag
+  -> write replay event fast_delegate_probe
+  -> return handled=false
+```
+
+Do not call `api.runtime.subagent.run()` in the probe. Do not send ACK or receipts from the probe. Do not alter planner/confirm behavior.
+
+### Probe Replay Event
+
+The replay event should be compact and redact user text beyond a short preview:
+
+```json
+{
+  "event": "fast_delegate_probe",
+  "sessionKey": "agent:main:slack:channel:...",
+  "beforeDispatchStateKey": "agent:main:slack:channel:...",
+  "lifecycleStateKey": "agent:main:slack:channel:...",
+  "stateKeyMatch": true,
+  "promptHash": "sha256:...",
+  "promptEquivalent": true,
+  "isManagedAgentContext": true,
+  "hasSlackAnchor": true,
+  "handledMode": "pass_through",
+  "judgeInvoked": false,
+  "decisionCacheHitLater": null
+}
+```
+
+When the optional decision probe is enabled, add:
+
+```json
+{
+  "decisionRoute": "delegate",
+  "decisionBucket": "must_delegate",
+  "judgeInvocationCount": 1,
+  "laterLifecycleCacheHit": true
+}
+```
+
+### Spike Exit Gates
+
+PC15 can move from feasibility to implementation only when:
+
+- Slack channel and Slack direct probes both produce stable state keys or documented aliases.
+- Prompt parity passes for plain Slack mention, thread reply, codex-slack-e2e wrapper, and queued-busy prompt wrapper.
+- `handled=true` short-circuit is proven in an isolated test with no child run.
+- Pass-through with a precomputed decision proves later lifecycle hooks do not re-run LLM judge.
+- Backend contract review chooses either `api.runtime.subagent.run()` or gateway `agent` for the first fast backend, with rollback documented.
+
 ## 9. Implementation Plan
 
 ### P0 Design And Harness
 
 - Add this document and align OpenSpec wording.
+- Run PC15-0 feasibility probes before opening runtime implementation.
 - Add focused tests for policy decision cache reuse across `before_dispatch`, `before_model_resolve`, and `before_prompt_build`.
 - Fix Slack acceptance harness regex so `route=reply |` is escaped and does not reject neutral ACK text.
 
@@ -282,6 +357,7 @@ Do these test/design slices before implementing direct child run. They are inten
 
 | Slice | Purpose | Required Evidence |
 | --- | --- | --- |
+| PC15-0 feasibility spike | Prove `before_dispatch` can support the design before implementation | Probe evidence for hook fields, managed ctx, stateKey/prompt parity, handled=true short-circuit, and backend contract feasibility |
 | PC15-A context parity | Build a managed context for `before_dispatch` that resolves the same policy state key as later lifecycle hooks | Slack channel, Slack direct, explicit session, and fallback cases produce the same key or documented aliases |
 | PC15-B prompt parity | Ensure before-dispatch and lifecycle hooks normalize the same user prompt | Body/content/thread metadata variants do not create cache misses |
 | PC15-C no double judge | Prove moving the first decision earlier does not run judge twice | A mocked LLM judge/provider is called at most once across before-dispatch, before-model-resolve, and before-prompt-build |
@@ -293,6 +369,168 @@ Do these test/design slices before implementing direct child run. They are inten
 | PC15-I backend contract | Decide `api.runtime.subagent.run()` vs gateway `agent` safely | Contract table covers inputs, returned refs, idempotency, model override, delivery/finalizer gaps, rollback |
 
 Runtime implementation starts only after PC15-A through PC15-D are reviewed. Direct-run backend starts only after PC15-I is reviewed.
+
+### PC15 Test Slice Details
+
+#### PC15-0 Feasibility Spike
+
+Allowed files for spike implementation, when opened:
+
+- a new test/probe module under `extensions/octoclaw-runtime/src/fast-delegate/` or `src/experiments/`;
+- focused tests for the probe module;
+- replay fixture updates.
+
+Forbidden during spike:
+
+- no child run;
+- no accepted ACK;
+- no finalizer/delivery changes;
+- no judge semantic changes.
+
+Required cases:
+
+- Slack channel mention with explicit channel session key;
+- Slack direct message session key;
+- explicit non-Slack session key fallback;
+- `handled=true` dummy result proving OpenClaw short-circuits later lifecycle;
+- `handled=false` pass-through proving later cache reuse.
+
+#### PC15-A Context Parity
+
+Create fixtures that compare:
+
+- raw `before_dispatch` event/context;
+- candidate managed ctx produced by the adapter;
+- lifecycle ctx used by `before_model_resolve` / `before_prompt_build`.
+
+Assertions:
+
+- `isManagedAgentContext(candidateCtx) === true` for user-facing turns;
+- `resolvePolicyStateKeys(candidateCtx)[0]` equals lifecycle key or appears in lifecycle alias list;
+- `buildPolicyMetadata(candidateCtx).session_key` equals the dispatchable user session key;
+- message id/thread ts are preserved when present.
+
+#### PC15-B Prompt Parity
+
+Fixtures must cover:
+
+- plain Slack text;
+- Slack mention-stripped body;
+- thread reply body;
+- `codex-slack-e2e` wrapper;
+- queued busy wrapper;
+- body/content mismatch where one field contains transport metadata.
+
+Assertions:
+
+- prompt hashes match after normalization, or `promptsEquivalent()` returns true;
+- no empty prompt is sent to `resolvePolicyDecisionForContext()`;
+- prompt preview in replay is truncated and redacted.
+
+#### PC15-C No Double Judge
+
+Use a mocked judge provider or fetch spy. The exact seam may be `callLlmJudge`, the OpenAI-compatible endpoint, or the existing judge config fetch path.
+
+Assertions:
+
+- first `before_dispatch` decision path invokes judge at most once;
+- later `before_model_resolve` returns cached decision;
+- later `before_prompt_build` returns cached decision;
+- WorkContract id and route seal stay stable across the three stages;
+- timeout/degraded judge result is cached as pass-through rather than retried in the same turn.
+
+#### PC15-D Pass-Through Compatibility
+
+Run existing focused suites with the experiment disabled and enabled-but-pass-through:
+
+- reply-route footer and message guard;
+- route hint merge/objection;
+- planner/confirm smoke unit path;
+- native spawn gate block/allow;
+- neutral ACK behavior.
+
+Assertions:
+
+- no changed user-visible text;
+- no extra WorkContract for the same turn;
+- no legacy queue/outbox writes introduced;
+- no extra judge invocation.
+
+#### PC15-E Fast Admission Fixtures
+
+Admission allows only high-confidence cases:
+
+- explicit "use a subagent/background/parallel worker";
+- code edit plus tests/build;
+- multi-step validation/review;
+- expected duration over configured threshold with clear deliverable.
+
+Admission passes through:
+
+- status/provenance/footer/timeout follow-up;
+- one-step lookup;
+- simple summarize/rewrite/explain;
+- judge timeout/degraded/abstain;
+- bare mentions of `opencode`, `glm`, model names, or tools without a work command;
+- missing expected deliverable;
+- duplicate active WorkContract.
+
+#### PC15-F Accepted Receipt Boundary
+
+Mock backend responses:
+
+- accepted with run id;
+- accepted without run id;
+- error;
+- timeout;
+- duplicate same idempotency key.
+
+Assertions:
+
+- only accepted with non-empty run id can produce `任务已启动。`;
+- all other outcomes are silent pass-through or explicit failure without delegated/running claim;
+- accepted receipt is deduped by turn/workContract/backend idempotency key.
+
+#### PC15-G Idempotency
+
+Use the same inbound Slack event twice and vary retry timing.
+
+Assertions:
+
+- same idempotency key;
+- one backend run;
+- one accepted receipt;
+- one WorkContract binding;
+- replay records duplicate suppression.
+
+#### PC15-H Observability
+
+Required replay/report fields:
+
+- `fast_delegate_evaluated`;
+- `fast_delegate_result=allowed|passed|disabled|probe_only|error`;
+- `state_key_match`;
+- `prompt_equivalent`;
+- `judge_invocation_count`;
+- `decision_cache_hit_later`;
+- `backend_accept_ms` when backend is enabled;
+- `footer_via=fast_delegate` for future finals.
+
+#### PC15-I Backend Contract
+
+Compare `api.runtime.subagent.run()` and gateway `agent` on:
+
+- controllable `sessionKey`;
+- returned `runId`;
+- child session key strategy;
+- provider/model override authorization;
+- idempotency key behavior;
+- `deliver:false` behavior;
+- finalizer/delivery gap;
+- abort/wait behavior;
+- rollback flag.
+
+Do not select a backend until this table is filled from code inspection or a local smoke.
 
 ## 10. Acceptance Criteria
 

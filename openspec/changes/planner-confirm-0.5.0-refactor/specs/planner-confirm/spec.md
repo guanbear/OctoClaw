@@ -240,6 +240,12 @@ Regression reports SHALL make route quality, latency, footer, and legacy fallbac
 
 The before-dispatch fast delegate design SHALL reuse the existing OctoClaw policy resolver and judge outputs. It SHALL NOT introduce a second semantic judge or independent keyword router.
 
+#### Scenario: feasibility is proven before implementation
+
+- WHEN PC15 moves from design to runtime implementation
+- THEN OctoClaw SHALL first prove that `before_dispatch` exposes sufficient inbound fields, can construct a managed context, can align state key and prompt normalization with later lifecycle hooks, and can short-circuit main-agent lifecycle with `handled=true`
+- AND this proof SHALL NOT start child runs, send delegate accepted ACK, or alter planner/confirm behavior.
+
 #### Scenario: before_dispatch computes policy first
 
 - WHEN a before-dispatch fast delegate experiment evaluates an inbound turn
