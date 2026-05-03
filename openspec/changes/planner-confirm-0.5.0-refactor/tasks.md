@@ -228,16 +228,16 @@ Tasks:
 - [x] SR-P0 neutral inbound ACK: Slack reaction/text appears within 1-5s and does not claim delegation or spawn success.
 - [x] SR-P0 neutral ACK is route-independent and does not depend on `decision.latency_ack.required`, route commit, or a non-OctoClaw tool name.
 - [x] SR-P0 target resolution uses original inbound Slack anchor (`channel/message.ts/thread_ts`), not post-policy state; `no_valid_thread_target` is covered by tests.
-- [ ] SR-P1 startup-cost-aware delegation uses three explicit buckets: `must_reply/main_fast_path`, `must_delegate`, and `budgeted_main_then_delegate`.
-- [ ] SR-P1 short tasks, simple status/provenance follow-up, and one-step fresh lookup stay on main fast path by default.
-- [ ] SR-P1 `fresh_live_lookup`, `conversation_control.route_hint=delegate`, and `fast_first_response` are downgraded from hard delegate signals; none can force delegate alone.
-- [ ] SR-P1 hard delegate signals still win: explicit background/subagent/parallel request, code edits, tests/builds, long commands, multi-step tools, review/validation, or expected duration over 90-120s.
-- [ ] SR-P1 explicit-delegate keyword matching does not treat bare mentions of `opencode`, `glm`, model names, or tools as hard delegate unless the user asks them to do work.
+- [x] SR-P1 startup-cost-aware delegation uses three explicit buckets: `must_reply/main_fast_path`, `must_delegate`, and `budgeted_main_then_delegate`.
+- [x] SR-P1 short tasks, simple status/provenance follow-up, and one-step fresh lookup stay on main fast path by default.
+- [x] SR-P1 `fresh_live_lookup`, `conversation_control.route_hint=delegate`, and `fast_first_response` are downgraded from hard delegate signals; none can force delegate alone.
+- [x] SR-P1 hard delegate signals still win: explicit background/subagent/parallel request, code edits, tests/builds, long commands, multi-step tools, review/validation, or expected duration over 90-120s.
+- [x] SR-P1 explicit-delegate keyword matching does not treat bare mentions of `opencode`, `glm`, model names, or tools as hard delegate unless the user asks them to do work.
 - [ ] SR-P1 `budgeted_main_then_delegate` can escalate after 20-30s, after 1-2 read-only tool calls, or when write/long-running work becomes necessary.
 - [ ] SR-P1 rule router, local judge, cheap LLM judge, route hints, and AGENTS/system prompt share the same bucket semantics.
-- [ ] SR-P1 judge/replay output records `decision_bucket`, `startup_cost_policy`, `duration_hint`, `tool_need_hint`, `reason_codes`, and `hard_delegate_signal`.
-- [ ] SR-P1 false-delegate cases are covered by tests/replay fixtures, including `fresh_live_lookup` no longer forcing delegate by itself.
-- [ ] SR-P1 false-reply cases are covered by tests/replay fixtures so explicit background work, code/test/edit, multi-step tools, review, and validation are not swallowed by main fast path.
+- [x] SR-P1 judge/replay output records `decision_bucket`, `startup_cost_policy`, `duration_hint`, `tool_need_hint`, `reason_codes`, and `hard_delegate_signal`.
+- [x] SR-P1 false-delegate cases are covered by tests/replay fixtures, including `fresh_live_lookup` no longer forcing delegate by itself.
+- [x] SR-P1 false-reply cases are covered by tests/replay fixtures so explicit background work, code/test/edit, multi-step tools, review, and validation are not swallowed by main fast path.
 - [ ] SR-P2 planner/native chain is slimmed so real delegated route commit to `sessions_spawn_intent_allowed` is p95 <= 30s in real Slack smoke.
 - [x] SR-P2 hard confirm remains strict: no `planned -> accepted`, no direct spawn, no delegate ACK before confirm.
 - [x] SR-P2 child spawn profile uses only current OpenClaw capabilities: explicit `context=isolated`, `lightContext=true`, bounded child prompt, fast/cheap model defaults, conservative `thinking`/timeout.
@@ -266,6 +266,18 @@ Evidence 2026-05-03:
 - Latest final delivery evidence: `completion_file_timeout=0` in both reports, final footer `route=delegate | ... | via=native_announce`, and each transcript has exactly one neutral ACK, one accepted ACK, and one final.
 - Focused verification after merging `origin/refactor/0.4.0-stable` through `7015abf`: `git diff --check`, `./node_modules/.bin/tsc --build extensions/octoclaw-runtime/tsconfig.json`, and `./node_modules/.bin/vitest run extensions/octoclaw-runtime/src/delegate/native-spawn-intent.test.ts extensions/octoclaw-runtime/src/extension-entry.test.ts extensions/octoclaw-runtime/src/extension-entry-neutral-ack.test.ts extensions/octoclaw-runtime/src/tools/registration-planner.test.ts extensions/octoclaw-runtime/src/delegate/native-spawn-gate-confirm.test.ts extensions/octoclaw-runtime/src/state/native-status-projector.test.ts extensions/octoclaw-runtime/src/work-contract/projectors.test.ts packages/octoclaw-contracts/src/status-projection.test.ts`; result `8 files / 165 tests passed`.
 - Regression verification after the same merge: `policy-resolver-judge-fallback`, `registration-dispatch-honesty`, `runtime-ledger-hot-path`, `execution-transition-integration`, `runtime-ledger`, `operator-diagnostics`, `regression-round4`, and `delegate-packets` all passed (`185 tests` total across the regression slice).
+
+Evidence 2026-05-04:
+
+- Latest planner-native ticket-fix smoke artifact: `/tmp/octoclaw-planner-native-user-20260504-ticket-fix/out/slack-acceptance-2026-05-03-22-36-12.{json,md}`.
+- Thread `1777847588.374549`, WorkContract `wc-ab450a65b9afe6f5`, spawnIntent `nsp_moqcltjd_68eac0a0`, runId `0a355aee-aaea-49cd-a768-493cfa5c7d58`, childSessionKey `agent:main:subagent:e01f185d-0aa1-4ee0-b438-6db9461140f3`.
+- Harness overall `pass`; neutralAckMs `5201` via Slack reaction `eyes`; acceptedAckMs `102093`; finalMs `182784`; final footer `route=delegate | model=zhipu/GLM-5.1 · thread | via=native_announce | worker=octoclaw-research | wc=wc-ab450`.
+- Replay stage timing: `message_received=5057ms`, `before_dispatch=5098ms`, `before_prompt_build=86211ms`, `sessions_spawn_intent_allowed=96922ms`, `sessions_spawn_accepted=102776ms`, `dispatch_confirm=102778ms`, `native_child_final=183504ms`.
+- Replay events include `sessions_spawn_intent_allowed`, `execution_transition` with `spawn_started`, `dispatch_confirm_completed ok=true`, `native_announce_completion_matched`, `native_announce_final_delivered`, and a later duplicate replay rejected as `already_delivered`.
+- `completionFileTimeoutCount=0`; no duplicate final visible in Slack transcript; SQLite native intent row is `accepted` with non-empty runId/childSessionKey.
+- SR-P1 focused verification for commit `2366e4e`: `git diff --check`, `./node_modules/.bin/tsc --build extensions/octoclaw-runtime/tsconfig.json`, and `./node_modules/.bin/vitest run extensions/octoclaw-runtime/src/resolve/policy-resolver-judge-fallback.test.ts extensions/octoclaw-runtime/src/resolve/ticket-dry-run.test.ts extensions/octoclaw-runtime/src/tools/registration-planner.test.ts` passed (`79 tests`).
+- Broader SR-P1/planner regression verification: `policy-resolver-judge-fallback`, `llm-judge`, `ticket-dry-run`, `ticket-enforcement`, `registration-planner`, `registration-dispatch-honesty`, `runtime-ledger-hot-path`, `runtime-ledger`, `operator-diagnostics`, and `regression-round4` passed (`206 tests`); `execution-transition-integration` and `delegate-packets` passed (`25 tests`).
+- Open follow-up: SR-P1 routing-time bucket selection is in place, but runtime escalation for `budgeted_main_then_delegate` after wall-clock/tool budget is still unchecked above; SR-P2 latency remains above target because `before_prompt_build` and `sessions_spawn_intent_allowed` dominate accepted ACK time.
 
 
 ## PC13 Slack Delivery Port

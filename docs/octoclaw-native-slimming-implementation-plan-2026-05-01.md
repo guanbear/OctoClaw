@@ -102,6 +102,9 @@
 - 两条 replay 均记录 `anchorSource=ctx`、`fallbackUsed=false`，且 `message_received`、`before_dispatch`、`before_prompt_build` 三入口 dedupe 后只发一条首 ACK；单测覆盖 event anchor 和 fallback-history 兜底。
 - Accepted ACK 仍未优化：两条 acceptedAckMs 为 `89865` / `112168`，`sessions_spawn_intent_allowed` 阶段约 `80s`，应继续作为 SR-P2/PC15 性能方向观察，不能把它和 neutral ACK 混在一起。
 - 两条 final 均为 `route=delegate | ... | via=native_announce`，`completion_file_timeout=0`，transcript 只有 neutral ACK、accepted ACK、final 三条可见消息。
+- 2026-05-04 local / 2026-05-03 UTC 最新 ticket-fix smoke：`/tmp/octoclaw-planner-native-user-20260504-ticket-fix/out/slack-acceptance-2026-05-03-22-36-12.{json,md}`，harness `pass`；thread `1777847588.374549`，WorkContract `wc-ab450a65b9afe6f5`，spawnIntent `nsp_moqcltjd_68eac0a0`，runId `0a355aee-aaea-49cd-a768-493cfa5c7d58`，childSession `agent:main:subagent:e01f185d-0aa1-4ee0-b438-6db9461140f3`。
+- 最新 smoke 的 neutralAckMs `5201`，Slack reaction `eyes`；acceptedAckMs `102093`，finalMs `182784`。Replay stage：`message_received=5057ms`、`before_dispatch=5098ms`、`before_prompt_build=86211ms`、`sessions_spawn_intent_allowed=96922ms`、`sessions_spawn_accepted=102776ms`、`dispatch_confirm=102778ms`、`native_child_final=183504ms`。
+- 最新 smoke final footer 为 `route=delegate | model=zhipu/GLM-5.1 · thread | via=native_announce | worker=octoclaw-research | wc=wc-ab450`，`completionFileTimeoutCount=0`，Slack transcript 无重复 final；后续 duplicate replay 被 `already_delivered` 拒绝。
 
 #### SR-P1：启动成本感知的委派规则
 
@@ -130,6 +133,7 @@
 - false delegate rate 在 nightly/Slack smoke 中可观测并下降。
 - false reply rate 同样必须可观测；明确长任务、代码/测试、多步工具、用户显式后台/并行不能被 main fast path 吃掉。
 - 主模型仍可在超过 fast path 预算后提交 route hint/dispatch，不被静态规则卡死。
+- 2026-05-04 实现状态：rule/router 已产出三段式 bucket 和 `startup_cost_policy`，并用 focused tests 覆盖 false delegate / false reply；`duration_hint=long` 和 `tool_need_hint=required` 是 hard delegate，`duration_hint=medium` 进入 `budgeted_main_then_delegate`。仍未完成的是运行时 wall-clock/tool budget 自动升级机制，因此不能把 SR-P1 说成端到端完成。
 
 #### SR-P2：瘦身 planner/native 热路径和观测
 
