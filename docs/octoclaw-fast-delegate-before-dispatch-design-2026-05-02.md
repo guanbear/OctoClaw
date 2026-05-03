@@ -211,6 +211,28 @@ For native planner/confirm finals, continue to report:
 route=delegate | ... | via=native_announce
 ```
 
+## 7.5 Context And Result Delivery Model
+
+Planner/native delegation and fast delegate deliberately use different context windows.
+
+Planner/native path:
+
+- The parent agent starts first and can see the normal OpenClaw run context: current prompt, system context, tool bundle, policy projection, and available conversation context.
+- The child does not automatically inherit the full parent transcript. The default spawn args should keep `context="isolated"` and `lightContext=true`.
+- The child prompt should be a compact task packet: user goal, deliverable, acceptance criteria, necessary guardrails, and explicit refs. Large context should move through attachments, workspace refs, or artifact refs instead of raw parent transcript.
+
+Before-dispatch fast delegate path:
+
+- The runtime runs earlier, before parent-model reasoning. It can rely on the inbound message, Slack/session/thread anchors, policyState/runtime ledger, recent receipts, and compact summaries.
+- It must pass through when the request depends on broad parent conversation context, ambiguous follow-ups such as "the third point above", status/provenance questions, or missing deliverables.
+- Fast admission is allowed only when the current inbound message plus compact refs are enough to start the child safely.
+
+Child result delivery:
+
+- The child result should be delivered directly through native announce or the future fast-delegate delivery path. The parent agent should not read the full child result and rewrite it.
+- After delivery, the parent state keeps only compact receipt data: WorkContract id, run id, child session key, result hash, short summary, footer provenance, and artifact refs.
+- Full child outputs are reopened only on demand, for example when the user explicitly asks for evidence, details, or the full report.
+
 ## 8. Relationship To Planner/Confirm
 
 The planner/confirm chain remains useful, but it should no longer be the only path for delegated work.
