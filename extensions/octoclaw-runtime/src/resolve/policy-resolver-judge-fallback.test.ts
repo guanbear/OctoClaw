@@ -1349,3 +1349,319 @@ Sender (untrusted metadata):
     });
   });
 });
+
+describe("SR-P1 startup-cost-aware delegation tightening", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  describe("false-delegate: advisory signals must not force delegate", () => {
+    it("bare opencode mention without action stays reply on judge timeout", async () => {
+      vi.spyOn(globalThis, "fetch").mockRejectedValueOnce(new DOMException("timeout", "AbortError"));
+
+      const decision = await resolveStatelessPolicyDecision("opencode 是什么", {
+        metadata: {
+          _judgeFastConfig: localJudgeConfig,
+        },
+      });
+
+      expect(routeDecisionOf(decision)).toMatchObject({
+        route: "reply",
+        judge_timeout: true,
+        final_judge_source: "timeout",
+        hard_delegate_signal: false,
+      });
+    });
+
+    it("bare GLM model discussion stays reply on judge timeout", async () => {
+      vi.spyOn(globalThis, "fetch").mockRejectedValueOnce(new DOMException("timeout", "AbortError"));
+
+      const decision = await resolveStatelessPolicyDecision("GLM 模型有哪些参数", {
+        metadata: {
+          _judgeFastConfig: localJudgeConfig,
+        },
+      });
+
+      expect(routeDecisionOf(decision)).toMatchObject({
+        route: "reply",
+        judge_timeout: true,
+        final_judge_source: "timeout",
+        hard_delegate_signal: false,
+      });
+    });
+
+    it("code/test configuration discussion stays reply on judge timeout", async () => {
+      vi.spyOn(globalThis, "fetch").mockRejectedValueOnce(new DOMException("timeout", "AbortError"));
+
+      const decision = await resolveStatelessPolicyDecision("测试怎么配置比较合理", {
+        metadata: {
+          _judgeFastConfig: localJudgeConfig,
+        },
+      });
+
+      expect(routeDecisionOf(decision)).toMatchObject({
+        route: "reply",
+        judge_timeout: true,
+        hard_delegate_signal: false,
+      });
+    });
+
+    it("validation/review process discussion stays reply on judge timeout", async () => {
+      vi.spyOn(globalThis, "fetch").mockRejectedValueOnce(new DOMException("timeout", "AbortError"));
+
+      const decision = await resolveStatelessPolicyDecision("验证和审核流程怎么设计比较合理", {
+        metadata: {
+          _judgeFastConfig: localJudgeConfig,
+        },
+      });
+
+      expect(routeDecisionOf(decision)).toMatchObject({
+        route: "reply",
+        judge_timeout: true,
+        hard_delegate_signal: false,
+      });
+    });
+
+    it("fast_first_response alone does not force delegate on judge timeout", async () => {
+      vi.spyOn(globalThis, "fetch").mockRejectedValueOnce(new DOMException("timeout", "AbortError"));
+
+      const decision = await resolveStatelessPolicyDecision("查一下状态", {
+        metadata: {
+          _judgeFastConfig: localJudgeConfig,
+          fast_first_response: true,
+        },
+      });
+
+      expect(routeDecisionOf(decision)).toMatchObject({
+        route: "reply",
+        judge_timeout: true,
+        hard_delegate_signal: false,
+      });
+      expect((routeDecisionOf(decision).reason_codes as string[])).toEqual(
+        expect.arrayContaining(["advisory:fast_first_response"]),
+      );
+    });
+
+    it("fresh_live_lookup without hard evidence stays budgeted with hard_delegate_signal=false", async () => {
+      vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+        judgeResponse("reply", 0.85),
+      );
+
+      const decision = await resolveStatelessPolicyDecision("查一下最新版本号", {
+        metadata: {
+          _judgeFastConfig: localJudgeConfig,
+          conversation_control: {
+            source: "explicit_conversation_control",
+            intent_class: "fresh_live_lookup",
+            require_fresh_lookup: true,
+          },
+        },
+      });
+
+      expect(routeDecisionOf(decision)).toMatchObject({
+        route: "reply",
+        decision_bucket: "budgeted_main_then_delegate",
+        hard_delegate_signal: false,
+      });
+    });
+
+    it("route_hint=delegate without hard evidence stays budgeted with hard_delegate_signal=false", async () => {
+      const decision = await resolveStatelessPolicyDecision("查一下版本号", {
+        metadata: {
+          _judgeFastConfig: localJudgeConfig,
+          session_key: "agent:main:srp1-route-hint-no-evidence",
+        },
+        routeHint: {
+          route_hint: "delegate",
+          requested_route: "delegate",
+          work_type: "research",
+          confidence: 0.8,
+          source: "main_agent",
+        },
+      });
+
+      expect(routeDecisionOf(decision)).toMatchObject({
+        route: "reply",
+        decision_bucket: "budgeted_main_then_delegate",
+        hard_delegate_signal: false,
+      });
+    });
+  });
+
+  describe("false-reply: structured evidence still delegates", () => {
+    it("workType=code forces delegate on judge timeout", async () => {
+      vi.spyOn(globalThis, "fetch").mockRejectedValueOnce(new DOMException("timeout", "AbortError"));
+
+      const decision = await resolveStatelessPolicyDecision("帮我实现这个功能", {
+        metadata: {
+          _judgeFastConfig: localJudgeConfig,
+          workType: "code",
+        },
+      });
+
+      expect(routeDecisionOf(decision)).toMatchObject({
+        route: "delegate",
+        judge_timeout: true,
+        decision_bucket: "must_delegate",
+        hard_delegate_signal: true,
+      });
+      expect((routeDecisionOf(decision).reason_codes as string[])).toEqual(
+        expect.arrayContaining([expect.stringContaining("hard_delegate:work_type_code")]),
+      );
+    });
+
+    it("natural test execution request forces delegate on judge timeout", async () => {
+      vi.spyOn(globalThis, "fetch").mockRejectedValueOnce(new DOMException("timeout", "AbortError"));
+
+      const decision = await resolveStatelessPolicyDecision("跑一下测试看看结果", {
+        metadata: {
+          _judgeFastConfig: localJudgeConfig,
+        },
+      });
+
+      expect(routeDecisionOf(decision)).toMatchObject({
+        route: "delegate",
+        judge_timeout: true,
+        decision_bucket: "must_delegate",
+        hard_delegate_signal: true,
+      });
+      expect((routeDecisionOf(decision).reason_codes as string[])).toEqual(
+        expect.arrayContaining([expect.stringContaining("hard_delegate:prompt_code_test_build_review_validation")]),
+      );
+    });
+
+    it("natural build validation request forces delegate on judge timeout", async () => {
+      vi.spyOn(globalThis, "fetch").mockRejectedValueOnce(new DOMException("timeout", "AbortError"));
+
+      const decision = await resolveStatelessPolicyDecision("请验证构建并告诉我结果", {
+        metadata: {
+          _judgeFastConfig: localJudgeConfig,
+        },
+      });
+
+      expect(routeDecisionOf(decision)).toMatchObject({
+        route: "delegate",
+        judge_timeout: true,
+        decision_bucket: "must_delegate",
+        hard_delegate_signal: true,
+      });
+    });
+
+    it("executor mention only delegates when paired with requested work", async () => {
+      vi.spyOn(globalThis, "fetch").mockRejectedValueOnce(new DOMException("timeout", "AbortError"));
+
+      const decision = await resolveStatelessPolicyDecision("让 opencode 跑测试并汇总结果", {
+        metadata: {
+          _judgeFastConfig: localJudgeConfig,
+        },
+      });
+
+      expect(routeDecisionOf(decision)).toMatchObject({
+        route: "delegate",
+        judge_timeout: true,
+        decision_bucket: "must_delegate",
+        hard_delegate_signal: true,
+      });
+      expect((routeDecisionOf(decision).reason_codes as string[])).toEqual(
+        expect.arrayContaining([expect.stringContaining("hard_delegate:prompt_explicit_delegate")]),
+      );
+    });
+
+    it("multi-step tool work forces delegate on judge timeout", async () => {
+      vi.spyOn(globalThis, "fetch").mockRejectedValueOnce(new DOMException("timeout", "AbortError"));
+
+      const decision = await resolveStatelessPolicyDecision("先读日志再跑测试，最后告诉我失败原因", {
+        metadata: {
+          _judgeFastConfig: localJudgeConfig,
+        },
+      });
+
+      expect(routeDecisionOf(decision)).toMatchObject({
+        route: "delegate",
+        judge_timeout: true,
+        decision_bucket: "must_delegate",
+        hard_delegate_signal: true,
+      });
+      expect((routeDecisionOf(decision).reason_codes as string[])).toEqual(
+        expect.arrayContaining([expect.stringContaining("hard_delegate:prompt_multistep_tool_work")]),
+      );
+    });
+
+    it("duration_hint=long forces delegate on judge timeout", async () => {
+      vi.spyOn(globalThis, "fetch").mockRejectedValueOnce(new DOMException("timeout", "AbortError"));
+
+      const decision = await resolveStatelessPolicyDecision("分析一下系统架构", {
+        metadata: {
+          _judgeFastConfig: localJudgeConfig,
+          duration_hint: "long",
+        },
+      });
+
+      expect(routeDecisionOf(decision)).toMatchObject({
+        route: "delegate",
+        judge_timeout: true,
+        decision_bucket: "must_delegate",
+        hard_delegate_signal: true,
+      });
+      expect((routeDecisionOf(decision).reason_codes as string[])).toEqual(
+        expect.arrayContaining([expect.stringContaining("hard_delegate:duration_long")]),
+      );
+    });
+
+    it("tool_need_hint=required still delegates on judge timeout", async () => {
+      vi.spyOn(globalThis, "fetch").mockRejectedValueOnce(new DOMException("timeout", "AbortError"));
+
+      const decision = await resolveStatelessPolicyDecision("验证构建结果", {
+        metadata: {
+          _judgeFastConfig: localJudgeConfig,
+          tool_need_hint: "required",
+        },
+      });
+
+      expect(routeDecisionOf(decision)).toMatchObject({
+        route: "delegate",
+        judge_timeout: true,
+        hard_delegate_signal: true,
+      });
+    });
+
+    it("structured explicit_delegate_request still delegates on judge timeout", async () => {
+      vi.spyOn(globalThis, "fetch").mockRejectedValueOnce(new DOMException("timeout", "AbortError"));
+
+      const decision = await resolveStatelessPolicyDecision("查一下状态", {
+        metadata: {
+          _judgeFastConfig: localJudgeConfig,
+          conversation_control: {
+            source: "explicit_conversation_control",
+            explicit_delegate_request: true,
+          },
+        },
+      });
+
+      expect(routeDecisionOf(decision)).toMatchObject({
+        route: "delegate",
+        judge_timeout: true,
+        hard_delegate_signal: true,
+      });
+    });
+
+    it("active judge must_delegate output still delegates", async () => {
+      vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+        judgeResponse("delegate", 0.88),
+      );
+
+      const decision = await resolveStatelessPolicyDecision("帮我重构一下代码结构", {
+        metadata: {
+          _judgeFastConfig: localJudgeConfig,
+        },
+      });
+
+      expect(routeDecisionOf(decision)).toMatchObject({
+        route: "delegate",
+        route_source: "judge",
+        final_judge_source: "local",
+        hard_delegate_signal: true,
+      });
+    });
+  });
+});

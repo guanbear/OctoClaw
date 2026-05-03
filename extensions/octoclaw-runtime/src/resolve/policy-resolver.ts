@@ -265,6 +265,23 @@ const EXPLICIT_DELEGATE_PROMPT_PATTERNS = [
   new RegExp(String.raw`(?:派(?:个|一个)?|委派)\s*${DELEGATE_EXECUTOR_PATTERN}?\s*(?:来)?[\s\S]{0,20}${DELEGATE_ACTION_PATTERN}`, "iu"),
   new RegExp(String.raw`(?:后台|并行)\s*[\s\S]{0,16}${DELEGATE_ACTION_PATTERN}`, "iu"),
 ];
+const CODE_TEST_BUILD_WORK_PATTERNS = [
+  /\b(?:implement|fix|refactor|edit|patch|commit|push|debug|lint)\b/iu,
+  /\b(?:run|execute)\s+(?:tests?|build|command|lint|tsc|vitest|pytest)\b/iu,
+  /\bbuild\s+(?:the\s+)?(?:app|project|package|extension|plugin|runtime|dist)\b/iu,
+  /\b(?:write)\s+(?:code|tests?|script)\b/iu,
+  /\b(?:please|can you|could you)\s+(?:review|validate)\b|\b(?:review|validate)\s+(?:code|changes?|patch|pr|pull request|build|tests?|results?|fix|implementation)\b/iu,
+  /\b(?:validation|regression)\s+(?:run|check|test|suite)\b/iu,
+  /(?:请|帮(?:我)?|给我|直接|现在|继续|先|再|然后|把|将|你来)?[\s\S]{0,12}(?:修改|修复|实现|重构|编辑|改代码|提交|跑(?:一下)?(?:测试|构建|命令|lint|tsc|vitest|pytest)|运行(?:测试|构建|检查|命令|lint|tsc|vitest|pytest)|执行(?:测试|构建|命令|lint|tsc|vitest|pytest)|部署)/iu,
+  /(?:请|帮(?:我)?|给我|直接|现在|继续|你来)[\s\S]{0,12}(?:验证|审核|排查|处理)(?:构建|测试|修复|结果|回归|日志|报错|失败|问题|PR|代码|改动|这个|一下)?/iu,
+  /(?:验证|审核|排查|处理)(?:构建|测试|修复|结果|回归|日志|报错|失败|问题|PR|代码|改动|这个|一下)[\s\S]{0,16}(?:结果|原因|失败|通过|修复|收口)?/iu,
+  /(?:测试|构建|回归|验收)[\s\S]{0,24}(?:跑一下|执行|运行|验证|检查|补齐|修复|通过|收口)/iu,
+];
+const MULTI_STEP_TOOL_WORK_PATTERNS = [
+  /\b(?:first|then|after that)\b[\s\S]{0,120}\b(?:run|build|test|edit|fix|read|inspect|validate|review|execute|debug|deploy)\b/iu,
+  /先[\s\S]{0,80}(?:再|然后)[\s\S]{0,80}(?:跑|执行|修|改|实现|验证|构建|测试|提交|部署|排查|查看|读取|检查)/iu,
+  /(?:多步|端到端|完整(?:验证|排查|实现|测试)|e2e)[\s\S]{0,80}(?:跑|执行|修|改|实现|验证|构建|测试|提交|部署|排查|检查|工具|命令)/iu,
+];
 
 function classifyStartupCost(prompt: string, metadata: UnknownRecord = {}): StartupCostClassification {
   const conversationControl = trustedConversationControl(metadata);
@@ -301,11 +318,11 @@ function classifyStartupCost(prompt: string, metadata: UnknownRecord = {}): Star
   );
   const codeOrMutationPrompt = promptMatches(
     rawPrompt,
-    /\b(implement|fix|refactor|edit|patch|commit|push|build|debug|lint|tsc|vitest|pytest|review|validate|validation|regression|run (?:tests?|build|command)|write (?:code|tests?|script))\b|修改|修复|实现|重构|编辑|改代码|提交|跑(?:测试|构建|命令)|运行(?:测试|构建|检查|命令)|测试|构建|日志|排查|报错|审核|验证|回归|验收/iu,
+    CODE_TEST_BUILD_WORK_PATTERNS,
   );
   const multiStepPrompt = promptMatches(
     rawPrompt,
-    /\b(first|then|after that|multi-step|end-to-end|e2e)\b|先[\s\S]{0,80}再|然后|多步|端到端|完整(?:验证|排查|实现)/iu,
+    MULTI_STEP_TOOL_WORK_PATTERNS,
   );
 
   const metadataToolNeed = coerceStartupToolNeedHint(metadata.tool_need_hint ?? metadata.toolNeedHint, "none");
@@ -322,7 +339,7 @@ function classifyStartupCost(prompt: string, metadata: UnknownRecord = {}): Star
     workType === "review" ? "work_type_review" : "",
     explicitDelegatePrompt ? "prompt_explicit_delegate" : "",
     codeOrMutationPrompt ? "prompt_code_test_build_review_validation" : "",
-    multiStepPrompt ? "prompt_multistep" : "",
+    multiStepPrompt ? "prompt_multistep_tool_work" : "",
   ].filter(Boolean);
 
   const hardDelegateSignal = hardDelegateReasons.length > 0;
@@ -347,6 +364,7 @@ function classifyStartupCost(prompt: string, metadata: UnknownRecord = {}): Star
         ? "medium"
         : "short";
 
+  const fastFirstResponse = asBoolean(metadata.fast_first_response ?? metadata.fastFirstResponse);
   const reasonCodes = Array.from(new Set([
     `decision_bucket:${decisionBucket}`,
     hardDelegateSignal ? "hard_delegate_signal" : "no_hard_delegate_signal",
@@ -357,6 +375,7 @@ function classifyStartupCost(prompt: string, metadata: UnknownRecord = {}): Star
     requiresStateGrounding ? "state_grounding_budgeted_main_first" : "",
     routeHint === "delegate" && !hardDelegateSignal ? "route_hint_delegate_advisory_only" : "",
     ...hardDelegateReasons.map((reason) => `hard_delegate:${reason}`),
+    fastFirstResponse ? "advisory:fast_first_response" : "",
   ].filter(Boolean)));
 
   const startupCostPolicy: UnknownRecord = {
