@@ -316,6 +316,7 @@ function stateMatchesOutboundAnchor(key: string, state: PolicyStateEntry, anchor
     stringValue(state.messageId),
     stringValue(state.replyToMessageId),
     stringValue(state.reply_to_id),
+    deliveryTargetReplyTo(asRecord(state)),
     stringValue(requestMetadata.message_id),
     stringValue(requestMetadata.messageId),
     stringValue(requestMetadata.inboundMessageTs),
@@ -326,11 +327,17 @@ function stateMatchesOutboundAnchor(key: string, state: PolicyStateEntry, anchor
 }
 
 function policyStateLooksRelevantForOutbound(key: string, state: PolicyStateEntry, targetKey: string, anchors: string[], now: number): boolean {
-  if (!targetKey || !key.toLowerCase().includes(targetKey)) return false;
+  if (!targetKey) return false;
+  const stateRecord = asRecord(state);
+  const keyLower = key.toLowerCase();
+  const anchorMatches = stateMatchesOutboundAnchor(key, state, anchors);
+  const targetMatches = keyLower.includes(targetKey);
+  if (!targetMatches && !(anchors.length > 0 && anchorMatches && keyLower.includes(":slack:"))) return false;
   const updatedAt = Number(state.updatedAt || state.createdAt || 0);
   if (!Number.isFinite(updatedAt) || now - updatedAt > 3 * 60 * 1000) return false;
-  if (anchors.length > 0 && !stateMatchesOutboundAnchor(key, state, anchors)) return false;
-  return Object.keys(asRecord(state.decision)).length > 0;
+  if (anchors.length > 0 && !anchorMatches) return false;
+  return Object.keys(asRecord(stateRecord.decision)).length > 0
+    || Object.keys(asRecord(stateRecord.outboundProjection || stateRecord.outbound_projection)).length > 0;
 }
 
 function outboundHasDeliveryMetadata(event: UnknownRecord): boolean {
@@ -1106,14 +1113,22 @@ function firstStringValue(...values: unknown[]): string {
   return "";
 }
 
+function outboundProjectionSnapshot(state: UnknownRecord): UnknownRecord {
+  return asRecord(state.outboundProjection || state.outbound_projection);
+}
+
 /** Resolve a model profile (e.g. "direct_main") or raw model string to a short display name. */
 function resolveDisplayModel(state: UnknownRecord, event: UnknownRecord, ctx: UnknownRecord): string {
+  const snapshot = outboundProjectionSnapshot(state);
   const decision = asRecord(state.decision);
   const modelPolicy = asRecord(decision.model_policy);
   const runtimeTruth = asRecord(decision.runtime_truth);
 
   // Policy/decision model takes priority over host shim values.
   const policyModel = firstStringValue(
+    snapshot.model,
+    snapshot.modelId,
+    snapshot.model_id,
     modelPolicy.selected_model,
     modelPolicy.model,
     state.modelProfile,
@@ -1145,10 +1160,11 @@ function resolveDisplayModel(state: UnknownRecord, event: UnknownRecord, ctx: Un
 
 /** Extract route source label for footer: "judge(0.87)" / "rule" / "fallback" / "agent↑judge=delegate" */
 function resolveRouteSource(state: UnknownRecord): string {
+  const snapshot = outboundProjectionSnapshot(state);
   const decision = asRecord(state.decision);
   const routeDecision = asRecord(decision.route_decision);
   const routeHintPolicy = asRecord(decision.route_hint_policy);
-  const source = stringValue(routeDecision.route_source || routeDecision.final_judge_source);
+  const source = stringValue(routeDecision.route_source || routeDecision.final_judge_source || snapshot.via || snapshot.source);
   const confidence = asRecord(decision).judge_confidence ?? routeDecision.route_confidence;
   const finalRoute = stringValue(routeDecision.route);
   const judgeRoute = stringValue(routeHintPolicy.judge_route || decision._judge_route);
@@ -1231,9 +1247,10 @@ function appendReplyProjectionFooter(content: string, state: UnknownRecord, even
   if (/\[ack\s*·/iu.test(content)) return content;
 
   const decision = asRecord(state.decision);
+  const snapshot = outboundProjectionSnapshot(state);
   const workContract = asRecord(decision.work_contract);
   const routeDecision = asRecord(decision.route_decision);
-  const route = stringValue(workContract.route || routeDecision.route || state.route || "reply") === "delegate"
+  const route = stringValue(workContract.route || routeDecision.route || state.route || snapshot.route || "reply") === "delegate"
     ? "delegate" : "reply";
 
   const debug = footerDebugEnabled();
@@ -1246,8 +1263,8 @@ function appendReplyProjectionFooter(content: string, state: UnknownRecord, even
     via: resolveRouteSource(state),
     thread: hasThreadProjection(event, ctx),
     ...(debug ? {
-      workerPool: stringValue(routeDecision.worker_pool),
-      workContractId: stringValue(workContract.workContractId || decision.workContractId),
+      workerPool: stringValue(routeDecision.worker_pool || snapshot.workerPool || snapshot.worker_pool),
+      workContractId: stringValue(workContract.workContractId || decision.workContractId || snapshot.workContractId || snapshot.work_contract_id),
     } : {}),
   };
   return renderIMProjectionFooter({
@@ -1446,7 +1463,9 @@ function resolveSlackMessageReceivedSessionKey(event: UnknownRecord, ctx: Unknow
   })();
   if (!targetKind || (channel && channel !== "slack")) return "";
   const threadId = stringValue(metadata.threadId || metadata.thread_id || event.threadId || event.thread_id);
-  const base = `agent:main:slack:${targetKind}:${target.toLowerCase()}`;
+  const base = targetKind === "direct"
+    ? `agent:main:slack:default:direct:${target.toLowerCase()}`
+    : `agent:main:slack:${targetKind}:${target.toLowerCase()}`;
   return threadId ? `${base}:thread:${threadId}` : base;
 }
 
@@ -1824,6 +1843,14 @@ export const plugin = {
       let anchorSource: InboundMessageTimestampSource = extractedAnchor.source;
       let fallbackUsed = false;
       if (!inboundMessageTs) {
+        const stateAnchor = deliveryTargetReplyTo(existingState)
+          || stringValue(existingState.inboundMessageTs || existingState.replyToMessageId || existingState.message_id || existingState.messageId);
+        if (stateAnchor) {
+          inboundMessageTs = stateAnchor;
+          anchorSource = "ctx";
+        }
+      }
+      if (!inboundMessageTs) {
         inboundMessageTs = await fetchLatestUserMessageTsForSessionKey(sessionKey, 1200);
         anchorSource = inboundMessageTs ? "fallback_history" : "none";
         fallbackUsed = Boolean(inboundMessageTs);
@@ -1919,6 +1946,22 @@ export const plugin = {
       if (!sessionKey) return;
       const stateKey = stringValue(ctxRecord.sessionKey || eventRecord.sessionKey) || sessionKey;
       const anchor = extractInboundMessageTimestampWithSource(ctxRecord, eventRecord, prompt);
+      if (anchor.ts) {
+        const now = Date.now();
+        updatePolicyState(stateKey, (current) => ({
+          ...(current ?? {}),
+          canonicalSessionKey: stateKey,
+          ackGuardKey: sessionKey,
+          inboundMessageTs: anchor.ts,
+          replyToMessageId: anchor.ts,
+          message_id: anchor.ts,
+          deliveryTarget: buildImmutableDeliveryTarget(sessionKey, anchor.ts),
+          delivery_target: buildImmutableDeliveryTarget(sessionKey, anchor.ts),
+          channelTone: stringValue(asRecord(current).channelTone || asRecord(current).channel_tone) || "chat",
+          createdAt: Number(current?.createdAt || 0) || now,
+          updatedAt: now,
+        }));
+      }
       void recordPolicyReplay(
         "message_received_observed",
         {
@@ -1954,7 +1997,15 @@ export const plugin = {
       const ctxRecord = asRecord(ctx);
       const mergedCtx = { ...eventRecord, ...ctxRecord };
       const stateKey = resolvePolicyStateKey(mergedCtx);
-      const anchor = extractInboundMessageTimestampWithSource(ctxRecord, eventRecord, prompt);
+      const extractedAnchor = extractInboundMessageTimestampWithSource(ctxRecord, eventRecord, prompt);
+      const existingState = asRecord(getPolicyStateForContext(mergedCtx).state);
+      const stateAnchor = deliveryTargetReplyTo(existingState)
+        || stringValue(existingState.inboundMessageTs || existingState.replyToMessageId || existingState.message_id || existingState.messageId);
+      const anchor = extractedAnchor.ts
+        ? extractedAnchor
+        : stateAnchor
+          ? { ts: stateAnchor, source: "ctx" as const }
+          : extractedAnchor;
       void recordPolicyReplay(
         "before_dispatch_observed",
         {
@@ -1967,7 +2018,11 @@ export const plugin = {
         pi.logger,
         null,
       ).catch(() => {});
-      void maybeSendNeutralInboundAckForContext("before_dispatch", event, ctx, prompt).catch((error) => {
+      void maybeSendNeutralInboundAckForContext("before_dispatch", event, ctx, prompt, {
+        stateKey,
+        inboundMessageTs: anchor.ts,
+        inboundMessageTsSource: anchor.source,
+      }).catch((error) => {
         pi.logger?.warn?.(`octoclaw neutral inbound ACK failed: ${String(error)}`);
       });
     }, 260);
@@ -2892,10 +2947,31 @@ export const plugin = {
         return;
       }
       if (shouldRetainCompactReceipt) {
+        const decision = asRecord(state?.decision);
+        const routeDecision = asRecord(decision.route_decision);
+        const workContract = asRecord(decision.work_contract);
+        const replyToMessageId = deliveryTargetReplyTo(asRecord(state))
+          || stringValue(state?.inboundMessageTs || state?.replyToMessageId || state?.message_id || ctx.inboundMessageTs);
+        const outboundProjection = {
+          route: finalReceipt.route,
+          model: resolveDisplayModel(asRecord(state), {}, asRecord(ctx)),
+          via: resolveRouteSource(asRecord(state)),
+          thread: Boolean(replyToMessageId || slackThreadFromSessionKey(stringValue(ctx.sessionKey || stateKey))),
+          workerPool: stringValue(routeDecision.worker_pool),
+          workContractId: stringValue(workContract.workContractId || decision.workContractId || finalReceipt.workContractId),
+        };
         policyState.update(stateKey, () => ({
           canonicalSessionKey: stateKey,
           latestExecutionReceipt: finalReceipt,
           workContractId: finalReceipt.workContractId ?? undefined,
+          outboundProjection,
+          outbound_projection: outboundProjection,
+          ackGuardKey: stringValue(state?.ackGuardKey || state?.ack_guard_key || ctx.sessionKey),
+          inboundMessageTs: replyToMessageId || undefined,
+          replyToMessageId: replyToMessageId || undefined,
+          message_id: replyToMessageId || undefined,
+          deliveryTarget: buildImmutableDeliveryTarget(stringValue(state?.ackGuardKey || state?.ack_guard_key || ctx.sessionKey || stateKey), replyToMessageId),
+          delivery_target: buildImmutableDeliveryTarget(stringValue(state?.ackGuardKey || state?.ack_guard_key || ctx.sessionKey || stateKey), replyToMessageId),
           directToolsSeen: finalReceipt.toolsUsed,
           toolsUsed: finalReceipt.toolsUsed,
           dispatchExecuted: finalReceipt.dispatchExecuted,

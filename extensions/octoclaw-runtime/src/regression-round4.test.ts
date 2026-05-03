@@ -777,6 +777,50 @@ describe("regression round 4: execution coverage projections", () => {
     }
   });
 
+  it("adds reply footer during Slack DM visible delivery after agent_end compacted state", () => {
+    const previousDebug = process.env.OCTOCLAW_FOOTER_DEBUG;
+    process.env.OCTOCLAW_FOOTER_DEBUG = "1";
+    const key = "agent:main:slack:default:direct:u0replyfooter";
+    policyState.setState(key, {
+      canonicalSessionKey: key,
+      inboundMessageTs: "1777782671.624909",
+      replyToMessageId: "1777782671.624909",
+      outboundProjection: {
+        route: "reply",
+        model: "zhipu/GLM-5.1",
+        via: "rule",
+        thread: true,
+        workerPool: "octoclaw-main",
+        workContractId: "wc-f3ccbb278a59bc2c",
+      },
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    } as Parameters<typeof policyState.setState>[1]);
+    try {
+      const outbound = guardOutboundMessageForPolicyState(
+        {
+          to: "D0AR3GTPYQL",
+          content: "你好 guan\n我在。",
+          replyToMessageId: "1777782671.624909",
+        },
+        {
+          sessionKey: key,
+          channelId: "slack",
+        },
+        Date.now(),
+      );
+
+      expect(outbound?.content).toContain("route=reply | model=zhipu/GLM-5.1 · thread");
+      expect(outbound?.content).toContain("via=rule");
+      expect(outbound?.content).toContain("worker=octoclaw-main");
+      expect(outbound?.content).toContain("wc=wc-f3cc");
+    } finally {
+      policyState.clearState(key);
+      if (previousDebug === undefined) delete process.env.OCTOCLAW_FOOTER_DEBUG;
+      else process.env.OCTOCLAW_FOOTER_DEBUG = previousDebug;
+    }
+  });
+
 
   it("does not duplicate footer when compact coverage projection already present", () => {
     const guarded = guardAssistantMessageForPolicyState(

@@ -253,4 +253,69 @@ describe("neutral Slack ACK hook dedupe", () => {
     const neutralAckEvents = readReplayEvents().filter((entry) => entry.event === "neutral_inbound_ack");
     expect(neutralAckEvents.some((entry) => entry.sent === true && entry.anchor_source === "fallback_history" && entry.fallback_used === true)).toBe(true);
   });
+
+  it("carries a Slack DM anchor from message_received into before_dispatch without history fallback", async () => {
+    const handlers = new Map<string, Function>();
+    const sends: IMSendParams[] = [];
+    const adapter: IMAdapter = {
+      channel: "slack",
+      capabilityLevel: "L2",
+      canHandle: (sessionKey) => sessionKey.includes("u0ackdm"),
+      resolveTarget: () => ({ channel: "slack", target: "user:u0ackdm" }),
+      send: async (params) => {
+        sends.push(params);
+        return { sent: true, delivered: true, messageId: "1777770001.000004", threadTs: params.replyToMessageId };
+      },
+      react: async () => ({ ok: true }),
+    };
+    registerIMAdapter(adapter);
+    plugin.register({
+      pluginConfig: { ackReactionEmoji: "eyes" },
+      on: (event, handler) => handlers.set(event, handler),
+      registerTool: () => {},
+      registerCommand: () => {},
+      logger: {},
+    });
+
+    const messageReceived = handlers.get("message_received");
+    const beforeDispatch = handlers.get("before_dispatch");
+    expect(messageReceived).toBeTruthy();
+    expect(beforeDispatch).toBeTruthy();
+
+    const sessionKey = "agent:main:slack:default:direct:u0ackdm";
+    messageReceived!(
+      {
+        content: "你好",
+        metadata: {
+          messageId: "1777770000.444444",
+          originatingChannel: "slack",
+          originatingTo: "user:U0ACKDM",
+        },
+      },
+      {
+        channelId: "slack",
+        conversationId: "user:U0ACKDM",
+      },
+    );
+    beforeDispatch!(
+      { prompt: "你好" },
+      {
+        sessionKey,
+        sessionId: "neutral-dm-source-session",
+        agentId: "main",
+        channelId: "slack",
+        cwd: tempWorkspace,
+      },
+    );
+    await waitForFireAndForget();
+
+    expect(fetchLatestUserMessageTsForSessionKey).not.toHaveBeenCalled();
+    expect(sends).toHaveLength(1);
+    expect(sends[0]).toMatchObject({ replyToMessageId: "1777770000.444444" });
+    const observedEvents = readReplayEvents().filter((entry) => entry.event === "before_dispatch_observed");
+    expect(observedEvents.some((entry) => entry.sessionKey === sessionKey && entry.inboundMessageTs === "1777770000.444444" && entry.anchor_source === "ctx")).toBe(true);
+    const neutralAckEvents = readReplayEvents().filter((entry) => entry.event === "neutral_inbound_ack");
+    expect(neutralAckEvents.some((entry) => entry.hookName === "before_dispatch" && entry.replyToMessageId === "1777770000.444444" && entry.reason !== "no_valid_thread_target")).toBe(true);
+    expect(neutralAckEvents.every((entry) => entry.fallback_used === false)).toBe(true);
+  });
 });
