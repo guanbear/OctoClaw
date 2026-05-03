@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ContextCoverageSnapshot } from "@octoclaw/contracts/work-contract";
-import { buildPromptContextProjection, deliverNativeAnnounceCompletion, extractInboundMessageTimestamp, guardOutboundMessageForPolicyState, plugin, resolveDelegationCapability, resolveReactionAckConfig } from "./extension-entry.js";
+import { buildPromptContextProjection, deliverNativeAnnounceCompletion, extractInboundMessageTimestamp, guardOutboundMessageForPolicyState, plugin, resolveDelegationCapability, resolveReactionAckConfig, wrapReplyDispatchFooterProjection } from "./extension-entry.js";
 import { guardAssistantMessageForPolicyState } from "./replay/message-guard.js";
 import { nativeSpawnIntentStore } from "./delegate/native-spawn-intent-store.js";
 import { policyState } from "./state/policy-state.js";
@@ -825,6 +825,86 @@ describe("guardOutboundMessageForPolicyState", () => {
     );
 
     expect(guarded).toEqual({ cancel: true });
+  });
+
+  it("reply_dispatch wraps Slack monitor final payloads before delivery", () => {
+    const handlers = new Map<string, Function>();
+    plugin.register({
+      on: (event, handler) => handlers.set(event, handler),
+      registerTool: () => {},
+      registerCommand: () => {},
+      logger: {},
+    });
+    const sent: unknown[] = [];
+    const dispatcher = {
+      sendFinalReply: vi.fn((payload: unknown) => {
+        sent.push(payload);
+        return true;
+      }),
+      sendToolResult: vi.fn(),
+      sendBlockReply: vi.fn(),
+      waitForIdle: vi.fn(),
+      getQueuedCounts: vi.fn(),
+      getFailedCounts: vi.fn(),
+      markComplete: vi.fn(),
+    };
+    const replyDispatch = handlers.get("reply_dispatch");
+    expect(replyDispatch).toBeTruthy();
+    replyDispatch!(
+      {
+        ctx: {
+          SessionKey: "agent:main:slack:default:direct:u0al9t5u89z",
+          Provider: "slack",
+          Surface: "slack",
+          OriginatingChannel: "slack",
+          OriginatingTo: "user:U0AL9T5U89Z",
+          NativeChannelId: "D0AR3GTPYQL",
+          MessageSid: "1777782671.624909",
+          ReplyToId: "1777782671.624909",
+        },
+      },
+      { dispatcher },
+    );
+
+    expect(dispatcher.sendFinalReply({ text: "在，guan。:章鱼:" })).toBe(true);
+    expect(String((sent[0] as { text?: unknown }).text)).toContain("在，guan。:章鱼:");
+    expect(String((sent[0] as { text?: unknown }).text)).toContain("route=reply | model=");
+    expect(String((sent[0] as { text?: unknown }).text)).toContain("· thread");
+  });
+
+  it("reply_dispatch cancels exact NO_REPLY final payloads before Slack delivery", () => {
+    const sent: unknown[] = [];
+    const dispatcher = {
+      sendFinalReply: vi.fn((payload: unknown) => {
+        sent.push(payload);
+        return true;
+      }),
+      sendToolResult: vi.fn(),
+      sendBlockReply: vi.fn(),
+      waitForIdle: vi.fn(),
+      getQueuedCounts: vi.fn(),
+      getFailedCounts: vi.fn(),
+      markComplete: vi.fn(),
+    };
+    wrapReplyDispatchFooterProjection(
+      {
+        ctx: {
+          SessionKey: "agent:main:slack:default:direct:u0al9t5u89z",
+          Provider: "slack",
+          Surface: "slack",
+          OriginatingChannel: "slack",
+          OriginatingTo: "user:U0AL9T5U89Z",
+          NativeChannelId: "D0AR3GTPYQL",
+          MessageSid: "1777782671.624909",
+          ReplyToId: "1777782671.624909",
+        },
+      },
+      { dispatcher },
+      Date.now(),
+    );
+
+    expect(dispatcher.sendFinalReply({ text: " NO_REPLY " })).toBe(false);
+    expect(sent).toHaveLength(0);
   });
 
 
