@@ -97,3 +97,26 @@ Cheaper workers can handle mechanical tests, fixture generation, docs sync, and 
 - After planner acceptance, legacy scheduler, completion binding, child-finalizer, and delivery outbox can be disabled from the default planner/native path; deletion/archive happens in separate slices after Slack smoke evidence.
 - PC13 Slack delivery port and PC14 nightly harness are 0.5.x immediate/parallel work, not blockers for 0.5.0 Must + Should.
 - Direct SDK spawn, warm worker pool/A2A, non-Slack delivery ports, managed flow orchestration, and unexposed OpenClaw hook work are deferred to separate OpenSpec changes.
+
+## Before-Dispatch Fast Delegate Design Baseline
+
+The planner/confirm chain is correct but cannot be the only responsiveness path because it waits for the main agent run and parent model tool negotiation. The 0.5.x performance recovery baseline is documented in `docs/octoclaw-fast-delegate-before-dispatch-design-2026-05-02.md`.
+
+This baseline is design-only for the 0.5.0 gate. It SHALL NOT block planner/native acceptance, and it SHALL NOT be implemented as an unbounded direct-spawn rewrite inside the current planner/confirm slices.
+
+The design constraints are:
+
+- Reuse existing `resolvePolicyDecisionForContext()` / `resolveStatelessPolicyDecision()` and existing judge outputs. Do not introduce a second judge or a divergent keyword router.
+- Move the first policy decision earlier only for the `before_dispatch` experiment. If the turn later proceeds into normal agent lifecycle, `before_model_resolve` and `before_prompt_build` must hit `policyState` cache and must not run LLM judge again.
+- Treat `fastDelegateAdmission()` as a deterministic guard over the existing decision, not as semantic judge authority.
+- Initially split implementation into proof slices: context/state-key parity, no-double-judge cache proof, fast admission pass/deny fixtures, and direct-run backend contract. Do not start with a monolithic spawn implementation.
+- Keep `planner/confirm` as the native truth path for gray cases and for tests that require tool-level `sessions_spawn` registry/announce semantics.
+- Do not claim `api.runtime.subagent.run()` is equivalent to tool-level `sessions_spawn`; if used later, it is a fast backend with explicit OctoClaw ledger/finalizer/delivery bridge until OpenClaw exposes an equivalent direct native spawn API.
+
+Before any runtime implementation slice starts, PC15 must produce test plans that prove:
+
+- the same normalized prompt and state key are used across `before_dispatch`, `before_model_resolve`, and `before_prompt_build`;
+- LLM judge is invoked at most once for one inbound turn;
+- pass-through turns preserve current behavior;
+- high-confidence delegate decisions can be identified without sending user-visible delegate ACK before a real accepted run id;
+- status/provenance follow-ups, simple replies, and bare model/tool mentions pass through.
