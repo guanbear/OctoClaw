@@ -1530,6 +1530,6 @@ GLM-5.1 适合承担高 token、边界清楚的实现包：
 7. 0.5.0 Must+Should 通过真实 Slack smoke 后，leader 做 PC11 legacy default-path removal。
 8. PC13 Slack delivery port 作为 0.5.x immediate 紧跟执行；只改 Slack，非 Slack 保持 fallback。
 9. PC14 nightly regression harness 可以和 macmini runtime 改动并行，但只允许改 fixtures/config/report parser/docs evidence。
-10. 非 Slack IM、direct SDK spawn、warm worker pool/A2A、managed flow 编排另起 future OpenSpec。
+10. 非 Slack IM、direct SDK spawn、managed flow 编排另起 future OpenSpec。warm worker pool/A2A 常驻 worker 已有独立设计文档，见 [`octoclaw-dispatch-latency-preload-design-2026-05-03.md`](./octoclaw-dispatch-latency-preload-design-2026-05-03.md)，包含方案 B（投机并行 spawn）和方案 A（预热 session pool）的机制验证、实现细节和可行性验证步骤；进入 roadmap 的前置条件是 0.5.0 Must ship 稳定且完成 Section 6 四项验证。
 
 这样能利用 GLM-5.1 的大 token 和实现能力，但把最容易出事故的执行真相、spawn 授权、ACK 时机和最终集成留给 leader。

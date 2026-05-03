@@ -22,11 +22,15 @@ Slack inbound
   -> OpenClaw native ackReaction/status reaction
   -> OpenClaw before_dispatch plugin hook
       -> reuse existing OctoClaw judge/policy decision
-      -> if high-confidence delegate: start child directly and handle the turn
+      -> if high-confidence delegate: cache a FastSpawnPlan draft only
       -> otherwise pass through to normal main-agent path
+  -> OpenClaw before_prompt_build plugin hook
+      -> if the draft still matches this turn: append a minimal tool-routing hint
+  -> main agent first LLM turn
+      -> call octoclaw_dispatch(fast=true) -> sessions_spawn -> octoclaw_dispatch_confirm
 ```
 
-This path bypasses parent-agent model startup and first-round planner/tool negotiation only for obvious delegated work.
+This path does **not** bypass parent-agent startup. It only removes the parent model's open-ended delegation deliberation and compresses the planner handshake from multiple turns into one tool-focused turn for obvious delegated work.
 
 ## 2. Current Judge Stage
 
@@ -58,26 +62,38 @@ Important implication: the existing judge already has a cache boundary. The fast
 
 Do not rewrite judge.
 
-Add a new `before_dispatch` fast delegate entrypoint that calls the same `resolvePolicyDecisionForContext()` / policy resolver used today. If the result is not safe enough for immediate delegation, return `handled=false` and let OpenClaw continue normally. Later lifecycle hooks must reuse the cached decision.
+Add a new `before_dispatch` fast delegate entrypoint that calls the same `resolvePolicyDecisionForContext()` / policy resolver used today. If the result is not safe enough to pre-stage a native spawn draft, return `handled=false` and let OpenClaw continue normally. Later lifecycle hooks must reuse the cached decision.
 
-Target flow:
+**推荐形态：native planner acceleration**（`before_dispatch` 只缓存 draft，主 agent 仍然启动但只需 1 turn，后半段完全走原生链）。不推荐 `handled: true` + direct backend 作为首选，因为它绕开了 `registerSubagentRun`，丢失 native announce/delivery chain。
+
+Target flow（native planner acceleration）：
 
 ```text
 before_dispatch
   -> resolvePolicyDecisionForContext(prompt, managedCtx)
-  -> policyState stores decision + WorkContract
+  -> policyState stores decision + FastSpawnPlan draft metadata
 
   if fastDelegateAdmission(decision, state) == allow:
-      -> api.runtime.subagent.run() or gateway agent
-      -> record runId / childSessionKey / WorkContract binding
-      -> send accepted receipt
-      -> return { handled: true, text?: receipt }
+      -> 生成 FastSpawnPlan draft（含 sessionsSpawnArgs draft、prompt hash、TTL）
+      -> 写入 policyState / SQLite
+      -> return { handled: false }  ← 主 agent 仍然启动
 
   else:
       -> return { handled: false }
-      -> before_model_resolve reads policyState cache
-      -> before_prompt_build reads policyState cache
+      -> before_model_resolve 读 policyState cache
+      -> before_prompt_build 读 policyState cache
+
+before_prompt_build（draft 命中时）：
+  -> 注入最小工具路由指令（appendSystemContext）
+  -> 主 agent 首轮直接调 octoclaw_dispatch({ fast: true, spawnPlanId }) + sessions_spawn
+  -> 省去 2-3 轮 planner 犹豫，压成 1 turn
+
+sessions_spawn + octoclaw_dispatch_confirm + native announce：完整原生链
 ```
+
+Important materialization rule: `before_dispatch` must not create a runnable `WorkContract` or `NativeSpawnIntent`. If the current resolver path auto-attaches a WorkContract, PC15 must add a dry-run/draft option or a separate draft builder before enabling this feature. Execution-state materialization happens only inside `octoclaw_dispatch(fast=true)` after draft re-validation.
+
+`handled: true` + direct backend 作为次选，仅在有强烈极致延迟需求且 finalizer 桥接经过 smoke 验证后、通过 feature flag 单独启用。
 
 The fast admission guard is not a new judge. It is a safety check over the existing judge result.
 
@@ -85,12 +101,12 @@ The fast admission guard is not a new judge. It is a safety check over the exist
 
 Fast delegate admission should be conservative. It answers only this question:
 
-> Is the existing judge/policy decision strong enough to skip the main agent and start background work immediately?
+> Is the existing judge/policy decision strong enough to pre-stage a spawn draft and instruct the parent to perform the native spawn immediately, without extra planning turns?
 
 Initial allow conditions:
 
 - `route_decision.route == "delegate"`.
-- WorkContract/admission says execution is allowed.
+- Policy admission says execution is allowed; WorkContract can be derived later during `octoclaw_dispatch(fast=true)`.
 - Judge succeeded or route source is an accepted deterministic policy rule.
 - Confidence is above the configured threshold when present.
 - `expected_deliverable` or equivalent task summary is non-empty.
@@ -114,18 +130,20 @@ When denied, do not send a failure. Just pass through to the normal path.
 
 ### 5.1 0.5.x Practical Backend
 
-Use `api.runtime.subagent.run()` or gateway `agent` as the first practical fast backend.
+**推荐方案：native planner acceleration（见 5.3）。**
 
-OctoClaw still records minimal runtime truth:
+使用 `api.runtime.subagent.run()` 或 gateway `agent` 直接调用（`handled: true`）技术上可行，但有明确的 native announce gap：这条路径不经过 `spawnSubagentDirect()`，不调用 `registerSubagentRun()`，子 agent 完成后没有原生 announce/delivery chain，需要 OctoClaw finalizer 桥接。除非明确接受这个 trade-off 并有可靠的 finalizer 兜底，否则不应作为首选。
+
+OctoClaw 无论选哪条路都需要自己记录：
 
 - WorkContract id
 - run id
-- child session key selected by OctoClaw or returned/inferred by backend
+- child session key
 - source route: `fast_delegate`
-- backend: `openclaw.gateway_agent` or `plugin_runtime_subagent_run`
-- Slack delivery target and footer provenance
+- backend: `planner_acceleration` / `direct_gateway_agent`
+- Slack delivery target 和 footer provenance
 
-This is a small compatibility layer, not a full custom runtime.
+这是薄兼容层，不是 full custom runtime。
 
 ### 5.2 Difference From The Old Wheel
 
@@ -137,16 +155,77 @@ Old OctoClaw wheel:
 - owned delivery and recovery;
 - could drift from OpenClaw native lifecycle.
 
-Fast delegate small wheel:
+Native planner acceleration thin layer:
 
 - OpenClaw still runs the actual agent/model/session/tools;
-- OctoClaw only decides fast route, records minimal ledger, and adapts Slack UX;
-- completion/finalizer exists only to bridge the fact that plugin runtime direct spawn is not yet equivalent to tool-level `sessions_spawn`;
+- OctoClaw only pre-stages a draft route/plan, records minimal ledger refs, and adapts Slack UX;
+- preferred backend (5.3) keeps full native announce/delivery chain;
 - planner/confirm remains available for gray cases and native-chain validation.
 
-The tradeoff is explicit: recover speed now while keeping the execution engine inside OpenClaw.
+### 5.3 Native Planner Acceleration（推荐路径）
 
-### 5.3 Future Native Backend
+这是与 slimming doc 原则完全兼容的快路径。核心思路：**`before_dispatch` 只预计算草稿，主 agent 仍然启动但只需 1 轮工具调用，后半段完全走原生链。**
+
+正确命名：`FastSpawnPlan`（或 `NativeSpawnIntentDraft`），不是 `NativeSpawnIntent`。Draft 不推进执行状态，不发 ACK，不进入 status projection。
+
+```text
+message_received / before_dispatch:
+  -> resolvePolicyDecisionForContext()，高置信 delegate
+  -> 预计算 FastSpawnPlan（含 sessionKey、prompt hash、sessionsSpawnArgs draft）
+  -> 写入 policyState / SQLite（TTL 60s）
+  -> return { handled: false }  ← 主 agent 仍然启动，不直接 spawn
+
+before_prompt_build:
+  -> 检测到 FastSpawnPlan draft 命中（sessionKey + prompt hash 匹配）
+  -> 注入 appendSystemContext（最小工具路由指令，不塞大上下文）：
+     "OctoClaw 已为本轮准备好高置信委派草稿（planId=xxx）。
+      直接调用 octoclaw_dispatch({ fast: true, spawnPlanId: 'xxx' })。
+      如果 dispatch 返回 sessionsSpawnArgs，立即调用 sessions_spawn。
+      不要先分析，不要直接回答。"
+
+主 agent 首轮 LLM（只有 1 turn）：
+  -> 调 octoclaw_dispatch({ fast: true, spawnPlanId: 'xxx' })
+
+octoclaw_dispatch(fast=true) 重新校验 draft：
+  校验项：spawnPlanId 存在、sessionKey 匹配、prompt hash 匹配、
+          TTL 未过期、judge/policy 仍是 delegate、没有 conflict WorkContract、
+          route seal / WorkContract refs 可生成
+  校验通过 → materialize WorkContract + NativeSpawnIntent，返回 sessionsSpawnArgs
+  校验失败 → 返回 pass_through，主 agent 退化到普通 planner/confirm 路径
+
+主 agent 同一轮 LLM（1 turn 内完成）：
+  -> 调原生 sessions_spawn（用 dispatch 返回的 sessionsSpawnArgs）
+  -> 调 octoclaw_dispatch_confirm（校验 runId，写入 native refs）
+
+子 agent 完整生命周期（原生链）：
+  -> spawnSubagentDirect() + registerSubagentRun + native announce/delivery
+```
+
+OpenClaw source anchors for this shape:
+
+- `openclaw-upstream/src/plugins/hook-types.ts`: `PluginHookBeforeDispatchResult` only supports `{ handled, text }`; there is no public spawn/registry API on this hook surface.
+- `openclaw-upstream/src/plugins/hook-before-agent-start.types.ts`: `before_prompt_build` supports `appendSystemContext`, which is the correct hook for the minimal tool-routing hint.
+- `openclaw-upstream/src/agents/pi-embedded-runner/run/attempt.ts`: `appendSystemContext` is applied to the system prompt immediately before model prompt submission.
+- `openclaw-upstream/src/plugins/hooks.ts`: `before_dispatch` is a claiming hook; returning `handled=false` preserves the normal native agent lifecycle.
+
+**这个方案节省的是什么**：主 agent 对"要不要委派"的多轮犹豫（当前 2-3 个 LLM turns），把 planner 握手压成最短工具链（1 turn）。
+
+**这个方案不节省的是**：OpenClaw embedded run startup（工具 bundle、system prompt、stream setup）和 child bootstrap；child bootstrap 仍由原生 `sessions_spawn`、`context="isolated"`、`lightContext=true`、模型/provider 冷启动等因素决定。
+
+**与 `handled: true` 路径的对比**：
+
+| | `handled: true` + direct backend | Native planner acceleration（本节）|
+| --- | --- | --- |
+| Parent LLM turns | 0（绕过）| 1 turn |
+| Native announce | 无（需 finalizer 补）| 完整（registerSubagentRun）|
+| SpawnSubagentDirect import | 不需要 | 不需要 |
+| api.runtime.subagent.run() | 需要 | 不需要 |
+| slimming doc 原则兼容 | 需要 finalizer 桥接 | 完全兼容 |
+| 延迟节省（parent）| 最大（省整个 parent 首轮）| 次之（省 2+ turns，保留 1 turn）|
+
+**推荐**：优先实现 native planner acceleration。`handled: true` 路径作为后备选项，仅当极致延迟有强烈需求且 finalizer 桥接经过 smoke 验证后再启用，需要 feature flag 和明确 rollback。
+
+### 5.4 Future Native Backend
 
 If OpenClaw later exposes a plugin SDK API equivalent to tool-level `sessions_spawn`, replace the backend with that API. The public API would need to return or persist the same truth that `sessions_spawn` has today:
 
@@ -199,17 +278,19 @@ There are three different ACK/status concepts and they must not be conflated:
 
 Do not say `任务已启动。` before the backend returns an accepted run id.
 
-For fast delegate, final footer should report a delegate source such as:
+For a deferred direct-backend fast delegate experiment, final footer should report a delegate source such as:
 
 ```text
 route=delegate | ... | via=fast_delegate
 ```
 
-For native planner/confirm finals, continue to report:
+For native planner/confirm finals and native planner acceleration finals, continue to report:
 
 ```text
 route=delegate | ... | via=native_announce
 ```
+
+If a footer needs to expose the acceleration source, add a separate compact field such as `planner=fast_draft`; do not replace `via=native_announce` when the child final actually came through the native announce path.
 
 ## 7.5 Context And Result Delivery Model
 
@@ -267,8 +348,8 @@ PC15 must start with a feasibility spike. This spike does not start child runs a
 | Can we build a managed ctx accepted by `isManagedAgentContext()`? | `resolvePolicyDecisionForContext()` returns null for unmanaged/subagent/cron contexts | Probe-created ctx passes `isManagedAgentContext()` for Slack channel/direct and explicit session cases | Add an adapter helper or stop; do not bypass the managed-context check |
 | Does `resolvePolicyStateKey()` match later lifecycle hooks? | Cache miss means double judge and inconsistent WorkContract | `before_dispatch`, `before_model_resolve`, and `before_prompt_build` produce the same key or documented aliases | Fix ctx adapter before any fast admission work |
 | Does prompt normalization match? | Cache miss can also come from `content` vs `bodyForAgent` vs prompt wrappers | `extractPromptText()`/normalizer outputs equivalent prompt across hook events | Add a shared prompt extractor for before-dispatch and lifecycle hooks |
-| Does `handled=true` really short-circuit main agent lifecycle? | Fast delegate only helps if main agent does not start | A probe handler returns `handled=true` and proves no `before_model_resolve` / `before_prompt_build` for that turn | Do not use `before_dispatch` for fast delegate; investigate earlier hook or upstream support |
-| Can the fast backend return accepted run evidence quickly? | Receipt must wait for real run id but should be much faster than planner/confirm | Dry-run or mocked backend contract shows run id, idempotency key, session key strategy, and error behavior | Keep planner/confirm as the only execution path until backend contract is solved |
+| Can `before_prompt_build` inject the minimal routing hint only for the same turn? | The native path depends on the parent seeing the draft instruction exactly once | Hook result contains `appendSystemContext` with the plan id only when sessionKey + prompt hash + TTL match | Keep PC15 probe-only until prompt-build injection is stable |
+| Can `octoclaw_dispatch(fast=true)` consume the draft atomically? | The draft must not produce duplicate WorkContracts or spawn intents | Unit test proves one-use consume and fallback on expired/hash-mismatch/stale plans | Keep normal planner/confirm as the only execution path until consume is race-safe |
 
 ### Probe Shape
 
@@ -281,6 +362,7 @@ before_dispatch probe mode
   -> compute stateKey/session aliases
   -> normalize prompt
   -> optionally call resolvePolicyDecisionForContext() behind a flag
+  -> optionally compute a FastSpawnPlan draft behind a separate flag
   -> write replay event fast_delegate_probe
   -> return handled=false
 ```
@@ -303,8 +385,8 @@ What is proven now:
 What is not proven by this unit probe:
 
 - OpenClaw host `before_dispatch` live field shape on macmini or production Slack.
-- Whether returning `handled=true` from the real hook prevents `before_model_resolve` / `before_prompt_build` for that turn.
-- Whether `api.runtime.subagent.run()` or the gateway agent backend can return accepted run evidence quickly enough for truthful `任务已启动。` receipts.
+- Whether `before_prompt_build` can inject the one-turn routing hint with the right plan id in live macmini Slack runs.
+- Whether `octoclaw_dispatch(fast=true)` can consume the draft without materializing stale or duplicate WorkContracts.
 
 Do not treat this as runtime implementation approval. It only clears the Slack channel/direct unit feasibility part of PC15-0.
 
@@ -324,6 +406,7 @@ The replay event should be compact and redact user text beyond a short preview:
   "isManagedAgentContext": true,
   "hasSlackAnchor": true,
   "handledMode": "pass_through",
+  "draftMode": "not_created|created|expired|hash_mismatch|consumed",
   "judgeInvoked": false,
   "decisionCacheHitLater": null
 }
@@ -346,9 +429,9 @@ PC15 can move from feasibility to implementation only when:
 
 - Slack channel and Slack direct probes both produce stable state keys or documented aliases.
 - Prompt parity passes for plain Slack mention, thread reply, codex-slack-e2e wrapper, and queued-busy prompt wrapper.
-- `handled=true` short-circuit is proven in an isolated test with no child run.
 - Pass-through with a precomputed decision proves later lifecycle hooks do not re-run LLM judge.
-- Backend contract review chooses either `api.runtime.subagent.run()` or gateway `agent` for the first fast backend, with rollback documented.
+- `before_prompt_build` injection is proven to be plan-id scoped, one-turn only, and absent on fallback.
+- `octoclaw_dispatch(fast=true)` draft consume is atomic and falls back to the normal planner on expired, mismatched, stale, or already-consumed plans.
 
 ## 9. Implementation Plan
 
@@ -372,18 +455,19 @@ PC15 can move from feasibility to implementation only when:
 - Reuse existing judge fields and WorkContract fields.
 - Add deny/pass-through tests for status follow-up, provenance follow-up, bare model/tool mentions, and uncertain judge output.
 
-### P3 Direct Child Run
+### P3 FastSpawnPlan Draft Store
 
-- Start child via `api.runtime.subagent.run()` or gateway `agent`.
-- Persist run binding in runtime ledger and WorkContract metadata.
-- Send accepted receipt only after run id is present.
-- Add idempotency key based on turn/session/workContractId to avoid duplicate child runs.
+- Add `FastSpawnPlan` / `NativeSpawnIntentDraft` schema and store.
+- Include plan id, session key, prompt hash, TTL, route seal input, task packet draft, and `sessionsSpawnArgs` draft.
+- Do not mark the draft as running/delegated and do not expose it as task status.
+- Add atomic one-use consume semantics.
 
-### P4 Finalizer And Slack Delivery
+### P4 Prompt Injection And Fast Dispatch Consume
 
-- Reuse the existing native announce/direct delivery fixes where possible.
-- Keep finalizer minimal and scoped to fast delegate backend gaps.
-- Ensure final footer is `delegate` and `via=fast_delegate`, not `reply`.
+- In `before_prompt_build`, append only the minimal routing hint when the draft matches the same turn.
+- Implement `octoclaw_dispatch({ fast: true, spawnPlanId })` to revalidate and consume the draft.
+- Materialize WorkContract and NativeSpawnIntent only after revalidation.
+- Return normal `sessionsSpawnArgs` so the main agent still calls OpenClaw native `sessions_spawn`.
 
 ### P5 Real Slack Smoke
 
@@ -396,22 +480,22 @@ PC15 can move from feasibility to implementation only when:
 
 ## 9.5 Test Slices Before Runtime Implementation
 
-Do these test/design slices before implementing direct child run. They are intentionally smaller than the full fast delegate feature, so workers can help without drifting into runtime rewrite.
+Do these test/design slices before implementing native planner acceleration. They are intentionally smaller than the full feature, so workers can help without drifting into runtime rewrite.
 
 | Slice | Purpose | Required Evidence |
 | --- | --- | --- |
-| PC15-0 feasibility spike | Prove `before_dispatch` can support the design before implementation | Probe evidence for hook fields, managed ctx, stateKey/prompt parity, handled=true short-circuit, and backend contract feasibility |
+| PC15-0 feasibility spike | Prove `before_dispatch` can support draft staging before implementation | Probe evidence for hook fields, managed ctx, stateKey/prompt parity, pass-through cache reuse, and prompt-build injection feasibility |
 | PC15-A context parity | Build a managed context for `before_dispatch` that resolves the same policy state key as later lifecycle hooks | Slack channel, Slack direct, explicit session, and fallback cases produce the same key or documented aliases |
 | PC15-B prompt parity | Ensure before-dispatch and lifecycle hooks normalize the same user prompt | Body/content/thread metadata variants do not create cache misses |
 | PC15-C no double judge | Prove moving the first decision earlier does not run judge twice | A mocked LLM judge/provider is called at most once across before-dispatch, before-model-resolve, and before-prompt-build |
 | PC15-D pass-through compatibility | Prove denied/disabled fast admission leaves current behavior unchanged | Existing reply, route-hint, planner/confirm, footer tests continue passing with cache reuse |
 | PC15-E fast admission fixtures | Prove admission is conservative and not a second judge | Explicit background/subagent/parallel allows; status/provenance/simple/one-step lookup/judge-timeout/bare model mention passes through |
-| PC15-F accepted receipt boundary | Preserve truthful ACK semantics for future direct backend | No `任务已启动。` before accepted run id exists |
-| PC15-G idempotency | Avoid duplicate direct runs on Slack retry/replay | Same inbound turn idempotency key starts at most one child |
+| PC15-F accepted receipt boundary | Preserve truthful ACK semantics for native planner acceleration | No `任务已启动。` before `sessions_spawn` accepted run id exists |
+| PC15-G idempotency | Avoid duplicate native spawns on Slack retry/replay | Same inbound turn idempotency key materializes at most one NativeSpawnIntent and one native spawn |
 | PC15-H observability | Make smoke/eval useful | Replay records evaluated/allowed/pass, cache hit/miss, judge invocation count, accepted timing, footer provenance |
-| PC15-I backend contract | Decide `api.runtime.subagent.run()` vs gateway `agent` safely | Contract table covers inputs, returned refs, idempotency, model override, delivery/finalizer gaps, rollback |
+| PC15-I native planner acceleration contract | Prove the draft-to-dispatch-to-sessions_spawn contract | Contract table covers draft schema, prompt injection, atomic consume, returned refs, idempotency, model override, fallback, and rollback |
 
-Runtime implementation starts only after PC15-A through PC15-D are reviewed. Direct-run backend starts only after PC15-I is reviewed.
+Runtime implementation starts only after PC15-A through PC15-D are reviewed. Draft materialization and `octoclaw_dispatch(fast=true)` start only after PC15-I is reviewed.
 
 ### PC15 Test Slice Details
 
@@ -435,7 +519,6 @@ Required cases:
 - Slack channel mention with explicit channel session key; unit-covered in `probe.test.ts`;
 - Slack direct message session key; unit-covered in `probe.test.ts`;
 - explicit non-Slack session key fallback;
-- `handled=true` dummy result proving OpenClaw short-circuits later lifecycle;
 - `handled=false` pass-through proving later cache reuse.
 
 #### PC15-A Context Parity
@@ -479,7 +562,7 @@ Assertions:
 - first `before_dispatch` decision path invokes judge at most once;
 - later `before_model_resolve` returns cached decision;
 - later `before_prompt_build` returns cached decision;
-- WorkContract id and route seal stay stable across the three stages;
+- draft id and route-seal input stay stable across the three stages; runnable WorkContract is not required before `octoclaw_dispatch(fast=true)`;
 - timeout/degraded judge result is cached as pass-through rather than retried in the same turn.
 
 #### PC15-D Pass-Through Compatibility
@@ -520,19 +603,19 @@ Admission passes through:
 
 #### PC15-F Accepted Receipt Boundary
 
-Mock backend responses:
+Mock native `sessions_spawn` / confirm outcomes:
 
-- accepted with run id;
-- accepted without run id;
+- `sessions_spawn` accepted with run id;
+- `sessions_spawn` accepted without run id;
 - error;
 - timeout;
 - duplicate same idempotency key.
 
 Assertions:
 
-- only accepted with non-empty run id can produce `任务已启动。`;
+- only native accepted with non-empty run id can produce `任务已启动。`;
 - all other outcomes are silent pass-through or explicit failure without delegated/running claim;
-- accepted receipt is deduped by turn/workContract/backend idempotency key.
+- accepted receipt is deduped by turn, WorkContract, and native spawn idempotency key.
 
 #### PC15-G Idempotency
 
@@ -541,7 +624,9 @@ Use the same inbound Slack event twice and vary retry timing.
 Assertions:
 
 - same idempotency key;
-- one backend run;
+- one draft consume;
+- one NativeSpawnIntent materialization;
+- one native `sessions_spawn` accepted run;
 - one accepted receipt;
 - one WorkContract binding;
 - replay records duplicate suppression.
@@ -556,41 +641,46 @@ Required replay/report fields:
 - `prompt_equivalent`;
 - `judge_invocation_count`;
 - `decision_cache_hit_later`;
-- `backend_accept_ms` when backend is enabled;
-- `footer_via=fast_delegate` for future finals.
+- `draft_created_ms`;
+- `draft_injected_ms`;
+- `fast_dispatch_consume_ms`;
+- `sessions_spawn_accepted_ms`;
+- `footer_via=native_announce` and optional `planner=fast_draft` for native planner acceleration finals.
 
-#### PC15-I Backend Contract
+#### PC15-I Native Planner Acceleration Contract
 
-Compare `api.runtime.subagent.run()` and gateway `agent` on:
+Document and test:
 
-- controllable `sessionKey`;
-- returned `runId`;
-- child session key strategy;
-- provider/model override authorization;
-- idempotency key behavior;
-- `deliver:false` behavior;
-- finalizer/delivery gap;
-- abort/wait behavior;
+- draft schema and TTL;
+- plan id entropy and prompt hash binding;
+- sessionKey/channel/thread binding;
+- `before_prompt_build` injection shape and hook priority;
+- `octoclaw_dispatch(fast=true)` input schema;
+- atomic consume and busy retry behavior;
+- returned `sessionsSpawnArgs` parity with normal planner/confirm;
+- confirm/runId transition behavior;
+- fallback when any validation fails;
 - rollback flag.
 
-Do not select a backend until this table is filled from code inspection or a local smoke.
+Do not enable native planner acceleration until this table is filled from code inspection and a local smoke.
 
 ## 10. Acceptance Criteria
 
-- For high-confidence delegate prompts, main agent does not start.
+- For high-confidence delegate prompts, main agent still starts but does not spend extra turns deciding whether to delegate.
+- The first parent LLM turn calls `octoclaw_dispatch(fast=true)` and then native `sessions_spawn`, or cleanly falls back to normal planner/confirm.
 - Judge/LLM judge runs at most once per inbound turn.
 - Later lifecycle hooks hit policyState cache when the turn is passed through.
 - Slack visible inbound reaction ACK p95 <= 3s when OpenClaw Slack config is correct.
-- Fast delegate accepted receipt p50 <= 6s and p95 <= 15s on macmini acceptance channel.
+- Native planner acceleration accepted receipt target: reduce current accepted ACK by one or more parent planning turns; initial macmini target p50 <= 60s and p95 <= 90s, then tighten from real smoke data.
 - No user-visible `任务已启动。` before accepted run id.
-- Final footer uses `route=delegate` and `via=fast_delegate` for fast path.
+- Native planner acceleration final footer uses `route=delegate` and `via=native_announce`; optional compact planner provenance may say `planner=fast_draft`.
 - Planner/confirm path still passes native smoke and reports `via=native_announce`.
 - Slack acceptance harness no longer treats neutral ACK as rejected final due to unescaped regex.
 
 ## 11. Open Questions
 
-- Whether `api.runtime.subagent.run()` can reliably expose or infer child session key for all channels.
-- Whether we should prefer gateway `agent` directly over plugin runtime for better idempotency and session-key control.
+- Whether direct backend should remain deferred entirely unless OpenClaw exposes an equivalent native plugin SDK spawn API.
+- Whether native planner acceleration needs a minimal tool allowlist / prompt mode to further reduce parent startup overhead.
 - Whether OpenClaw upstream will expose a public plugin SDK API equivalent to tool-level `sessions_spawn`.
 - Whether fast delegate should support observer/read-only lanes in 0.5.x or defer them to planner/confirm.
 
@@ -603,4 +693,4 @@ Make this the 0.5.x performance recovery direction:
 - Use policyState to avoid duplicate judge.
 - Use fast delegate only for high-confidence delegated work.
 - Keep planner/confirm as the native/gray path.
-- Keep the small finalizer/delivery bridge only until OpenClaw exposes a fully equivalent direct native spawn API.
+- Prefer native planner acceleration over direct backend. Keep direct backend/finalizer bridge out of the default path until OpenClaw exposes a fully equivalent direct native spawn API or a separate smoke-proven rollback-protected experiment justifies it.
