@@ -265,6 +265,27 @@ before_dispatch probe mode
 
 Do not call `api.runtime.subagent.run()` in the probe. Do not send ACK or receipts from the probe. Do not alter planner/confirm behavior.
 
+### 2026-05-03 Unit Probe Evidence
+
+The first non-invasive feasibility probe is implemented in `extensions/octoclaw-runtime/src/fast-delegate/probe.ts`, with focused coverage in `extensions/octoclaw-runtime/src/fast-delegate/probe.test.ts`.
+
+What is proven now:
+
+- Slack channel events can build a candidate managed ctx accepted by `isManagedAgentContext()`.
+- Slack direct events can build a candidate managed ctx accepted by `isManagedAgentContext()`.
+- `resolvePolicyStateKey()` matches the later lifecycle key for normal Slack channel/direct cases.
+- Slack thread/root mismatches are surfaced as explicit binding aliases instead of being hidden.
+- Prompt extraction reuses the current `extractPromptText()` / session prompt equivalence logic for Slack mentions, harness wrappers, and busy-queue wrappers.
+- Probe replay evidence is compact: it records hashes, lengths, keys, aliases, and metadata refs, not raw full user text.
+
+What is not proven by this unit probe:
+
+- OpenClaw host `before_dispatch` live field shape on macmini or production Slack.
+- Whether returning `handled=true` from the real hook prevents `before_model_resolve` / `before_prompt_build` for that turn.
+- Whether `api.runtime.subagent.run()` or the gateway agent backend can return accepted run evidence quickly enough for truthful `任务已启动。` receipts.
+
+Do not treat this as runtime implementation approval. It only clears the Slack channel/direct unit feasibility part of PC15-0.
+
 ### Probe Replay Event
 
 The replay event should be compact and redact user text beyond a short preview:
@@ -389,8 +410,8 @@ Forbidden during spike:
 
 Required cases:
 
-- Slack channel mention with explicit channel session key;
-- Slack direct message session key;
+- Slack channel mention with explicit channel session key; unit-covered in `probe.test.ts`;
+- Slack direct message session key; unit-covered in `probe.test.ts`;
 - explicit non-Slack session key fallback;
 - `handled=true` dummy result proving OpenClaw short-circuits later lifecycle;
 - `handled=false` pass-through proving later cache reuse.

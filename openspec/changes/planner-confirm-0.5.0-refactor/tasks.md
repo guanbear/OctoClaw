@@ -342,7 +342,7 @@ Tasks:
 
 Implementation pre-gates:
 
-- [ ] PC15-0 feasibility probe has live or unit evidence for Slack channel and Slack direct cases.
+- [x] PC15-0 feasibility probe has unit evidence for Slack channel and Slack direct cases (`extensions/octoclaw-runtime/src/fast-delegate/probe.test.ts`). Live `handled=true` short-circuit and backend evidence remain future gates.
 - [ ] PC15-A through PC15-D tests exist and pass.
 - [ ] PC15-I backend contract table is filled from code inspection or local smoke.
 - [ ] Codex leader explicitly opens a new runtime write slice before any `extension-entry.ts`, direct-run, finalizer, or delivery code is changed.
