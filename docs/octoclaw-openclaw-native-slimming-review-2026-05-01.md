@@ -1076,7 +1076,7 @@ Slack/IM 发送切到 OpenClaw `runtime.channel.reply` / `runtime.channel.outbou
 1. 非 Slack IM delivery port 迁移。
 2. managed flow 编排增强。
 3. direct SDK spawn backend；只有 OpenClaw plugin SDK 暴露完整等价能力后再做。
-4. warm worker pool / A2A 常驻 worker；当前只作为研究项，不承诺 child start p95 <= 10s。
+4. warm worker pool / A2A 常驻 worker；当前只作为研究项，不承诺 child start p95 <= 10s。已有独立设计文档 [`octoclaw-dispatch-latency-preload-design-2026-05-03.md`](./octoclaw-dispatch-latency-preload-design-2026-05-03.md)，包含方案 B（投机并行 spawn）、方案 A（预热 session pool）及从 B 进化到 A 的路径；OpenClaw v2026.4.29 源码层面已确认 `isContinuationTurn` 跳 bootstrap、`mode: "session"` 持久 session、`sessions_send` 续 turn 三个底层机制均存在，进入 roadmap 的前置条件是 0.5.0 Must ship 稳定且完成文档中四项可行性验证。
 5. OpenClaw 未暴露的 tool allowlist/private hook。
 
 ## 14. 最终目标状态
