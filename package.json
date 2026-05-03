@@ -11,6 +11,7 @@
     "check": "pnpm build && pnpm -r --stream run check",
     "test": "vitest run",
     "test:watch": "vitest",
+    "verify:openclaw-baseline": "node scripts/verify-openclaw-baseline.mjs",
     "clean": "pnpm -r --stream run clean"
   },
   "devDependencies": {
