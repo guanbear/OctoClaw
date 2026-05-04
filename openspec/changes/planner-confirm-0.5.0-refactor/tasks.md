@@ -332,23 +332,23 @@ Tasks:
 
 - [x] Add standalone fast delegate design doc with current judge stage, target flow, no-double-judge requirement, ACK semantics, and acceptance criteria.
 - [x] Add OpenSpec proposal/design/spec language making PC15 design-only for the 0.5.0 gate.
-- [x] Define PC15-0 feasibility spike: before any implementation, prove `before_dispatch` exposes enough fields, can build a managed ctx, can align stateKey/prompt with lifecycle hooks, can short-circuit with `handled=true`, and has a plausible direct-run backend contract.
+- [x] Define PC15-0 feasibility spike: before any implementation, prove `before_dispatch` exposes enough fields, can build a managed ctx, can align stateKey/prompt with lifecycle hooks, can pass through with `handled=false` for native planner acceleration, and has a plausible draft-to-dispatch contract. Direct `handled=true` backend remains deferred.
 - [x] Define `before_dispatch` context parity test slice: prove the constructed managed ctx resolves the same `policyState` key as later `before_model_resolve` / `before_prompt_build` for Slack channel, Slack direct, explicit session, and non-Slack fallback cases.
 - [x] Define prompt normalization parity test slice: prove before-dispatch uses the same normalized prompt as lifecycle hooks and avoids cache misses from body/content/thread metadata differences.
 - [x] Define no-double-judge test slice: spy/mock `callLlmJudge` or equivalent judge provider and prove one inbound pass-through turn invokes it at most once across before-dispatch, before-model-resolve, and before-prompt-build.
 - [x] Define pass-through behavior test slice: when fast admission denies or is disabled, current planner/confirm, reply, route-hint, and footer behavior remains unchanged.
 - [x] Define fast admission fixture matrix: high-confidence explicit background/subagent/parallel task is allowed; status follow-up, provenance follow-up, simple reply, one-step lookup, judge timeout/degraded, and bare `opencode`/`glm`/model/tool mentions pass through.
-- [x] Define accepted receipt boundary test slice: future direct-run backend must not send `任务已启动。` or delegate accepted ACK before accepted run id exists.
+- [x] Define accepted receipt boundary test slice: native planner acceleration and any future direct-run backend must not send `任务已启动。` or delegate accepted ACK before accepted run id exists.
 - [x] Define idempotency/dedupe test slice: duplicate Slack retries for the same inbound turn do not start two direct child runs.
 - [x] Define observability slice: replay/smoke report records `fast_delegate_evaluated`, `fast_delegate_allowed|passed`, decision cache hit/miss, judge invocation count, accepted run id timing, and footer provenance.
-- [x] Define backend contract slice comparing `api.runtime.subagent.run()` vs gateway `agent`: required inputs, returned refs, idempotency, model override authorization, delivery/finalizer gaps, and rollback behavior.
-- [ ] Do not implement direct-run backend until the parity/no-double-judge/pass-through tests are written and reviewed.
+- [x] Define backend contract slice comparing native planner acceleration vs `api.runtime.subagent.run()` / gateway `agent`: required inputs, returned refs, idempotency, model override authorization, delivery/finalizer gaps, and rollback behavior.
+- [x] Do not implement direct-run backend in PC15 default path. Current proof keeps direct backend untouched and prefers native planner acceleration.
 
 Implementation pre-gates:
 
-- [x] PC15-0 feasibility probe has unit evidence for Slack channel and Slack direct cases (`extensions/octoclaw-runtime/src/fast-delegate/probe.test.ts`). Live `handled=true` short-circuit and backend evidence remain future gates.
-- [ ] PC15-A through PC15-D tests exist and pass.
-- [ ] PC15-I backend contract table is filled from code inspection or local smoke.
+- [x] PC15-0 feasibility probe has unit evidence for Slack channel and Slack direct cases (`extensions/octoclaw-runtime/src/fast-delegate/probe.test.ts`). Live native hook registration and direct `handled=true` backend evidence remain future gates.
+- [x] PC15-A through PC15-D tests exist and pass in the non-invasive proof slice (`probe.test.ts`, `draft.test.ts`, `no-double-judge.test.ts`).
+- [x] PC15-I native planner acceleration contract table is filled from code inspection and unit proof. Local/live smoke remains required before runtime enablement.
 - [ ] Codex leader explicitly opens a new runtime write slice before any `extension-entry.ts`, direct-run, finalizer, or delivery code is changed.
 
 

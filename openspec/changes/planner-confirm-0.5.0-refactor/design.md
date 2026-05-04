@@ -109,7 +109,7 @@ The design constraints are:
 - Reuse existing `resolvePolicyDecisionForContext()` / `resolveStatelessPolicyDecision()` and existing judge outputs. Do not introduce a second judge or a divergent keyword router.
 - Move the first policy decision earlier only for the `before_dispatch` experiment. If the turn later proceeds into normal agent lifecycle, `before_model_resolve` and `before_prompt_build` must hit `policyState` cache and must not run LLM judge again.
 - Treat `fastDelegateAdmission()` as a deterministic guard over the existing decision, not as semantic judge authority.
-- Initially split implementation into proof slices: context/state-key parity, no-double-judge cache proof, fast admission pass/deny fixtures, and direct-run backend contract. Do not start with a monolithic spawn implementation.
+- Initially split implementation into proof slices: context/state-key parity, no-double-judge cache proof, fast admission pass/deny fixtures, and native planner acceleration contract. Do not start with a monolithic spawn implementation.
 - Keep `planner/confirm` as the native truth path for gray cases and for tests that require tool-level `sessions_spawn` registry/announce semantics.
 - Do not claim `api.runtime.subagent.run()` is equivalent to tool-level `sessions_spawn`; if used later, it is a fast backend with explicit OctoClaw ledger/finalizer/delivery bridge until OpenClaw exposes an equivalent direct native spawn API.
 

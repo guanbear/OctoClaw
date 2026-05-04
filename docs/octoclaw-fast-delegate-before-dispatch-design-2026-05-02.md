@@ -377,18 +377,23 @@ What is proven now:
 
 - Slack channel events can build a candidate managed ctx accepted by `isManagedAgentContext()`.
 - Slack direct events can build a candidate managed ctx accepted by `isManagedAgentContext()`.
+- Explicit non-Slack session events preserve state-key/prompt parity but are not marked as Slack anchored.
 - `resolvePolicyStateKey()` matches the later lifecycle key for normal Slack channel/direct cases.
 - Slack thread/root mismatches are surfaced as explicit binding aliases instead of being hidden.
-- Prompt extraction reuses the current `extractPromptText()` / session prompt equivalence logic for Slack mentions, harness wrappers, and busy-queue wrappers.
+- Prompt extraction reuses the current `extractPromptText()` / session prompt equivalence logic for Slack mentions, harness wrappers, busy-queue wrappers, and body/content mismatch cases where one field contains transport metadata.
 - Probe replay evidence is compact: it records hashes, lengths, keys, aliases, and metadata refs, not raw full user text.
+- No-double-judge proof now covers the planned `before_dispatch -> before_model_resolve -> before_prompt_build` sequence by calling the existing resolver once and verifying later lifecycle calls reuse the cached decision, including a judge-timeout pass-through case.
+- Fast admission proof now stages only a `FastSpawnPlan` draft for high-confidence delegate decisions. It passes through disabled, reply, low-confidence, degraded/timeout judge, missing deliverable, execution-follow-up, approval-needed, and duplicate-active-work cases.
+- Native planner acceleration contract proof now covers plan id + prompt hash binding, TTL, `context:"isolated"`, `lightContext:true`, minimal prompt hint shape, and one-use atomic consume with expired/state-key/prompt-hash fallback.
 
 What is not proven by this unit probe:
 
 - OpenClaw host `before_dispatch` live field shape on macmini or production Slack.
 - Whether `before_prompt_build` can inject the one-turn routing hint with the right plan id in live macmini Slack runs.
 - Whether `octoclaw_dispatch(fast=true)` can consume the draft without materializing stale or duplicate WorkContracts.
+- Whether the end-to-end fast path materially reduces accepted ACK latency in real Slack; that still needs a live smoke after runtime registration.
 
-Do not treat this as runtime implementation approval. It only clears the Slack channel/direct unit feasibility part of PC15-0.
+Do not treat this as runtime implementation approval. It clears the non-invasive PC15-0/A/B/C/E/I unit proof slice; runtime hook registration, `octoclaw_dispatch(fast=true)`, and live Slack smoke are still separate gates.
 
 ### Probe Replay Event
 
@@ -649,20 +654,22 @@ Required replay/report fields:
 
 #### PC15-I Native Planner Acceleration Contract
 
-Document and test:
+Current non-invasive contract table:
 
-- draft schema and TTL;
-- plan id entropy and prompt hash binding;
-- sessionKey/channel/thread binding;
-- `before_prompt_build` injection shape and hook priority;
-- `octoclaw_dispatch(fast=true)` input schema;
-- atomic consume and busy retry behavior;
-- returned `sessionsSpawnArgs` parity with normal planner/confirm;
-- confirm/runId transition behavior;
-- fallback when any validation fails;
-- rollback flag.
+| Contract Item | 0.5.x Native Planner Acceleration Rule | Current Evidence | Runtime Gate |
+| --- | --- | --- | --- |
+| Draft schema | `FastSpawnPlan` is `kind=native_planner_acceleration`, `status=draft`, with `planId`, `stateKey`, `sessionKey`, `promptHash`, `expectedDeliverable`, message/session refs, TTL, and `sessionsSpawnArgsDraft` | `draft.ts` + `draft.test.ts` | Persist in SQLite/policyState only after runtime slice opens |
+| No execution materialization | `before_dispatch` draft is not a runnable `WorkContract`, `NativeSpawnIntent`, task-state row, ACK, or status projection | `draft.ts` contains no WorkContract/native intent imports or delivery calls | Keep this invariant in code review for `extension-entry.ts` |
+| Prompt hash binding | Draft consume requires same `stateKey` and same `promptHash` | `draft.test.ts` state-key and prompt-hash mismatch cases | Use normalized prompt from the shared extractor in live hook |
+| TTL | Default draft TTL is 60s; expired consume deletes draft and falls back | `draft.test.ts` expired case | Tune from live telemetry if parent startup regularly exceeds TTL |
+| Context window | `sessionsSpawnArgsDraft` starts with `context:"isolated"` and `lightContext:true` | `draft.test.ts` | Ensure real `sessionsSpawnArgs` parity in `octoclaw_dispatch(fast=true)` tests |
+| Prompt injection | The hint names only `octoclaw_dispatch(fast=true, spawnPlanId)`, native `sessions_spawn`, and `octoclaw_dispatch_confirm`; it does not send Slack text or claim started | `buildFastDelegatePromptHint()` test | Hook priority and one-turn injection need runtime tests |
+| Atomic consume | In-memory proof consumes once; subsequent consume returns `missing`; mismatch does not consume | `draft.test.ts` | SQLite/store implementation needs transaction or compare-and-swap test |
+| Admission | Allows only high-confidence delegate with clear deliverable; disabled/reply/low confidence/degraded/timeout/missing deliverable/follow-up/approval/duplicate pass through | `draft.test.ts` | Extend fixture matrix with live judge outputs before enabling by default |
+| Accepted receipt boundary | Draft/hint cannot send `任务已启动。`; accepted ACK remains after `sessions_spawn` accepted + confirm | `draft.ts` has no delivery path; prompt hint states no claim before accepted run evidence | Keep existing confirm ACK tests in the runtime slice |
+| Rollback | Feature can be disabled by not evaluating admission or not injecting the hint; default remains normal planner/confirm | Admission disabled test | Add env/config flag during runtime slice |
 
-Do not enable native planner acceleration until this table is filled from code inspection and a local smoke.
+Do not enable native planner acceleration until runtime hook registration, `octoclaw_dispatch(fast=true)` materialization, and a local/live Slack smoke prove this contract end to end.
 
 ## 10. Acceptance Criteria
 
