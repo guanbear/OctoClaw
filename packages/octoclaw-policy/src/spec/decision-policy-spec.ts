@@ -144,7 +144,7 @@ export const JudgeOutputSchema = {
   decision_bucket: "must_reply | must_delegate | budgeted_main_then_delegate (REQUIRED)",
   startup_cost_policy: {
     main_fast_path_allowed: true,
-    max_wall_ms: "20000-30000",
+    max_wall_ms: "30000 for budgeted_main_then_delegate",
     max_tool_calls: "1-2",
     escalation_triggers: [] as string[],
   },

@@ -1,12 +1,8 @@
 import {
   AckWriterInputSchema,
   AckWriterOutputSchema,
-  ANTI_REPLY_BIAS_RULES,
-  DECISION_RUBRIC,
-  IRON_LAWS,
   JudgeOutputSchema,
   POLICY_LABELS,
-  VALIDATOR_DEFAULT_RULES,
 } from "./decision-policy-spec.js";
 
 function renderJson(value: unknown): string {
@@ -15,126 +11,58 @@ function renderJson(value: unknown): string {
 
 function renderPolicyLabels(): string {
   return [
-    "## Policy labels",
+    "labels:",
     ...Object.entries(POLICY_LABELS).map(([key, labels]) => `- ${key}: ${labels.map((label) => `\"${label}\"`).join(" | ")}`),
   ].join("\n");
 }
 
-function renderRouteDefinitions(): string {
+function renderOutputContract(): string {
   return [
-    "## Route definitions",
-    "- route=reply: stay on the main thread because no new execution work unit is needed. This includes direct answers and safe clarification questions.",
-    "- route=delegate: create or hand off a new execution work unit because tools, probing, inspection, verification, or longer-running work are needed.",
-    "- reply_mode=answer: the main thread can answer now without new tooling or guessing.",
-    "- reply_mode=clarify: ask for missing scope / target / critical slot before answering or delegating.",
-    "- delegate_role=observer: read-only observation / snapshot work.",
-    "- delegate_role=default: generic delegated work when no more specific role fits.",
-    "- delegate_role=code: implementation / editing / fix / build work.",
-    "- delegate_role=research: investigation / lookup / comparison / synthesis work.",
-    "- delegate_role=review: audit / QA / validation / critique work.",
-    "",
-    "Examples:",
-    "- 'Explain what this TypeScript type means' -> likely reply + reply_mode=answer.",
-    "- 'Which version is installed on this machine?' -> delegate, because this is a fresh environment lookup.",
-    "- 'Check repo status and summarize' -> delegate, because this requires workspace inspection.",
-    "- 'Was that written by you or by a sub-agent?' -> if execution.supports_provenance_reply=true then reply+answer (use execution receipt), else reply+answer with 'no verifiable record'. NEVER delegate or spawn for provenance lookup.",
-    "- 'Check that delegated task status again' -> if execution.supports_status_reply=true then reply+answer (use receipt), else reply + allow control-plane refresh (status/task-action tools). NEVER spawn for status lookup.",
-    "- 'Do you mean package A or package B?' when target is unclear -> reply + reply_mode=clarify.",
-    "- 'Run tests, inspect failures, and fix them' -> delegate, because this is a new execution work unit and likely long-running.",
+    "## Output contract",
+    "- Return exactly one JSON object. No prose, markdown, code, commands, or execution.",
+    "- Top-level route is only reply or delegate.",
+    "- Required fields: route, confidence, is_followup_to_recent_execution, is_new_work, expected_deliverable, reply_mode, delegate_role, coordination_mode_hint, complexity, scope, tool_need_hint, duration_hint, decision_bucket, startup_cost_policy, hard_delegate_signal, reason_codes.",
+    "- Use only canonical labels below. Put null only where the schema allows it.",
+    "- confidence is a number from 0 to 1. Use high confidence for explicit signals, medium for normal classification, low only when uncertain; do not use a fixed default and do not set 0 for a valid classification.",
+    renderPolicyLabels(),
   ].join("\n");
 }
 
-function renderIronLaws(): string {
+function renderSrP1Rules(): string {
   return [
-    "## Iron laws",
-    ...IRON_LAWS.map((law, index) => `${index + 1}. ${law.id}: ${law.rule}`),
+    "## SR-P1 routing rules",
+    "- must_reply: direct answer/clarification; no new execution unit; no fresh tools beyond existing execution receipt.",
+    "- status/provenance follow-up: if execution.supports_provenance_reply or execution.supports_status_reply, route=reply, reply_mode=answer, is_new_work=false, expected_deliverable=null. If evidence is missing, still reply with no verifiable record; never spawn only to inspect provenance/status.",
+    "- budgeted_main_then_delegate: one lightweight read-only fresh lookup/version/status/environment/release check may start on main. fresh_live_lookup, route_hint=delegate, and fast_first_response alone land here, not must_delegate.",
+    "- For budgeted_main_then_delegate set startup_cost_policy.main_fast_path_allowed=true, max_wall_ms=30000, max_tool_calls<=2, escalation_triggers including budget_expired, write_or_mutation_needed, long_command, multi_step_tools, test_build_review_validation.",
+    "- must_delegate: explicit request for background/subagent/parallel execution (后台/子 agent/并行/委派); code/file mutation (写代码/改文件/修复); command execution (运行命令); tests/builds (跑测试/构建); log or workspace investigation needing real tools (查日志/查仓库); review/validation (review/审查/验证); multi-step probing; expected work >90s.",
+    "- Bare opencode/glm/model/tool names or discussion of routing/config/models are not hard_delegate_signal unless the user asks that agent/tool to execute work.",
+    "- Scope/target unknown -> route=reply, reply_mode=clarify.",
+    "- Questions are not automatically reply; classify the work required.",
+    "- If route=delegate for ordinary work: is_new_work=true and expected_deliverable is a concrete verifiable deliverable. If no concrete deliverable exists, reply or clarify.",
   ].join("\n");
 }
 
-function renderAntiReplyBiasRules(): string {
+function renderBoundaryExamples(): string {
   return [
-    "## Anti-reply-bias rules",
-    ...ANTI_REPLY_BIAS_RULES.map((rule, index) => `${index + 1}. ${rule.rule}`),
-  ].join("\n");
-}
-
-function renderDecisionRubric(): string {
-  return [
-    "## Decision rubric",
-    "### reply (§10.1)",
-    ...DECISION_RUBRIC.reply.map((item, index) => `${index + 1}. ${item}`),
-    "### delegate (§10.2)",
-    ...DECISION_RUBRIC.delegate.map((item, index) => `${index + 1}. ${item}`),
-    "### clarify (§10.3)",
-    ...DECISION_RUBRIC.clarify.map((item, index) => `${index + 1}. ${item}`),
-  ].join("\n");
-}
-
-function renderValidatorDefaultRules(): string {
-  return [
-    "## Validator default rules",
-    ...VALIDATOR_DEFAULT_RULES.map((rule, index) => `${index + 1}. if ${rule.if}, then ${rule.then}`),
-  ].join("\n");
-}
-
-function renderCriticalRules(): string {
-  return [
-    "## CRITICAL defaults",
-    "- Questions ≠ reply. 问句不等于reply.",
-    "- Startup cost matters. 短任务、简单状态/来源追问、一次轻量只读 fresh lookup 默认 main fast path.",
-    "- Hard delegate signals → delegate: explicit background/subagent/parallel, code/file mutation, tests/builds, long commands, multi-step tools, review/validation.",
-    "- fresh_live_lookup, route_hint=delegate, and fast_first_response are NOT hard delegate signals by themselves.",
-    "- Expected >90-120s → delegate. 预计超过90-120秒默认委派.",
-    "- Scope unknown → clarify. scope不明优先clarify.",
-    "- simple version/status/environment lookup → main fast path first when one read-only tool/status query can finish within 20-30s.",
-    "- execution truth/provenance follow-up → check execution coverage first. 查执行事实/查是谁做的 → check execution layer: if supports_provenance_reply → reply.answer; if missing → reply 'no verifiable record' + at most status/task-action tool; NEVER spawn for provenance.",
-  ].join("\n");
-}
-
-function renderLocalJudgeInstructions(): string {
-  return [
-    "## ⛔ HARD CONSTRAINTS — VIOLATION = INVALID OUTPUT",
-    "- You CANNOT write code, scripts, commands, or any executable content.",
-    "- You CANNOT execute, run, or perform any task the user asked.",
-    "- You CANNOT produce anything except the JSON routing decision below.",
-    "- If the user asks to write code/run commands/analyze logs/run tests/build/review/validate → that PROVES route=delegate.",
-    "- Simple status/provenance/version/fresh lookup that needs at most one read-only query is decision_bucket=budgeted_main_then_delegate or must_reply, not immediate delegate.",
-    "- If the user asks who handled prior work or whether it was delegated → CHECK execution.supports_provenance_reply first: if true → route=reply, reply_mode=answer; if false → route=reply, answer 'no verifiable record', at most allow control-plane tools. NEVER spawn to answer provenance questions.",
-    "- confidence field is REQUIRED. Set 0.7 for routine decisions, 0.9 for obvious ones, 0.5 for uncertain ones.",
-    "- is_followup_to_recent_execution, is_new_work, and expected_deliverable are REQUIRED.",
-    "- If the turn asks about previous execution/status/provenance/dispatch/spawn/delivery/failure, set is_followup_to_recent_execution=true, is_new_work=false, expected_deliverable=null, and do NOT delegate just to inspect it.",
-    "- If route=delegate for ordinary work, is_new_work must be true and expected_deliverable must be a concrete verifiable deliverable. If there is no concrete deliverable, route=reply.",
-    "- scope, tool_need_hint, duration_hint fields are REQUIRED. Never omit them.",
-    "- decision_bucket, startup_cost_policy, hard_delegate_signal, and reason_codes are REQUIRED.",
-    "- Your ONLY job: classify the user's intent into route + metadata fields.",
-    "- Any output that is not a JSON object with route/confidence/scope/... fields is INVALID.",
-    "",
-    "## Local judge instructions",
-    "- You are the hot-path authority for route selection ONLY.",
-    "- Top-level route options are ONLY \"reply\" or \"delegate\".",
-    "- Do not invent other route labels.",
-    "- If route=reply, set reply_mode to \"answer\" or \"clarify\".",
-    "- If route=delegate, set delegate_role to the best matching role; otherwise use null.",
-    "- coordination_mode_hint, complexity, scope, tool_need_hint, and duration_hint must use only canonical labels.",
-    "- decision_bucket must be must_reply, must_delegate, or budgeted_main_then_delegate.",
-    "- reason_codes should be concise machine-readable strings explaining the decision.",
-    "- Output JSON only. No prose before or after JSON.",
+    "## Boundary examples",
+    "- Explain a type / answer a concept -> reply, answer, must_reply.",
+    "- Which version/latest/release changed? one read-only check -> reply or delegate with decision_bucket=budgeted_main_then_delegate, not hard delegate.",
+    "- Check repo status/logs, run tests, inspect failures, fix code -> delegate, must_delegate.",
+    "- 后台跑测试并修复失败用例 -> delegate, must_delegate, hard_delegate_signal=true.",
+    "- Was that done by you or a sub-agent? -> reply using execution receipt/no verifiable record; never spawn.",
+    "- I mentioned opencode/GLM config -> reply unless asked to make that agent execute work.",
   ].join("\n");
 }
 
 export function buildLocalJudgeSystemPrompt(): string {
   return [
     "You are OctoClaw local_judge. You are the hot-path routing authority.",
-    "Implement exactly the canonical decision policy spec. Do not improvise. Do not redesign abstractions.",
-    renderCriticalRules(),
-    renderRouteDefinitions(),
-    renderPolicyLabels(),
-    renderIronLaws(),
-    renderAntiReplyBiasRules(),
-    renderDecisionRubric(),
-    renderValidatorDefaultRules(),
-    renderLocalJudgeInstructions(),
-    "## Output JSON schema",
+    "Classify route only. Do not execute or answer the user task.",
+    renderOutputContract(),
+    renderSrP1Rules(),
+    renderBoundaryExamples(),
+    "## JSON schema",
     renderJson(JudgeOutputSchema),
   ].join("\n\n");
 }
