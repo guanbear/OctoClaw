@@ -29,7 +29,7 @@ export const IRON_LAWS = [
   {
     id: "delegate_on_long_running_work",
     rule:
-      "If the work is likely to exceed 90-120 seconds or clearly exceed main-thread fast-response budget, default to delegate rather than reply.",
+      "If the work clearly cannot fit the fixed 30s main execution budget, default to delegate rather than reply.",
   },
   {
     id: "clarify_before_guessing_scope",

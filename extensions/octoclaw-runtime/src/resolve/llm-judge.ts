@@ -204,6 +204,11 @@ function isOllamaEndpoint(baseUrl: string): boolean {
   return baseUrl.includes(":11434") || baseUrl.includes("localhost:11434") || baseUrl.includes("127.0.0.1:11434");
 }
 
+function ollamaKeepAlive(): string {
+  const configured = process.env.OCTOCLAW_JUDGE_OLLAMA_KEEP_ALIVE?.trim();
+  return configured || "30m";
+}
+
 async function postOllamaNative(
   options: OpenAICompatOptions,
   systemPrompt: string,
@@ -219,6 +224,11 @@ async function postOllamaNative(
     stream: false,
     think: false,
     format: "json",
+    keep_alive: ollamaKeepAlive(),
+    options: {
+      temperature: 0,
+      num_predict: options.maxTokens,
+    },
   });
 
   const url = options.baseUrl.replace(/\/v1$/, "").replace(/\/+$/, "") + "/api/chat";
@@ -387,7 +397,7 @@ export async function callLlmJudge(
       buildJudgeSystemPrompt(),
       buildJudgeUserPrompt(input),
       controller.signal,
-      128,
+      192,
     );
     if (process.env.OCTOCLAW_JUDGE_DEBUG) {
       console.log(`[octoclaw-judge] raw response length=${raw.length} preview="${raw.slice(0, 200)}"`);

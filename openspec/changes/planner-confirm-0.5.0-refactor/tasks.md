@@ -231,7 +231,7 @@ Tasks:
 - [x] SR-P1 startup-cost-aware delegation uses runtime-derived buckets: `must_reply/main_fast_path`, `must_delegate`, and `budgeted_main_then_delegate`.
 - [x] SR-P1 short tasks, simple status/provenance follow-up, and one-step fresh lookup stay on main fast path by default.
 - [x] SR-P1 `fresh_live_lookup`, `conversation_control.route_hint=delegate`, and `fast_first_response` are downgraded from hard delegate signals; none can force delegate alone.
-- [x] SR-P1 hard delegate signals still win: explicit background/subagent/parallel request, code edits, tests/builds, long commands, multi-step tools, review/validation, or expected duration over 90-120s.
+- [x] SR-P1 hard delegate signals still win: explicit background/subagent/parallel request, code edits, tests/builds, long commands, multi-step tools, review/validation, or work that clearly cannot fit the fixed 30s main execution budget.
 - [x] SR-P1 explicit-delegate keyword matching does not treat bare mentions of `opencode`, `glm`, model names, or tools as hard delegate unless the user asks them to do work.
 - [x] SR-P1 `budgeted_main_then_delegate` uses a fixed 30s soft main execution budget: expiry records `budgeted_main_escalated_pending`, late final records `budgeted_main_completed_late` without spawn, and the next ordinary tool/prompt boundary escalates through `octoclaw_dispatch` with replay metrics.
 - [x] SR-P1 rule router, local judge, cheap LLM judge, route hints, and AGENTS/system prompt share the same two-class-judge plus runtime-derived-bucket semantics.

@@ -30,6 +30,7 @@ describe("llm judge single-judge mode", () => {
   afterEach(() => {
     delete process.env.OCTOCLAW_JUDGE_FAST;
     delete process.env.OCTOCLAW_JUDGE_DEBUG;
+    delete process.env.OCTOCLAW_JUDGE_OLLAMA_KEEP_ALIVE;
     vi.restoreAllMocks();
   });
 
@@ -111,6 +112,54 @@ describe("llm judge single-judge mode", () => {
     expect(decision._judge_route).toBe("delegate");
     const shadowLog = decision._judge_shadow_log as Record<string, unknown>;
     expect(shadowLog.final_judge_route).toBe("delegate");
+  });
+
+  it("keeps Ollama native judge resident and caps generation", async () => {
+    process.env.OCTOCLAW_JUDGE_OLLAMA_KEEP_ALIVE = "45m";
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(jsonResponse({
+      message: {
+        content: JSON.stringify({
+          route: "reply",
+          confidence: 0.86,
+          is_followup_to_recent_execution: false,
+          is_new_work: false,
+          expected_deliverable: null,
+          reply_mode: "answer",
+          delegate_role: null,
+          coordination_mode_hint: "solo_worker",
+          complexity: "simple",
+          scope: "unknown",
+          tool_need_hint: "none",
+          duration_hint: "short",
+          evidence_required: false,
+          reason_codes: ["simple_reply"],
+        }),
+      },
+      prompt_eval_count: 280,
+      eval_count: 64,
+    }));
+
+    const decision = await resolveStatelessPolicyDecision("你好", {
+      metadata: {
+        _judgeFastConfig: {
+          ...localJudgeConfig,
+          baseUrl: "http://127.0.0.1:11434/v1",
+          timeoutLocalMs: 1200,
+        },
+      },
+    });
+
+    expect(routeDecisionOf(decision).route).toBe("reply");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("http://127.0.0.1:11434/api/chat");
+    const request = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body)) as Record<string, unknown>;
+    expect(request.keep_alive).toBe("45m");
+    expect(request.think).toBe(false);
+    expect(request.format).toBe("json");
+    expect(request.options).toEqual({
+      temperature: 0,
+      num_predict: 192,
+    });
   });
 
   it("requires route hint when judge fast config is absent", async () => {

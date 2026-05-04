@@ -167,7 +167,7 @@ Delegation decisions SHALL account for native spawn cold-start cost and SHALL av
 
 #### Scenario: hard delegate signal
 
-- WHEN the request explicitly asks for background/subagent/parallel work, code edits, tests/builds, long commands, multi-step tools, review/validation, or expected duration over 90-120s
+- WHEN the request explicitly asks for background/subagent/parallel work, code edits, tests/builds, long commands, multi-step tools, review/validation, or work that clearly cannot fit the fixed 30s main execution budget
 - THEN the decision bucket MAY be `must_delegate`
 - AND the decision SHALL record reason codes, duration hint, tool need hint, startup cost policy, and hard delegate signal.
 

@@ -122,7 +122,7 @@
 三段式决策口径：
 
 - `must_reply/main_fast_path`：简单回答、状态/来源追问、澄清问题、单步只读查证、当前上下文可直接完成的任务。
-- `must_delegate`：用户明确要求后台/子 agent/并行、代码修改/测试/构建、长命令、多步工具链、大量上下文阅读、review/验证、预计 90-120 秒以上。
+- `must_delegate`：用户明确要求后台/子 agent/并行、代码修改/测试/构建、长命令、多步工具链、大量上下文阅读、review/验证，或明显无法放进固定 30s main execution budget。
 - `budgeted_main_then_delegate`：无法高置信判断时，主 agent 先在固定 30s soft runtime budget 内尝试；超过预算后进入升级待执行状态，或在需要写操作、长命令、多步工具、测试/build/review/validation 时立即转 `octoclaw_dispatch`。
 
 实现口径：
@@ -1023,7 +1023,7 @@ admission 规则：
 这个优化不能实现成“保守到几乎不委派”。正确形态是三段式：
 
 - `must_reply/main_fast_path`：当前上下文或一次轻量只读工具可完成，且无写操作、无长命令、无多步研究。
-- `must_delegate`：有硬委派信号，例如用户明确要求子 agent/后台/并行、代码修改/测试/构建、多步工具、大量上下文阅读、review/验证、预计 90-120 秒以上。
+- `must_delegate`：有硬委派信号，例如用户明确要求子 agent/后台/并行、代码修改/测试/构建、多步工具、大量上下文阅读、review/验证，或明显无法放进固定 30s main execution budget。
 - `budgeted_main_then_delegate`：中间地带先让主 agent 在固定 30s soft runtime budget 内尝试；预算超限后进入升级待执行状态，或出现写操作/长命令/第二轮以上真实工具时转 `octoclaw_dispatch`。
 
 rule、local judge、cheap LLM judge 和 prompt 注入必须统一为“judge 两档 route + runtime 成本派生三档”的语义；只改 rule 或只改 prompt 都会导致路由抖动。尤其是 `fresh_live_lookup`、`conversation_control.route_hint=delegate`、`fast_first_response` 这些旧信号需要降级，但不能覆盖 `must_delegate` 硬信号。
@@ -1040,7 +1040,7 @@ rule、local judge、cheap LLM judge 和 prompt 注入必须统一为“judge �
 
 默认委派子 agent：
 
-- 预计超过 90-120 秒，或者用户明确接受后台等待。
+- 明显无法放进固定 30s main execution budget，或者用户明确接受后台等待。
 - 需要代码/文件修改、测试、构建、日志排查、环境探测、长时间命令。
 - 需要多步工具链，或者真实工具调用可能超过 1-2 次。
 - 需要大量上下文阅读，容易污染主 agent 上下文。
