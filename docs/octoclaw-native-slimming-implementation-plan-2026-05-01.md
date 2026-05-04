@@ -128,7 +128,7 @@
 实现口径：
 
 - 将 planner path 的 `octoclaw_policy_decide -> octoclaw_dispatch` 合并为更直接的 planner tool（例如 `octoclaw_plan_native_spawn`），或让 `octoclaw_dispatch` 在已有 decision 时直接返回 `NativeSpawnIntent + sessionsSpawnArgs`。
-- local judge 高置信 delegate 且 admission 通过时，system instruction 要求主 agent 直接调用 `sessions_spawn`，不要先解释、总结或二次规划。
+- local judge 高置信 delegate 且 admission 通过时，system instruction 要求主 agent 直接进入 fast/native planner handshake：先调用 `octoclaw_dispatch(fast=true)` 或复用已有 decision 生成/消费 `NativeSpawnIntent`，再调用原生 `sessions_spawn`，最后调用 `octoclaw_dispatch_confirm`；不要先解释、总结或二次规划，也不能绕过 dispatch/gate/confirm 裸调 `sessions_spawn`。
 - `sessionsSpawnArgs` 必须小：只包含 `task/label/runtime/model/thinking/cwd/runTimeoutSeconds/mode/cleanup/sandbox/lightContext` 等 OpenClaw 原生允许字段，不传 `target/channel/to/threadId/replyTo/transport`。
 - planner path 默认传 `sessionsSpawnArgs.lightContext=true`；child prompt 只保留任务、上下文摘要、验收标准、交付格式和必要 guardrail，不塞 parent 长上下文或 raw transcript。
 - child 默认使用快/便宜模型，复杂任务再按 complexity/model policy 升级；`thinking` 默认关闭或低档，`runTimeoutSeconds` 按 expected duration 设置。
