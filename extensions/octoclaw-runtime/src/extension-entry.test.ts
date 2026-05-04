@@ -1610,7 +1610,9 @@ describe("budgeted_main_then_delegate runtime budget", () => {
     expect(policyState.getState(key)?.decision?.route_decision).toMatchObject({
       route: "delegate",
       route_source: "budgeted_main_escalation",
+      is_new_work: true,
     });
+    expect(policyState.getState(key)?.decision).toMatchObject({ is_new_work: true });
     expect(policyState.getState(key)).toMatchObject({
       dispatchStatus: "budgeted_main_escalated",
       dispatchExecuted: false,
@@ -1664,7 +1666,9 @@ describe("budgeted_main_then_delegate runtime budget", () => {
     expect(policyState.getState(key)?.decision?.route_decision).toMatchObject({
       route: "delegate",
       route_source: "budgeted_main_escalation",
+      is_new_work: true,
     });
+    expect(policyState.getState(key)?.decision).toMatchObject({ is_new_work: true });
     await waitForFireAndForget();
     expect(readReplayEvents()).toContainEqual(expect.objectContaining({
       event: "budgeted_main_escalated",

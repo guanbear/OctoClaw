@@ -285,14 +285,26 @@ export function escalateBudgetedMainDecision(decision: UnknownRecord, reason: st
   const routeHintPolicy = asRecord(decision.route_hint_policy);
   const reviewPolicy = asRecord(decision.review_policy);
   const routerDecision = asRecord(decision.router_decision_v2);
+  const expectedDeliverable = asString(
+    decision.expected_deliverable
+    || decision.expectedDeliverable
+    || routeDecision.expected_deliverable
+    || routeDecision.expectedDeliverable,
+  );
   return {
     ...decision,
+    is_new_work: true,
+    isNewWork: true,
+    ...(expectedDeliverable ? { expected_deliverable: expectedDeliverable, expectedDeliverable } : {}),
     route_decision: {
       ...routeDecision,
       route: "delegate",
       system_preferred_route: "delegate",
       route_source: "budgeted_main_escalation",
       dispatch_required: true,
+      is_new_work: true,
+      isNewWork: true,
+      ...(expectedDeliverable ? { expected_deliverable: expectedDeliverable, expectedDeliverable } : {}),
       task_class: "delegated_single",
       protocol: "delegated",
       reason,
