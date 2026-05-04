@@ -215,9 +215,13 @@ describe("octoclaw_dispatch planner backend", () => {
     expect(body.sessionsSpawnArgs.task).toContain("octoclaw.delegate_handoff.v1");
     expect(body.sessionsSpawnArgs.task).toContain(`\"cwd\": \"${tempWorkspace}\"`);
     expect(body.sessionsSpawnArgs.task).toContain("\"contextMode\": \"isolated\"");
-    expect(body.sessionsSpawnArgs.task).toContain("\"maxToolCalls\"");
+    expect(body.sessionsSpawnArgs.task).toContain("\"contextStrategy\": \"bounded_brief_only\"");
+    expect(body.sessionsSpawnArgs.task).toContain("\"workspaceMode\": \"read_only\"");
+    expect(body.sessionsSpawnArgs.task).toContain("\"readScope\": []");
+    expect(body.sessionsSpawnArgs.task).toContain("\"maxToolCalls\": 5");
+    expect(body.sessionsSpawnArgs.task).toContain("avoid broad workspace inventory");
     expect(body.sessionsSpawnArgs.task).toContain("do not infer hidden parent transcript");
-    expect(JSON.stringify(body.sessionsSpawnArgs).length).toBeLessThan(5_500);
+    expect(JSON.stringify(body.sessionsSpawnArgs).length).toBeLessThan(5_000);
     expect(nativeSpawnIntentStore.get(body.spawnIntentId)?.status).toBe("planned");
     expect(countRows("scheduler_queue", "work_contract_id = ?", [contract.workContractId])).toBe(0);
     expect(countRows("task_attempts", "work_contract_id = ?", [contract.workContractId])).toBe(0);
@@ -271,6 +275,7 @@ describe("octoclaw_dispatch planner backend", () => {
     expect(task).toContain("openspec/changes/planner-confirm-0.5.0-refactor/tasks.md");
     expect(task).toContain("\"readScope\"");
     expect(task).toContain("\"workspaceMode\": \"read_only\"");
+    expect(task).toContain("\"contextStrategy\": \"explicit_refs\"");
     expect(task).toContain("\"maxToolCalls\": 6");
     expect(task).toContain("Use local OctoClaw docs first; web is not needed for PC13 evidence.");
     expect(task).not.toContain("SECRET_PARENT_TRANSCRIPT");

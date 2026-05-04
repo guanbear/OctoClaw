@@ -24,6 +24,21 @@ describe("delegate packet builders", () => {
     expect(packet.forbiddenContent).toContain("full_transcript");
   });
 
+  it("deduplicates forbidden content inherited from WorkContract main context", () => {
+    const packet = buildDelegateHandoffPacket({
+      delegateTaskId: "delegate-1",
+      attemptId: "attempt-1",
+      threadBindingKey: "thread-1",
+      currentUserAsk: "Check status",
+      taskBrief: "Check delegated status",
+      modelProfile: "worker_research",
+      forbiddenContent: ["full_transcript", "raw_execution_log"],
+    });
+
+    expect(packet.forbiddenContent.filter((item) => item === "full_transcript")).toHaveLength(1);
+    expect(packet.forbiddenContent).toContain("raw_execution_log");
+  });
+
   it("worker result injection into main agent only includes compact packet", () => {
     const result = buildWorkerResultPacket({
       delegateTaskId: "delegate-1",

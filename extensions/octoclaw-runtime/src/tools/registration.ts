@@ -893,13 +893,23 @@ function normalizePlannerWorkspaceMode(value: unknown, fallback: "read_only" | "
 
 function normalizePlannerRole(value: unknown): "observer" | "default" | "code" | "research" | "review" {
   const role = asString(value);
-  return role === "observer" || role === "code" || role === "research" || role === "review" ? role : "default";
+  if (role === "observer" || role === "code" || role === "research" || role === "review") return role;
+  if (role === "worker_code" || role === "octoclaw-code") return "code";
+  if (role === "worker_research" || role === "octoclaw-research") return "research";
+  if (role === "worker_review" || role === "octoclaw-review") return "review";
+  return "default";
 }
 
 function plannerMaxToolCalls(value: unknown, fallback = 10): number {
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) return fallback;
   return Math.max(2, Math.min(24, Math.floor(numeric)));
+}
+
+function plannerDefaultMaxToolCalls(role: "observer" | "default" | "code" | "research" | "review", hasExplicitContextRefs: boolean): number {
+  if (role === "code" || role === "review") return 14;
+  if (role === "research") return hasExplicitContextRefs ? 8 : 5;
+  return hasExplicitContextRefs ? 8 : 4;
 }
 
 function buildPlannerContextPacket(params: {
@@ -952,36 +962,45 @@ function buildPlannerContextPacket(params: {
     contextRefs.read_scope,
     delegateScope?.read,
     primaryFiles,
-    cwd,
   );
   const writeScope = plannerStringArray(
     contextRefs.writeScope,
     contextRefs.write_scope,
     delegateScope?.write,
   );
+  const artifactRefs = params.workContract?.delegate?.artifactRefs ?? [];
+  const hasExplicitContextRefs = primaryFiles.length > 0 || readScope.length > 0 || writeScope.length > 0 || artifactRefs.length > 0;
+  const role = normalizePlannerRole(params.workContract?.delegate?.role
+    ?? routeDecision.worker_role
+    ?? routeDecision.role
+    ?? routeDecision.task_class
+    ?? routeDecision.worker_pool);
+  const workspaceFallback = role === "code" || writeScope.length > 0 ? "write_allowed" : "read_only";
   const workspaceMode = normalizePlannerWorkspaceMode(
     contextRefs.workspaceMode
       ?? contextRefs.workspace_mode
       ?? delegateScope?.workspaceMode
       ?? metadata.workspaceMode
       ?? metadata.workspace_mode,
-    "write_allowed",
+    workspaceFallback,
   );
-  const role = normalizePlannerRole(params.workContract?.delegate?.role ?? routeDecision.worker_role ?? routeDecision.role);
   const maxToolCalls = plannerMaxToolCalls(
     contextRefs.maxToolCalls
       ?? contextRefs.max_tool_calls
       ?? metadata.maxToolCalls
       ?? metadata.max_tool_calls,
-    role === "review" || role === "code" ? 14 : 10,
+    plannerDefaultMaxToolCalls(role, hasExplicitContextRefs),
   );
+  const defaultSourcePolicy = hasExplicitContextRefs
+    ? "Use explicit refs and local workspace first. Use external web only when the task explicitly needs current outside facts or local refs are insufficient."
+    : "Use the supplied task brief first. No explicit refs were provided, so avoid broad workspace inventory; use external web only when the task explicitly needs current outside facts.";
   const sourcePolicy = optionalString(
     contextRefs.sourcePolicy,
     contextRefs.source_policy,
     metadata.sourcePolicy,
     metadata.source_policy,
-    "Use explicit refs and local workspace first. Use external web only when the task explicitly needs current outside facts or local refs are insufficient.",
-  ) || "Use explicit refs and local workspace first. Use external web only when the task explicitly needs current outside facts or local refs are insufficient.";
+    defaultSourcePolicy,
+  ) || defaultSourcePolicy;
   const threadSummary = optionalString(
     contextRefs.threadSummary,
     contextRefs.thread_summary,
@@ -1021,6 +1040,7 @@ function buildPlannerContextPacket(params: {
       workspaceRoot,
       contextMode: "isolated",
       lightContext: true,
+      contextStrategy: hasExplicitContextRefs ? "explicit_refs" : "bounded_brief_only",
       primaryFiles,
       sourcePolicy,
       executionBudget: {
@@ -1033,7 +1053,9 @@ function buildPlannerContextPacket(params: {
     "```",
     "",
     "Operational rules:",
-    "- Start from primaryFiles/readScope when present; otherwise inspect cwd/workspaceRoot with scoped file search.",
+    hasExplicitContextRefs
+      ? "- Start from primaryFiles/readScope/artifactRefs; do not expand beyond them unless the task cannot be answered otherwise."
+      : "- No primaryFiles/readScope/artifactRefs were supplied. Treat the task as bounded by the brief; avoid broad workspace inventory and use only narrowly targeted read-only checks when indispensable.",
     "- Do not run broad discovery under /Users, memory/wiki search, or web search unless explicit refs fail and the task requires it.",
     "- If a fast file search tool is unavailable, use a scoped fallback under cwd/workspaceRoot only.",
     "- Keep within maxToolCalls when possible; deliver partial findings with caveats instead of exhausting the native run timeout.",

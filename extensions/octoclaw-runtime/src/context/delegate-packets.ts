@@ -66,6 +66,14 @@ export interface MainResumePacket {
   artifactRefs: string[];
 }
 
+function uniqueStrings(values: string[]): string[] {
+  const out: string[] = [];
+  for (const value of values) {
+    if (!out.includes(value)) out.push(value);
+  }
+  return out;
+}
+
 export function buildDelegateHandoffPacket(input: BuildDelegateHandoffPacketInput): DelegateHandoffPacket {
   const excerpts = input.relevantExcerpts?.filter((excerpt) => excerpt.trim().length > 0);
   if (excerpts && excerpts.length > 0 && !input.contextEscalationReason) {
@@ -94,13 +102,13 @@ export function buildDelegateHandoffPacket(input: BuildDelegateHandoffPacketInpu
     relevantExcerpts: excerpts,
     contextEscalationReason: input.contextEscalationReason,
     artifactRefs: input.artifactRefs ?? [],
-    forbiddenContent: [
+    forbiddenContent: uniqueStrings([
       "full_transcript",
       "internal_route_rationale",
       "contamination_guard_text",
       "worker_chain_of_thought",
       ...(input.forbiddenContent ?? []),
-    ],
+    ]),
   };
 }
 
