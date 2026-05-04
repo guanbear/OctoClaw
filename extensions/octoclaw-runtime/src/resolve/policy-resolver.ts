@@ -249,6 +249,15 @@ function coerceStartupDurationHint(value: unknown, fallback: StartupDurationHint
     : fallback;
 }
 
+function coerceStartupDecisionBucket(value: unknown): StartupDecisionBucket | "" {
+  const normalized = asString(value);
+  return normalized === "must_reply"
+    || normalized === "must_delegate"
+    || normalized === "budgeted_main_then_delegate"
+    ? normalized
+    : "";
+}
+
 function promptMatches(prompt: string, pattern: RegExp | RegExp[]): boolean {
   return Array.isArray(pattern)
     ? pattern.some((item) => item.test(prompt))
@@ -327,6 +336,7 @@ function classifyStartupCost(prompt: string, metadata: UnknownRecord = {}): Star
 
   const metadataToolNeed = coerceStartupToolNeedHint(metadata.tool_need_hint ?? metadata.toolNeedHint, "none");
   const metadataDuration = coerceStartupDurationHint(metadata.duration_hint ?? metadata.durationHint, "short");
+  const judgeDecisionBucket = coerceStartupDecisionBucket(metadata._judge_decision_bucket);
   const hardDelegateReasons = isStatusOrProvenanceFollowup ? [] : [
     asBoolean(metadata.requiresDelegation) ? "metadata_requires_delegation" : "",
     asBoolean(metadata.requiresObservation) ? "metadata_requires_observation" : "",
@@ -347,6 +357,8 @@ function classifyStartupCost(prompt: string, metadata: UnknownRecord = {}): Star
     ? "must_reply"
     : hardDelegateSignal
       ? "must_delegate"
+      : judgeDecisionBucket === "budgeted_main_then_delegate"
+        ? "budgeted_main_then_delegate"
       : requiresFreshLookup || requiresStateGrounding || routeHint === "delegate" || metadataToolNeed === "maybe" || metadataDuration === "medium"
         ? "budgeted_main_then_delegate"
         : "must_reply";
@@ -370,6 +382,7 @@ function classifyStartupCost(prompt: string, metadata: UnknownRecord = {}): Star
     hardDelegateSignal ? "hard_delegate_signal" : "no_hard_delegate_signal",
     isStatusOrProvenanceFollowup ? "startup_status_or_provenance_followup_reply" : "",
     isExecutionFollowup && !hardDelegateSignal && !isStatusOrProvenanceFollowup ? "startup_execution_followup_without_new_work_reply" : "",
+    judgeDecisionBucket ? `judge_decision_bucket:${judgeDecisionBucket}` : "",
     intentClass ? `intent:${intentClass}` : "",
     requiresFreshLookup ? "fresh_lookup_budgeted_main_first" : "",
     requiresStateGrounding ? "state_grounding_budgeted_main_first" : "",
@@ -1982,6 +1995,8 @@ export async function resolveStatelessPolicyDecision(task: string, options: Unkn
           ? String(judgeResult.expected_deliverable ?? judgeResult.expectedDeliverable).trim() || null
           : null;
         delegateReasonCodes = coerceDelegateReasonCodes(judgeResult.delegateReasonCodes);
+        const judgeDecisionBucket = coerceStartupDecisionBucket(judgeResult.decisionBucket ?? judgeResult.decision_bucket);
+        if (judgeDecisionBucket) metadata._judge_decision_bucket = judgeDecisionBucket;
 
         // ── Validator default rules (spec §11) ──
         // tool_need_hint / duration_hint must influence route, not just be telemetry.
