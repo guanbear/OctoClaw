@@ -1641,14 +1641,46 @@ describe("budgeted_main_then_delegate runtime budget", () => {
 
     const key = "agent:main:slack:channel:c0as4dappu3:thread:t-budget-timeout-dispatch";
     const now = Date.now();
+    const prompt = "整理这轮 SR-P1 evidence";
+    const initialReplyContract = buildWorkContractFromPolicy(
+      key,
+      prompt,
+      "undetermined",
+      coverageSnapshot(),
+      buildWorkDecisionSeal("local_judge", "reply", ["budgeted_main_initial_reply"]),
+      {
+        reply: {
+          replyMode: "answer",
+          grounding: "none",
+          allowedTools: [],
+          forbiddenTools: ["octoclaw_dispatch", "spawn"],
+          evidenceRefs: [],
+        },
+      },
+    );
+    expect(saveWorkContract(initialReplyContract)).toBe(true);
     const pendingBudget = budgetedMainState(now - BUDGETED_MAIN_MAX_WALL_MS - 1_000, {
       escalatedPending: true,
       escalated_pending: true,
       reason: "wall_time_over_budget",
+      workContractId: initialReplyContract.workContractId,
+      work_contract_id: initialReplyContract.workContractId,
     });
     policyState.setState(key, {
-      prompt: "整理这轮 SR-P1 evidence",
-      decision: budgetedMainDecision(),
+      prompt,
+      workContractId: initialReplyContract.workContractId,
+      work_contract_id: initialReplyContract.workContractId,
+      decision: {
+        ...budgetedMainDecision(),
+        workContractId: initialReplyContract.workContractId,
+        work_contract: {
+          workContractId: initialReplyContract.workContractId,
+          work_contract_id: initialReplyContract.workContractId,
+          route: "reply",
+          status: "sealed",
+          forbiddenTools: ["octoclaw_dispatch", "spawn"],
+        },
+      },
       budgetedMain: pendingBudget,
       budgeted_main: pendingBudget,
       createdAt: now - 35_000,
@@ -1669,10 +1701,22 @@ describe("budgeted_main_then_delegate runtime budget", () => {
       is_new_work: true,
     });
     expect(policyState.getState(key)?.decision).toMatchObject({ is_new_work: true });
+    const escalatedState = policyState.getState(key);
+    const escalatedWorkContractId = String(escalatedState?.workContractId ?? "");
+    expect(escalatedWorkContractId).toBeTruthy();
+    expect(escalatedWorkContractId).not.toBe(initialReplyContract.workContractId);
+    expect(escalatedState?.decision?.work_contract).toMatchObject({
+      workContractId: escalatedWorkContractId,
+      route: "delegate",
+      status: "sealed",
+    });
+    expect(loadWorkContract(initialReplyContract.workContractId)?.route).toBe("reply");
+    expect(loadWorkContract(escalatedWorkContractId)?.route).toBe("delegate");
     await waitForFireAndForget();
     expect(readReplayEvents()).toContainEqual(expect.objectContaining({
       event: "budgeted_main_escalated",
       reason: "wall_time_over_budget",
+      workContractId: escalatedWorkContractId,
     }));
     policyState.clearState(key);
   });

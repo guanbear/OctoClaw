@@ -45,7 +45,7 @@ import {
   resolvePolicyStateKeys,
 } from "./resolve/session.js";
 import { checkActiveTaskRecovery, resolvePolicyDecisionForContext } from "./resolve/policy-resolver.js";
-import { envOverrides, resolveReplayLogPath, resolveTaskStatePath, resolveWorkspaceRoot } from "./resolve/env.js";
+import { envOverrides, resolveReplayLogPath, resolveTaskStatePath, resolveWorkspaceRoot, stableId } from "./resolve/env.js";
 import {
   DEFAULT_TASK_STATE_RETENTION_MIN_RUN_INTERVAL_MS,
   pruneTaskStateCache,
@@ -81,8 +81,11 @@ import { policyState, type PolicyStateEntry } from "./state/policy-state.js";
 import { getCommandRegistrations, getToolRegistrations } from "./tools/registration.js";
 import { evaluateNativeSpawnGate } from "./delegate/native-spawn-gate.js";
 import { isPlannerAllowedForSession, resolveSpawnBackend, shouldRunChildFinalizerRecovery, shouldRunDeliveryOutboxFlush } from "./config/index.js";
-import { findWorkContractByNativeChildSessionKey, loadWorkContract, updateWorkContract } from "./work-contract/store.js";
-import type { WorkContract } from "@octoclaw/contracts/work-contract";
+import { findWorkContractByNativeChildSessionKey, loadWorkContract, saveWorkContract, updateWorkContract } from "./work-contract/store.js";
+import { compactWorkContractView, type ContextCoverageSnapshot, type DelegateContract, type IntentClass, type WorkContract, type WorkDecisionSource } from "@octoclaw/contracts/work-contract";
+import { buildWorkContractFromPolicy, buildWorkDecisionSeal } from "./work-contract/builders.js";
+import { buildExecutionCoverageLayer } from "./resolve/execution-coverage-precheck.js";
+import { buildMemoryCoverageLayer } from "./resolve/memory-coverage-precheck.js";
 import {
   BUDGETED_MAIN_MAX_WALL_MS,
   buildBudgetedMainMetrics,
@@ -2069,6 +2072,162 @@ function budgetedMainVisibleStartAt(state: UnknownRecord, now: number): number {
   return Number.isFinite(candidate) && candidate > 0 ? candidate : now;
 }
 
+function budgetedMainIntentClass(decision: UnknownRecord): IntentClass {
+  const routeDecision = asRecord(decision.route_decision);
+  const request = asRecord(decision.request);
+  const metadata = asRecord(request.metadata);
+  const conversationControl = asRecord(metadata.conversation_control);
+  const raw = stringValue(
+    decision.intent_class
+      || routeDecision.intent_class
+      || conversationControl.intent_class
+      || "delegated_work",
+  );
+  return raw === "plain_chat"
+    || raw === "runtime_read_model"
+    || raw === "execution_followup"
+    || raw === "local_surface_lookup"
+    || raw === "fresh_live_lookup"
+    || raw === "delegated_work"
+    || raw === "undetermined"
+    ? raw
+    : "delegated_work";
+}
+
+function budgetedMainDecisionSource(decision: UnknownRecord): WorkDecisionSource {
+  const routeDecision = asRecord(decision.route_decision);
+  const raw = stringValue(decision._judge_source || routeDecision.final_judge_source || routeDecision.route_source || "local_judge");
+  if (raw === "continuation"
+    || raw === "execution_coverage"
+    || raw === "memory_coverage"
+    || raw === "local_judge"
+    || raw === "remote_judge"
+    || raw === "validator"
+    || raw === "main_agent_route_hint"
+    || raw === "policy_rule"
+  ) {
+    return raw;
+  }
+  return "local_judge";
+}
+
+function budgetedMainCoverageSnapshot(stateKey: string): ContextCoverageSnapshot {
+  const execution = buildExecutionCoverageLayer([stateKey]);
+  const memory = buildMemoryCoverageLayer();
+  const conflict = Boolean((execution.coverage && execution.coverage !== "none") && (memory.coverage && memory.coverage !== "none"));
+  return {
+    precheckOrder: [
+      "conversation_grounding",
+      "continuation_route_reuse",
+      "execution_coverage",
+      "memory_coverage",
+      "build_judge_context_packet",
+      "local_judge",
+      "validator_or_remote",
+      "route_seal_commit",
+    ],
+    execution,
+    memory,
+    conflict,
+    authority: conflict
+      ? "execution_wins"
+      : execution.coverage && execution.coverage !== "none"
+        ? "execution_wins"
+        : memory.coverage && memory.coverage !== "none"
+          ? "memory_only"
+          : "none",
+  };
+}
+
+function attachBudgetedMainDelegateWorkContract(input: {
+  stateKey: string;
+  state: UnknownRecord;
+  decision: UnknownRecord;
+  reason: string;
+  now: number;
+}): { decision: UnknownRecord; workContractId: string } {
+  const existingContract = asRecord(input.decision.work_contract);
+  if (stringValue(existingContract.route) === "delegate") {
+    const existingId = stringValue(existingContract.workContractId || existingContract.work_contract_id || input.decision.workContractId || input.decision.work_contract_id);
+    if (existingId && loadWorkContract(existingId)?.route === "delegate") {
+      return { decision: input.decision, workContractId: existingId };
+    }
+  }
+
+  const routeDecision = asRecord(input.decision.route_decision);
+  const expectedDeliverable = stringValue(
+    input.decision.expected_deliverable
+      || input.decision.expectedDeliverable
+      || routeDecision.expected_deliverable
+      || routeDecision.expectedDeliverable
+      || input.state.prompt,
+  );
+  const userAsk = stringValue(input.state.prompt)
+    || stringValue(asRecord(input.decision.request).prompt)
+    || expectedDeliverable
+    || "Budgeted main escalation";
+  const reasonCodes = Array.from(new Set([
+    ...stringArray(routeDecision.reason_codes),
+    "budgeted_main_escalated",
+    `budgeted_main_escalation:${input.reason}`,
+  ]));
+  const coverage = budgetedMainCoverageSnapshot(input.stateKey);
+  const decisionSeal = buildWorkDecisionSeal(
+    budgetedMainDecisionSource(input.decision),
+    "delegate",
+    reasonCodes,
+    {
+      delegateRole: "default",
+      confidence: typeof input.decision.judge_confidence === "number" ? input.decision.judge_confidence : undefined,
+    },
+  );
+  const delegateTaskId = stableId("delegate-task", [
+    input.stateKey,
+    userAsk,
+    input.reason,
+    String(input.now),
+  ]);
+  const delegate: DelegateContract = {
+    delegateTaskId,
+    currentAttemptId: `${delegateTaskId}:attempt:1`,
+    role: "default",
+    coordinationMode: "solo_worker",
+    acceptanceCriteria: [expectedDeliverable || "Return a compact result that satisfies the original request."],
+    scope: {
+      read: ["workspace"],
+      write: ["workspace"],
+      workspaceMode: "write_allowed",
+      scopeFingerprint: stableId("scope", [input.stateKey, userAsk, input.reason]),
+    },
+    modelProfile: stringValue(routeDecision.worker_pool || routeDecision.model || asRecord(input.decision.request).model) || "default",
+    nativeBinding: null,
+    childSessions: [],
+    artifactRefs: [],
+    nextAction: "dispatch",
+  };
+  const contract = buildWorkContractFromPolicy(
+    input.stateKey,
+    userAsk,
+    budgetedMainIntentClass(input.decision),
+    coverage,
+    decisionSeal,
+    { delegate },
+  );
+  if (!saveWorkContract(contract)) {
+    return { decision: input.decision, workContractId: "" };
+  }
+
+  return {
+    decision: {
+      ...input.decision,
+      workContractId: contract.workContractId,
+      work_contract_id: contract.workContractId,
+      work_contract: compactWorkContractView(contract),
+    },
+    workContractId: contract.workContractId,
+  };
+}
+
 function updateBudgetedMainForContext(input: {
   stateKey: string;
   ctx: UnknownRecord;
@@ -2112,8 +2271,8 @@ async function recordBudgetedMainEvent(input: {
     now,
     reason: input.reason,
     sessionKey: input.stateKey,
-    workContractId: budgetedMainWorkContractId(input.state, input.decision),
-    spawnIntentId: budgetedMainSpawnIntentId(input.state),
+    workContractId: input.budgetState.workContractId || budgetedMainWorkContractId(input.state, input.decision),
+    spawnIntentId: input.budgetState.spawnIntentId || budgetedMainSpawnIntentId(input.state),
   });
   await recordPolicyReplay(
     input.event,
@@ -2293,13 +2452,22 @@ async function escalateBudgetedMainForTool(input: {
   logger?: LoggerLike;
 }): Promise<{ state: PolicyStateEntry | null; decision: UnknownRecord }> {
   const now = Date.now();
-  const escalatedDecision = escalateBudgetedMainDecision(input.decision, input.reason);
+  const escalatedBaseDecision = escalateBudgetedMainDecision(input.decision, input.reason);
+  const attached = attachBudgetedMainDelegateWorkContract({
+    stateKey: input.stateKey,
+    state: input.state,
+    decision: escalatedBaseDecision,
+    reason: input.reason,
+    now,
+  });
+  const escalatedDecision = attached.decision;
   const escalatedBudget: BudgetedMainState = {
     ...input.budgetState,
     active: false,
     escalatedAt: now,
     escalatedPending: false,
     reason: input.reason,
+    workContractId: attached.workContractId || input.budgetState.workContractId,
   };
   clearBudgetedMainTimer(input.stateKey);
   const nextState = updateBudgetedMainForContext({
@@ -2317,6 +2485,7 @@ async function escalateBudgetedMainForTool(input: {
       spawnExecuted: false,
       budgeted_main_escalated: true,
       budgeted_main_escalated_at: new Date(now).toISOString(),
+      ...(attached.workContractId ? { workContractId: attached.workContractId, work_contract_id: attached.workContractId } : {}),
     },
   });
   await recordBudgetedMainEvent({
