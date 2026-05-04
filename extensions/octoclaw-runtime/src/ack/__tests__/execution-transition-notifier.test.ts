@@ -21,6 +21,7 @@ type ReplaySpy = MockInstance<typeof import("../../replay/replay.js").recordPoli
 
 describe("execution transition notifier", () => {
   beforeEach(async () => {
+    process.env.OCTOCLAW_LEGACY_CLI_DELIVERY = "1";
     resetExecTransitionState();
     vi.restoreAllMocks();
     const { envOverrides } = await import("../../resolve/env.js");

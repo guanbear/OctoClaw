@@ -11,6 +11,7 @@ type ReplaySpy = MockInstance<typeof import("../../replay/replay.js").recordPoli
 
 describe("delegate without dispatch notice", () => {
   beforeEach(() => {
+    process.env.OCTOCLAW_LEGACY_CLI_DELIVERY = "1";
     resetDelegateWithoutDispatchState();
     vi.restoreAllMocks();
   });

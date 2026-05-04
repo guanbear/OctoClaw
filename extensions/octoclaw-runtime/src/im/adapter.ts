@@ -1,3 +1,5 @@
+import type { MessageDeliveryKind, MessageDeliveryProvenance, MessageDeliveryTargetSource } from "./delivery-port.js";
+
 export type IMCapabilityLevel = "L0" | "L1" | "L2";
 
 export interface IMProjectionFooter {
@@ -24,6 +26,11 @@ export interface IMSendParams {
   cwd?: string;
   suppressProjectionFooter?: boolean;
   projectionFooter?: IMProjectionFooter;
+  deliveryKind?: MessageDeliveryKind;
+  deliveryTargetSource?: MessageDeliveryTargetSource;
+  deliveryProvenance?: MessageDeliveryProvenance;
+  footerMode?: "off" | "debug";
+  dedupeKey?: string;
 }
 
 export interface IMSendResult {
@@ -32,6 +39,9 @@ export interface IMSendResult {
   messageId?: string;
   threadTs?: string;
   error?: string;
+  transport?: string;
+  targetSource?: string;
+  footerSource?: string;
 }
 
 export interface IMReactParams {

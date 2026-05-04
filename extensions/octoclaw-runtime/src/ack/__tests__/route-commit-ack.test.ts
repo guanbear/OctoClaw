@@ -53,6 +53,7 @@ function decision(overrides: Record<string, unknown> = {}): Record<string, unkno
 
 describe("route commit ACK", () => {
   beforeEach(() => {
+    process.env.OCTOCLAW_LEGACY_CLI_DELIVERY = "1";
     resetRouteCommitAckState();
     vi.clearAllMocks();
     useMockAdapter = false;

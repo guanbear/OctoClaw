@@ -221,6 +221,9 @@ async function sendRouteCommitAckDirect(
     timeoutMs: 5000,
     cwd: asString(cwd) || resolveWorkspaceRoot(),
     suppressProjectionFooter: true,
+    deliveryKind: "neutral_ack",
+    deliveryTargetSource: asString(replyToMessageId) ? "inbound_anchor" : "session_fallback",
+    footerMode: "off",
   });
   return {
     attempted: result.error !== "no_im_adapter",
