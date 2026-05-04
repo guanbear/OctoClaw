@@ -218,6 +218,52 @@ describe("octoclaw_dispatch planner backend", () => {
     expect(countRows("completion_bindings", "work_contract_id = ?", [contract.workContractId])).toBe(0);
   });
 
+  it("does not re-materialize legacy dispatch after native planner spawn is already accepted", async () => {
+    process.env.OCTOCLAW_SPAWN_BACKEND = "planner";
+    const contract = seedWorkContract();
+    contract.nativeSpawnRefs = {
+      openclawRunId: "run-existing-planner",
+      childSessionKey: "agent:main:subagent:existing-planner",
+      spawnIntentId: "nsp-existing-planner",
+      spawnBackend: "sessions_spawn_planner",
+      spawnMode: "run",
+    };
+    contract.telemetry = {
+      ...contract.telemetry,
+      dispatchExecuted: true,
+      spawnExecuted: true,
+      childRunId: "run-existing-planner",
+      childSessionKey: "agent:main:subagent:existing-planner",
+    };
+    saveWorkContract(contract);
+
+    const response = await dispatchTool().execute({
+      task: contract.userAsk,
+      workContractId: contract.workContractId,
+      policyJson: JSON.stringify(delegateDecision(contract)),
+      timeoutSeconds: 900,
+    }, {
+      sessionKey: contract.sessionKey,
+      sessionId: "session-planner-already-started",
+      cwd: tempWorkspace,
+      helperInvoker: () => {
+        throw new Error("legacy helper must not run for accepted native planner refs");
+      },
+    });
+
+    const body = JSON.parse(String(response.text));
+    expect(body.ok).toBe(true);
+    expect(body.status).toBe("already_started");
+    expect(body.spawn_executed).toBe(true);
+    expect(body.run_id).toBe("run-existing-planner");
+    expect(body.child_session_key).toBe("agent:main:subagent:existing-planner");
+    expect(body.sessionsSpawnArgs).toBeUndefined();
+    expect(body.nextTool).toBeUndefined();
+    const events = readReplayEvents();
+    expect(events.some((event) => event.event === "dispatch_native_spawn_already_started")).toBe(true);
+    expect(events.some((event) => event.event === "execution_transition")).toBe(false);
+  });
+
   it("uses planner backend when allowlist matches the base Slack channel for a thread session", async () => {
     process.env.OCTOCLAW_SPAWN_BACKEND = "planner";
     process.env.OCTOCLAW_PLANNER_ALLOWLIST = "agent:main:slack:channel:c0as4dappu3";

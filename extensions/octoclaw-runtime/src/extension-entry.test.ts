@@ -2329,6 +2329,86 @@ describe("before_tool_call route hint guard", () => {
     nativeSpawnIntentStore.clearForTests();
     delete process.env.OCTOCLAW_SPAWN_BACKEND;
   });
+
+  it("records budget escalation metrics when budgeted main reaches sessions_spawn gate", async () => {
+    nativeSpawnIntentStore.clearForTests();
+    process.env.OCTOCLAW_SPAWN_BACKEND = "planner";
+    const handlers = new Map<string, Function>();
+    plugin.register({
+      on: (event, handler) => handlers.set(event, handler),
+      registerTool: () => {},
+      registerCommand: () => {},
+      logger: {},
+    });
+
+    const key = "agent:main:slack:channel:c0as4dappu3:thread:t-spawn-gate-budgeted-main";
+    const now = Date.now();
+    const args = { task: "summarize current runtime evidence", runtime: "subagent" as const, mode: "run" as const, cleanup: "keep" as const, sandbox: "inherit" as const, lightContext: true };
+    const intent = nativeSpawnIntentStore.create({
+      workContractId: "wc-spawn-gate-budgeted-main",
+      sessionKey: key,
+      sessionsSpawnArgs: args,
+      ttlMs: 60_000,
+    });
+    policyState.setState(key, {
+      decision: {
+        request: { session_key: key },
+        route_decision: { route: "delegate", decision_bucket: "budgeted_main_then_delegate" },
+        hook_interface: { before_tool_call: { enabled: false } },
+        route_hint_policy: { required: false, submitted: true },
+        tool_policy: { must_delegate_via: "octoclaw_dispatch", allowed_control_tools: ["octoclaw_dispatch", "octoclaw_status"] },
+      },
+      routeHintSubmitted: true,
+      inboundObservedAt: now - 45_000,
+      budgetedMain: budgetedMainState(now - 31_000, {
+        reason: "wall_time_over_budget",
+        escalatedPending: true,
+        escalated_pending: true,
+      }),
+      budgeted_main: budgetedMainState(now - 31_000, {
+        reason: "wall_time_over_budget",
+        escalatedPending: true,
+        escalated_pending: true,
+      }),
+      createdAt: now - 45_000,
+      updatedAt: now,
+    });
+
+    const beforeToolCall = handlers.get("before_tool_call");
+    expect(beforeToolCall).toBeTruthy();
+    const result = await beforeToolCall!(
+      { toolName: "sessions_spawn", params: args },
+      { sessionKey: key, agentId: "main" },
+    );
+
+    expect(result).toBeUndefined();
+    expect(nativeSpawnIntentStore.get(intent.spawnIntentId)?.status).toBe("spawn_call_started");
+    await waitForFireAndForget();
+    const events = readReplayEvents();
+    expect(events).toContainEqual(expect.objectContaining({
+      event: "budgeted_main_escalated",
+      reason: "wall_time_over_budget",
+      decision_bucket: "budgeted_main_then_delegate",
+      budgetEscalationReason: "wall_time_over_budget",
+      workContractId: intent.workContractId,
+      spawnIntentId: intent.spawnIntentId,
+    }));
+    expect(events).toContainEqual(expect.objectContaining({
+      event: "sessions_spawn_intent_allowed",
+      spawn_intent_id: intent.spawnIntentId,
+      work_contract_id: intent.workContractId,
+      decision_bucket: "budgeted_main_then_delegate",
+    }));
+    expect(policyState.getState(key)?.budgetedMain).toMatchObject({
+      active: false,
+      reason: "wall_time_over_budget",
+      workContractId: intent.workContractId,
+      spawnIntentId: intent.spawnIntentId,
+    });
+    policyState.clearState(key);
+    nativeSpawnIntentStore.clearForTests();
+    delete process.env.OCTOCLAW_SPAWN_BACKEND;
+  });
 });
 
 describe("PC7 planner path legacy runtime disable", () => {

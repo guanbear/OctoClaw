@@ -413,6 +413,65 @@ function validateDispatchWorkContract(contract: WorkContract | null, workContrac
   return { ok: true, contract };
 }
 
+function confirmedNativePlannerRefs(contract: WorkContract | null): {
+  runId: string;
+  childRunId: string;
+  childSessionKey: string;
+  spawnIntentId: string;
+} | null {
+  if (!contract) return null;
+  const refs = asRecord(contract.nativeSpawnRefs);
+  const telemetry = asRecord(contract.telemetry);
+  const spawnBackend = asString(refs.spawnBackend);
+  const runId = asString(refs.openclawRunId || telemetry.openclawRunId);
+  if (spawnBackend !== "sessions_spawn_planner" || !runId) return null;
+  return {
+    runId,
+    childRunId: asString(refs.childRunId || telemetry.childRunId || runId),
+    childSessionKey: asString(refs.childSessionKey || telemetry.childSessionKey),
+    spawnIntentId: asString(refs.spawnIntentId),
+  };
+}
+
+function nativePlannerAlreadyStartedResponse(params: {
+  workContract: WorkContract;
+  refs: NonNullable<ReturnType<typeof confirmedNativePlannerRefs>>;
+  workerPool: string;
+  model: string;
+}): Record<string, unknown> {
+  const delegateTaskId = asString(params.workContract.delegate?.delegateTaskId);
+  const attemptId = asString(params.workContract.delegate?.currentAttemptId);
+  const body = {
+    ok: true,
+    route: "delegate",
+    status: "already_started",
+    delegation_method: "octoclaw_dispatch_planner",
+    work_contract_id: params.workContract.workContractId,
+    workContractId: params.workContract.workContractId,
+    delegate_task_id: delegateTaskId || null,
+    delegateTaskId: delegateTaskId || null,
+    attempt_id: attemptId || null,
+    attemptId: attemptId || null,
+    spawn_intent_id: params.refs.spawnIntentId || null,
+    spawnIntentId: params.refs.spawnIntentId || null,
+    run_id: params.refs.runId,
+    runId: params.refs.runId,
+    child_run_id: params.refs.childRunId || params.refs.runId,
+    childRunId: params.refs.childRunId || params.refs.runId,
+    child_session_key: params.refs.childSessionKey || null,
+    childSessionKey: params.refs.childSessionKey || null,
+    worker_pool: params.workerPool,
+    model: params.model,
+    dispatch_executed: true,
+    spawn_executed: true,
+    materialized: false,
+    result_materialized: false,
+    ack_sent: false,
+    instruction: "Native sessions_spawn is already accepted for this WorkContract. Do not call sessions_spawn or legacy dispatch again; wait for native_announce completion or use octoclaw_status.",
+  };
+  return toolResponse(JSON.stringify(body), body);
+}
+
 function nativeFlowStatusFromSubstrate(substrate: string): NativeFlowStatus {
   switch (substrate) {
     case "running":
@@ -2662,6 +2721,55 @@ export function getToolRegistrations(options: ToolRegistrationOptions = {}): Too
           metadata.expected_at = Date.now() + expectedSeconds * 1000;
         }
 
+        const existingNativePlannerRefs = confirmedNativePlannerRefs(dispatchWorkContract);
+        if (isDelegatedRoute && dispatchWorkContract && existingNativePlannerRefs) {
+          const replaySessionKey = resolveDispatchSessionKey(ctx, metadata, { stateKey, state, cachedDecision })
+            || asString(metadata.session_key || managedSessionKey || stateKey);
+          const delegateTaskId = asString(dispatchWorkContract?.delegate?.delegateTaskId);
+          const attemptId = asString(dispatchWorkContract?.delegate?.currentAttemptId);
+          const nextState = {
+            ...(state ?? {}),
+            prompt: asString(params.task),
+            decision: cachedDecision,
+            delegated: true,
+            dispatchRoute: "delegate",
+            dispatchStatus: "already_started",
+            dispatchExecuted: true,
+            spawnExecuted: true,
+            childSessionKey: existingNativePlannerRefs.childSessionKey,
+            childRunId: existingNativePlannerRefs.childRunId || existingNativePlannerRefs.runId,
+            runId: existingNativePlannerRefs.runId,
+            workContractId: dispatchWorkContract.workContractId,
+            spawnIntentId: existingNativePlannerRefs.spawnIntentId,
+            updatedAt: Date.now(),
+          };
+          setPolicyStateForContext(ctx, nextState, replaySessionKey || stateKey);
+          if (stateKey && replaySessionKey && stateKey !== replaySessionKey) {
+            setPolicyStateForContext(ctx, nextState, stateKey);
+          }
+          await recordPolicyReplay("dispatch_native_spawn_already_started", {
+            sessionKey: replaySessionKey,
+            sessionId: asString(ctx.sessionId),
+            route: "delegate",
+            work_contract_id: dispatchWorkContract.workContractId,
+            delegate_task_id: delegateTaskId,
+            attempt_id: attemptId,
+            spawn_intent_id: existingNativePlannerRefs.spawnIntentId,
+            run_id: existingNativePlannerRefs.runId,
+            child_run_id: existingNativePlannerRefs.childRunId || existingNativePlannerRefs.runId,
+            child_session_key: existingNativePlannerRefs.childSessionKey,
+            dispatch_executed: true,
+            spawn_executed: true,
+            materialized: false,
+          }, toolLogger(ctx), null);
+          return nativePlannerAlreadyStartedResponse({
+            workContract: dispatchWorkContract,
+            refs: existingNativePlannerRefs,
+            workerPool: asString(asRecord(cachedDecision.route_decision).worker_pool),
+            model: selectedModel || asString(metadata.model),
+          });
+        }
+
         const helperInvoker = readHelperInvoker(asRecord(metadata).helperInvoker, ctx.helperInvoker);
         let schedulerQueueId = "";
         let schedulerDispatchState: "inactive" | "bypassed" | "leased" = "inactive";
@@ -2685,10 +2793,21 @@ export function getToolRegistrations(options: ToolRegistrationOptions = {}): Too
             managedSessionKey,
             stateKey,
             params.sessionKey,
+            metadata.session_key,
             initialMetadata.session_key,
             ctx.sessionKey,
             ctx.canonicalSessionKey,
             ctx.sessionId,
+            state?.canonicalSessionKey,
+            state?.canonical_session_key,
+            state?.ackGuardKey,
+            state?.ack_guard_key,
+            state?.sessionKey,
+            state?.session_key,
+            asRecord(state?.deliveryTarget).sessionKey,
+            asRecord(state?.deliveryTarget).session_key,
+            asRecord(state?.delivery_target).sessionKey,
+            asRecord(state?.delivery_target).session_key,
           );
           const plannerEnabled = spawnBackend === "planner"
             && plannerSessionCandidates.some((candidate) => isPlannerAllowedForSession(candidate));

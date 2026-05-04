@@ -2294,7 +2294,7 @@ async function recordBudgetedMainEvent(input: {
       sessionId: stringValue(input.ctx.sessionId),
     },
     input.logger,
-    input.decision,
+    null,
   );
 }
 
@@ -3697,12 +3697,61 @@ export const plugin = {
             dispatchStatus: "spawn_call_started",
             controlToolsSeen: Array.from(new Set([...(Array.isArray(current.controlToolsSeen) ? current.controlToolsSeen : []), toolName])),
           }));
+          const decisionBucket = stringValue(asRecord(decision.route_decision).decision_bucket || decision._decision_bucket || asRecord(asRecord(decision.route_decision).startup_cost_policy).decision_bucket);
+          if (decisionBucket === "budgeted_main_then_delegate") {
+            const now = Date.now();
+            const stateRecord = asRecord(state);
+            const liveBudget = readBudgetedMainState(stateRecord);
+            if (!liveBudget?.escalatedAt) {
+              const startedBudget = liveBudget ?? buildBudgetedMainState({
+                now,
+                decision,
+                visibleStartAt: budgetedMainVisibleStartAt(stateRecord, now),
+                budgetStartSource: "sessions_spawn_gate_fallback",
+                workContractId: gate.intent.workContractId,
+                spawnIntentId: gate.intent.spawnIntentId,
+              });
+              const reason = liveBudget?.escalatedPending || now - startedBudget.startedAt >= startedBudget.maxWallMs
+                ? "wall_time_over_budget"
+                : "main_agent_called_dispatch";
+              const escalatedBudget = {
+                ...startedBudget,
+                active: false,
+                escalatedAt: now,
+                escalatedPending: false,
+                reason,
+                workContractId: gate.intent.workContractId,
+                spawnIntentId: gate.intent.spawnIntentId,
+              };
+              updateBudgetedMainForContext({
+                stateKey: stateKey || gate.intent.sessionKey,
+                ctx,
+                state: stateRecord,
+                budgetState: escalatedBudget,
+                extra: {
+                  budgeted_main_escalated: true,
+                  budgeted_main_escalated_at: new Date(now).toISOString(),
+                },
+              });
+              await recordBudgetedMainEvent({
+                event: "budgeted_main_escalated",
+                stateKey: stateKey || gate.intent.sessionKey,
+                ctx,
+                state: stateRecord,
+                decision,
+                budgetState: escalatedBudget,
+                reason,
+                logger: pi.logger,
+                now,
+              }).catch(() => {});
+            }
+          }
           void recordPolicyReplay("sessions_spawn_intent_allowed", {
             sessionKey: stateKey || gate.intent.sessionKey,
             sessionId: stringValue(ctx.sessionId),
             route: stringValue(asRecord(decision.route_decision).route),
-            decision_bucket: stringValue(asRecord(decision.route_decision).decision_bucket || decision._decision_bucket || asRecord(asRecord(decision.route_decision).startup_cost_policy).decision_bucket),
-            decisionBucket: stringValue(asRecord(decision.route_decision).decision_bucket || decision._decision_bucket || asRecord(asRecord(decision.route_decision).startup_cost_policy).decision_bucket),
+            decision_bucket: decisionBucket,
+            decisionBucket,
             toolName,
             spawn_intent_id: gate.intent.spawnIntentId,
             work_contract_id: gate.intent.workContractId,
