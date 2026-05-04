@@ -114,6 +114,7 @@ function compactDefined<T extends CompactParentPacket>(packet: T): T {
 }
 
 async function sendExecutionTransitionMessage(
+  transitionKind: ExecutionTransitionKind,
   sessionKey: string,
   message: string,
   replyToMessageId?: string,
@@ -140,6 +141,9 @@ async function sendExecutionTransitionMessage(
     timeoutMs: 5000,
     cwd: asString(cwd) || resolveWorkspaceRoot(),
     suppressProjectionFooter: true,
+    deliveryKind: transitionKind === "spawn_started" ? "accepted_ack" : "status_reply",
+    deliveryTargetSource: asString(replyToMessageId) ? "inbound_anchor" : "session_fallback",
+    footerMode: "off",
   });
   return {
     attempted: result.error !== "no_im_adapter",
@@ -374,6 +378,7 @@ export async function emitExecutionTransitionNotification(params: {
   let result: AckSendResult;
   try {
     result = await sendExecutionTransitionMessage(
+      params.transitionKind,
       params.sessionKey,
       text,
       params.replyToMessageId,

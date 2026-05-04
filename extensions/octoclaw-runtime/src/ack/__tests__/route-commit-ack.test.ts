@@ -12,6 +12,7 @@ import {
 let useMockAdapter = false;
 let previousSpawnBackend: string | undefined;
 let previousPlannerAllowlist: string | undefined;
+let previousLegacyCliDelivery: string | undefined;
 
 const imAdapter = {
   canHandle: vi.fn(() => true),
@@ -57,8 +58,10 @@ describe("route commit ACK", () => {
   beforeEach(() => {
     previousSpawnBackend = process.env.OCTOCLAW_SPAWN_BACKEND;
     previousPlannerAllowlist = process.env.OCTOCLAW_PLANNER_ALLOWLIST;
+    previousLegacyCliDelivery = process.env.OCTOCLAW_LEGACY_CLI_DELIVERY;
     process.env.OCTOCLAW_SPAWN_BACKEND = "legacy";
     delete process.env.OCTOCLAW_PLANNER_ALLOWLIST;
+    process.env.OCTOCLAW_LEGACY_CLI_DELIVERY = "1";
     resetRouteCommitAckState();
     vi.clearAllMocks();
     useMockAdapter = false;
@@ -72,8 +75,11 @@ describe("route commit ACK", () => {
     else process.env.OCTOCLAW_SPAWN_BACKEND = previousSpawnBackend;
     if (previousPlannerAllowlist === undefined) delete process.env.OCTOCLAW_PLANNER_ALLOWLIST;
     else process.env.OCTOCLAW_PLANNER_ALLOWLIST = previousPlannerAllowlist;
+    if (previousLegacyCliDelivery === undefined) delete process.env.OCTOCLAW_LEGACY_CLI_DELIVERY;
+    else process.env.OCTOCLAW_LEGACY_CLI_DELIVERY = previousLegacyCliDelivery;
     previousSpawnBackend = undefined;
     previousPlannerAllowlist = undefined;
+    previousLegacyCliDelivery = undefined;
   });
 
   it("projects truthful zh delegate text without execution claims", () => {

@@ -535,6 +535,9 @@ async function sendCompletionMessage(
     replyToMessageId: resolveFinalReplyToMessageId(options) || undefined,
     timeoutMs: 8000,
     cwd: options.cwd || resolveWorkspaceRoot(),
+    deliveryKind: "legacy_fallback",
+    deliveryTargetSource: resolveFinalReplyToMessageId(options) ? "inbound_anchor" : "session_fallback",
+    footerMode: "off",
   });
   return {
     sent: result.sent,

@@ -3,7 +3,8 @@ import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { runCommand, resolveWorkspaceRoot } from "../../resolve/env.js";
-import type { IMAdapter, IMMessageTurnAnchorParams, IMProjectionFooter } from "../adapter.js";
+import type { IMAdapter, IMMessageTurnAnchorParams, IMProjectionFooter, IMSendParams } from "../adapter.js";
+import type { MessageDeliveryEnvelope, MessageDeliveryResult } from "../delivery-port.js";
 
 type SlackCommandResult = {
   ok?: unknown;
@@ -29,6 +30,9 @@ export interface SlackSendResult {
   messageId?: string;
   threadTs?: string;
   error?: string;
+  transport?: "slack_api" | "legacy_cli";
+  targetSource?: string;
+  footerSource?: string;
 }
 
 export interface SlackAdapterConfig {
@@ -87,15 +91,25 @@ function readSlackBotToken(): string {
     const slack = channels.slack && typeof channels.slack === "object" && !Array.isArray(channels.slack)
       ? channels.slack as Record<string, unknown>
       : {};
-    return stringValue(slack.botToken);
+    const direct = stringValue(slack.botToken || slack.token);
+    if (direct) return direct;
+    const accounts = slack.accounts && typeof slack.accounts === "object" && !Array.isArray(slack.accounts)
+      ? slack.accounts as Record<string, unknown>
+      : {};
+    const defaultAccount = accounts.default && typeof accounts.default === "object" && !Array.isArray(accounts.default)
+      ? accounts.default as Record<string, unknown>
+      : {};
+    const defaultToken = stringValue(defaultAccount.botToken || defaultAccount.token);
+    if (defaultToken) return defaultToken;
+    for (const entry of Object.values(accounts)) {
+      if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
+      const token = stringValue((entry as Record<string, unknown>).botToken || (entry as Record<string, unknown>).token);
+      if (token) return token;
+    }
+    return "";
   } catch {
     return "";
   }
-}
-
-function normalizeSlackConversationId(value: unknown): string {
-  const normalized = stringValue(value).replace(/^channel:/iu, "").toUpperCase();
-  return /^[CDG][A-Z0-9]{8,}$/u.test(normalized) ? normalized : "";
 }
 
 function normalizeEmojiName(emoji: string): string {
@@ -180,6 +194,55 @@ function postSlackApiIsolated<T extends Record<string, unknown>>(
   } catch {
     return { ok: false, error: "slack_api_child_invalid_json" } as T & { ok?: boolean; error?: string };
   }
+}
+
+function legacyCliDeliveryEnabled(): boolean {
+  const raw = stringValue(process.env.OCTOCLAW_LEGACY_CLI_DELIVERY).toLowerCase();
+  return ["1", "true", "on", "yes"].includes(raw);
+}
+
+const SLACK_API_TEXT_CHUNK_LIMIT = 39000;
+
+function splitSlackText(message: string): string[] {
+  const text = String(message ?? "");
+  if (!text) return [];
+  const chunks: string[] = [];
+  for (let index = 0; index < text.length; index += SLACK_API_TEXT_CHUNK_LIMIT) {
+    chunks.push(text.slice(index, index + SLACK_API_TEXT_CHUNK_LIMIT));
+  }
+  return chunks;
+}
+
+function slackTargetSource(params: { replyToMessageId?: string; threadTs?: string }): "inbound_anchor" | "event_metadata" | "session_fallback" {
+  if (normalizeSlackMessageTs(params.replyToMessageId)) return "inbound_anchor";
+  if (normalizeSlackMessageTs(params.threadTs)) return "event_metadata";
+  return "session_fallback";
+}
+
+function envelopeProjectionFooter(envelope: MessageDeliveryEnvelope): IMProjectionFooter | null {
+  if (envelope.footerMode !== "debug" || !envelope.provenance) return null;
+  return {
+    route: envelope.provenance.route === "delegate" ? "delegate" : "reply",
+    model: "direct_main",
+    via: envelope.provenance.via,
+    workContractId: envelope.provenance.workContractId,
+    thread: Boolean(normalizeSlackMessageTs(envelope.target.replyToMessageId || envelope.target.threadTs)),
+  };
+}
+
+function applyEnvelopeFooter(envelope: MessageDeliveryEnvelope): { content: string; footerSource: "envelope" | "adapter" | "none" } {
+  const projection = envelopeProjectionFooter(envelope);
+  if (!projection) {
+    return {
+      content: envelope.content,
+      footerSource: envelope.footerMode === "debug" && /route=\w+\s*\|/u.test(envelope.content) ? "adapter" : "none",
+    };
+  }
+  const rendered = renderSlackProjectionFooter(envelope.content, projection);
+  return {
+    content: rendered,
+    footerSource: rendered !== envelope.content ? "envelope" : "adapter",
+  };
 }
 
 export function renderSlackProjectionFooter(message: string, projection: IMProjectionFooter): string {
@@ -449,15 +512,7 @@ export class SlackAdapter implements IMAdapter {
     return { channelId: "", error: stringValue(opened.error) || "dm_channel_unresolved" };
   }
 
-  async send(params: {
-    sessionKey: string;
-    message: string;
-    replyToMessageId?: string;
-    timeoutMs?: number;
-    cwd?: string;
-    suppressProjectionFooter?: boolean;
-    projectionFooter?: IMProjectionFooter;
-  }): Promise<SlackSendResult> {
+  async send(params: IMSendParams): Promise<SlackSendResult> {
     const target = this.resolveTarget(params.sessionKey);
     if (!target.target) {
       return {
@@ -471,36 +526,83 @@ export class SlackAdapter implements IMAdapter {
     const message = params.suppressProjectionFooter || !params.projectionFooter
       ? params.message
       : this.renderProjectionFooter(params.message, params.projectionFooter);
-
-    // When replyToMessageId is provided, always try --reply-to first so the ACK
-    // lands in the user's thread.  This is independent of the replyToMode config
-    // (which controls the general request flow).  For ACKs specifically, we want
-    // every reply to thread under the user's inbound message.
     const replyToMessageId = normalizeSlackMessageTs(params.replyToMessageId);
-    if (replyToMessageId) {
-      this.ackDebug(`replyToMessageId=${replyToMessageId} — attempting threaded send`);
-      const threadedResult = await this.executeSend(target, message, timeoutMs, params.cwd, replyToMessageId, params.suppressProjectionFooter);
-      if (threadedResult.sent) {
-        this.ackDebug("send succeeded (threaded)");
-        return threadedResult;
-      }
-      this.ackDebug(`threaded attempt failed: ${threadedResult.error} — NOT retrying without --reply-to to avoid double delivery`);
-      return threadedResult;
-    }
+    const source = params.deliveryTargetSource ?? slackTargetSource({ replyToMessageId, threadTs: target.threadTs });
+    const footerMode = params.footerMode ?? (params.projectionFooter && !params.suppressProjectionFooter ? "debug" : "off");
+    const result = await this.sendText({
+      kind: params.deliveryKind ?? (params.suppressProjectionFooter ? "neutral_ack" : "legacy_fallback"),
+      channel: "slack",
+      target: {
+        to: target.target,
+        threadTs: normalizeSlackMessageTs(target.threadTs) || undefined,
+        replyToMessageId: replyToMessageId || undefined,
+        source,
+      },
+      content: message,
+      provenance: params.deliveryProvenance,
+      footerMode,
+      dedupeKey: params.dedupeKey,
+    }, { timeoutMs, cwd: params.cwd, suppressProjectionFooter: params.suppressProjectionFooter });
 
-    // No replyToMessageId — also try session-key-derived threadTs if present
-    if (target.threadTs) {
-      this.ackDebug(`no replyToMessageId but threadTs=${target.threadTs} — sending with --thread-id`);
+    if (result.ok) {
+      this.ackDebug(replyToMessageId ? "send succeeded (threaded)" : "send succeeded (slack delivery port)");
     }
-
-    const result = await this.executeSend(target, message, timeoutMs, params.cwd, undefined, params.suppressProjectionFooter);
-    if (result.sent) {
-      this.ackDebug("send succeeded (no reply-to, top-level or thread-id)");
-    }
-    return result;
+    return {
+      sent: result.ok,
+      delivered: result.ok,
+      messageId: result.messageId,
+      threadTs: result.threadTs,
+      error: result.error,
+      transport: result.transport as SlackSendResult["transport"],
+      targetSource: result.targetSource,
+      footerSource: result.footerSource,
+    };
   }
 
-  private async executeSend(
+  async sendText(
+    envelope: MessageDeliveryEnvelope,
+    options: { timeoutMs?: number; cwd?: string; suppressProjectionFooter?: boolean } = {},
+  ): Promise<MessageDeliveryResult> {
+    const target = this.resolveEnvelopeTarget(envelope);
+    if (!target.target) {
+      return {
+        ok: false,
+        error: "unresolvable_session_target",
+        transport: legacyCliDeliveryEnabled() ? "legacy_cli" : "slack_api",
+        targetSource: envelope.target.source,
+        footerSource: envelope.footerMode === "debug" ? "envelope" : "none",
+      };
+    }
+
+    const timeoutMs = Math.max(500, Number(options.timeoutMs || 5000));
+    const replyToMessageId = normalizeSlackMessageTs(envelope.target.replyToMessageId);
+    const projected = applyEnvelopeFooter(envelope);
+    const result = legacyCliDeliveryEnabled()
+      ? await this.executeLegacyCliSend(target, projected.content, timeoutMs, options.cwd, replyToMessageId || undefined, options.suppressProjectionFooter)
+      : await this.executeSlackApiSend(target, projected.content, timeoutMs);
+
+    return {
+      ok: result.sent || result.delivered,
+      messageId: result.messageId,
+      threadTs: result.threadTs,
+      error: result.error,
+      transport: result.transport,
+      targetSource: envelope.target.source,
+      footerSource: projected.footerSource,
+    };
+  }
+
+  private resolveEnvelopeTarget(envelope: MessageDeliveryEnvelope): SlackDeliveryTarget {
+    const to = stringValue(envelope.target.channelId || envelope.target.to).toUpperCase();
+    return {
+      channel: "slack",
+      target: to,
+      threadTs: normalizeSlackMessageTs(envelope.target.replyToMessageId || envelope.target.threadTs) || undefined,
+      replyToMessageId: normalizeSlackMessageTs(envelope.target.replyToMessageId) || undefined,
+    };
+  }
+
+  private async executeLegacyCliSend(
     target: SlackDeliveryTarget,
     message: string,
     timeoutMs: number,
@@ -508,13 +610,6 @@ export class SlackAdapter implements IMAdapter {
     replyToMessageId?: string,
     suppressProjectionFooter?: boolean,
   ): Promise<SlackSendResult> {
-    if (suppressProjectionFooter) {
-      const direct = await this.executeInternalDirectSend(target, message, timeoutMs, replyToMessageId);
-      if (direct.sent || direct.error !== "direct_slack_unsupported") {
-        return direct;
-      }
-    }
-
     const args = ["message", "send", "--channel", "slack", "--target", target.target, "--json"];
 
     if (message) {
@@ -552,6 +647,7 @@ export class SlackAdapter implements IMAdapter {
           delivered: true,
           ...(messageId ? { messageId } : {}),
           ...(threadTs ? { threadTs } : {}),
+          transport: "legacy_cli",
         };
       }
 
@@ -564,62 +660,75 @@ export class SlackAdapter implements IMAdapter {
           sent: false,
           delivered: false,
           error: stringValue(explicitFailure.error) || "send_failed",
+          transport: "legacy_cli",
         };
       }
 
       if (result.code === 0) {
-        return { sent: true, delivered: true };
+        return { sent: true, delivered: true, transport: "legacy_cli" };
       }
 
       return {
         sent: false,
         delivered: false,
         error: result.stderr || "send_failed",
+        transport: "legacy_cli",
       };
     } catch (error) {
       return {
         sent: false,
         delivered: false,
         error: String(error),
+        transport: "legacy_cli",
       };
     }
   }
 
-  private async executeInternalDirectSend(
+  private async executeSlackApiSend(
     target: SlackDeliveryTarget,
     message: string,
     timeoutMs: number,
-    replyToMessageId?: string,
   ): Promise<SlackSendResult> {
     const token = readSlackBotToken();
-    const channel = normalizeSlackConversationId(target.target);
-    if (!token || !channel) {
-      return { sent: false, delivered: false, error: "direct_slack_unsupported" };
+    if (!token) {
+      return { sent: false, delivered: false, error: "missing_slack_bot_token", transport: "slack_api" };
     }
-    const threadTs = normalizeSlackMessageTs(replyToMessageId) || normalizeSlackMessageTs(target.threadTs);
-    try {
-      const result = await postSlackApi<SlackCommandResult>("chat.postMessage", token, {
-        channel,
-        text: message,
-        ...(threadTs ? { thread_ts: threadTs } : {}),
-        unfurl_links: false,
-        unfurl_media: false,
-      }, Math.min(Math.max(500, timeoutMs), 2500));
-      if (result.ok === true) {
-        const messageId = stringValue(result.message?.ts || result.ts);
-        const returnedThreadTs = stringValue(result.message?.thread_ts || result.thread_ts || threadTs);
-        return {
-          sent: true,
-          delivered: true,
-          ...(messageId ? { messageId } : {}),
-          ...(returnedThreadTs ? { threadTs: returnedThreadTs } : {}),
-        };
+
+    const channelResult = await this.resolveReactionChannelId(target.target, token, Math.max(500, Math.floor(timeoutMs * 0.35)));
+    if (!channelResult.channelId) {
+      return { sent: false, delivered: false, error: channelResult.error || "send_channel_unresolved", transport: "slack_api" };
+    }
+
+    const chunks = splitSlackText(message);
+    if (!chunks.length) {
+      return { sent: false, delivered: false, error: "empty_message", transport: "slack_api" };
+    }
+
+    const threadTs = normalizeSlackMessageTs(target.replyToMessageId || target.threadTs);
+    let lastMessageId = "";
+    for (const chunk of chunks) {
+      try {
+        const response = await postSlackApi<{ ts?: unknown; message?: { ts?: unknown; thread_ts?: unknown } }>("chat.postMessage", token, {
+          channel: channelResult.channelId,
+          text: chunk,
+          ...(threadTs ? { thread_ts: threadTs } : {}),
+        }, Math.max(500, timeoutMs));
+        if (response.ok !== true) {
+          return { sent: false, delivered: false, error: stringValue(response.error) || "send_failed", transport: "slack_api" };
+        }
+        lastMessageId = stringValue(response.ts || response.message?.ts || lastMessageId);
+      } catch (error) {
+        return { sent: false, delivered: false, error: String(error), transport: "slack_api" };
       }
-      return { sent: false, delivered: false, error: stringValue(result.error) || "direct_slack_send_failed" };
-    } catch (error) {
-      const messageText = error instanceof Error ? error.message : String(error);
-      return { sent: false, delivered: false, error: messageText || "direct_slack_send_failed" };
     }
+
+    return {
+      sent: true,
+      delivered: true,
+      ...(lastMessageId ? { messageId: lastMessageId } : {}),
+      ...(threadTs ? { threadTs } : {}),
+      transport: "slack_api",
+    };
   }
 
   shouldUseThread(): boolean {

@@ -193,7 +193,13 @@ function resolveOutboxDeliverySessionKey(parentSessionKey: string): string {
 export async function flushDeliveryOutbox(options: FlushDeliveryOutboxOptions = {}): Promise<FlushDeliveryOutboxResult> {
   const now = options.now ?? new Date();
   const maxAttempts = Math.max(1, Number(options.maxAttempts || DEFAULT_MAX_ATTEMPTS));
-  const sendMessage = options.sendMessage ?? ((params) => sendIMMessage({ ...params, timeoutMs: 5000 }));
+  const sendMessage = options.sendMessage ?? ((params) => sendIMMessage({
+    ...params,
+    timeoutMs: 5000,
+    deliveryKind: "legacy_fallback",
+    deliveryTargetSource: params.replyToMessageId ? "inbound_anchor" : "session_fallback",
+    footerMode: "off",
+  }));
   const entries = readDeliveryOutbox(options.outboxPath);
   const remaining: DeliveryOutboxEntry[] = [];
   const result: FlushDeliveryOutboxResult = { attempted: 0, delivered: 0, failed: 0, retryPending: 0, remaining: 0 };

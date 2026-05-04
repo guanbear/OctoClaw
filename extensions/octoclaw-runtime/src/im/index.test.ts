@@ -77,6 +77,34 @@ describe("IM adapter factory", () => {
     expect(getAdapterForSession("feishu:user:ABC123")).toBe(customAdapter);
   });
 
+  it("sendIMMessage preserves delivery transport observability fields", async () => {
+    const customAdapter: IMAdapter = {
+      channel: "observed",
+      canHandle: (sessionKey) => sessionKey.startsWith("observed:"),
+      resolveTarget: () => ({ channel: "observed", target: "O123" }),
+      send: async () => ({
+        sent: true,
+        delivered: true,
+        messageId: "msg-1",
+        transport: "slack_api",
+        targetSource: "inbound_anchor",
+        footerSource: "envelope",
+      }),
+      react: async () => ({ ok: true }),
+    };
+    registerIMAdapter(customAdapter);
+
+    const result = await sendIMMessage({ sessionKey: "observed:channel:O123", message: "hello" });
+
+    expect(result).toMatchObject({
+      sent: true,
+      messageId: "msg-1",
+      transport: "slack_api",
+      targetSource: "inbound_anchor",
+      footerSource: "envelope",
+    });
+  });
+
   it("sendWithDegradation does not degrade Slack threaded sends to top-level", async () => {
     const sendCalls: Array<{ replyToMessageId?: string }> = [];
     const slackAdapter: IMAdapter = {

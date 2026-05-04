@@ -9,6 +9,7 @@ import path from "node:path";
 import os from "node:os";
 
 export type { IMAdapter } from "./adapter.js";
+export type { MessageDeliveryEnvelope, MessageDeliveryPort, MessageDeliveryResult } from "./delivery-port.js";
 
 const adapterRegistry: IMAdapter[] = [];
 

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 type MockRunCommand = (command: string, args: string[], options: unknown) => Promise<{ code: number; stdout: string; stderr: string }>;
 
@@ -7,6 +7,22 @@ vi.mock("../../resolve/env.js", () => ({
   runCommand: (...args: unknown[]) => mockRunCommand(...(args as [string, string[], unknown])),
   resolveWorkspaceRoot: () => "/workspace",
 }));
+
+const originalLegacyDelivery = process.env.OCTOCLAW_LEGACY_CLI_DELIVERY;
+const originalSlackBotToken = process.env.SLACK_BOT_TOKEN;
+
+beforeEach(() => {
+  mockRunCommand = async () => ({ code: 0, stdout: "", stderr: "" });
+  process.env.OCTOCLAW_LEGACY_CLI_DELIVERY = "1";
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+  if (originalLegacyDelivery === undefined) delete process.env.OCTOCLAW_LEGACY_CLI_DELIVERY;
+  else process.env.OCTOCLAW_LEGACY_CLI_DELIVERY = originalLegacyDelivery;
+  if (originalSlackBotToken === undefined) delete process.env.SLACK_BOT_TOKEN;
+  else process.env.SLACK_BOT_TOKEN = originalSlackBotToken;
+});
 
 import {
   SlackAdapter,
@@ -52,6 +68,114 @@ describe("SlackAdapter", () => {
     });
 
     expect(result.sent).toBe(true);
+  });
+
+  it("sends Slack messages through Slack Web API by default without invoking OpenClaw CLI", async () => {
+    delete process.env.OCTOCLAW_LEGACY_CLI_DELIVERY;
+    process.env.SLACK_BOT_TOKEN = "xoxb-test";
+    mockRunCommand = async () => { throw new Error("openclaw cli should not be used by default"); };
+    const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      expect(String(url)).toBe("https://slack.com/api/chat.postMessage");
+      expect(JSON.parse(String(init?.body))).toEqual({
+        channel: "C123ABCDEF",
+        text: "ack",
+        thread_ts: "1700000000.000100",
+      });
+      return { json: async () => ({ ok: true, ts: "1700000000.000200" }) } as Response;
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const adapter = new SlackAdapter();
+    const result = await adapter.send({
+      sessionKey: "agent:main:slack:channel:C123abcdef",
+      message: "ack",
+      replyToMessageId: "1700000000.000100",
+    });
+
+    expect(result).toMatchObject({
+      sent: true,
+      delivered: true,
+      messageId: "1700000000.000200",
+      threadTs: "1700000000.000100",
+      transport: "slack_api",
+      targetSource: "inbound_anchor",
+      footerSource: "none",
+    });
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it("opens Slack DMs before Web API message delivery", async () => {
+    delete process.env.OCTOCLAW_LEGACY_CLI_DELIVERY;
+    process.env.SLACK_BOT_TOKEN = "xoxb-test";
+    mockRunCommand = async () => { throw new Error("openclaw cli should not be used by default"); };
+    const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      if (String(url) === "https://slack.com/api/conversations.open") {
+        expect(JSON.parse(String(init?.body))).toEqual({ users: "U123ABCDEF" });
+        return { json: async () => ({ ok: true, channel: { id: "D123ABCDEF" } }) } as Response;
+      }
+      expect(String(url)).toBe("https://slack.com/api/chat.postMessage");
+      expect(JSON.parse(String(init?.body))).toEqual({
+        channel: "D123ABCDEF",
+        text: "dm ack",
+      });
+      return { json: async () => ({ ok: true, ts: "1700000000.000210" }) } as Response;
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const adapter = new SlackAdapter();
+    const result = await adapter.send({
+      sessionKey: "agent:main:slack:default:direct:u123abcdef",
+      message: "dm ack",
+    });
+
+    expect(result).toMatchObject({
+      sent: true,
+      delivered: true,
+      messageId: "1700000000.000210",
+      transport: "slack_api",
+      targetSource: "session_fallback",
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("renders debug footer from delivery envelope provenance", async () => {
+    delete process.env.OCTOCLAW_LEGACY_CLI_DELIVERY;
+    process.env.SLACK_BOT_TOKEN = "xoxb-test";
+    const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      expect(String(url)).toBe("https://slack.com/api/chat.postMessage");
+      const body = JSON.parse(String(init?.body));
+      expect(body.channel).toBe("C123ABCDEF");
+      expect(body.text).toContain("done");
+      expect(body.text).toContain("route=delegate | model=direct_main · thread | via=native_announce | wc=wc-12345");
+      expect(body.thread_ts).toBe("1700000000.000100");
+      return { json: async () => ({ ok: true, ts: "1700000000.000220" }) } as Response;
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const adapter = new SlackAdapter();
+    const result = await adapter.sendText({
+      kind: "native_child_final",
+      channel: "slack",
+      target: {
+        to: "C123ABCDEF",
+        replyToMessageId: "1700000000.000100",
+        source: "inbound_anchor",
+      },
+      content: "done",
+      provenance: {
+        route: "delegate",
+        via: "native_announce",
+        workContractId: "wc-1234567890",
+      },
+      footerMode: "debug",
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      transport: "slack_api",
+      targetSource: "inbound_anchor",
+      footerSource: "envelope",
+    });
   });
 
   it("resolveTarget parses Slack channel+thread session keys", () => {
@@ -110,7 +234,7 @@ describe("SlackAdapter", () => {
       replyToMessageId: "1700000000.000100",
     });
 
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       sent: true,
       delivered: true,
       messageId: "1700000000.000200",
@@ -135,7 +259,7 @@ describe("SlackAdapter", () => {
       message: "ack",
     });
 
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       sent: true,
       delivered: true,
       messageId: "1700000000.000500",
@@ -159,7 +283,7 @@ describe("SlackAdapter", () => {
       message: "ack",
     });
 
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       sent: false,
       delivered: false,
       error: "channel_not_found",
@@ -180,7 +304,7 @@ describe("SlackAdapter", () => {
       replyToMessageId: "1700000000.000100",
     });
 
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       sent: true,
       delivered: true,
       messageId: "1700000000.000300",
@@ -241,7 +365,7 @@ describe("SlackAdapter", () => {
       message: "ack",
     });
 
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       sent: true,
       delivered: true,
       messageId: "1700000000.000400",
@@ -261,7 +385,7 @@ describe("SlackAdapter", () => {
       message: "ack",
     });
 
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       sent: false,
       delivered: false,
       error: expect.stringContaining("channel_not_found"),
@@ -281,7 +405,7 @@ describe("SlackAdapter", () => {
       message: "ack",
     });
 
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       sent: false,
       delivered: false,
       error: "channel_not_found",

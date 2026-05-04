@@ -302,6 +302,9 @@ async function sendCompactionNotice(event: UnknownRecord, ctx: UnknownRecord, lo
     timeoutMs: 5000,
     cwd: resolveWorkspaceRoot(),
     suppressProjectionFooter: true,
+    deliveryKind: "status_reply",
+    deliveryTargetSource: replyToMessageId ? "inbound_anchor" : "session_fallback",
+    footerMode: "off",
   });
   void recordPolicyReplay(
     "compaction_notice",
