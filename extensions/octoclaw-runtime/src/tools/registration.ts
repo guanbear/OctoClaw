@@ -960,7 +960,6 @@ function buildPlannerContextPacket(params: {
   const readScope = plannerStringArray(
     contextRefs.readScope,
     contextRefs.read_scope,
-    delegateScope?.read,
     primaryFiles,
   );
   const writeScope = plannerStringArray(
@@ -997,8 +996,6 @@ function buildPlannerContextPacket(params: {
   const sourcePolicy = optionalString(
     contextRefs.sourcePolicy,
     contextRefs.source_policy,
-    metadata.sourcePolicy,
-    metadata.source_policy,
     defaultSourcePolicy,
   ) || defaultSourcePolicy;
   const threadSummary = optionalString(

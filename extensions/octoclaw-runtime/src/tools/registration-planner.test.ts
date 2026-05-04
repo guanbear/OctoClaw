@@ -240,6 +240,55 @@ describe("octoclaw_dispatch planner backend", () => {
     }));
   });
 
+  it("does not treat Slack acceptance metadata or broad contract read scope as explicit child refs", async () => {
+    process.env.OCTOCLAW_SPAWN_BACKEND = "planner";
+    const contract = seedWorkContract();
+    const broadReadScope = path.join(tempWorkspace, "openclaw", "repos", "octoclaw");
+    contract.delegate = {
+      delegateTaskId: `delegate-task:${contract.workContractId}`,
+      currentAttemptId: null,
+      role: "research",
+      coordinationMode: "solo_worker",
+      acceptanceCriteria: ["Return a compact status-surface field summary."],
+      scope: {
+        read: [broadReadScope],
+        write: [],
+        workspaceMode: "read_only",
+        scopeFingerprint: "repo-root-read",
+      },
+      modelProfile: "worker_research",
+      nativeBinding: null,
+      childSessions: [],
+      artifactRefs: [],
+      nextAction: "dispatch",
+    };
+    saveWorkContract(contract);
+
+    const response = await dispatchTool().execute({
+      task: "调研 OctoClaw 当前任务状态面板需要展示哪些字段；完成后给 5 条中文摘要。",
+      workContractId: contract.workContractId,
+      policyJson: JSON.stringify(delegateDecision(contract)),
+      metadataJson: JSON.stringify({
+        sourcePolicy: "slack OCTOCLAW_ACCEPTANCE run=planner-native-child-context case=child-context acceptance=true",
+      }),
+      timeoutSeconds: 300,
+    }, {
+      sessionKey: contract.sessionKey,
+      sessionId: "session-planner-context-sanitized-test",
+      cwd: tempWorkspace,
+    });
+
+    const body = JSON.parse(String(response.text));
+    const task = String(body.sessionsSpawnArgs.task);
+    expect(body.ok).toBe(true);
+    expect(task).toContain("\"contextStrategy\": \"bounded_brief_only\"");
+    expect(task).toContain("\"readScope\": []");
+    expect(task).toContain("\"sourcePolicy\": \"Use the supplied task brief first.");
+    expect(task).toContain("\"maxToolCalls\": 5");
+    expect(task).not.toContain("OCTOCLAW_ACCEPTANCE");
+    expect(task).not.toContain(broadReadScope);
+  });
+
   it("adds explicit context refs and tool budget to native planner child packets without raw parent transcript", async () => {
     process.env.OCTOCLAW_SPAWN_BACKEND = "planner";
     const contract = seedWorkContract();
