@@ -253,7 +253,7 @@ The before-dispatch fast delegate design SHALL reuse the existing OctoClaw polic
 #### Scenario: feasibility is proven before implementation
 
 - WHEN PC15 moves from design to runtime implementation
-- THEN OctoClaw SHALL first prove that `before_dispatch` exposes sufficient inbound fields, can construct a managed context, can align state key and prompt normalization with later lifecycle hooks, and can short-circuit main-agent lifecycle with `handled=true`
+- THEN OctoClaw SHALL first prove that `before_dispatch` exposes sufficient inbound fields, can construct a managed context, can align state key and prompt normalization with later lifecycle hooks, and can pass through with `handled=false` while preparing a native planner acceleration draft
 - AND this proof SHALL NOT start child runs, send delegate accepted ACK, or alter planner/confirm behavior.
 
 #### Scenario: before_dispatch computes policy first
@@ -272,13 +272,13 @@ The before-dispatch fast delegate design SHALL reuse the existing OctoClaw polic
 #### Scenario: fast admission is a guard, not a judge
 
 - WHEN an existing policy decision is evaluated for fast delegate
-- THEN fast admission SHALL only allow direct background execution for high-confidence delegate decisions with an allowed WorkContract/admission and clear expected deliverable
+- THEN fast admission SHALL only allow draft staging for high-confidence delegate decisions with allowed admission and clear expected deliverable
 - AND uncertain, timed-out, degraded, follow-up, status/provenance, simple-reply, or bare model/tool mention cases SHALL pass through.
 
 #### Scenario: no false delegate receipt
 
-- WHEN fast admission allows a future direct-run backend
-- THEN OctoClaw SHALL NOT send a delegate accepted receipt until that backend returns accepted run evidence with a non-empty run id.
+- WHEN fast admission allows a future native planner acceleration or direct-run backend path
+- THEN OctoClaw SHALL NOT send a delegate accepted receipt until native `sessions_spawn` or the backend returns accepted run evidence with a non-empty run id.
 
 #### Scenario: planner remains native gray path
 

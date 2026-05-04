@@ -118,6 +118,36 @@ describe("before-dispatch fast delegate feasibility probe", () => {
     expect(result.aliases).toContain("binding:slack:channel:c0as4dappu3");
   });
 
+  it("keeps explicit non-Slack sessions compatible without Slack anchor claims", () => {
+    const sessionKey = "agent:main:explicit:22deaf5d-4e7e-4acc-a436-98f34aa68300";
+    const prompt = "请后台跑一下这个 review。";
+
+    const result = runFastDelegateFeasibilityProbe({
+      event: {
+        prompt,
+        sessionId: sessionKey,
+      },
+      ctx: {
+        sessionKey,
+        sessionId: sessionKey,
+        trigger: "message",
+      },
+      lifecycleEvent: { prompt },
+      lifecycleCtx: {
+        sessionKey,
+        sessionId: sessionKey,
+        trigger: "message",
+      },
+    });
+
+    expect(result.isManagedAgentContext).toBe(false);
+    expect(result.beforeDispatchStateKey).toBe(sessionKey);
+    expect(result.lifecycleStateKey).toBe(sessionKey);
+    expect(result.stateKeyMatch).toBe(true);
+    expect(result.promptEquivalent).toBe(true);
+    expect(result.hasSlackAnchor).toBe(false);
+  });
+
   it("uses the current prompt extraction rules for harness and busy wrappers", () => {
     const prompt = "请让子 agent 查 release notes。";
     const harness = `[codex-slack-e2e scenario]\n当前用户问题：${prompt}`;
@@ -128,6 +158,24 @@ describe("before-dispatch fast delegate feasibility probe", () => {
     const result = runFastDelegateFeasibilityProbe({
       event: {
         body: queued,
+        channel: "C0AS4DAPPU3",
+        sessionKey: "agent:main:slack:channel:c0as4dappu3",
+        ts: "1777734999.123456",
+      },
+      ctx: { sessionKey: "agent:main:slack:channel:c0as4dappu3", channelId: "C0AS4DAPPU3" },
+      lifecycleEvent: { prompt },
+    });
+
+    expect(result.prompt).toBe(prompt);
+    expect(result.promptEquivalent).toBe(true);
+  });
+
+  it("prefers normalized transport body over noisy content metadata", () => {
+    const prompt = "请让子 agent 查 release notes。";
+    const result = runFastDelegateFeasibilityProbe({
+      event: {
+        body: prompt,
+        content: "Conversation info (untrusted metadata):\n```noise```\nSender (untrusted metadata):\n```U1```\nwrong metadata copy",
         channel: "C0AS4DAPPU3",
         sessionKey: "agent:main:slack:channel:c0as4dappu3",
         ts: "1777734999.123456",
