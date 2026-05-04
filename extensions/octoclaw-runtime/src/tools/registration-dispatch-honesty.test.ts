@@ -61,6 +61,41 @@ function delegateDecision(route = "delegate") {
   };
 }
 
+function budgetedMainEscalatedDecision(routeSeal: RouteSeal, sessionKey: string) {
+  return {
+    ...delegateDecision("delegate"),
+    request: { session_key: sessionKey },
+    routeSeal,
+    route_decision: {
+      route: "delegate",
+      system_preferred_route: "delegate",
+      route_source: "budgeted_main_escalation",
+      dispatch_required: true,
+      worker_pool: "octoclaw-research",
+      task_class: "delegated_single",
+      decision_bucket: "budgeted_main_then_delegate",
+      reason_codes: ["budgeted_main_escalated", "budgeted_main_escalation:main_agent_called_dispatch"],
+      expected_deliverable: "Dispatch the budgeted main task through the native planner.",
+      is_new_work: true,
+    },
+    tool_policy: {
+      must_delegate_via: "octoclaw_dispatch",
+      allow_direct_tools: false,
+      delegate_first: true,
+      allowed_control_tools: ["octoclaw_dispatch", "octoclaw_dispatch_confirm", "octoclaw_status"],
+    },
+    route_hint_policy: {
+      submitted: true,
+      source: "budgeted_main_escalation",
+    },
+    _decision_bucket: "budgeted_main_then_delegate",
+    _budgeted_main_escalated: true,
+    _budgeted_main_escalation_reason: "main_agent_called_dispatch",
+    is_new_work: true,
+    expected_deliverable: "Dispatch the budgeted main task through the native planner.",
+  };
+}
+
 function seal(overrides: Partial<RouteSeal> = {}): RouteSeal {
   return {
     schemaVersion: ROUTE_SEAL_SCHEMA_VERSION,
@@ -640,6 +675,39 @@ describe("octoclaw_dispatch honesty", () => {
     expect(result.ok).toBe(false);
     expect(result.seal_mismatch).toBe(true);
     expect(result.retryable).toBe(false);
+  });
+
+  it("allows budgeted_main_then_delegate dispatch escalation under a sealed reply route", async () => {
+    const stateKey = "session-dispatch-honesty-budgeted-main";
+    const routeSeal = seal({ route: "reply" });
+    policyState.set(stateKey, {
+      prompt: "Dispatch budgeted main after explicit escalation",
+      decision: budgetedMainEscalatedDecision(routeSeal, stateKey),
+      routeSeal,
+      routeHintSubmitted: true,
+    });
+
+    const result = await executeDispatch({
+      task: "Dispatch budgeted main after explicit escalation",
+      forceRoute: "delegate",
+      metadataJson: JSON.stringify({
+        turnId: "turn-1",
+        threadBindingKey: "thread-1",
+        session_key: stateKey,
+      }),
+    }, {
+      sessionKey: stateKey,
+      canonicalSessionKey: stateKey,
+      sessionId: "session-dispatch-honesty-budgeted-main-test",
+      turnId: "turn-1",
+      threadBindingKey: "thread-1",
+      helperInvoker: spawnedHelper(),
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.route).toBe("delegate");
+    expect(result.seal_mismatch).not.toBe(true);
+    expect(result.execution_state).toBe("spawn_confirmed");
   });
 
   it("includes terminal:true for terminal dispatch honesty failures", async () => {
