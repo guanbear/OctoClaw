@@ -197,6 +197,25 @@ export function looksLikeToolProvenanceClaim(text: string): boolean {
     || /direct tools used.{0,80}(实际|actually|used|web_fetch|web_search|exec|unavailable)/iu.test(raw);
 }
 
+function stripInternalToolProvenanceGuardText(text: string): string {
+  return String(text || "")
+    .replace(/这条回复里有未被执行事实记录覆盖的工具来源声明（[^）]*）。目前可确认的 direct tools 只有：[^。]*。我不能把未记录的工具说成已经用过。/gu, "")
+    .replace(/这条回复试图声明用了 [^，。]*，但当前 execution facts 没有记录到可验证的 direct tool 调用。按事实口径：[^。]*。Direct tools used 目前不可用。我需要重新走受控查询或执行链路，不能凭记忆声称已经查过。/gu, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function stripUngroundedToolProvenanceClaims(text: string, ungroundedClaims: string[]): string {
+  const claimSet = new Set(ungroundedClaims.map((item) => item.toLowerCase()));
+  const segments = String(text || "").match(/[^。！？!?；;\n]+[。！？!?；;]?|\n+/gu) ?? [String(text || "")];
+  const kept = segments.filter((segment) => {
+    const normalized = segment.toLowerCase();
+    const mentionsUngroundedTool = Array.from(claimSet).some((tool) => normalized.includes(tool));
+    return !(mentionsUngroundedTool && looksLikeToolProvenanceClaim(segment));
+  }).join("");
+  return kept.replace(/\n{3,}/g, "\n\n").trim();
+}
+
 function hasStatusProjectionToolEvidence(state: Record<string, unknown>): boolean {
   const seenTools = new Set([
     ...asStringArray(state.controlToolsSeen),
@@ -217,10 +236,9 @@ export function ungroundedToolProvenanceReply(
   state: Record<string, unknown>,
   claimedTools: string[],
 ): { mode: string; message: Record<string, unknown> } {
-  const seen = asStringArray(state.directToolsSeen);
-  const text = seen.length > 0
-    ? `这条回复里有未被执行事实记录覆盖的工具来源声明（${claimedTools.join(", ")}）。目前可确认的 direct tools 只有：${seen.join(", ")}。我不能把未记录的工具说成已经用过。`
-    : `这条回复试图声明用了 ${claimedTools.join(", ")}，但当前 execution facts 没有记录到可验证的 direct tool 调用。按事实口径：route=${String(asRecord(asRecord(state.decision).route_decision).route ?? "").trim() || "unknown"}，request_kind=${String(asRecord(asRecord(state.decision).router_decision_v2).request_kind ?? "").trim() || "unknown"}，Direct tools used 目前不可用。我需要重新走受控查询或执行链路，不能凭记忆声称已经查过。`;
+  void state;
+  void claimedTools;
+  const text = "我继续按当前问题回答。";
   return { mode: "replace", message: { role: "assistant", content: [{ type: "text", text }] } };
 }
 
@@ -319,10 +337,19 @@ export function guardAssistantMessageForPolicyState(
     const fallback = genericGreetingFallbackReply(state);
     return { mode: fallback.mode, message: replaceAssistantMessageText(message, assistantMessageText(fallback.message)) };
   }
+  const cleanedInternalToolGuard = stripInternalToolProvenanceGuardText(replyText);
+  if (cleanedInternalToolGuard !== replyText) {
+    const safeText = cleanedInternalToolGuard || "我继续按当前问题回答。";
+    return { mode: "replace", message: replaceAssistantMessageText(message, safeText) };
+  }
   const claimedTools = claimedDirectToolNames(replyText);
   const seenTools = new Set(asStringArray(state.directToolsSeen).map((item) => item.toLowerCase()));
   const ungroundedClaims = claimedTools.filter((item) => !seenTools.has(item.toLowerCase()));
   if (ungroundedClaims.length > 0 && looksLikeToolProvenanceClaim(replyText)) {
+    const cleaned = stripUngroundedToolProvenanceClaims(replyText, ungroundedClaims);
+    if (cleaned && cleaned !== replyText) {
+      return { mode: "replace", message: replaceAssistantMessageText(message, cleaned) };
+    }
     const fallback = ungroundedToolProvenanceReply(state, ungroundedClaims);
     return { mode: fallback.mode, message: replaceAssistantMessageText(message, assistantMessageText(fallback.message)) };
   }

@@ -28,12 +28,11 @@ import {
 import { latencyAckStage, shouldSendLatencyAck } from "./ack/ack-guard.js";
 import { selectDispatchPolicyDecision, selectReplaySessionKeyForDispatch } from "./tools/registration.js";
 
+function textOf(result: { message?: Record<string, unknown> }): string {
+  return String((result.message as { content?: Array<{ text?: string }> })?.content?.[0]?.text ?? "");
+}
 
 describe("regression round 4: contaminated session guard is narrow", () => {
-  function textOf(result: { message?: Record<string, unknown> }): string {
-    return String((result.message as { content?: Array<{ text?: string }> })?.content?.[0]?.text ?? "");
-  }
-
   const contaminatedState = {
     sessionBoundary: { status: "contaminated_subagent_identity" },
     decision: { route_decision: { route: "reply", task_class: "main_direct" } },
@@ -182,6 +181,70 @@ describe("regression round 4: scenario 2b — delegated state normalization", ()
     );
 
     expect(guarded.mode).toBe("pass");
+  });
+
+  it("strips internal tool provenance guard text instead of surfacing it", () => {
+    const guarded = guardAssistantMessageForPolicyState(
+      {
+        role: "assistant",
+        content: [{
+          type: "text",
+          text: "这条回复里有未被执行事实记录覆盖的工具来源声明（exec）。目前可确认的 direct tools 只有：web_fetch, read, browser。我不能把未记录的工具说成已经用过。\n\n这篇文章核心是围绕上下文边界设计。",
+        }],
+      },
+      {
+        directToolsSeen: ["web_fetch", "read", "browser"],
+        decision: { route_decision: { route: "reply", task_class: "main_direct" } },
+      },
+    );
+
+    expect(guarded.mode).toBe("replace");
+    expect(textOf(guarded)).toBe("这篇文章核心是围绕上下文边界设计。");
+    expect(textOf(guarded)).not.toContain("未被执行事实记录覆盖");
+    expect(textOf(guarded)).not.toContain("direct tools");
+  });
+
+  it("removes ungrounded tool-source sentence and keeps the user answer", () => {
+    const guarded = guardAssistantMessageForPolicyState(
+      {
+        role: "assistant",
+        content: [{
+          type: "text",
+          text: "我刚才用了 exec 和 web_fetch 查到文章内容。结论是：上下文边界决定是否适合拆成 sub-agent。",
+        }],
+      },
+      {
+        directToolsSeen: ["web_fetch"],
+        decision: { route_decision: { route: "reply", task_class: "main_direct" } },
+      },
+    );
+
+    expect(guarded.mode).toBe("replace");
+    expect(textOf(guarded)).toBe("结论是：上下文边界决定是否适合拆成 sub-agent。");
+    expect(textOf(guarded)).not.toContain("exec");
+    expect(textOf(guarded)).not.toContain("未被执行事实");
+  });
+
+  it("falls back without exposing tool provenance audit wording", () => {
+    const guarded = guardAssistantMessageForPolicyState(
+      {
+        role: "assistant",
+        content: [{
+          type: "text",
+          text: "我刚才用了 exec 查到的。",
+        }],
+      },
+      {
+        directToolsSeen: [],
+        decision: { route_decision: { route: "reply", task_class: "main_direct" } },
+      },
+    );
+
+    expect(guarded.mode).toBe("replace");
+    expect(textOf(guarded)).toBe("我继续按当前问题回答。");
+    expect(textOf(guarded)).not.toContain("工具来源");
+    expect(textOf(guarded)).not.toContain("exec");
+    expect(textOf(guarded)).not.toContain("direct tools");
   });
 
   it("replaces false sessions_spawn dispatch claim without execution evidence", () => {
