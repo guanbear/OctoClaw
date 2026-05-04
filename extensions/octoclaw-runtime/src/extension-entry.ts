@@ -219,11 +219,12 @@ function cancelNeutralAckTimersByCandidates(sessionKeys: string[], replyToMessag
 
 const OCTOCLAW_ROUTE_HINT_SYSTEM_CONTEXT = [
   "Use octoclaw_route_hint only as an internal control-plane action when runtime policy requires it; never introduce it with user-visible text.",
-  "Use octoclaw_route_hint to state whether this should be reply or delegate. Read-only observation is delegate with observer role.",
+  "Use octoclaw_route_hint to state only the two-class route intent: reply or delegate. Runtime derives must_reply, must_delegate, or budgeted_main_then_delegate from route plus cost signals.",
   "After route_hint merge: reply may answer directly; delegated routes must go through octoclaw_dispatch.",
   "",
-  "Prefer delegation for multi-step tasks (writing code, research, analysis, file changes).",
-  "Handle directly only for simple Q&A, greetings, or quick clarifications.",
+  "Handle directly for greetings, simple Q&A, clarifications, status/provenance follow-up, and one lightweight read-only lookup when it fits the budget.",
+  "Delegate only for explicit background/subagent/parallel work, code/file mutation, tests/builds, long commands, multi-step tools, review/validation, or work that cannot fit the budget.",
+  "Bare model/tool names, fresh lookup, route_hint=delegate, and fast_first_response are advisory only and do not force delegate by themselves.",
 ].join("\n");
 
 const OCTOCLAW_TASK_ACTION_SYSTEM_CONTEXT = [

@@ -624,7 +624,7 @@ OctoClaw 最初目标是把长时间、工具密集、上下文污染高的工�
 - 可以并行处理。
 - 用户明确要求后台、子 agent、并行、不要阻塞。
 
-中间地带用 `budgeted_main_then_delegate` 预算：先让主 agent 做一次快路径尝试，超过时间、工具或上下文预算再转 delegate。`fresh_live_lookup`、`conversation_control.route_hint=delegate`、`fast_first_response` 只能作为 reason code，不能单独成为 hard delegate signal。
+中间地带用 runtime 派生的 `budgeted_main_then_delegate` 预算：judge 只输出 `route=reply|delegate` 和成本信号（`confidence`、`tool_need_hint`、`duration_hint`、`scope`、`evidence_required`），主 runtime 再派生三档 bucket。`fresh_live_lookup`、`conversation_control.route_hint=delegate`、`fast_first_response` 只能作为 reason code，不能单独成为 hard delegate signal。
 
 ```text
 budgeted_main_then_delegate:
@@ -635,7 +635,7 @@ budgeted_main_then_delegate:
   escalateWhen: write_needed | long_command | multi_step_tool_chain | context_budget_exceeded
 ```
 
-rule、local judge、cheap LLM judge、route hint 和 AGENTS/system prompt 必须同步这套三段式语义：`must_reply/main_fast_path`、`must_delegate`、`budgeted_main_then_delegate`。只改其中一层会重新引入路由抖动。
+rule、local judge、cheap LLM judge、route hint 和 AGENTS/system prompt 必须同步这套“judge 两档 + runtime 成本派生三档”的语义：`must_reply/main_fast_path`、`must_delegate`、`budgeted_main_then_delegate`。judge 直接给的 `decision_bucket` 只能作为 telemetry；只改其中一层会重新引入路由抖动。
 
 ### 7.5 judge 不等于 dispatch 授权
 

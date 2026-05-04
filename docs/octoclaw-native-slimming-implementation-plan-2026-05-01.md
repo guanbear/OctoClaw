@@ -127,13 +127,14 @@
 
 实现口径：
 
-- `duration_hint=short` 且 `tool_need_hint=none|maybe` 时，默认 `reply`，除非用户明确要求后台/子 agent 或 WorkContract admission 有硬证据。
+- judge 只输出两档 `route=reply|delegate` 和成本信号；runtime 再用 `confidence`、`tool_need_hint`、`duration_hint`、`scope`、`evidence_required` 派生 `must_reply` / `must_delegate` / `budgeted_main_then_delegate`。
+- `duration_hint=short`、`tool_need_hint=none`、`scope=local|unknown`、`evidence_required=false` 且高置信 `route=reply` 时派生 `must_reply`；`tool_need_hint=maybe`、`duration_hint=medium`、`scope=remote|both`、`evidence_required=true` 或低置信 reply 派生 `budgeted_main_then_delegate`。
 - `fresh_live_lookup` 不再自动 delegate；先允许 main fast path 做一次轻量只读查证，预算超限再转 delegate。
 - `conversation route_hint=delegate` 不能单独强制 delegate；必须同时满足 long duration、required tools、code/test/edit、explicit delegate、或多步/并行收益。
 - `fast_first_response` 不再作为 delegate reason code；delegate reason 应收敛为 `background_execution`、`context_hygiene`、`parallelism`、`cost_tiering`、`specialized_tools`、`quality_isolation`。
 - status/provenance/execution follow-up 一律不 spawn；优先 native state、replay、WorkContract refs，缺证据则诚实回复无可验证记录。
-- rule、local judge、cheap LLM judge、route hint、AGENTS.md/prompt 注入必须同步改；不能只改某一层，否则会出现 local 判 main fast path、LLM 或 prompt 又因 `fresh_live_lookup` 拉回 delegate 的抖动。
-- local/cheap judge 输出不能只有 `reply/delegate`，还必须带 `startup_cost_policy`、`duration_hint`、`tool_need_hint`、`decision_bucket`、`reason_codes`，便于 replay 和 false-route 复盘。
+- rule、local judge、cheap LLM judge、route hint、AGENTS.md/prompt 注入必须同步使用“route 两档 + runtime 成本派生三档”；不能只改某一层，否则会出现 local 判 main fast path、LLM 或 prompt 又因 `fresh_live_lookup` 拉回 delegate 的抖动。
+- local/cheap judge 输出不能只有 `reply/delegate`，还必须带 `duration_hint`、`tool_need_hint`、`scope`、`evidence_required`、`reason_codes`。`decision_bucket` / `startup_cost_policy` / `hard_delegate_signal` 只能作为 telemetry，不能作为 SR-P1 权威。
 
 验收：
 
@@ -142,7 +143,7 @@
 - false delegate rate 在 nightly/Slack smoke 中可观测并下降。
 - false reply rate 同样必须可观测；明确长任务、代码/测试、多步工具、用户显式后台/并行不能被 main fast path 吃掉。
 - 主模型仍可在超过 fast path 预算后提交 route hint/dispatch，不被静态规则卡死。
-- 2026-05-04 实现状态：rule/router 已产出三段式 bucket 和 `startup_cost_policy`，并用 focused tests 覆盖 false delegate / false reply；`duration_hint=long` 和 `tool_need_hint=required` 是 hard delegate，`duration_hint=medium` 进入 `budgeted_main_then_delegate`。本轮补入固定 30s soft runtime budget 的状态机和 focused tests，但真实 Slack SR-P1 evidence 矩阵仍需继续补齐，不能把 SR-P1 或 0.5.0 说成端到端完成。
+- 2026-05-04 实现状态：rule/router 已改为 runtime 派生三段式 bucket，judge 只需给两档 route 和成本信号；focused tests 覆盖 false delegate / false reply、低置信 reply 进入 budget、以及 judge `decision_bucket` 只作为 telemetry。固定 30s soft runtime budget 状态机和 focused tests 已补入，但真实 Slack SR-P1 evidence 矩阵仍需继续补齐，不能把 SR-P1 或 0.5.0 说成端到端完成。
 
 #### SR-P2：瘦身 planner/native 热路径和观测
 
@@ -1025,7 +1026,7 @@ admission 规则：
 - `must_delegate`：有硬委派信号，例如用户明确要求子 agent/后台/并行、代码修改/测试/构建、多步工具、大量上下文阅读、review/验证、预计 90-120 秒以上。
 - `budgeted_main_then_delegate`：中间地带先让主 agent 在固定 30s soft runtime budget 内尝试；预算超限后进入升级待执行状态，或出现写操作/长命令/第二轮以上真实工具时转 `octoclaw_dispatch`。
 
-rule、local judge、cheap LLM judge 和 prompt 注入必须统一这套三段式语义；只改 rule 或只改 prompt 都会导致路由抖动。尤其是 `fresh_live_lookup`、`conversation_control.route_hint=delegate`、`fast_first_response` 这些旧信号需要降级，但不能覆盖 `must_delegate` 硬信号。
+rule、local judge、cheap LLM judge 和 prompt 注入必须统一为“judge 两档 route + runtime 成本派生三档”的语义；只改 rule 或只改 prompt 都会导致路由抖动。尤其是 `fresh_live_lookup`、`conversation_control.route_hint=delegate`、`fast_first_response` 这些旧信号需要降级，但不能覆盖 `must_delegate` 硬信号。
 
 默认主 agent 处理：
 
@@ -1035,7 +1036,7 @@ rule、local judge、cheap LLM judge 和 prompt 注入必须统一这套三段�
 - 需要澄清 scope、目标、验收标准。
 - 简单版本/状态/配置查询，且可以用一次只读工具或 native status 完成。
 - `fresh_live_lookup` 但目标明确、结果短、预计 30 秒内能完成。
-- `duration_hint=short` 且 `tool_need_hint=none|maybe`。
+- `duration_hint=short`、`tool_need_hint=none`、`scope=local|unknown`、`evidence_required=false`，并且 judge 对 `route=reply` 高置信。
 
 默认委派子 agent：
 
@@ -1079,10 +1080,10 @@ main_fast_path:
 
 judge 输出要求：
 
-- `decision_bucket`: `must_reply`、`must_delegate`、`budgeted_main_then_delegate` 之一。
-- `startup_cost_policy`: 说明是否允许 main fast path、预算、转委派条件。
-- `duration_hint`、`tool_need_hint`、`reason_codes`: 作为 route replay 和验收依据。
-- `hard_delegate_signal`: 记录用户显式后台/并行、代码/测试、多步工具等不能被 main fast path 覆盖的信号。
+- `route`: 只允许 `reply` 或 `delegate`。judge 不直接决定 SR-P1 三档 bucket。
+- `confidence` / `route_confidence`: 低置信 `reply` 不再强行算 `must_reply`，runtime 会派生为 budgeted main。
+- `duration_hint`、`tool_need_hint`、`scope`、`evidence_required`、`reason_codes`: 作为 runtime 派生 `decision_bucket` 和 replay 验收依据。
+- `decision_bucket`、`startup_cost_policy`、`hard_delegate_signal`: 可记录为 telemetry，但 runtime 不把 judge 给出的 `decision_bucket` 当权威。
 
 验收：
 

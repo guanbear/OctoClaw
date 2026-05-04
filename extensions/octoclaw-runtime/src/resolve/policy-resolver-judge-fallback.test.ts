@@ -74,6 +74,34 @@ function minimalJudgeResponse(route: "reply" | "delegate", confidence = 0.82): R
   });
 }
 
+function judgeSignalResponse(payload: Record<string, unknown>): Response {
+  return jsonResponse({
+    choices: [{
+      message: {
+        content: JSON.stringify({
+          route: "reply",
+          confidence: 0.86,
+          abstain_reason: null,
+          ack_text: "收到",
+          is_followup_to_recent_execution: false,
+          is_new_work: false,
+          expected_deliverable: null,
+          reply_mode: "answer",
+          delegate_role: null,
+          coordination_mode_hint: "solo_worker",
+          complexity: "simple",
+          scope: "local",
+          tool_need_hint: "none",
+          duration_hint: "short",
+          evidence_required: false,
+          reason_codes: [],
+          ...payload,
+        }),
+      },
+    }],
+  });
+}
+
 function routeDecisionOf(decision: unknown): Record<string, unknown> {
   return (decision as { route_decision: Record<string, unknown> }).route_decision;
 }
@@ -656,32 +684,12 @@ describe("execution coverage override intent guard", () => {
     });
   });
 
-  it("honors actionable judge budget bucket without deterministic fresh-lookup intent", async () => {
-    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(jsonResponse({
-      choices: [{
-        message: {
-          content: JSON.stringify({
-            route: "reply",
-            confidence: 0.86,
-            abstain_reason: null,
-            ack_text: "收到",
-            decision_bucket: "budgeted_main_then_delegate",
-            startup_cost_policy: {
-              main_fast_path_allowed: true,
-              max_wall_ms: 30_000,
-              max_tool_calls: 2,
-              escalation_triggers: ["budget_expired", "write_or_mutation_needed"],
-            },
-            hard_delegate_signal: false,
-            is_followup_to_recent_execution: false,
-            is_new_work: false,
-            expected_deliverable: null,
-            scope: "remote",
-            tool_need_hint: "none",
-            duration_hint: "short",
-          }),
-        },
-      }],
+  it("derives budgeted bucket from reply cost signals without trusting judge decision_bucket", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(judgeSignalResponse({
+      scope: "remote",
+      tool_need_hint: "maybe",
+      duration_hint: "short",
+      evidence_required: true,
     }));
 
     const decision = await resolveStatelessPolicyDecision(
@@ -699,40 +707,52 @@ describe("execution coverage override intent guard", () => {
       hard_delegate_signal: false,
     });
     expect(routeDecisionOf(decision).reason_codes as string[]).toEqual(
-      expect.arrayContaining(["judge_decision_bucket:budgeted_main_then_delegate"]),
+      expect.arrayContaining([
+        "startup_cost_derived_from_route_cost_signals",
+        "judge_cost_scope:remote",
+        "judge_evidence_required",
+      ]),
     );
   });
 
-  it("preserves low-confidence reply budget bucket without treating it as delegate authority", async () => {
-    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(jsonResponse({
-      choices: [{
-        message: {
-          content: JSON.stringify({
-            route: "reply",
-            confidence: 0,
-            abstain_reason: null,
-            ack_text: null,
-            decision_bucket: "budgeted_main_then_delegate",
-            startup_cost_policy: {
-              main_fast_path_allowed: true,
-              max_wall_ms: 30_000,
-              max_tool_calls: 2,
-              escalation_triggers: ["budget_expired", "write_or_mutation_needed"],
-            },
-            hard_delegate_signal: false,
-            is_followup_to_recent_execution: false,
-            is_new_work: false,
-            expected_deliverable: null,
-            scope: "remote",
-            tool_need_hint: "none",
-            duration_hint: "short",
-          }),
-        },
-      }],
+  it("ignores judge decision_bucket telemetry for high-confidence simple replies", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(judgeSignalResponse({
+      decision_bucket: "budgeted_main_then_delegate",
+      startup_cost_policy: { main_fast_path_allowed: true, max_wall_ms: 30_000 },
+      scope: "local",
+      tool_need_hint: "none",
+      duration_hint: "short",
+      evidence_required: false,
+    }));
+
+    const decision = await resolveStatelessPolicyDecision("用一句话解释 NIH 是什么", {
+      metadata: {
+        _judgeFastConfig: localJudgeConfig,
+      },
+    });
+
+    expect(routeDecisionOf(decision)).toMatchObject({
+      route: "reply",
+      decision_bucket: "must_reply",
+      hard_delegate_signal: false,
+    });
+    expect(routeDecisionOf(decision).reason_codes as string[]).toEqual(
+      expect.arrayContaining(["judge_decision_bucket_telemetry:budgeted_main_then_delegate"]),
+    );
+  });
+
+  it("uses low-confidence reply route as budget signal without delegate authority", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(judgeSignalResponse({
+      confidence: 0,
+      ack_text: null,
+      scope: "local",
+      tool_need_hint: "none",
+      duration_hint: "short",
+      evidence_required: false,
     }));
 
     const decision = await resolveStatelessPolicyDecision(
-      "给我两个版本差异的五句摘要，只读即可。",
+      "<@U0ARU7EKGCQ> OpenClaw 2026.4.29 相比 2026.4.21 有哪些 release 变化？也看一下 OctoClaw 文档里 PC13 Slack delivery port 记录的字段，最后用 5 句中文总结。只读即可。",
       {
         metadata: {
           _judgeFastConfig: localJudgeConfig,
@@ -748,7 +768,40 @@ describe("execution coverage override intent guard", () => {
       hard_delegate_signal: false,
     });
     expect(routeDecisionOf(decision).reason_codes as string[]).toEqual(
-      expect.arrayContaining(["judge_decision_bucket:budgeted_main_then_delegate"]),
+      expect.arrayContaining([
+        "judge_route_intent:reply",
+        "judge_low_confidence_budgeted",
+      ]),
+    );
+  });
+
+  it("derives must_delegate from an actionable two-class delegate judge without decision_bucket", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(judgeSignalResponse({
+      route: "delegate",
+      confidence: 0.88,
+      is_new_work: true,
+      expected_deliverable: "review summary",
+      delegate_role: "review",
+      scope: "local",
+      tool_need_hint: "maybe",
+      duration_hint: "medium",
+      evidence_required: true,
+    }));
+
+    const decision = await resolveStatelessPolicyDecision("做一次只读 review 并汇总风险", {
+      metadata: {
+        _judgeFastConfig: localJudgeConfig,
+      },
+    });
+
+    expect(routeDecisionOf(decision)).toMatchObject({
+      route: "delegate",
+      route_source: "judge",
+      decision_bucket: "must_delegate",
+      hard_delegate_signal: true,
+    });
+    expect(routeDecisionOf(decision).reason_codes as string[]).toEqual(
+      expect.arrayContaining(["hard_delegate:judge_actionable_delegate"]),
     );
   });
 

@@ -72,7 +72,7 @@ export const ANTI_REPLY_BIAS_RULES = [
   {
     id: "fresh_state_lookups_budgeted_main_first",
     rule:
-      "Fresh state lookup such as version/latest/status/local-machine/remote/release comparison is main fast path first when it is one lightweight read-only lookup; delegate only after budget, write, long-running, or multi-step signals.",
+      "Fresh state lookup such as version/latest/status/local-machine/remote/release comparison is route=reply with cost signals; runtime derives budgeted main first when it is one lightweight read-only lookup and delegates only after budget, write, long-running, or multi-step signals.",
   },
   {
     id: "real_probing_delegate",
@@ -112,7 +112,7 @@ export const VALIDATOR_DEFAULT_RULES = [
   },
   {
     if: "fresh_live_lookup or route_hint=delegate without a hard delegate signal",
-    then: "use budgeted_main_then_delegate; do not force delegate alone",
+    then: "emit route=reply plus cost signals; runtime derives budgeted_main_then_delegate and does not force delegate alone",
   },
   {
     if: "execution.supports_provenance_reply == true",
@@ -141,14 +141,15 @@ export const JudgeOutputSchema = {
   scope: "local | remote | both | unknown (REQUIRED)",
   tool_need_hint: "none | maybe | required (REQUIRED)",
   duration_hint: "short | medium | long (REQUIRED)",
-  decision_bucket: "must_reply | must_delegate | budgeted_main_then_delegate (REQUIRED)",
+  evidence_required: "boolean (REQUIRED; true when a fresh external/local evidence check is needed)",
+  decision_bucket: "must_reply | must_delegate | budgeted_main_then_delegate (OPTIONAL TELEMETRY; runtime does not trust it as SR-P1 authority)",
   startup_cost_policy: {
     main_fast_path_allowed: true,
     max_wall_ms: "30000 for budgeted_main_then_delegate",
     max_tool_calls: "1-2",
     escalation_triggers: [] as string[],
   },
-  hard_delegate_signal: "boolean (REQUIRED)",
+  hard_delegate_signal: "boolean (OPTIONAL TELEMETRY)",
   reason_codes: [] as string[],
 } as const;
 

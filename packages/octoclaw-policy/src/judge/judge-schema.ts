@@ -168,8 +168,8 @@ export interface JudgeInput {
 /**
  * Output from the LLM judge.
  *
- * Hot-path consumers only read `route`, `confidence`, `abstainReason`.
- * All other fields are written to replay log for offline analysis.
+ * Hot-path consumers read the two-class route plus cost signals. Runtime derives
+ * SR-P1 buckets; judge-provided decision_bucket is telemetry only.
  */
 export interface JudgeOutput {
   route: JudgeRoute;
@@ -220,6 +220,7 @@ export interface JudgeOutput {
   requestKind?: string;
   target?: string;
   budgetBand?: JudgeBudgetBand;
+  evidence_required?: boolean;
   evidenceRequired?: boolean;
   ackRequired?: boolean;
 }

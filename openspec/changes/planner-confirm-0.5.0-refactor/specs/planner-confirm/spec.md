@@ -159,6 +159,12 @@ Delegation decisions SHALL account for native spawn cold-start cost and SHALL av
 - THEN the decision bucket SHALL be `must_reply/main_fast_path` or `budgeted_main_then_delegate`
 - AND `fresh_live_lookup` SHALL NOT force delegate by itself.
 
+#### Scenario: runtime-derived startup bucket
+
+- WHEN the local or cheap LLM judge returns `route=reply` or `route=delegate`
+- THEN OctoClaw SHALL derive `decision_bucket` in runtime from the route plus `confidence`, `tool_need_hint`, `duration_hint`, `scope`, `evidence_required`, and hard boundary signals
+- AND a judge-provided `decision_bucket` SHALL be treated as telemetry only.
+
 #### Scenario: hard delegate signal
 
 - WHEN the request explicitly asks for background/subagent/parallel work, code edits, tests/builds, long commands, multi-step tools, review/validation, or expected duration over 90-120s
