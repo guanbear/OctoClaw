@@ -40,6 +40,7 @@ function packet(overrides: Partial<RouteCommitAckPacket> = {}): RouteCommitAckPa
     hasValidThreadTarget: true,
     channelTone: "chat",
     taskClass: "coding",
+    decisionBucket: "must_delegate",
     language: "zh",
     ...overrides,
   };
@@ -47,7 +48,7 @@ function packet(overrides: Partial<RouteCommitAckPacket> = {}): RouteCommitAckPa
 
 function decision(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
-    route_decision: { route: "delegate", route_source: "judge" },
+    route_decision: { route: "delegate", route_source: "judge", decision_bucket: "must_delegate" },
     work_contract: { workContractId: "wc-123", turnId: "turn-789" },
     routeSeal: { requestId: "req-seal-456", turnId: "turn-789", threadBindingKey: "thread-binding", route: "delegate", source: "local_judge", reasonCodes: ["local_judge"], createdAt: new Date().toISOString(), inputHash: "", stateGeneration: 0, schemaVersion: "octoclaw.route_seal.v1" },
     ...overrides,
@@ -135,6 +136,7 @@ describe("route commit ACK", () => {
     expect(result?.routeCommitId).toBe("wc-123");
     expect(result?.route).toBe("delegate");
     expect(result?.routeSealId).toBe("req-seal-456");
+    expect(result?.decisionBucket).toBe("must_delegate");
   });
 
   it("returns null when route commit packet fields are missing", () => {
@@ -270,6 +272,7 @@ describe("route commit ACK", () => {
       expect.objectContaining({
         ackKey: expect.stringContaining("wc-123"),
         routeCommitId: "wc-123",
+        decision_bucket: "must_delegate",
         ackSent: true,
       }),
       undefined,

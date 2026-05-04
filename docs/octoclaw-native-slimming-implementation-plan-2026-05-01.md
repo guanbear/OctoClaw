@@ -105,6 +105,9 @@
 - 2026-05-04 local / 2026-05-03 UTC 最新 ticket-fix smoke：`/tmp/octoclaw-planner-native-user-20260504-ticket-fix/out/slack-acceptance-2026-05-03-22-36-12.{json,md}`，harness `pass`；thread `1777847588.374549`，WorkContract `wc-ab450a65b9afe6f5`，spawnIntent `nsp_moqcltjd_68eac0a0`，runId `0a355aee-aaea-49cd-a768-493cfa5c7d58`，childSession `agent:main:subagent:e01f185d-0aa1-4ee0-b438-6db9461140f3`。
 - 最新 smoke 的 neutralAckMs `5201`，Slack reaction `eyes`；acceptedAckMs `102093`，finalMs `182784`。Replay stage：`message_received=5057ms`、`before_dispatch=5098ms`、`before_prompt_build=86211ms`、`sessions_spawn_intent_allowed=96922ms`、`sessions_spawn_accepted=102776ms`、`dispatch_confirm=102778ms`、`native_child_final=183504ms`。
 - 最新 smoke final footer 为 `route=delegate | model=zhipu/GLM-5.1 · thread | via=native_announce | worker=octoclaw-research | wc=wc-ab450`，`completionFileTimeoutCount=0`，Slack transcript 无重复 final；后续 duplicate replay 被 `already_delivered` 拒绝。
+- 2026-05-04 clean planner-native 三样本：`/tmp/octoclaw-sr-p1-smoke-20260504/run{3,4,5}-clean/` 均为 harness `pass`。neutralAckMs 为 `4724` / `4735` / `4722`，nearest-rank p95/max `4735ms`，三次均为 Slack reaction；acceptedAckMs 为 `111112` / `111567` / `110619`，finalMs 为 `208413` / `305340` / `217014`。
+- 最新 clean run5：`/tmp/octoclaw-sr-p1-smoke-20260504/run5-clean/slack-acceptance-2026-05-04-02-07-19.{json,md}`；thread `1777860220.481439`，WorkContract `wc-8952a8e3a003c912`，spawnIntent `nsp_moqk4odi_c2da90d2`，runId `793c2d86-badc-4c10-bd78-03efe2cb7937`，childSession `agent:main:subagent:afcea35f-6139-41e6-b588-942311844f37`，decision_bucket `must_delegate`。
+- 最新 clean run5 replay：`completion_file_timeout=0`、`duplicateFinal=0`、`footerVia=native_announce`、PC13 delivery `delivery_transport=slack_api` / `target_source=inbound_anchor` / `footer_source=envelope`。Stage：`message_received=3606ms`、`before_dispatch=3649ms`、`before_prompt_build=87659ms`、`sessions_spawn_intent_allowed=104851ms`、`sessions_spawn_accepted=111138ms`、`dispatch_confirm=111141ms`、`native_child_final=217610ms`。
 
 #### SR-P1：启动成本感知的委派规则
 
@@ -1258,7 +1261,7 @@ interface MessageDeliveryPort {
 - `footer_delegate_provenance`：debug footer 对 child final 显示 `route=delegate` 和 `via=subagent|native_announce`。
 - `no_completion_file_timeout`：planner/native path 没有 `completion_file_timeout` 和“任务超时”误报。
 
-报告必须输出这些字段，便于和真实 Slack smoke 对齐：neutral ACK latency、route decision/bucket、spawn allowed latency、confirm ACK latency、child progress/final latency、footer provenance、是否出现 `completion_file_timeout`、是否调用 legacy CLI delivery。
+报告必须输出这些字段，便于和真实 Slack smoke 对齐：neutral ACK latency、route decision/bucket、`decision_bucket`、`budgetElapsedMs`、`budgetEscalationReason`、`visibleElapsedMs`、spawn allowed latency、confirm ACK latency、child progress/final latency、footer provenance/`footerVia`、PC13 `delivery_transport`/`target_source`/`footer_source`、`duplicateFinalCount`、是否出现 `completion_file_timeout`、是否调用 legacy CLI delivery。
 
 ## 14. 发布顺序
 

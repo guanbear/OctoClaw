@@ -933,6 +933,24 @@ function buildNativeAnnounceFinalMessage(input: {
   });
 }
 
+function nativeAnnounceDeliveryProvenance(contract: WorkContract, completion: NativeAnnounceCompletion): {
+  route: "delegate";
+  via: "native_announce";
+  workContractId: string;
+  runId?: string;
+  childSessionKey?: string;
+} {
+  const ids = contractNativeIds(contract);
+  const childSessionKey = ids.childSessionKey || completion.sourceSessionKey;
+  return {
+    route: "delegate",
+    via: "native_announce",
+    workContractId: contract.workContractId,
+    ...(ids.runId ? { runId: ids.runId } : {}),
+    ...(childSessionKey ? { childSessionKey } : {}),
+  };
+}
+
 export async function deliverNativeAnnounceCompletion(input: {
   contract: WorkContract;
   completion: NativeAnnounceCompletion;
@@ -962,14 +980,19 @@ export async function deliverNativeAnnounceCompletion(input: {
   if (!message) {
     return { sent: false, error: "native_announce_empty_result", sessionKey, replyToMessageId };
   }
+  const content = input.completion.resultText.trim();
   const sendMessage = input.sendMessage ?? ((params) => sendIMMessage({
     ...params,
     timeoutMs: 8000,
-    suppressProjectionFooter: true,
+    suppressProjectionFooter: false,
+    deliveryKind: "native_child_final",
+    deliveryTargetSource: params.replyToMessageId ? "inbound_anchor" : "session_fallback",
+    deliveryProvenance: nativeAnnounceDeliveryProvenance(input.contract, input.completion),
+    footerMode: footerDebugEnabled() ? "debug" : "off",
   }));
   const result = await sendMessage({
     sessionKey,
-    message,
+    message: input.sendMessage ? message : content,
     replyToMessageId: replyToMessageId || undefined,
     cwd: input.cwd || resolveWorkspaceRoot(),
   });
@@ -1326,6 +1349,12 @@ async function handleNativeAnnounceCompletion(input: {
       directDeliveryAttempted: !alreadyDelivered && directDeliveryEnabled,
       directDeliverySent: directDelivery.sent,
       directDeliveryError: directDelivery.error || "",
+      delivery_transport: directDelivery.transport || "",
+      deliveryTransport: directDelivery.transport || "",
+      target_source: directDelivery.targetSource || "",
+      targetSource: directDelivery.targetSource || "",
+      footer_source: directDelivery.footerSource || "",
+      footerSource: directDelivery.footerSource || "",
       deliverySessionKey: directDelivery.sessionKey || updatedContract.sessionKey || preStateKey,
       replyToMessageId: directDelivery.replyToMessageId || "",
     },
@@ -1343,6 +1372,12 @@ async function handleNativeAnnounceCompletion(input: {
         deliverySessionKey: directDelivery.sessionKey,
         replyToMessageId: directDelivery.replyToMessageId,
         messageId: directDelivery.messageId || "",
+        delivery_transport: directDelivery.transport || "",
+        deliveryTransport: directDelivery.transport || "",
+        target_source: directDelivery.targetSource || "",
+        targetSource: directDelivery.targetSource || "",
+        footer_source: directDelivery.footerSource || "",
+        footerSource: directDelivery.footerSource || "",
       },
       input.logger,
       null,
@@ -3482,6 +3517,8 @@ export const plugin = {
             sessionKey: stateKey || gate.intent.sessionKey,
             sessionId: stringValue(ctx.sessionId),
             route: stringValue(asRecord(decision.route_decision).route),
+            decision_bucket: stringValue(asRecord(decision.route_decision).decision_bucket || decision._decision_bucket || asRecord(asRecord(decision.route_decision).startup_cost_policy).decision_bucket),
+            decisionBucket: stringValue(asRecord(decision.route_decision).decision_bucket || decision._decision_bucket || asRecord(asRecord(decision.route_decision).startup_cost_policy).decision_bucket),
             toolName,
             spawn_intent_id: gate.intent.spawnIntentId,
             work_contract_id: gate.intent.workContractId,

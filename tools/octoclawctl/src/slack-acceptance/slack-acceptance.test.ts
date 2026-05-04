@@ -651,12 +651,13 @@ describe("no-spawn replay assertion", () => {
       { at: "2099-12-31T23:59:51.000Z", event: "neutral_inbound_ack", sessionKey: `slack:channel:C_ACC_TEST:thread:${threadTs}`, replyToMessageId: threadTs, anchor_source: "event", fallback_used: false, sent: true },
       { at: "2099-12-31T23:59:51.500Z", event: "completion_file_timeout", sessionKey: "slack:channel:C_ACC_TEST:thread:123", parentSessionKey: "slack:channel:C_ACC_TEST:thread:123", workContractId: "wc-unrelated" },
       { at: "2099-12-31T23:59:52.000Z", event: "before_prompt_build_observed", sessionKey: `slack:channel:C_ACC_TEST:thread:${threadTs}`, inboundMessageTs: threadTs, anchor_source: "event" },
-      { at: "2099-12-31T23:59:53.000Z", event: "policy_resolved", sessionKey: `slack:channel:C_ACC_TEST:thread:${threadTs}`, workContractId: "wc-stage" },
+      { at: "2099-12-31T23:59:53.000Z", event: "policy_resolved", sessionKey: `slack:channel:C_ACC_TEST:thread:${threadTs}`, workContractId: "wc-stage", decision_bucket: "budgeted_main_then_delegate", visibleElapsedMs: 3000 },
+      { at: "2099-12-31T23:59:53.500Z", event: "budgeted_main_escalated", sessionKey: `slack:channel:C_ACC_TEST:thread:${threadTs}`, workContractId: "wc-stage", decision_bucket: "budgeted_main_then_delegate", budgetElapsedMs: 30001, budgetEscalationReason: "wall_time_over_budget", visibleElapsedMs: 33000 },
       { at: "2099-12-31T23:59:54.000Z", event: "dispatch_planner_intent_created", sessionKey: `slack:channel:C_ACC_TEST:thread:${threadTs}`, work_contract_id: "wc-stage", spawn_intent_id: "nsp-stage" },
       { at: "2099-12-31T23:59:55.000Z", event: "sessions_spawn_intent_allowed", sessionKey: `slack:channel:C_ACC_TEST:thread:${threadTs}`, work_contract_id: "wc-stage", spawn_intent_id: "nsp-stage" },
       { at: "2099-12-31T23:59:56.000Z", event: "execution_transition", transitionKind: "spawn_started", sessionKey: `slack:channel:C_ACC_TEST:thread:${threadTs}`, workContractId: "wc-stage", compactParentPacket: { runId: "run-stage", childSessionKey: "agent:main:subagent:stage" } },
       { at: "2099-12-31T23:59:57.000Z", event: "dispatch_confirm_completed", sessionKey: `slack:channel:C_ACC_TEST:thread:${threadTs}`, work_contract_id: "wc-stage", spawn_intent_id: "nsp-stage", run_id: "run-stage", child_session_key: "agent:main:subagent:stage", ok: true },
-      { at: "2099-12-31T23:59:58.000Z", event: "native_announce_final_delivered", sessionKey: `slack:channel:C_ACC_TEST:thread:${threadTs}`, workContractId: "wc-stage" },
+      { at: "2099-12-31T23:59:58.000Z", event: "native_announce_final_delivered", sessionKey: `slack:channel:C_ACC_TEST:thread:${threadTs}`, workContractId: "wc-stage", footer_via: "native_announce", delivery_transport: "slack_api", target_source: "inbound_anchor", footer_source: "envelope", duplicate_final_count: 0 },
     ];
     await fs.writeFile(replayPath, replayEvents.map((event) => JSON.stringify(event)).join("\n"), "utf8");
 
@@ -690,6 +691,16 @@ describe("no-spawn replay assertion", () => {
       runId: "run-stage",
       childSessionKey: "agent:main:subagent:stage",
       completionFileTimeoutCount: 0,
+      decisionBucket: "budgeted_main_then_delegate",
+      budgetEvent: "budgeted_main_escalated",
+      budgetElapsedMs: 30001,
+      budgetEscalationReason: "wall_time_over_budget",
+      visibleElapsedMs: 3000,
+      footerVia: "native_announce",
+      deliveryTransport: "slack_api",
+      targetSource: "inbound_anchor",
+      footerSource: "envelope",
+      duplicateFinalCount: 0,
     });
     expect(delegatedCase.replayEvidence?.stageMs).toEqual(expect.objectContaining({
       message_received: expect.any(Number),
@@ -704,6 +715,9 @@ describe("no-spawn replay assertion", () => {
     }));
     expect(delegatedCase.final.matchedText).toBe("OpenClaw 总结\n\n• route=delegate | via=native_announce");
     expect(renderSlackAcceptanceMarkdown(report)).toContain("stageMs:");
+    expect(renderSlackAcceptanceMarkdown(report)).toContain("decision_bucket=budgeted_main_then_delegate");
+    expect(renderSlackAcceptanceMarkdown(report)).toContain("footerVia=native_announce");
+    expect(renderSlackAcceptanceMarkdown(report)).toContain("delivery_transport=slack_api");
   });
 });
 

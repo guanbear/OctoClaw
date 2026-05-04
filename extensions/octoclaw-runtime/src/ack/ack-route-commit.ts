@@ -16,6 +16,7 @@ export interface RouteCommitAckPacket {
   hasValidThreadTarget: boolean;
   channelTone: "chat" | "work" | "cli" | "unknown";
   taskClass: string;
+  decisionBucket: string;
   language: "zh" | "en";
 }
 
@@ -107,6 +108,16 @@ function detectChannelTone(decision: Record<string, unknown>, state: Record<stri
   return "unknown";
 }
 
+function detectDecisionBucket(decision: Record<string, unknown>): string {
+  const routeDecision = readRecord(decision.route_decision);
+  const startupCostPolicy = readRecord(routeDecision.startup_cost_policy || decision._startup_cost_policy);
+  return asString(
+    routeDecision.decision_bucket
+      || decision._decision_bucket
+      || startupCostPolicy.decision_bucket,
+  );
+}
+
 function parseThreadBindingKey(sessionKey: string): string {
   const parts = sessionKey.split(":");
   const threadIndex = parts.indexOf("thread");
@@ -142,6 +153,7 @@ function buildRouteCommitAckPacketInternal(
     hasValidThreadTarget,
     channelTone: detectChannelTone(decision, state),
     taskClass: asString(routeDecision.task_class),
+    decisionBucket: detectDecisionBucket(decision),
     language: detectLanguage(decision, state),
   };
 }
@@ -346,6 +358,8 @@ async function recordRouteCommitAckReplay(
         routeSealId: packet?.routeSealId ?? "",
         turnId: packet?.turnId ?? "",
         taskClass: packet?.taskClass ?? "",
+        decision_bucket: packet?.decisionBucket ?? "",
+        decisionBucket: packet?.decisionBucket ?? "",
         channelTone: packet?.channelTone ?? "",
         ackKey,
         ackKind: "route_commit_ack",

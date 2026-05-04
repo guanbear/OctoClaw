@@ -58,7 +58,7 @@ Footer is a debug projection. It defaults off, never appends to ACK/progress/no-
 
 Slack delivery port work is 0.5.x immediate and Slack-first, not a broad IM rewrite. The abstraction should be channel-neutral (a small delivery envelope/port with target, content, provenance, footer mode, dedupe key, and transport result), but the only new implementation in this change is Slack. It moves OctoClaw-owned Slack packets away from `openclaw message send` CLI/stdout parsing while keeping `OCTOCLAW_LEGACY_CLI_DELIVERY=1` rollback. Ordinary main-agent final replies stay on OpenClaw native Slack delivery; OctoClaw only projects debug footer facts through hooks. Non-Slack IM behavior stays on existing fallback.
 
-Nightly/acceptance reports must include neutral ACK latency, route bucket, spawn allowed latency, confirm ACK latency, child progress/final latency, footer provenance, `completion_file_timeout`, and legacy CLI delivery usage.
+Nightly/acceptance reports must include neutral ACK latency, route bucket, `decision_bucket`, `budgetElapsedMs`, `budgetEscalationReason`, `visibleElapsedMs`, spawn allowed latency, confirm ACK latency, child progress/final latency, footer provenance/`footerVia`, PC13 `delivery_transport`/`target_source`/`footer_source`, duplicate final count, `completion_file_timeout`, and legacy CLI delivery usage.
 
 ## Leader / Worker Split
 

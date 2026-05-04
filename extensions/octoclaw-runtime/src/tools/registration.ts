@@ -2772,14 +2772,24 @@ export function getToolRegistrations(options: ToolRegistrationOptions = {}): Too
                 || undefined,
               label: asString(asRecord(dispatchWorkContract?.mainContext).summary || params.task),
             });
-            const intent = nativeSpawnIntentStore.create({
-              workContractId,
-              delegateTaskId,
-              attemptId,
-              sessionKey: managedSessionKey || stateKey || asString(params.sessionKey),
-              sessionsSpawnArgs: sessionsSpawnArgs as { task: string; [key: string]: unknown },
-              ttlMs: resolveSpawnIntentTtlMs(),
-            });
+            let intent: ReturnType<typeof nativeSpawnIntentStore.create>;
+            try {
+              intent = nativeSpawnIntentStore.create({
+                workContractId,
+                delegateTaskId,
+                attemptId,
+                sessionKey: managedSessionKey || stateKey || asString(params.sessionKey),
+                sessionsSpawnArgs: sessionsSpawnArgs as { task: string; [key: string]: unknown },
+                ttlMs: resolveSpawnIntentTtlMs(),
+              });
+            } catch (error) {
+              const message = error instanceof Error ? error.message : String(error);
+              const errorMessage = message.includes("SQLITE") || message.includes("sqlite")
+                ? "native_spawn_intent_store_unavailable"
+                : "native_spawn_intent_create_failed";
+              await recordDispatchTerminalFailure(errorMessage, { route: resolvedRoute });
+              return dispatchHonestyFailure({ route: resolvedRoute, error: errorMessage, retryable: true, terminal: false });
+            }
 
             const nextState = {
               ...(state ?? {}),

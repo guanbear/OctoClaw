@@ -30,6 +30,17 @@ function asString(value: unknown): string {
   return String(value ?? "").trim();
 }
 
+function storeErrorReason(error: unknown): string {
+  const record = asRecord(error);
+  const code = asString(record.code).toLowerCase();
+  const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
+  if (code === "sqlite_busy" || code === "sqlite_locked" || message.includes("sqlite_busy") || message.includes("database is locked")) {
+    return "sqlite_busy";
+  }
+  if (code === "sqlite_unavailable" || message.includes("sqlite_unavailable")) return "sqlite_unavailable";
+  return "intent_store_error";
+}
+
 function asBoolean(value: unknown): boolean {
   return value === true;
 }
@@ -72,7 +83,13 @@ export function evaluateNativeSpawnGate(input: NativeSpawnGateInput): NativeSpaw
   let firstMismatch: NativeSpawnGateDecision | null = null;
   let firstTransitionFailure: NativeSpawnGateDecision | null = null;
   for (const sessionKey of keys) {
-    const pending = nativeSpawnIntentStore.findPendingForSession(sessionKey, { now: input.now });
+    let pending: NativeSpawnIntent | null;
+    try {
+      pending = nativeSpawnIntentStore.findPendingForSession(sessionKey, { now: input.now });
+    } catch (error) {
+      firstTransitionFailure ??= { allowed: false, reason: storeErrorReason(error) };
+      continue;
+    }
     if (!pending) continue;
     if (pending.canonicalArgsHash !== actualHash) {
       firstMismatch ??= {

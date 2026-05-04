@@ -22,6 +22,7 @@ const fs = fsSync as unknown as {
 const osModule = os as unknown as { tmpdir(): string };
 
 let tempWorkspace = "";
+let previousLegacyCliDelivery: string | undefined;
 
 const args: SessionsSpawnArgs = {
   task: "Research the native planner confirm handshake.",
@@ -70,6 +71,8 @@ function seedContract(sessionKey = "session-native-spawn-confirm") {
 }
 
 beforeEach(() => {
+  previousLegacyCliDelivery = process.env.OCTOCLAW_LEGACY_CLI_DELIVERY;
+  process.env.OCTOCLAW_LEGACY_CLI_DELIVERY = "1";
   tempWorkspace = fs.mkdtempSync(path.join(osModule.tmpdir(), "octoclaw-native-spawn-gate-confirm-"));
   envOverrides.workspaceRoot = tempWorkspace;
   nativeSpawnIntentStore.clearForTests();
@@ -84,6 +87,9 @@ afterEach(() => {
   resetExecTransitionState();
   nativeSpawnIntentStore.clearForTests();
   envOverrides.workspaceRoot = "";
+  if (previousLegacyCliDelivery === undefined) delete process.env.OCTOCLAW_LEGACY_CLI_DELIVERY;
+  else process.env.OCTOCLAW_LEGACY_CLI_DELIVERY = previousLegacyCliDelivery;
+  previousLegacyCliDelivery = undefined;
   if (tempWorkspace) fs.rmSync(tempWorkspace, { recursive: true, force: true });
   tempWorkspace = "";
 });

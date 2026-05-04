@@ -312,7 +312,8 @@ describe("SlackAdapter", () => {
     });
   });
 
-  it("uses Slack Web API directly for internal ACK sends", async () => {
+  it("uses Slack Web API by default for internal ACK sends", async () => {
+    delete process.env.OCTOCLAW_LEGACY_CLI_DELIVERY;
     const previousToken = process.env.SLACK_BOT_TOKEN;
     process.env.SLACK_BOT_TOKEN = "xoxb-test";
     mockRunCommand = async () => { throw new Error("openclaw cli should not be used for internal ACK sends"); };
@@ -322,8 +323,6 @@ describe("SlackAdapter", () => {
         channel: "C123ABCDEF",
         text: "收到，正在判断并准备处理。",
         thread_ts: "1700000000.000100",
-        unfurl_links: false,
-        unfurl_media: false,
       });
       return {
         json: async () => ({ ok: true, ts: "1700000000.000200", message: { ts: "1700000000.000200", thread_ts: "1700000000.000100" } }),
@@ -339,11 +338,14 @@ describe("SlackAdapter", () => {
       suppressProjectionFooter: true,
     });
 
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       sent: true,
       delivered: true,
       messageId: "1700000000.000200",
       threadTs: "1700000000.000100",
+      transport: "slack_api",
+      targetSource: "inbound_anchor",
+      footerSource: "none",
     });
     expect(fetchMock).toHaveBeenCalledOnce();
 

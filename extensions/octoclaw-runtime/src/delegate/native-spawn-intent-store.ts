@@ -70,6 +70,9 @@ export type ConfirmFailResult = NativeSpawnIntentTransitionResult;
 
 type StoreOptions = { dbPath?: string; sqlite?: SqliteProvider };
 type StoreRuntimeOptions = StoreOptions & { persist?: boolean; memory?: Map<string, NativeSpawnIntent> };
+type OpenedIntentDb = ReturnType<typeof openDb>;
+
+const SQLITE_BUSY_RETRY_DELAYS_MS = [0, 5, 25, 75] as const;
 
 function asRecord(value: unknown): Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value)
@@ -79,6 +82,59 @@ function asRecord(value: unknown): Record<string, unknown> {
 
 function asString(value: unknown): string {
   return String(value ?? "").trim();
+}
+
+function asErrorCode(error: unknown): string {
+  const record = asRecord(error);
+  return asString(record.code || record.name).toUpperCase();
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function isSqliteBusyError(error: unknown): boolean {
+  const code = asErrorCode(error);
+  const message = errorMessage(error).toLowerCase();
+  return code === "SQLITE_BUSY"
+    || code === "SQLITE_LOCKED"
+    || message.includes("sqlite_busy")
+    || message.includes("sqlite_locked")
+    || message.includes("database is locked")
+    || message.includes("database is busy");
+}
+
+function storeError(error: unknown): string {
+  if (isSqliteBusyError(error)) return "sqlite_busy";
+  const code = asErrorCode(error).toLowerCase();
+  if (code === "sqlite_unavailable") return "sqlite_unavailable";
+  const message = errorMessage(error);
+  return message ? `sqlite_error:${message}` : "sqlite_error";
+}
+
+function makeStoreError(code: string, message?: string): Error {
+  const error = new Error(message || code);
+  (error as Error & { code?: string }).code = code;
+  return error;
+}
+
+function sleepSync(ms: number): void {
+  if (ms <= 0) return;
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+function withSqliteBusyRetry<T>(operation: () => T): T {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < SQLITE_BUSY_RETRY_DELAYS_MS.length; attempt += 1) {
+    try {
+      return operation();
+    } catch (error) {
+      lastError = error;
+      if (!isSqliteBusyError(error) || attempt === SQLITE_BUSY_RETRY_DELAYS_MS.length - 1) throw error;
+      sleepSync(SQLITE_BUSY_RETRY_DELAYS_MS[attempt + 1] ?? 0);
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error(String(lastError));
 }
 
 function normalizeNow(now?: Date | number): Date {
@@ -128,18 +184,22 @@ function cloneIntent(intent: NativeSpawnIntent): NativeSpawnIntent {
 
 const fallbackMemoryIntents = new Map<string, NativeSpawnIntent>();
 
+function persistentRequested(opts?: StoreRuntimeOptions): boolean {
+  return opts?.persist === true || Boolean(opts?.dbPath) || opts?.sqlite !== undefined;
+}
+
 function openDb(opts?: StoreRuntimeOptions) {
-  if (opts?.persist !== true && !opts?.dbPath && opts?.sqlite === undefined) {
-    return { db: null, dbPath: "" };
+  if (!persistentRequested(opts)) {
+    return { db: null, dbPath: "", persistent: false, error: "" };
   }
   const opened = openRuntimeLedger({ dbPath: opts?.dbPath, mode: "best_effort", sqlite: opts?.sqlite });
-  if (opened.status !== "ok" || !opened.db) return { db: null, dbPath: opened.dbPath };
-  return { db: opened.db, dbPath: opened.dbPath };
+  if (opened.status !== "ok" || !opened.db) return { db: null, dbPath: opened.dbPath, persistent: true, error: opened.error || "sqlite_unavailable" };
+  return { db: opened.db, dbPath: opened.dbPath, persistent: true, error: "" };
 }
 
 function upsertDbIntent(db: NonNullable<ReturnType<typeof openDb>["db"]>, intent: NativeSpawnIntent): void {
   const normalized = normalizeIntent(intent);
-  db.prepare(
+  withSqliteBusyRetry(() => db.prepare(
     `INSERT INTO native_spawn_intents (
        spawn_intent_id, work_contract_id, session_key, status, args_hash,
        run_id, child_session_key, expires_at, created_at, updated_at, intent_json, revision
@@ -167,7 +227,37 @@ function upsertDbIntent(db: NonNullable<ReturnType<typeof openDb>["db"]>, intent
     normalized.createdAt,
     normalized.updatedAt,
     JSON.stringify(normalized),
-  );
+  ));
+}
+
+function readDbIntent(db: NonNullable<OpenedIntentDb["db"]>, spawnIntentId: string): NativeSpawnIntent | null {
+  return withSqliteBusyRetry(() => parseIntent(db.prepare("SELECT intent_json FROM native_spawn_intents WHERE spawn_intent_id = ?").get(spawnIntentId)));
+}
+
+function closeDb(opened: OpenedIntentDb): void {
+  if (!opened.db) return;
+  try { opened.db.close(); } catch {}
+}
+
+function failIfPersistentUnavailable(opened: OpenedIntentDb): void {
+  if (opened.persistent) {
+    throw makeStoreError("SQLITE_UNAVAILABLE", opened.error || "sqlite unavailable");
+  }
+}
+
+function withDbTransaction<T>(db: NonNullable<OpenedIntentDb["db"]>, operation: () => T): T {
+  withSqliteBusyRetry(() => db.exec("BEGIN IMMEDIATE"));
+  let committed = false;
+  try {
+    const result = operation();
+    withSqliteBusyRetry(() => db.exec("COMMIT"));
+    committed = true;
+    return result;
+  } finally {
+    if (!committed) {
+      try { db.exec("ROLLBACK"); } catch {}
+    }
+  }
 }
 
 function memoryFor(opts?: StoreRuntimeOptions): Map<string, NativeSpawnIntent> {
@@ -178,6 +268,7 @@ function saveIntent(intent: NativeSpawnIntent, opts?: StoreRuntimeOptions): Nati
   const copy = cloneIntent(intent);
   const opened = openDb(opts);
   if (!opened.db) {
+    failIfPersistentUnavailable(opened);
     memoryFor(opts).set(copy.spawnIntentId, copy);
     return cloneIntent(copy);
   }
@@ -194,13 +285,14 @@ function readIntent(spawnIntentId: string, opts?: StoreRuntimeOptions): NativeSp
   if (!id) return null;
   const opened = openDb(opts);
   if (!opened.db) {
+    failIfPersistentUnavailable(opened);
     const intent = memoryFor(opts).get(id);
     return intent ? cloneIntent(intent) : null;
   }
   try {
-    return parseIntent(opened.db.prepare("SELECT intent_json FROM native_spawn_intents WHERE spawn_intent_id = ?").get(id));
+    return readDbIntent(opened.db, id);
   } finally {
-    try { opened.db.close(); } catch {}
+    closeDb(opened);
   }
 }
 
@@ -267,13 +359,16 @@ export class NativeSpawnIntentStore {
     const nowMs = now.getTime();
     const runtimeOptions = this.options(options);
     const opened = openDb(runtimeOptions);
-    if (!opened.db) return findPendingInMemory(this.memory, key, nowMs);
+    if (!opened.db) {
+      failIfPersistentUnavailable(opened);
+      return findPendingInMemory(this.memory, key, nowMs);
+    }
     try {
-      const rows = opened.db.prepare(
+      const rows = withSqliteBusyRetry(() => opened.db!.prepare(
         `SELECT intent_json FROM native_spawn_intents
          WHERE session_key = ? AND status = 'planned'
          ORDER BY created_at DESC`,
-      ).all(key);
+      ).all(key));
       for (const row of rows) {
         const intent = parseIntent(row);
         if (!intent) continue;
@@ -285,7 +380,7 @@ export class NativeSpawnIntentStore {
       }
       return null;
     } finally {
-      try { opened.db.close(); } catch {}
+      closeDb(opened);
     }
   }
 
@@ -298,6 +393,40 @@ export class NativeSpawnIntentStore {
     sqlite?: SqliteProvider;
   }): NativeSpawnIntentTransitionResult {
     const runtimeOptions = this.options(input);
+    const opened = openDb(runtimeOptions);
+    if (opened.db) {
+      try {
+        return withDbTransaction(opened.db, () => {
+          const intent = readDbIntent(opened.db!, input.spawnIntentId);
+          if (!intent) return { ok: false, error: "intent_not_found" };
+          const now = normalizeNow(input.now);
+          if (input.sessionKey && intent.sessionKey !== input.sessionKey) {
+            return { ok: false, intent, error: "session_mismatch" };
+          }
+          if (intent.status !== "planned") {
+            return { ok: false, intent, error: `invalid_status:${intent.status}` };
+          }
+          if (parseTime(intent.expiresAt) <= now.getTime()) {
+            const expired = cloneIntent({ ...intent, status: "expired", updatedAt: now.toISOString() });
+            upsertDbIntent(opened.db!, expired);
+            return { ok: false, intent: expired, error: "intent_expired" };
+          }
+          const actualHash = hashSessionsSpawnArgs(input.sessionsSpawnArgs);
+          if (actualHash !== intent.canonicalArgsHash) {
+            return { ok: false, intent, error: "args_hash_mismatch" };
+          }
+          const started = cloneIntent({ ...intent, status: "spawn_call_started", updatedAt: now.toISOString() });
+          upsertDbIntent(opened.db!, started);
+          return { ok: true, intent: started };
+        });
+      } catch (error) {
+        return { ok: false, error: storeError(error) };
+      } finally {
+        closeDb(opened);
+      }
+    }
+    if (opened.persistent) return { ok: false, error: "sqlite_unavailable" };
+
     const intent = readIntent(input.spawnIntentId, runtimeOptions);
     if (!intent) return { ok: false, error: "intent_not_found" };
     const now = normalizeNow(input.now);
@@ -328,6 +457,66 @@ export class NativeSpawnIntentStore {
     const runId = asString(input.runId);
     if (!runId) return { ok: false, status: "error", error: "run_id_required" };
     const runtimeOptions = this.options(input);
+    const opened = openDb(runtimeOptions);
+    if (opened.db) {
+      try {
+        return withDbTransaction(opened.db, () => {
+          const intent = readDbIntent(opened.db!, input.spawnIntentId);
+          if (!intent) return { ok: false, status: "error", error: "intent_not_found" };
+          if (intent.workContractId !== input.workContractId) {
+            return { ok: false, status: "error", intent, error: "work_contract_mismatch" };
+          }
+          if (input.sessionKey && intent.sessionKey !== input.sessionKey) {
+            return { ok: false, status: "error", intent, error: "session_mismatch" };
+          }
+          if (intent.status === "accepted") {
+            if (intent.runId === runId) return { ok: true, status: "idempotent", intent, idempotent: true };
+            return {
+              ok: false,
+              status: "conflict",
+              intent,
+              error: "run_id_conflict",
+              existingRunId: intent.runId ?? undefined,
+            };
+          }
+          if (intent.status !== "spawn_call_started") {
+            return { ok: false, status: "error", intent, error: `invalid_status:${intent.status}` };
+          }
+          const now = normalizeNow(input.now);
+          if (parseTime(intent.expiresAt) <= now.getTime()) {
+            const expired = cloneIntent({ ...intent, status: "expired", updatedAt: now.toISOString() });
+            upsertDbIntent(opened.db!, expired);
+            return {
+              ok: false,
+              status: "error",
+              intent: expired,
+              error: "intent_expired",
+            };
+          }
+          const accepted: NativeSpawnIntent = {
+            ...intent,
+            status: "accepted",
+            runId,
+            openclawRunId: runId,
+            childRunId: asString(input.childRunId) || runId,
+            childSessionKey: asString(input.childSessionKey) || intent.childSessionKey || null,
+            acceptedAt: now.toISOString(),
+            confirmedAt: now.toISOString(),
+            updatedAt: now.toISOString(),
+            error: null,
+          };
+          const normalized = cloneIntent(accepted);
+          upsertDbIntent(opened.db!, normalized);
+          return { ok: true, status: "accepted", intent: normalized, idempotent: false };
+        });
+      } catch (error) {
+        return { ok: false, status: "error", error: storeError(error) };
+      } finally {
+        closeDb(opened);
+      }
+    }
+    if (opened.persistent) return { ok: false, status: "error", error: "sqlite_unavailable" };
+
     const intent = readIntent(input.spawnIntentId, runtimeOptions);
     if (!intent) return { ok: false, status: "error", error: "intent_not_found" };
     if (intent.workContractId !== input.workContractId) {
@@ -406,21 +595,25 @@ export class NativeSpawnIntentStore {
     dbPath?: string;
     sqlite?: SqliteProvider;
   }): NativeSpawnIntentTransitionResult {
-    const runtimeOptions = this.options(input);
-    const intent = readIntent(input.spawnIntentId, runtimeOptions);
-    if (!intent) return { ok: false, error: "intent_not_found" };
-    if (input.workContractId && intent.workContractId !== input.workContractId) {
-      return { ok: false, intent, error: "work_contract_mismatch" };
+    try {
+      const runtimeOptions = this.options(input);
+      const intent = readIntent(input.spawnIntentId, runtimeOptions);
+      if (!intent) return { ok: false, error: "intent_not_found" };
+      if (input.workContractId && intent.workContractId !== input.workContractId) {
+        return { ok: false, intent, error: "work_contract_mismatch" };
+      }
+      if (input.sessionKey && intent.sessionKey !== input.sessionKey) {
+        return { ok: false, intent, error: "session_mismatch" };
+      }
+      if (isNativeSpawnIntentTerminal(intent.status)) return { ok: false, intent, error: intent.status === "accepted" ? "already_accepted" : "already_terminal" };
+      const now = normalizeNow(input.now);
+      return {
+        ok: true,
+        intent: saveIntent({ ...intent, status: "failed", error: input.error, failedAt: now.toISOString(), updatedAt: now.toISOString() }, runtimeOptions),
+      };
+    } catch (error) {
+      return { ok: false, error: storeError(error) };
     }
-    if (input.sessionKey && intent.sessionKey !== input.sessionKey) {
-      return { ok: false, intent, error: "session_mismatch" };
-    }
-    if (isNativeSpawnIntentTerminal(intent.status)) return { ok: false, intent, error: intent.status === "accepted" ? "already_accepted" : "already_terminal" };
-    const now = normalizeNow(input.now);
-    return {
-      ok: true,
-      intent: saveIntent({ ...intent, status: "failed", error: input.error, failedAt: now.toISOString(), updatedAt: now.toISOString() }, runtimeOptions),
-    };
   }
 
   confirmFailed(spawnIntentId: string, error: string, now?: number): ConfirmFailResult {
@@ -428,12 +621,16 @@ export class NativeSpawnIntentStore {
   }
 
   markAckSent(spawnIntentId: string, opts?: { now?: Date | number; dbPath?: string; sqlite?: SqliteProvider }): NativeSpawnIntentTransitionResult {
-    const runtimeOptions = this.options(opts);
-    const intent = readIntent(spawnIntentId, runtimeOptions);
-    if (!intent) return { ok: false, error: "intent_not_found" };
-    if (intent.ackSentAt) return { ok: true, intent };
-    const now = normalizeNow(opts?.now);
-    return { ok: true, intent: saveIntent({ ...intent, ackSentAt: now.toISOString(), updatedAt: now.toISOString() }, runtimeOptions) };
+    try {
+      const runtimeOptions = this.options(opts);
+      const intent = readIntent(spawnIntentId, runtimeOptions);
+      if (!intent) return { ok: false, error: "intent_not_found" };
+      if (intent.ackSentAt) return { ok: true, intent };
+      const now = normalizeNow(opts?.now);
+      return { ok: true, intent: saveIntent({ ...intent, ackSentAt: now.toISOString(), updatedAt: now.toISOString() }, runtimeOptions) };
+    } catch (error) {
+      return { ok: false, error: storeError(error) };
+    }
   }
 
   expire(spawnIntentId: string, opts?: { now?: Date | number; dbPath?: string; sqlite?: SqliteProvider }): NativeSpawnIntent | null {

@@ -347,7 +347,7 @@ describe("guardOutboundMessageForPolicyState", () => {
     saveWorkContract(contract);
     policyState.setState(key, {
       decision: {
-        route_decision: { route: "delegate" },
+        route_decision: { route: "delegate", decision_bucket: "must_delegate" },
         work_contract: { workContractId: contract.workContractId, route: "delegate" },
         request: { metadata: { message_id: "1777368523.770689" } },
       },
@@ -1015,7 +1015,7 @@ describe("guardOutboundMessageForPolicyState", () => {
         ctx: { sessionKey: parentKey, channelId: "slack" },
         sendMessage: async (params) => {
           sent = params;
-          return { sent: true, messageId: "1777709670.123456", threadTs: params.replyToMessageId };
+          return { sent: true, messageId: "1777709670.123456", threadTs: params.replyToMessageId, transport: "slack_api", targetSource: "inbound_anchor", footerSource: "envelope" };
         },
       });
 
@@ -1041,7 +1041,7 @@ describe("guardOutboundMessageForPolicyState", () => {
       pluginConfig: {
         nativeAnnounceSendMessageForTests: async (params: { sessionKey: string; message: string; replyToMessageId?: string }) => {
           sentMessages.push(params);
-          return { sent: true, messageId: "1777709670.123456", threadTs: params.replyToMessageId };
+          return { sent: true, messageId: "1777709670.123456", threadTs: params.replyToMessageId, transport: "slack_api", targetSource: "inbound_anchor", footerSource: "envelope" };
         },
       },
       on: (event, handler) => handlers.set(event, handler),
@@ -1143,11 +1143,17 @@ describe("guardOutboundMessageForPolicyState", () => {
         delivered: true,
         directDeliveryAttempted: true,
         directDeliverySent: true,
+        delivery_transport: "slack_api",
+        target_source: "inbound_anchor",
+        footer_source: "envelope",
       }));
       expect(firstReplayEvents).toContainEqual(expect.objectContaining({
         event: "native_announce_final_delivered",
         workContractId: contract.workContractId,
         messageId: "1777709670.123456",
+        delivery_transport: "slack_api",
+        target_source: "inbound_anchor",
+        footer_source: "envelope",
       }));
       expect(firstReplayEvents).not.toContainEqual(expect.objectContaining({
         event: "native_announce_completion_duplicate",
@@ -1794,7 +1800,7 @@ describe("before_tool_call route hint guard", () => {
     const key = "agent:main:slack:channel:c0as4dappu3";
     policyState.setState(key, {
       decision: {
-        route_decision: { route: "delegate" },
+        route_decision: { route: "delegate", decision_bucket: "must_delegate" },
         hook_interface: { before_tool_call: { enabled: true, route_hint_required: false, route_hint_tool: "octoclaw_route_hint", delegation_enforcement: true } },
         route_hint_policy: { required: false, submitted: false },
         tool_policy: {
@@ -2191,7 +2197,7 @@ describe("before_tool_call route hint guard", () => {
     policyState.setState(key, {
       decision: {
         request: { session_key: key },
-        route_decision: { route: "delegate" },
+        route_decision: { route: "delegate", decision_bucket: "must_delegate" },
         hook_interface: { before_tool_call: { enabled: false } },
       },
       createdAt: Date.now(),
@@ -2233,7 +2239,7 @@ describe("before_tool_call route hint guard", () => {
     policyState.setState(key, {
       decision: {
         request: { session_key: key },
-        route_decision: { route: "delegate" },
+        route_decision: { route: "delegate", decision_bucket: "must_delegate" },
         hook_interface: { before_tool_call: { enabled: false } },
         route_hint_policy: { required: false, submitted: true },
         tool_policy: { must_delegate_via: "octoclaw_dispatch", allowed_control_tools: ["octoclaw_dispatch", "octoclaw_status"] },
@@ -2256,11 +2262,12 @@ describe("before_tool_call route hint guard", () => {
     const events = fsSync.readFileSync(replayLogPath, "utf8")
       .trim()
       .split("\n")
-      .map((line) => JSON.parse(line) as { event?: string; spawn_intent_id?: string; work_contract_id?: string });
+      .map((line) => JSON.parse(line) as { event?: string; spawn_intent_id?: string; work_contract_id?: string; decision_bucket?: string });
     expect(events).toContainEqual(expect.objectContaining({
       event: "sessions_spawn_intent_allowed",
       spawn_intent_id: intent.spawnIntentId,
       work_contract_id: intent.workContractId,
+      decision_bucket: "must_delegate",
     }));
     policyState.clearState(key);
     nativeSpawnIntentStore.clearForTests();

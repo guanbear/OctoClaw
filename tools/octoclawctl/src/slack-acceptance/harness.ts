@@ -121,6 +121,15 @@ function asBoolean(value: unknown): boolean {
   return value === true || value === "true";
 }
 
+function asFiniteNumber(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return undefined;
+}
+
 function normalizeCase(caseConfig: SlackAcceptanceCaseConfig, index: number): SlackAcceptanceCaseConfig {
   return {
     id: caseConfig.id || `${caseConfig.kind}-${index + 1}`,
@@ -388,6 +397,46 @@ function replayEventChildSessionKey(event: Record<string, unknown>): string {
   return asString(event.child_session_key || event.childSessionKey || event.sourceSessionKey || event.source_session_key || asRecord(event.compactParentPacket).childSessionKey);
 }
 
+function replayEventDecisionBucket(event: Record<string, unknown>): string {
+  return asString(
+    event.decision_bucket
+    || event.decisionBucket
+    || asRecord(event.route_decision).decision_bucket
+    || asRecord(event.routeDecision).decisionBucket
+    || asRecord(event.router_decision_v2).decision_bucket
+    || asRecord(event.startup_cost_policy).decision_bucket,
+  );
+}
+
+function replayEventBudgetElapsedMs(event: Record<string, unknown>): number | undefined {
+  return asFiniteNumber(event.budgetElapsedMs)
+    ?? asFiniteNumber(event.budget_elapsed_ms)
+    ?? asFiniteNumber(event.budget_ms)
+    ?? asFiniteNumber(event.elapsedMs)
+    ?? asFiniteNumber(event.elapsed_ms);
+}
+
+function replayEventVisibleElapsedMs(event: Record<string, unknown>): number | undefined {
+  return asFiniteNumber(event.visibleElapsedMs)
+    ?? asFiniteNumber(event.visible_elapsed_ms);
+}
+
+function replayEventBudgetEscalationReason(event: Record<string, unknown>): string {
+  return asString(event.budgetEscalationReason || event.budget_escalation_reason || event.reason);
+}
+
+function replayEventDeliveryTransport(event: Record<string, unknown>): string {
+  return asString(event.deliveryTransport || event.delivery_transport || event.transport);
+}
+
+function replayEventTargetSource(event: Record<string, unknown>): string {
+  return asString(event.targetSource || event.target_source);
+}
+
+function replayEventFooterSource(event: Record<string, unknown>): string {
+  return asString(event.footerSource || event.footer_source);
+}
+
 function stageNameForReplayEvent(event: Record<string, unknown>): string {
   const eventName = asString(event.event);
   const transitionKind = asString(event.transitionKind);
@@ -401,6 +450,41 @@ function stageNameForReplayEvent(event: Record<string, unknown>): string {
   if (eventName === "dispatch_confirm_completed") return "dispatch_confirm";
   if (eventName === "native_announce_completion_matched" || eventName === "native_announce_final_delivered") return "native_child_final";
   return "";
+}
+
+function footerViaFromText(text: string): string | undefined {
+  const match = text.match(/\bvia=([a-z0-9_.:-]+)/iu);
+  return match?.[1];
+}
+
+function normalizedMessageText(text: string): string {
+  return text.trim().replace(/\s+/gu, " ");
+}
+
+function duplicateFinalCount(messages: SlackMessageRecord[], final: AssertionResult): number | undefined {
+  const matchedText = asString(final.matchedText);
+  if (!matchedText) return undefined;
+  const normalized = normalizedMessageText(matchedText);
+  if (!normalized) return undefined;
+  const count = messages.filter((message) => normalizedMessageText(message.text) === normalized).length;
+  return Math.max(0, count - 1);
+}
+
+function enrichReplayEvidenceFromTranscript(
+  evidence: SlackAcceptanceReplayEvidence,
+  messages: SlackMessageRecord[],
+  final: AssertionResult,
+): SlackAcceptanceReplayEvidence {
+  const finalText = asString(final.matchedText)
+    || asString(messages.slice().reverse().find((message) => footerViaFromText(message.text))?.text)
+    || asString(messages[messages.length - 1]?.text);
+  const footerVia = footerViaFromText(finalText);
+  const duplicateCount = duplicateFinalCount(messages, final);
+  return {
+    ...evidence,
+    footerVia: evidence.footerVia || footerVia,
+    duplicateFinalCount: evidence.duplicateFinalCount ?? duplicateCount,
+  };
 }
 
 async function collectReplayEvidence(
@@ -433,6 +517,16 @@ async function collectReplayEvidence(
   let runId = "";
   let childSessionKey = "";
   let completionFileTimeoutCount = 0;
+  let decisionBucket = "";
+  let budgetEvent = "";
+  let budgetElapsedMs: number | undefined;
+  let budgetEscalationReason = "";
+  let visibleElapsedMs: number | undefined;
+  let footerVia = "";
+  let deliveryTransport = "";
+  let targetSource = "";
+  let footerSource = "";
+  let duplicateFinalCount: number | undefined;
   const referenceTs = threadTs || promptTs;
   const events: Array<{ event: Record<string, unknown>; at: number }> = [];
 
@@ -492,13 +586,29 @@ async function collectReplayEvidence(
     if (eventRunId) runId = runId || eventRunId;
     const eventChildSessionKey = replayEventChildSessionKey(event);
     if (eventChildSessionKey) childSessionKey = childSessionKey || eventChildSessionKey;
-    if (asString(event.event) === "neutral_inbound_ack") {
+    const eventDecisionBucket = replayEventDecisionBucket(event);
+    if (eventDecisionBucket) decisionBucket = decisionBucket || eventDecisionBucket;
+    const eventName = asString(event.event);
+    if (eventName === "neutral_inbound_ack") {
       anchorSource = anchorSource || asString(event.anchor_source);
       fallbackUsed = fallbackUsed || asBoolean(event.fallback_used);
     }
-    if (asString(event.event) === "completion_file_timeout") {
+    if (eventName === "completion_file_timeout") {
       completionFileTimeoutCount += 1;
     }
+    if (eventName.startsWith("budgeted_main_")) {
+      budgetEvent = budgetEvent || eventName;
+      budgetElapsedMs ??= replayEventBudgetElapsedMs(event);
+      budgetEscalationReason = budgetEscalationReason || replayEventBudgetEscalationReason(event);
+    }
+    visibleElapsedMs ??= replayEventVisibleElapsedMs(event);
+    footerVia = footerVia || asString(event.footerVia || event.footer_via || asRecord(event.footer).via);
+    if (eventName === "native_announce_final_delivered" || eventName === "native_announce_completion_matched") {
+      deliveryTransport = deliveryTransport || replayEventDeliveryTransport(event);
+      targetSource = targetSource || replayEventTargetSource(event);
+      footerSource = footerSource || replayEventFooterSource(event);
+    }
+    duplicateFinalCount ??= asFiniteNumber(event.duplicateFinalCount) ?? asFiniteNumber(event.duplicate_final_count);
     const stageName = stageNameForReplayEvent(event);
     if (stageName && stageMs[stageName] === undefined) {
       stageMs[stageName] = Math.max(0, Math.round(at - since));
@@ -510,6 +620,16 @@ async function collectReplayEvidence(
     reason: matched.size > 0 ? `matching replay events observed: ${matched.size}` : "no matching replay events observed",
     anchorSource: anchorSource || undefined,
     fallbackUsed,
+    decisionBucket: decisionBucket || undefined,
+    budgetEvent: budgetEvent || undefined,
+    budgetElapsedMs,
+    budgetEscalationReason: budgetEscalationReason || undefined,
+    visibleElapsedMs,
+    footerVia: footerVia || undefined,
+    deliveryTransport: deliveryTransport || undefined,
+    targetSource: targetSource || undefined,
+    footerSource: footerSource || undefined,
+    duplicateFinalCount,
     workContractId: Array.from(workContractIds)[0],
     spawnIntentId: spawnIntentId || undefined,
     runId: runId || undefined,
@@ -991,7 +1111,8 @@ async function runCase(client: SlackAcceptanceClient, config: SlackAcceptanceRes
   const final = finalCollection.assertion;
   const noSpawn = await checkNoSpawn(config.replayPath, sentIso, config.sessionKey, caseConfig.noSpawnExpected === true);
   progress.push(progressEvent(caseStartMs, "nospawn_assertion_completed", noSpawn.reason));
-  const replayEvidence = await collectReplayEvidence(config.replayPath, sentIso, config.sessionKey, posted.ts, threadTs);
+  const rawReplayEvidence = await collectReplayEvidence(config.replayPath, sentIso, config.sessionKey, posted.ts, threadTs);
+  const replayEvidence = enrichReplayEvidenceFromTranscript(rawReplayEvidence, finalCollection.replies, final);
   progress.push(progressEvent(caseStartMs, "replay_evidence_collected", replayEvidence.reason));
   const effectiveAck = caseConfig.ackRequired === true
     ? fastFinalSatisfiesAck(ack, final, allReplies, posted.ts, ackTimeoutMs)

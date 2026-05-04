@@ -168,6 +168,16 @@ export interface SlackAcceptanceReplayEvidence {
   reason: string;
   anchorSource?: string;
   fallbackUsed?: boolean;
+  decisionBucket?: string;
+  budgetEvent?: string;
+  budgetElapsedMs?: number;
+  budgetEscalationReason?: string;
+  visibleElapsedMs?: number;
+  footerVia?: string;
+  deliveryTransport?: string;
+  targetSource?: string;
+  footerSource?: string;
+  duplicateFinalCount?: number;
   workContractId?: string;
   spawnIntentId?: string;
   runId?: string;

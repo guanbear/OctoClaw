@@ -1,5 +1,9 @@
 import crypto from "node:crypto";
-import { describe, expect, it } from "vitest";
+import { createRequire } from "node:module";
+import fsSync from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   canonicalizeSessionsSpawnArgs,
   computePlanHash,
@@ -7,6 +11,21 @@ import {
   type SessionsSpawnArgs,
 } from "./native-spawn-intent.js";
 import { NativeSpawnIntentStore } from "./native-spawn-intent-store.js";
+import type { SqliteProvider } from "../runtime-ledger/types.js";
+
+interface TestFs {
+  mkdtempSync(prefix: string): string;
+  rmSync(pathname: string, opts?: { recursive?: boolean; force?: boolean }): void;
+}
+
+interface TestOs {
+  tmpdir(): string;
+}
+
+const fs = fsSync as unknown as TestFs;
+const osModule = os as unknown as TestOs;
+const nodeRequire = createRequire(import.meta.url);
+const tmpDirs: string[] = [];
 
 const baseArgs: SessionsSpawnArgs = {
   task: "Implement a focused deliverable with clear success criteria.",
@@ -20,6 +39,123 @@ const BASE_NOW = 1777723200000; // 2026-05-02T12:00:00.000Z
 function createStore(): NativeSpawnIntentStore {
   return new NativeSpawnIntentStore();
 }
+
+function makeTempDbPath(): string {
+  const dir = fs.mkdtempSync(path.join(osModule.tmpdir(), "octoclaw-native-spawn-intent-"));
+  tmpDirs.push(dir);
+  return path.join(dir, "intent.sqlite");
+}
+
+function loadNodeSqlite(): SqliteProvider {
+  try {
+    return nodeRequire("node:sqlite") as SqliteProvider;
+  } catch {
+    return null;
+  }
+}
+
+function requireNodeSqlite(): NonNullable<SqliteProvider> {
+  const sqlite = loadNodeSqlite();
+  expect(sqlite).not.toBeNull();
+  return sqlite!;
+}
+
+function sqliteBusyError(): Error {
+  const error = new Error("database is locked");
+  (error as Error & { code?: string }).code = "SQLITE_BUSY";
+  return error;
+}
+
+function sqliteWithBusyBegin(real: NonNullable<SqliteProvider>, failures: number): { sqlite: SqliteProvider; attempts: () => number } {
+  let remaining = failures;
+  let attempts = 0;
+  const RealDatabase = real.DatabaseSync;
+  return {
+    attempts: () => attempts,
+    sqlite: {
+      DatabaseSync: class {
+        private readonly inner: InstanceType<typeof RealDatabase>;
+
+        constructor(location: string, options?: { open?: boolean }) {
+          this.inner = options === undefined ? new RealDatabase(location) : new RealDatabase(location, options);
+        }
+
+        exec(sql: string): void {
+          if (sql.trim().toUpperCase() === "BEGIN IMMEDIATE" && remaining > 0) {
+            remaining -= 1;
+            attempts += 1;
+            throw sqliteBusyError();
+          }
+          this.inner.exec(sql);
+        }
+
+        prepare(sql: string) {
+          return this.inner.prepare(sql);
+        }
+
+        close(): void {
+          this.inner.close();
+        }
+      },
+    } as unknown as SqliteProvider,
+  };
+}
+
+function sqliteWithNativeUpsertBusy(real: NonNullable<SqliteProvider>): {
+  sqlite: SqliteProvider;
+  attempts: () => number;
+  setFailures: (count: number) => void;
+} {
+  let remaining = 0;
+  let attempts = 0;
+  const RealDatabase = real.DatabaseSync;
+  return {
+    attempts: () => attempts,
+    setFailures: (count: number) => { remaining = count; },
+    sqlite: {
+      DatabaseSync: class {
+        private readonly inner: InstanceType<typeof RealDatabase>;
+
+        constructor(location: string, options?: { open?: boolean }) {
+          this.inner = options === undefined ? new RealDatabase(location) : new RealDatabase(location, options);
+        }
+
+        exec(sql: string): void {
+          this.inner.exec(sql);
+        }
+
+        prepare(sql: string) {
+          const statement = this.inner.prepare(sql);
+          if (!sql.includes("INSERT INTO native_spawn_intents")) return statement;
+          return {
+            run: (...params: unknown[]) => {
+              if (remaining > 0) {
+                remaining -= 1;
+                attempts += 1;
+                throw sqliteBusyError();
+              }
+              return statement.run(...params);
+            },
+            get: (...params: unknown[]) => statement.get(...params),
+            all: (...params: unknown[]) => statement.all(...params),
+            finalize: () => statement.finalize(),
+          };
+        }
+
+        close(): void {
+          this.inner.close();
+        }
+      },
+    } as unknown as SqliteProvider,
+  };
+}
+
+afterEach(() => {
+  while (tmpDirs.length > 0) {
+    const dir = tmpDirs.pop()!;
+    try { fs.rmSync(dir, { recursive: true, force: true }); } catch {}
+  }
+});
 
 function createIntent(store = createStore(), ttlMs = 60_000, now = BASE_NOW) {
   return store.create({
@@ -523,5 +659,117 @@ describe("NativeSpawnIntentStore edge cases", () => {
     expect(store.size()).toBe(2);
     store.clear();
     expect(store.size()).toBe(0);
+  });
+});
+
+describe("NativeSpawnIntentStore SQLite race and busy evidence", () => {
+  it("persists hash mismatch as planned and still rejects planned -> accepted", () => {
+    const sqlite = requireNodeSqlite();
+    const dbPath = makeTempDbPath();
+    const store = new NativeSpawnIntentStore({ persist: true });
+    const intent = store.create({
+      workContractId: "wc_sqlite_mismatch",
+      sessionKey: "session-sqlite-mismatch",
+      sessionsSpawnArgs: baseArgs,
+      ttlMs: 60_000,
+      now: BASE_NOW,
+      dbPath,
+      sqlite,
+    });
+
+    const mismatch = store.transitionToSpawnCallStarted({
+      spawnIntentId: intent.spawnIntentId,
+      sessionKey: "session-sqlite-mismatch",
+      sessionsSpawnArgs: { ...baseArgs, task: "tampered" },
+      now: BASE_NOW,
+      dbPath,
+      sqlite,
+    });
+    expect(mismatch).toMatchObject({ ok: false, error: "args_hash_mismatch" });
+
+    const confirm = store.confirmAccepted({
+      spawnIntentId: intent.spawnIntentId,
+      workContractId: "wc_sqlite_mismatch",
+      sessionKey: "session-sqlite-mismatch",
+      runId: "run-after-mismatch",
+      now: BASE_NOW + 1,
+      dbPath,
+      sqlite,
+    });
+    expect(confirm).toMatchObject({ ok: false, error: "invalid_status:planned" });
+    expect(store.get(intent.spawnIntentId, { dbPath, sqlite })?.status).toBe("planned");
+    expect(store.get(intent.spawnIntentId, { dbPath, sqlite })?.runId ?? null).toBeNull();
+  });
+
+  it("retries SQLITE_BUSY while atomically authorizing spawn_call_started", () => {
+    const realSqlite = requireNodeSqlite();
+    const busy = sqliteWithBusyBegin(realSqlite, 1);
+    const dbPath = makeTempDbPath();
+    const store = new NativeSpawnIntentStore({ persist: true });
+    const intent = store.create({
+      workContractId: "wc_sqlite_busy_start",
+      sessionKey: "session-sqlite-busy-start",
+      sessionsSpawnArgs: baseArgs,
+      ttlMs: 60_000,
+      now: BASE_NOW,
+      dbPath,
+      sqlite: busy.sqlite,
+    });
+
+    const started = store.transitionToSpawnCallStarted({
+      spawnIntentId: intent.spawnIntentId,
+      sessionKey: "session-sqlite-busy-start",
+      sessionsSpawnArgs: baseArgs,
+      now: BASE_NOW + 1,
+      dbPath,
+      sqlite: busy.sqlite,
+    });
+
+    expect(started).toMatchObject({ ok: true });
+    expect(busy.attempts()).toBe(1);
+    expect(store.get(intent.spawnIntentId, { dbPath, sqlite: realSqlite })?.status).toBe("spawn_call_started");
+  });
+
+  it("fails closed when accepted confirm cannot be durably written", () => {
+    const realSqlite = requireNodeSqlite();
+    const busy = sqliteWithNativeUpsertBusy(realSqlite);
+    const dbPath = makeTempDbPath();
+    const store = new NativeSpawnIntentStore({ persist: true });
+    const intent = store.create({
+      workContractId: "wc_sqlite_busy_confirm",
+      sessionKey: "session-sqlite-busy-confirm",
+      sessionsSpawnArgs: baseArgs,
+      ttlMs: 60_000,
+      now: BASE_NOW,
+      dbPath,
+      sqlite: realSqlite,
+    });
+    const started = store.transitionToSpawnCallStarted({
+      spawnIntentId: intent.spawnIntentId,
+      sessionKey: "session-sqlite-busy-confirm",
+      sessionsSpawnArgs: baseArgs,
+      now: BASE_NOW + 1,
+      dbPath,
+      sqlite: realSqlite,
+    });
+    expect(started).toMatchObject({ ok: true });
+
+    busy.setFailures(99);
+    const confirm = store.confirmAccepted({
+      spawnIntentId: intent.spawnIntentId,
+      workContractId: "wc_sqlite_busy_confirm",
+      sessionKey: "session-sqlite-busy-confirm",
+      runId: "run-busy-confirm",
+      now: BASE_NOW + 2,
+      dbPath,
+      sqlite: busy.sqlite,
+    });
+
+    expect(confirm).toMatchObject({ ok: false, error: "sqlite_busy" });
+    expect(busy.attempts()).toBeGreaterThanOrEqual(4);
+    const persisted = store.get(intent.spawnIntentId, { dbPath, sqlite: realSqlite });
+    expect(persisted?.status).toBe("spawn_call_started");
+    expect(persisted?.runId ?? null).toBeNull();
+    expect(persisted?.ackSentAt ?? null).toBeNull();
   });
 });
