@@ -254,6 +254,7 @@ Owner: Codex leader after 0.5.0 Must+Should acceptance. GLM/cheap workers may im
 
 Write scope:
 
+- `extensions/octoclaw-runtime/src/im/*` for shared delivery envelope/port types only
 - `extensions/octoclaw-runtime/src/im/slack/*`
 - `extensions/octoclaw-runtime/src/im/send.ts`
 - Slack acceptance/nightly harness and report parser
@@ -265,12 +266,15 @@ Forbidden scope:
 
 Tasks:
 
-- [ ] Slack neutral ACK, delegate accepted ACK, thread reply, native announce final delivery, and debug footer use Slack delivery port instead of CLI/shell hot path.
+- [ ] Shared delivery envelope/port is channel-neutral but minimal: kind, target, content, provenance, footer mode, dedupe key, and transport result.
+- [ ] Slack neutral ACK text fallback, delegate accepted ACK, native announce final delivery, status/provenance follow-up, and legacy fallback use Slack delivery port instead of CLI/shell hot path.
+- [ ] Ordinary main-agent final reply is not re-sent by OctoClaw; it remains on OpenClaw native Slack delivery, with footer projection only through hooks.
 - [ ] Slack target comes from delivery context or inbound `channel/message.ts/thread_ts`, not session-key guessing.
+- [ ] Slack footer/provenance comes from envelope/native refs, not recent policyState or body regex guessing.
 - [ ] Slack native delivery path does not call `openclaw message send` or `runCommand("openclaw", ...)`.
 - [ ] `OCTOCLAW_LEGACY_CLI_DELIVERY=1` restores old Slack CLI path for rollback.
-- [ ] Non-Slack IM behavior remains unchanged.
-- [ ] Real Slack smoke proves native announce final delivery still works and no `completion_file_timeout` appears.
+- [ ] Non-Slack IM behavior remains unchanged except type-compatible fallback preservation.
+- [ ] Real Slack smoke proves native announce final delivery still works and no `completion_file_timeout` appears; report includes delivery transport, target source, and footer source.
 
 ## PC14 Nightly Regression Harness
 

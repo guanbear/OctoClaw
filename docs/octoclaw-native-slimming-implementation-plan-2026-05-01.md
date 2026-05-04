@@ -1100,7 +1100,9 @@ prompt 只负责引导模型，最终副作用仍由 admission、spawn intent ga
 
 ## 11. Phase 6：Slack delivery 切到原生 route/port
 
-目标：只把 Slack 热路径从 shell out `openclaw message send` 和 stdout/stderr 解析中移出来。非 Slack IM 不在 0.5.x immediate 范围内强行改造，继续走现有 fallback，避免一次性扩大风险面。
+目标：只把 OctoClaw 自己发出的 Slack 热路径从 shell out `openclaw message send` 和 stdout/stderr 解析中移出来。普通 main agent final reply 先继续交给 OpenClaw 原生 Slack delivery，OctoClaw 只通过 hook 做 footer projection；不要在本 slice 抢管所有 Slack 回复。
+
+设计保持 channel-neutral，但 0.5.x immediate 只实现 Slack。Feishu、WeChat 和其他 IM 继续走现有 fallback，不做迁移。这个 port 也不要做成新的 broker/outbox/state machine；它只是同步、有界 timeout、可观测的 delivery primitive。
 
 当前风险文件：
 
@@ -1111,28 +1113,51 @@ prompt 只负责引导模型，最终副作用仍由 admission、spawn intent ga
 
 改法：
 
-1. 先抽 Slack 可用的 `MessageDeliveryPort`，但接口命名保持通用，便于未来非 Slack 复用：
+1. 抽一个轻量 `MessageDeliveryEnvelope` / `MessageDeliveryPort`，接口命名保持 IM 通用，但第一实现只注册 Slack：
 
 ```ts
+type MessageDeliveryKind =
+  | "neutral_ack"
+  | "accepted_ack"
+  | "native_child_final"
+  | "status_reply"
+  | "legacy_fallback";
+
+interface MessageDeliveryEnvelope {
+  kind: MessageDeliveryKind;
+  channel: "slack" | string;
+  target: {
+    to?: string;
+    channelId?: string;
+    threadTs?: string;
+    replyToMessageId?: string;
+    source: "delivery_context" | "inbound_anchor" | "event_metadata" | "session_fallback";
+  };
+  content: string;
+  provenance?: {
+    route?: "reply" | "delegate";
+    via?: string;
+    workContractId?: string;
+    runId?: string;
+    childSessionKey?: string;
+  };
+  footerMode?: "off" | "debug";
+  dedupeKey?: string;
+}
+
 interface MessageDeliveryPort {
-  send(params: {
-    channel: "slack";
-    accountId?: string;
-    to: string;
-    threadId?: string;
-    text: string;
-    idempotencyKey?: string;
-    deliveryContext?: unknown;
-  }): Promise<{ ok: boolean; messageId?: string; threadId?: string; error?: string }>;
+  sendText(envelope: MessageDeliveryEnvelope): Promise<{ ok: boolean; messageId?: string; threadTs?: string; error?: string }>;
+  react?(envelope: MessageDeliveryEnvelope & { emoji: string }): Promise<{ ok: boolean; error?: string }>;
 }
 ```
 
-2. Slack 的 neutral ACK、delegate accepted ACK、thread reply、native announce final、debug footer 都统一走这个 port 或 Slack reaction backend；`sendIMMessage()` 不再直接知道 Slack CLI。
-3. native port 优先接 OpenClaw `runtime.channel.reply.dispatchReplyFromConfig`、`runtime.channel.reply.withReplyDispatcher`、`runtime.channel.outbound.loadAdapter`，或 Slack plugin 暴露的稳定 delivery port。
-4. Slack target 必须来自 delivery context 或 inbound `channel/message.ts/thread_ts` anchor；不能从 session key 猜 channel/thread。
-5. native port 不可用时，CLI adapter 只作为 legacy fallback，受 `OCTOCLAW_LEGACY_CLI_DELIVERY=1` 控制。
-6. Slack explicit reaction 可继续用 Web API backend，但必须使用 inbound `channel/message.ts` anchor，并和首 ACK dedupe 共用 receipt。
-7. 非 Slack IM 行为保持不变；最多做类型兼容和 fallback 保留，不迁移 Feishu/其他 IM 的发送路径。
+2. 第一阶段只接管 OctoClaw 自己发出的可见包：neutral ACK 的文字 fallback、delegate accepted ACK、native announce child final、status/provenance follow-up、legacy fallback。普通 main agent final reply 继续交给 OpenClaw 原生 Slack delivery；OctoClaw 只在 `message_sending` / `before_message_write` hook 做 footer projection。
+3. Slack footer 只能从 envelope/provenance 或 accepted native refs 渲染；不要再用最近 policyState、session key、正文 regex 去猜 child final 的 route/via。
+4. Slack target 优先级固定为 delivery context > inbound `channel/message.ts/thread_ts` anchor > event metadata > session fallback；`message_received` 没有原始 anchor 时 fail closed 或只记录 observed，不用 history 猜。
+5. Slack backend 优先使用公开稳定的 OpenClaw channel delivery API；如果当前版本没有足够 API，就直接用 Slack Web API backend，并借鉴 OpenClaw Slack `sendMessageSlack` 的 DM resolve、threadTs、chunking 语义。不要 private import OpenClaw Slack extension 内部模块。
+6. `sendIMMessage()` 对 Slack 走 delivery port；非 Slack 继续走现有 adapter/fallback。
+7. CLI adapter 只保留为 `OCTOCLAW_LEGACY_CLI_DELIVERY=1` rollback。
+8. Slack explicit reaction 可继续用 Web API backend，但必须使用明确 inbound anchor，并和首 ACK dedupe 共用 receipt。
 
 验收：
 
@@ -1363,15 +1388,17 @@ interface MessageDeliveryPort {
 
 ### 16.6 Slack delivery port 包
 
-目标：只把 Slack CLI/stdout 发送路径挪出热路径；非 Slack IM 保持现有 fallback，不进入 0.5.x immediate。
+目标：只把 OctoClaw 自己发出的 Slack CLI/stdout 发送路径挪出热路径；普通 main agent final reply 不在本 slice 抢管。接口保持 IM 通用，第一实现只做 Slack；非 Slack IM 保持现有 fallback，不进入 0.5.x immediate。
 
 改动：
 
-- 抽 `MessageDeliveryPort`，但本 slice 只接 Slack；`sendIMMessage()` 对 Slack 只依赖 port。
-- Slack neutral ACK、delegate accepted ACK、thread reply、native announce final、debug footer 都走 Slack port 或明确 Slack reaction backend。
-- native port 优先适配 `runtime.channel.reply.dispatchReplyFromConfig` / `withReplyDispatcher` / `outbound.loadAdapter`，或 Slack plugin 暴露的稳定 delivery API。
+- 抽轻量 `MessageDeliveryEnvelope` / `MessageDeliveryPort`，但本 slice 只注册 Slack 实现；`sendIMMessage()` 对 Slack 只依赖 port。
+- Slack neutral ACK 文字 fallback、delegate accepted ACK、native announce final、status/provenance follow-up、legacy fallback 走 Slack port 或明确 Slack reaction backend。
+- 普通 main final reply 继续由 OpenClaw 原生 Slack delivery 负责；OctoClaw hook 只做 footer projection，不重复投递。
+- footer 从 envelope/provenance 或 accepted native refs 渲染，不再靠最近 policyState/session key 猜 child final。
+- Slack target 优先 delivery context / inbound anchor；没有明确 anchor 时 fail closed 或只记录 observed。
+- backend 优先公开稳定的 OpenClaw channel delivery API；若不可用，则用 Slack Web API backend，借鉴 OpenClaw Slack `sendMessageSlack` 行为，不 private import 内部模块。
 - CLI adapter 只保留为 `OCTOCLAW_LEGACY_CLI_DELIVERY=1` fallback。
-- Slack explicit reaction adapter 可保留，但只接受明确 inbound anchor。
 - 非 Slack 代码只允许做类型兼容和 fallback 保留，不能顺手迁移 Feishu/其他 IM。
 
 验收：
