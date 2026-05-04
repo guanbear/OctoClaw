@@ -2324,7 +2324,8 @@ export async function resolvePolicyDecisionForContext(
   ctx: ManagedContext,
   _cwd: string,
   logger?: LoggerLike,
-): Promise<{ decision: UnknownRecord; stateKey: string; state: PolicyContextState } | null> {
+): Promise<{ decision: UnknownRecord; stateKey: string; state: PolicyContextState; usedCachedPolicy?: boolean; resolveElapsedMs?: number } | null> {
+  const resolveStartedAt = Date.now();
   const prompt = typeof promptOrEvent === "string"
     ? normalizePolicyPrompt(promptOrEvent)
     : extractPromptText(asRecord(promptOrEvent) as ExtractPromptEvent);
@@ -2373,7 +2374,23 @@ export async function resolvePolicyDecisionForContext(
       decision: cached,
       routeSeal,
     });
-    return { decision: cached, stateKey, state: { ...existing, decision: cached, routeSeal, updatedAt: Date.now() } };
+    const resolveElapsedMs = Date.now() - resolveStartedAt;
+    await recordPolicyReplay(
+      "policy_resolve_cache_hit",
+      {
+        sessionKey: stateKey,
+        sessionId: asString(ctx.sessionId),
+        stateKey,
+        route: asString(asRecord(cached.route_decision).route),
+        decision_bucket: asString(asRecord(cached.route_decision).decision_bucket || asRecord(cached.route_decision).decisionBucket),
+        workContractId: asString(cached.workContractId || asRecord(cached.work_contract).workContractId || asRecord(cached.work_contract).work_contract_id),
+        usedCachedPolicy: true,
+        elapsedMs: resolveElapsedMs,
+      },
+      logger,
+      null,
+    ).catch(() => undefined);
+    return { decision: cached, stateKey, state: { ...existing, decision: cached, routeSeal, updatedAt: Date.now() }, usedCachedPolicy: true, resolveElapsedMs };
   }
 
   try {
@@ -2425,6 +2442,7 @@ export async function resolvePolicyDecisionForContext(
     nextState.workContractId = asString(decision.workContractId);
     nextState.latestStatus = "sealed";
 
+    const resolveElapsedMs = Date.now() - resolveStartedAt;
     await recordPolicyReplay(
       "policy_resolved",
       buildPolicyResolvedReplayPayload({
@@ -2444,6 +2462,7 @@ export async function resolvePolicyDecisionForContext(
         prompt,
         routeHintSubmitted: Boolean(nextState.routeHintSubmitted),
         usedCachedPolicy: false,
+        resolveElapsedMs,
       }),
       logger,
       decision,
@@ -2468,7 +2487,7 @@ export async function resolvePolicyDecisionForContext(
       logger,
       decision,
     );
-    return { decision, stateKey, state: nextState };
+    return { decision, stateKey, state: nextState, usedCachedPolicy: false, resolveElapsedMs };
   } catch (error) {
     logger?.warn?.(`octoclaw runtime policy resolve failed: ${String(error instanceof Error ? error.message : error)}`);
     return null;

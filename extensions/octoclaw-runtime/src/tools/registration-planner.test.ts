@@ -222,6 +222,18 @@ describe("octoclaw_dispatch planner backend", () => {
     expect(countRows("scheduler_queue", "work_contract_id = ?", [contract.workContractId])).toBe(0);
     expect(countRows("task_attempts", "work_contract_id = ?", [contract.workContractId])).toBe(0);
     expect(countRows("completion_bindings", "work_contract_id = ?", [contract.workContractId])).toBe(0);
+    const events = readReplayEvents();
+    expect(events).toContainEqual(expect.objectContaining({
+      event: "dispatch_tool_started",
+      work_contract_id: contract.workContractId,
+      elapsedMs: expect.any(Number),
+    }));
+    expect(events).toContainEqual(expect.objectContaining({
+      event: "dispatch_planner_intent_created",
+      work_contract_id: contract.workContractId,
+      spawn_intent_id: body.spawnIntentId,
+      elapsedMs: expect.any(Number),
+    }));
   });
 
   it("adds explicit context refs and tool budget to native planner child packets without raw parent transcript", async () => {

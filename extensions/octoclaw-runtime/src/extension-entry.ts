@@ -3062,7 +3062,9 @@ export const plugin = {
 
     registerLifecycleHook("before_model_resolve", async (event, ctx) => {
       if (!isManagedAgentContext(ctx)) return;
+      const hookStartedAt = Date.now();
       const prompt = extractPromptText(event);
+      const stateKey = resolvePolicyStateKey(ctx);
       const nativeAnnounceHandled = await handleNativeAnnounceCompletion({
         event,
         ctx,
@@ -3090,12 +3092,53 @@ export const plugin = {
         ).catch(() => {});
         return;
       }
+      void recordPolicyReplay(
+        "before_model_resolve_observed",
+        {
+          sessionKey: stateKey || stringValue(ctx.sessionKey),
+          sessionId: stringValue(ctx.sessionId),
+          stateKey,
+          elapsedMs: Date.now() - hookStartedAt,
+        },
+        pi.logger,
+        null,
+      ).catch(() => {});
+      const policyResolveStartedAt = Date.now();
+      void recordPolicyReplay(
+        "before_model_policy_resolve_started",
+        {
+          sessionKey: stateKey || stringValue(ctx.sessionKey),
+          sessionId: stringValue(ctx.sessionId),
+          stateKey,
+          elapsedMs: policyResolveStartedAt - hookStartedAt,
+        },
+        pi.logger,
+        null,
+      ).catch(() => {});
       const resolved = await resolvePolicyDecisionForContext(
         prompt,
         ctx,
         process.cwd(),
         pi.logger,
       );
+      const modelPolicyDecision = asRecord(resolved?.decision);
+      void recordPolicyReplay(
+        "before_model_policy_resolve_completed",
+        {
+          sessionKey: stateKey || stringValue(ctx.sessionKey),
+          sessionId: stringValue(ctx.sessionId),
+          stateKey: stringValue(resolved?.stateKey || stateKey),
+          elapsedMs: Date.now() - policyResolveStartedAt,
+          hookElapsedMs: Date.now() - hookStartedAt,
+          resolved: Boolean(resolved),
+          usedCachedPolicy: resolved?.usedCachedPolicy === true,
+          route: stringValue(asRecord(modelPolicyDecision.route_decision).route),
+          decision_bucket: stringValue(asRecord(modelPolicyDecision.route_decision).decision_bucket),
+          workContractId: stringValue(modelPolicyDecision.workContractId || asRecord(modelPolicyDecision.work_contract).workContractId || asRecord(modelPolicyDecision.work_contract).work_contract_id),
+        },
+        pi.logger,
+        null,
+      ).catch(() => {});
       const decision = asRecord(resolved?.decision);
       const hookConfig = asRecord(decision.hook_interface).before_model_resolve;
       const resolvedHookConfig = asRecord(hookConfig);
@@ -3109,6 +3152,7 @@ export const plugin = {
 
     registerLifecycleHook("before_prompt_build", async (event, ctx) => {
       if (!isManagedAgentContext(ctx)) return;
+      const hookStartedAt = Date.now();
       const prompt = extractPromptText(event);
 
       const preStateKey = resolvePolicyStateKey(ctx);
@@ -3122,6 +3166,17 @@ export const plugin = {
         sendMessage: nativeAnnounceSendOverride(pi.pluginConfig),
       });
       if (nativeAnnounceHandled) return nativeAnnounceHandled.projection;
+      void recordPolicyReplay(
+        "before_prompt_build_started",
+        {
+          sessionKey: preStateKey || stringValue(ctx.sessionKey),
+          sessionId: stringValue(ctx.sessionId),
+          stateKey: preStateKey,
+          elapsedMs: Date.now() - hookStartedAt,
+        },
+        pi.logger,
+        null,
+      ).catch(() => {});
       const preMetadata = buildPolicyMetadata(ctx, { stateKey: preStateKey });
       const sessionKeys = resolvePolicyStateKeys(ctx);
       preMetadata.judge_replay_log_path = resolveReplayLogPath();
@@ -3244,6 +3299,19 @@ export const plugin = {
 
       startLatencyAckTimer(preStateKey);
 
+      const policyResolveStartedAt = Date.now();
+      void recordPolicyReplay(
+        "policy_resolve_started",
+        {
+          sessionKey: preSessionKey || stringValue(ctx.sessionKey),
+          sessionId: stringValue(ctx.sessionId),
+          stateKey: preStateKey,
+          elapsedMs: policyResolveStartedAt - hookStartedAt,
+          anchor_source: inboundMessageTsSource,
+        },
+        pi.logger,
+        null,
+      ).catch(() => {});
       const resolved = await resolvePolicyDecisionForContext(
         prompt,
         ctx,
@@ -3255,6 +3323,24 @@ export const plugin = {
         }
         return null;
       });
+      const resolvedDecisionForTiming = asRecord(resolved?.decision);
+      void recordPolicyReplay(
+        "policy_resolve_completed",
+        {
+          sessionKey: preSessionKey || stringValue(ctx.sessionKey),
+          sessionId: stringValue(ctx.sessionId),
+          stateKey: stringValue(resolved?.stateKey || preStateKey),
+          elapsedMs: Date.now() - policyResolveStartedAt,
+          hookElapsedMs: Date.now() - hookStartedAt,
+          resolved: Boolean(resolved),
+          usedCachedPolicy: resolved?.usedCachedPolicy === true,
+          route: stringValue(asRecord(resolvedDecisionForTiming.route_decision).route),
+          decision_bucket: stringValue(asRecord(resolvedDecisionForTiming.route_decision).decision_bucket),
+          workContractId: stringValue(resolvedDecisionForTiming.workContractId || asRecord(resolvedDecisionForTiming.work_contract).workContractId || asRecord(resolvedDecisionForTiming.work_contract).work_contract_id),
+        },
+        pi.logger,
+        null,
+      ).catch(() => {});
       pendingDecision.value = asRecord(resolved?.decision);
 
       if (resolved) {
@@ -3520,11 +3606,28 @@ export const plugin = {
         decision: effectiveDecision,
         logger: pi.logger,
       });
-      return buildPromptContextProjection({
+      const projection = buildPromptContextProjection({
         prependSystem,
         contextPayload,
         shouldInjectPolicyProjection: shouldInjectPrependContext,
       });
+      void recordPolicyReplay(
+        "prompt_projection_built",
+        {
+          sessionKey: stateKey || stringValue(ctx.sessionKey),
+          sessionId: stringValue(ctx.sessionId),
+          stateKey,
+          route,
+          decision_bucket: stringValue(asRecord(effectiveDecision.route_decision).decision_bucket),
+          elapsedMs: Date.now() - hookStartedAt,
+          prependSystemCount: prependSystem.length,
+          injectedPolicyProjection: shouldInjectPrependContext,
+          projectionReturned: Boolean(projection),
+        },
+        pi.logger,
+        null,
+      ).catch(() => {});
+      return projection;
     });
 
     registerLifecycleHook("before_tool_call", async (event, ctx) => {

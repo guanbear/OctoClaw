@@ -2742,6 +2742,7 @@ export function getToolRegistrations(options: ToolRegistrationOptions = {}): Too
       },
       execute: async (params, _rawCtx) => {
         const ctx = _rawCtx ?? {};
+        const dispatchToolStartedAt = Date.now();
         let { key: stateKey, state } = resolveDispatchPolicyContext(ctx, asString(params.task));
         let hadCachedDecision = Boolean(params.policyJson || state?.decision);
         let cachedDecision = selectDispatchPolicyDecision(state?.decision, params.policyJson);
@@ -2872,6 +2873,16 @@ export function getToolRegistrations(options: ToolRegistrationOptions = {}): Too
         let metadata = initialMetadata;
         metadata = finalizeDispatchMetadata(ctx, metadata, { stateKey, state, cachedDecision });
         metadata.requested_route = normalizeLiveRoute(resolvedRoute, "reply");
+        await recordPolicyReplay("dispatch_tool_started", {
+          sessionKey: managedSessionKey || stateKey || asString(params.sessionKey),
+          sessionId: asString(ctx.sessionId),
+          route: resolvedRoute,
+          stateKey,
+          hadCachedDecision,
+          policyJsonProvided: Boolean(params.policyJson),
+          work_contract_id: asString(requestedWorkContractId || asRecord(cachedDecision.work_contract).workContractId || asRecord(cachedDecision.work_contract).work_contract_id || cachedDecision.workContractId),
+          elapsedMs: Date.now() - dispatchToolStartedAt,
+        }, toolLogger(ctx), null).catch(() => undefined);
         if (dispatchWorkContract) {
           metadata.workContractId = dispatchWorkContract.workContractId;
           metadata.work_contract_id = dispatchWorkContract.workContractId;
@@ -3208,7 +3219,8 @@ export function getToolRegistrations(options: ToolRegistrationOptions = {}): Too
               dispatch_executed: false,
               spawn_executed: false,
               materialized: false,
-            }, toolLogger(ctx), cachedDecision);
+              elapsedMs: Date.now() - dispatchToolStartedAt,
+            }, toolLogger(ctx), null);
             return plannerDispatchResponse({
               spawnIntentId: intent.spawnIntentId,
               workContractId,

@@ -446,8 +446,16 @@ function stageNameForReplayEvent(event: Record<string, unknown>): string {
   const transitionKind = asString(event.transitionKind);
   if (eventName === "message_received_observed") return "message_received";
   if (eventName === "before_dispatch_observed") return "before_dispatch";
+  if (eventName === "before_model_resolve_observed") return "before_model_resolve";
+  if (eventName === "before_model_policy_resolve_started") return "before_model_policy_resolve_started";
+  if (eventName === "before_model_policy_resolve_completed") return "before_model_policy_resolve_completed";
+  if (eventName === "before_prompt_build_started") return "before_prompt_build_started";
   if (eventName === "before_prompt_build_observed") return "before_prompt_build";
+  if (eventName === "policy_resolve_started") return "policy_resolve_started";
+  if (eventName === "policy_resolve_completed" || eventName === "policy_resolve_cache_hit") return "policy_resolve_completed";
   if (eventName === "policy_resolved" || eventName === "policy_judged") return "judge_resolved";
+  if (eventName === "prompt_projection_built") return "prompt_projection_built";
+  if (eventName === "dispatch_tool_started") return "dispatch_tool_started";
   if (eventName === "dispatch_planner_intent_created") return "octoclaw_dispatch";
   if (eventName === "sessions_spawn_intent_allowed") return "sessions_spawn_intent_allowed";
   if (eventName === "execution_transition" && transitionKind === "spawn_started") return "sessions_spawn_accepted";
@@ -517,6 +525,7 @@ async function collectReplayEvidence(
   const stageMs: Record<string, number> = {};
   let anchorSource = "";
   let fallbackUsed = false;
+  let nativeWorkContractId = "";
   let spawnIntentId = "";
   let runId = "";
   let childSessionKey = "";
@@ -582,6 +591,8 @@ async function collectReplayEvidence(
 
   for (const index of Array.from(matched).sort((a, b) => events[a].at - events[b].at)) {
     const { event, at } = events[index];
+    const eventName = asString(event.event);
+    const transitionKind = asString(event.transitionKind);
     const eventWorkContractId = replayEventWorkContractId(event);
     if (eventWorkContractId) workContractIds.add(eventWorkContractId);
     const eventSpawnIntentId = replayEventSpawnIntentId(event);
@@ -590,9 +601,22 @@ async function collectReplayEvidence(
     if (eventRunId) runId = runId || eventRunId;
     const eventChildSessionKey = replayEventChildSessionKey(event);
     if (eventChildSessionKey) childSessionKey = childSessionKey || eventChildSessionKey;
+    if (
+      eventWorkContractId
+      && (
+        Boolean(eventSpawnIntentId || eventRunId || eventChildSessionKey)
+        || eventName === "dispatch_planner_intent_created"
+        || eventName === "sessions_spawn_intent_allowed"
+        || eventName === "dispatch_confirm_completed"
+        || eventName === "native_announce_completion_matched"
+        || eventName === "native_announce_final_delivered"
+        || (eventName === "execution_transition" && transitionKind === "spawn_started")
+      )
+    ) {
+      nativeWorkContractId = nativeWorkContractId || eventWorkContractId;
+    }
     const eventDecisionBucket = replayEventDecisionBucket(event);
     if (eventDecisionBucket) decisionBucket = decisionBucket || eventDecisionBucket;
-    const eventName = asString(event.event);
     if (eventName === "neutral_inbound_ack") {
       anchorSource = anchorSource || asString(event.anchor_source);
       fallbackUsed = fallbackUsed || asBoolean(event.fallback_used);
@@ -634,7 +658,7 @@ async function collectReplayEvidence(
     targetSource: targetSource || undefined,
     footerSource: footerSource || undefined,
     duplicateFinalCount,
-    workContractId: Array.from(workContractIds)[0],
+    workContractId: nativeWorkContractId || Array.from(workContractIds)[0],
     spawnIntentId: spawnIntentId || undefined,
     runId: runId || undefined,
     childSessionKey: childSessionKey || undefined,

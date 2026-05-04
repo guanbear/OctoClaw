@@ -1472,13 +1472,85 @@ describe("budgeted_main_then_delegate runtime budget", () => {
       budgetStartSource: "before_prompt_build_complete",
     });
     await waitForFireAndForget();
-    expect(readReplayEvents()).toContainEqual(expect.objectContaining({
+    const events = readReplayEvents();
+    expect(events).toContainEqual(expect.objectContaining({
+      event: "before_prompt_build_started",
+      stateKey: key,
+    }));
+    expect(events).toContainEqual(expect.objectContaining({
+      event: "policy_resolve_started",
+      stateKey: key,
+    }));
+    expect(events).toContainEqual(expect.objectContaining({
+      event: "policy_resolve_cache_hit",
+      stateKey: key,
+      usedCachedPolicy: true,
+    }));
+    expect(events).toContainEqual(expect.objectContaining({
+      event: "policy_resolve_completed",
+      stateKey: key,
+      usedCachedPolicy: true,
+      decision_bucket: "budgeted_main_then_delegate",
+    }));
+    expect(events).toContainEqual(expect.objectContaining({
+      event: "prompt_projection_built",
+      stateKey: key,
+      decision_bucket: "budgeted_main_then_delegate",
+      projectionReturned: true,
+    }));
+    expect(events).toContainEqual(expect.objectContaining({
       event: "budgeted_main_started",
       reason: "budgeted_main_started",
       max_wall_ms: BUDGETED_MAIN_MAX_WALL_MS,
       budget_start_source: "before_prompt_build_complete",
     }));
     await agentEnd?.({}, { sessionKey: key, sessionId: "session-budget-start", agentId: "main" });
+    policyState.clearState(key);
+  });
+
+  it("records prompt timing replay even when cached decision lacks replay runtime switch", async () => {
+    const handlers = new Map<string, Function>();
+    plugin.register({
+      on: (event, handler) => handlers.set(event, handler),
+      registerTool: () => {},
+      registerCommand: () => {},
+      logger: {},
+    });
+
+    const key = "agent:main:slack:channel:c0as4dappu3:thread:t-budget-timing-no-switch";
+    const prompt = "查一下 OpenClaw 最新版本号";
+    const decision = budgetedMainDecision();
+    delete decision.runtime_switches;
+    policyState.setState(key, {
+      prompt,
+      decision,
+      createdAt: Date.now() - 2_000,
+      updatedAt: Date.now(),
+    });
+
+    const beforePromptBuild = handlers.get("before_prompt_build");
+    expect(beforePromptBuild).toBeTruthy();
+    await beforePromptBuild!(
+      { prompt },
+      { sessionKey: key, sessionId: "session-budget-timing-no-switch", agentId: "main", channelId: "slack" },
+    );
+
+    await waitForFireAndForget();
+    const events = readReplayEvents();
+    expect(events).toContainEqual(expect.objectContaining({
+      event: "policy_resolve_cache_hit",
+      stateKey: key,
+      usedCachedPolicy: true,
+    }));
+    expect(events).toContainEqual(expect.objectContaining({
+      event: "policy_resolve_completed",
+      stateKey: key,
+      usedCachedPolicy: true,
+    }));
+    expect(events).toContainEqual(expect.objectContaining({
+      event: "prompt_projection_built",
+      stateKey: key,
+    }));
     policyState.clearState(key);
   });
 
