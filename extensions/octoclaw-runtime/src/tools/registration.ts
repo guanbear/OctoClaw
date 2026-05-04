@@ -8,10 +8,12 @@ import {
 import {
   envOverrides,
   resolveReplayLogPath,
+  resolveWorkspaceRoot,
   resolveWorkerCompletionPath,
   stableId,
   truncateText,
 } from "../resolve/env.js";
+import { buildDelegateHandoffPacket } from "../context/delegate-packets.js";
 import {
   pruneTaskStateCache,
   readArchivedTaskState,
@@ -860,22 +862,209 @@ function buildSubagentSpawnMessage(params: { task: string; childSessionKey: stri
 }
 
 const PLANNER_NATIVE_RUN_TIMEOUT_FLOOR_SECONDS = 300;
+const PLANNER_CONTEXT_PACKET_MAX_ITEMS = 8;
+
+function plannerStringArray(...values: unknown[]): string[] {
+  const out: string[] = [];
+  const push = (value: unknown): void => {
+    if (Array.isArray(value)) {
+      for (const item of value) push(item);
+      return;
+    }
+    const text = asString(value);
+    if (text && !out.includes(text)) out.push(text);
+  };
+  for (const value of values) push(value);
+  return out.slice(0, PLANNER_CONTEXT_PACKET_MAX_ITEMS);
+}
+
+function plannerContextRecord(...values: unknown[]): UnknownRecord {
+  for (const value of values) {
+    const record = asRecord(value);
+    if (Object.keys(record).length > 0) return record;
+  }
+  return {};
+}
+
+function normalizePlannerWorkspaceMode(value: unknown, fallback: "read_only" | "write_allowed" = "write_allowed"): "read_only" | "write_allowed" {
+  const mode = asString(value);
+  return mode === "read_only" || mode === "readonly" || mode === "read-only" ? "read_only" : fallback;
+}
+
+function normalizePlannerRole(value: unknown): "observer" | "default" | "code" | "research" | "review" {
+  const role = asString(value);
+  return role === "observer" || role === "code" || role === "research" || role === "review" ? role : "default";
+}
+
+function plannerMaxToolCalls(value: unknown, fallback = 10): number {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return fallback;
+  return Math.max(2, Math.min(24, Math.floor(numeric)));
+}
+
+function buildPlannerContextPacket(params: {
+  task: string;
+  workContractId: string;
+  delegateTaskId: string;
+  attemptId?: string;
+  expectedDeliverable?: string;
+  childSessionKey?: string;
+  cwd?: string;
+  selectedModel?: string;
+  decision?: UnknownRecord | null;
+  metadata?: UnknownRecord | null;
+  workContract?: WorkContract | null;
+}): string {
+  const metadata = asRecord(params.metadata);
+  const decision = asRecord(params.decision);
+  const routeDecision = asRecord(decision.route_decision);
+  const requestMetadata = asRecord(asRecord(decision.request).metadata);
+  const contextRefs = plannerContextRecord(
+    metadata.context_refs,
+    metadata.contextRefs,
+    requestMetadata.context_refs,
+    requestMetadata.contextRefs,
+    decision.context_refs,
+    decision.contextRefs,
+    routeDecision.context_refs,
+    routeDecision.contextRefs,
+  );
+  const delegateScope = params.workContract?.delegate?.scope;
+  const cwd = asString(params.cwd, resolveWorkspaceRoot());
+  const workspaceRoot = optionalString(
+    contextRefs.workspaceRoot,
+    contextRefs.workspace_root,
+    metadata.workspaceRoot,
+    metadata.workspace_root,
+    envOverrides.workspaceRoot,
+    cwd,
+  ) || cwd;
+  const primaryFiles = plannerStringArray(
+    contextRefs.primaryFiles,
+    contextRefs.primary_files,
+    metadata.primaryFiles,
+    metadata.primary_files,
+    routeDecision.primaryFiles,
+    routeDecision.primary_files,
+  );
+  const readScope = plannerStringArray(
+    contextRefs.readScope,
+    contextRefs.read_scope,
+    delegateScope?.read,
+    primaryFiles,
+    cwd,
+  );
+  const writeScope = plannerStringArray(
+    contextRefs.writeScope,
+    contextRefs.write_scope,
+    delegateScope?.write,
+  );
+  const workspaceMode = normalizePlannerWorkspaceMode(
+    contextRefs.workspaceMode
+      ?? contextRefs.workspace_mode
+      ?? delegateScope?.workspaceMode
+      ?? metadata.workspaceMode
+      ?? metadata.workspace_mode,
+    "write_allowed",
+  );
+  const role = normalizePlannerRole(params.workContract?.delegate?.role ?? routeDecision.worker_role ?? routeDecision.role);
+  const maxToolCalls = plannerMaxToolCalls(
+    contextRefs.maxToolCalls
+      ?? contextRefs.max_tool_calls
+      ?? metadata.maxToolCalls
+      ?? metadata.max_tool_calls,
+    role === "review" || role === "code" ? 14 : 10,
+  );
+  const sourcePolicy = optionalString(
+    contextRefs.sourcePolicy,
+    contextRefs.source_policy,
+    metadata.sourcePolicy,
+    metadata.source_policy,
+    "Use explicit refs and local workspace first. Use external web only when the task explicitly needs current outside facts or local refs are insufficient.",
+  ) || "Use explicit refs and local workspace first. Use external web only when the task explicitly needs current outside facts or local refs are insufficient.";
+  const threadSummary = optionalString(
+    contextRefs.threadSummary,
+    contextRefs.thread_summary,
+    metadata.threadSummary,
+    metadata.thread_summary,
+    "",
+  ) || "";
+  const handoffPacket = buildDelegateHandoffPacket({
+    delegateTaskId: params.delegateTaskId,
+    attemptId: params.attemptId || `${params.delegateTaskId}:attempt:1`,
+    threadBindingKey: params.workContract?.continuity.threadBindingKey || stableId("thread", [params.workContractId]),
+    currentUserAsk: truncateText(params.task, 700),
+    taskBrief: truncateText(params.task, 900),
+    acceptanceCriteria: [asString(params.expectedDeliverable, "Return a compact result that directly satisfies the parent user request.")],
+    readScope,
+    writeScope,
+    workspaceMode,
+    role,
+    modelProfile: asString(params.selectedModel, params.workContract?.delegate?.modelProfile || "default"),
+    maxInputTokens: 1800,
+    maxSummaryTokens: 500,
+    threadSummary: threadSummary ? truncateText(threadSummary, 500) : undefined,
+    artifactRefs: params.workContract?.delegate?.artifactRefs ?? [],
+    forbiddenContent: params.workContract?.mainContext.forbiddenContent ?? [],
+  });
+  return [
+    "## Runtime Context Packet",
+    "This packet is generated by OctoClaw runtime; do not infer hidden parent transcript.",
+    "```json",
+    JSON.stringify({
+      schemaVersion: "octoclaw.planner_native_context.v1",
+      workContractId: params.workContractId,
+      delegateTaskId: params.delegateTaskId,
+      attemptId: params.attemptId || `${params.delegateTaskId}:attempt:1`,
+      preferredChildSessionKey: asString(params.childSessionKey) || undefined,
+      cwd,
+      workspaceRoot,
+      contextMode: "isolated",
+      lightContext: true,
+      primaryFiles,
+      sourcePolicy,
+      executionBudget: {
+        maxToolCalls,
+        broadDiscovery: "forbidden_outside_cwd_without_explicit_need",
+        resultOnBudgetPressure: "return_partial_with_caveats",
+      },
+      handoff: handoffPacket,
+    }, null, 2),
+    "```",
+    "",
+    "Operational rules:",
+    "- Start from primaryFiles/readScope when present; otherwise inspect cwd/workspaceRoot with scoped file search.",
+    "- Do not run broad discovery under /Users, memory/wiki search, or web search unless explicit refs fail and the task requires it.",
+    "- If a fast file search tool is unavailable, use a scoped fallback under cwd/workspaceRoot only.",
+    "- Keep within maxToolCalls when possible; deliver partial findings with caveats instead of exhausting the native run timeout.",
+    "- Native announce handles final delivery; do not write legacy completion files unless explicitly instructed by a rollback path.",
+  ].join("\n");
+}
 
 function buildPlannerSpawnTask(params: {
   task: string;
   workContractId: string;
   delegateTaskId: string;
+  attemptId?: string;
   expectedDeliverable?: string;
   childSessionKey?: string;
+  cwd?: string;
+  selectedModel?: string;
+  decision?: UnknownRecord | null;
+  metadata?: UnknownRecord | null;
+  workContract?: WorkContract | null;
 }): string {
   return [
     "[OctoClaw delegated work]",
     `workContractId: ${params.workContractId}`,
     `delegateTaskId: ${params.delegateTaskId}`,
+    params.attemptId ? `attemptId: ${params.attemptId}` : "",
     params.childSessionKey ? `preferredChildSessionKey: ${params.childSessionKey}` : "",
     "",
     "Expected deliverable:",
     params.expectedDeliverable || "A compact result packet that directly satisfies the parent user request.",
+    "",
+    buildPlannerContextPacket(params),
     "",
     "Rules:",
     "- Work only on the task below; do not expose hidden reasoning or raw transcript.",
@@ -956,6 +1145,10 @@ function buildPlannerSessionsSpawnArgs(params: {
   timeoutSeconds?: number;
   preferredChildSessionKey?: string;
   label?: string;
+  attemptId?: string;
+  decision?: UnknownRecord | null;
+  metadata?: UnknownRecord | null;
+  workContract?: WorkContract | null;
 }): Record<string, unknown> {
   const requestedTimeout = Number.isFinite(params.timeoutSeconds)
     ? Math.max(0, Math.floor(params.timeoutSeconds ?? 0))
@@ -972,8 +1165,14 @@ function buildPlannerSessionsSpawnArgs(params: {
       task: params.task,
       workContractId: params.workContractId,
       delegateTaskId: params.delegateTaskId,
+      attemptId: params.attemptId,
       expectedDeliverable: params.expectedDeliverable,
       childSessionKey: params.preferredChildSessionKey,
+      cwd: params.cwd,
+      selectedModel: params.selectedModel,
+      decision: params.decision,
+      metadata: params.metadata,
+      workContract: params.workContract,
     }),
     label: truncateText(params.label || params.expectedDeliverable || params.task, 80),
     runtime: "subagent",
@@ -2533,7 +2732,7 @@ export function getToolRegistrations(options: ToolRegistrationOptions = {}): Too
           expectedSeconds: { type: "number", description: "Main agent's estimate of how long this task should take. Used as timeout baseline." },
           timeoutSeconds: { type: "number", description: "Runner timeout in seconds." },
           sessionKey: { type: "string", description: "Optional session key override." },
-          metadataJson: { type: "string", description: "Optional JSON object with extra session metadata." },
+          metadataJson: { type: "string", description: "Optional JSON object with extra session metadata. For delegated work, include known anchors as context_refs: { primaryFiles, readScope, writeScope, sourcePolicy, maxToolCalls, workspaceMode }." },
           policyJson: { type: "string", description: "Optional precomputed runtime policy decision JSON." },
           workContractId: { type: "string", description: "Optional sealed WorkContract id to dispatch without re-judging." },
           delegateTaskId: { type: "string", description: "Optional delegate task id for continuation-aware dispatch." },
@@ -2946,6 +3145,7 @@ export function getToolRegistrations(options: ToolRegistrationOptions = {}): Too
               task: asString(params.task),
               workContractId,
               delegateTaskId,
+              attemptId,
               expectedDeliverable: asString(ticketCandidate.expected_deliverable),
               selectedModel,
               cwd: asString(params.cwd, ctxCwd(ctx)),
@@ -2955,6 +3155,9 @@ export function getToolRegistrations(options: ToolRegistrationOptions = {}): Too
                 || dispatchWorkContract?.continuity.preferredChildSessionKey
                 || undefined,
               label: asString(asRecord(dispatchWorkContract?.mainContext).summary || params.task),
+              decision: cachedDecision,
+              metadata,
+              workContract: dispatchWorkContract,
             });
             let intent: ReturnType<typeof nativeSpawnIntentStore.create>;
             try {

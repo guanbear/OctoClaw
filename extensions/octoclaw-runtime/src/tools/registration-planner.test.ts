@@ -211,11 +211,59 @@ describe("octoclaw_dispatch planner backend", () => {
       runTimeoutSeconds: 900,
     });
     expect(body.sessionsSpawnArgs.task).toContain(contract.workContractId);
-    expect(JSON.stringify(body.sessionsSpawnArgs).length).toBeLessThan(2_500);
+    expect(body.sessionsSpawnArgs.task).toContain("octoclaw.planner_native_context.v1");
+    expect(body.sessionsSpawnArgs.task).toContain("octoclaw.delegate_handoff.v1");
+    expect(body.sessionsSpawnArgs.task).toContain(`\"cwd\": \"${tempWorkspace}\"`);
+    expect(body.sessionsSpawnArgs.task).toContain("\"contextMode\": \"isolated\"");
+    expect(body.sessionsSpawnArgs.task).toContain("\"maxToolCalls\"");
+    expect(body.sessionsSpawnArgs.task).toContain("do not infer hidden parent transcript");
+    expect(JSON.stringify(body.sessionsSpawnArgs).length).toBeLessThan(5_500);
     expect(nativeSpawnIntentStore.get(body.spawnIntentId)?.status).toBe("planned");
     expect(countRows("scheduler_queue", "work_contract_id = ?", [contract.workContractId])).toBe(0);
     expect(countRows("task_attempts", "work_contract_id = ?", [contract.workContractId])).toBe(0);
     expect(countRows("completion_bindings", "work_contract_id = ?", [contract.workContractId])).toBe(0);
+  });
+
+  it("adds explicit context refs and tool budget to native planner child packets without raw parent transcript", async () => {
+    process.env.OCTOCLAW_SPAWN_BACKEND = "planner";
+    const contract = seedWorkContract();
+
+    const response = await dispatchTool().execute({
+      task: "只读调查：查看 PC13 Slack delivery port 记录并输出 5 句中文总结。",
+      workContractId: contract.workContractId,
+      policyJson: JSON.stringify(delegateDecision(contract)),
+      metadataJson: JSON.stringify({
+        context_refs: {
+          primaryFiles: [
+            "docs/octoclaw-native-slimming-implementation-plan-2026-05-01.md",
+            "openspec/changes/planner-confirm-0.5.0-refactor/tasks.md",
+          ],
+          readScope: ["docs", "openspec"],
+          sourcePolicy: "Use local OctoClaw docs first; web is not needed for PC13 evidence.",
+          maxToolCalls: 6,
+          workspaceMode: "read_only",
+          rawTranscript: "SECRET_PARENT_TRANSCRIPT",
+        },
+      }),
+      timeoutSeconds: 300,
+    }, {
+      sessionKey: contract.sessionKey,
+      sessionId: "session-planner-context-packet-test",
+      cwd: tempWorkspace,
+    });
+
+    const body = JSON.parse(String(response.text));
+    const task = String(body.sessionsSpawnArgs.task);
+    expect(body.ok).toBe(true);
+    expect(task).toContain("docs/octoclaw-native-slimming-implementation-plan-2026-05-01.md");
+    expect(task).toContain("openspec/changes/planner-confirm-0.5.0-refactor/tasks.md");
+    expect(task).toContain("\"readScope\"");
+    expect(task).toContain("\"workspaceMode\": \"read_only\"");
+    expect(task).toContain("\"maxToolCalls\": 6");
+    expect(task).toContain("Use local OctoClaw docs first; web is not needed for PC13 evidence.");
+    expect(task).not.toContain("SECRET_PARENT_TRANSCRIPT");
+    expect(task).not.toContain("Completion Requirement");
+    expect(nativeSpawnIntentStore.get(body.spawnIntentId)?.status).toBe("planned");
   });
 
   it("does not re-materialize legacy dispatch after native planner spawn is already accepted", async () => {

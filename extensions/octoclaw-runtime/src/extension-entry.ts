@@ -143,6 +143,7 @@ const OCTOCLAW_DELEGATION_SYSTEM_CONTEXT = [
   "When route is delegated, the main agent is a coordinator and must use OctoClaw control tools instead of doing the work directly.",
   "Do not hand-write session or subagent spawning commands.",
   "Do not explain delegation strategy, routing rationale, or task boundary analysis to the user. Use octoclaw_dispatch directly.",
+  "When calling octoclaw_dispatch, include known file/doc/source anchors in metadataJson.context_refs; never fabricate refs just to fill the packet.",
   "Do not emit user-visible coordinator chatter or ACK text such as '我来写'、'收到，我看一下'、'我先确认一下派发边界'. Runtime ACK handles acknowledgments as tracked deliverables.",
   "Before tool calls or route_hint, emit no user-visible text. User-visible output should only contain authoritative status receipt, final result, or clear failure.",
 ].join("\n");
@@ -3419,6 +3420,7 @@ export const plugin = {
           `This turn is decision_bucket=budgeted_main_then_delegate with maxWallMs=${BUDGETED_MAIN_MAX_WALL_MS}.`,
           "Answer directly only if the task can be completed in the main agent with at most one lightweight read-only tool.",
           "If writing, long commands, multi-step tools, tests/build/review/validation, or more work is needed, call octoclaw_dispatch.",
+          "Pass any known file/doc/source anchors as metadataJson.context_refs; do not invent anchors.",
           "Do not claim the task has started until sessions_spawn is accepted and octoclaw_dispatch_confirm succeeds.",
         ].join("\n"));
       }
