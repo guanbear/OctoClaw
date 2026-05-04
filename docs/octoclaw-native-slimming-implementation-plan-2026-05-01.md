@@ -114,7 +114,7 @@
 
 - `must_reply/main_fast_path`：简单回答、状态/来源追问、澄清问题、单步只读查证、当前上下文可直接完成的任务。
 - `must_delegate`：用户明确要求后台/子 agent/并行、代码修改/测试/构建、长命令、多步工具链、大量上下文阅读、review/验证、预计 90-120 秒以上。
-- `budgeted_main_then_delegate`：无法高置信判断时，主 agent 先在预算内尝试；超过 20-30 秒、超过 1-2 次只读工具、需要写操作或长命令时再转 delegate。
+- `budgeted_main_then_delegate`：无法高置信判断时，主 agent 先在固定 30s soft runtime budget 内尝试；超过预算后进入升级待执行状态，或在需要写操作、长命令、多步工具、测试/build/review/validation 时立即转 `octoclaw_dispatch`。
 
 实现口径：
 
@@ -133,7 +133,7 @@
 - false delegate rate 在 nightly/Slack smoke 中可观测并下降。
 - false reply rate 同样必须可观测；明确长任务、代码/测试、多步工具、用户显式后台/并行不能被 main fast path 吃掉。
 - 主模型仍可在超过 fast path 预算后提交 route hint/dispatch，不被静态规则卡死。
-- 2026-05-04 实现状态：rule/router 已产出三段式 bucket 和 `startup_cost_policy`，并用 focused tests 覆盖 false delegate / false reply；`duration_hint=long` 和 `tool_need_hint=required` 是 hard delegate，`duration_hint=medium` 进入 `budgeted_main_then_delegate`。仍未完成的是运行时 wall-clock/tool budget 自动升级机制，因此不能把 SR-P1 说成端到端完成。
+- 2026-05-04 实现状态：rule/router 已产出三段式 bucket 和 `startup_cost_policy`，并用 focused tests 覆盖 false delegate / false reply；`duration_hint=long` 和 `tool_need_hint=required` 是 hard delegate，`duration_hint=medium` 进入 `budgeted_main_then_delegate`。本轮补入固定 30s soft runtime budget 的状态机和 focused tests，但真实 Slack SR-P1 evidence 矩阵仍需继续补齐，不能把 SR-P1 或 0.5.0 说成端到端完成。
 
 #### SR-P2：瘦身 planner/native 热路径和观测
 
@@ -1008,13 +1008,13 @@ admission 规则：
 
 ### 10.3 委派判定规则和主线程预算
 
-0.5.0 的路由目标从“尽量委派”改成“短任务 main fast path，长任务 delegate 不堵”。委派规则必须显式计入 native spawn 冷启动成本：如果一个任务主 agent 20-30 秒内能用当前上下文或一次轻量只读工具完成，delegate 反而会伤害体验。
+0.5.0 的路由目标从“尽量委派”改成“短任务 main fast path，长任务 delegate 不堵”。委派规则必须显式计入 native spawn 冷启动成本：如果一个任务主 agent 在固定 30s main execution budget 内能用当前上下文或一次轻量只读工具完成，delegate 反而会伤害体验。这里的 30s 是 soft runtime budget，不是用户可见端到端 SLA，也不是强抢占 deadline。
 
 这个优化不能实现成“保守到几乎不委派”。正确形态是三段式：
 
 - `must_reply/main_fast_path`：当前上下文或一次轻量只读工具可完成，且无写操作、无长命令、无多步研究。
 - `must_delegate`：有硬委派信号，例如用户明确要求子 agent/后台/并行、代码修改/测试/构建、多步工具、大量上下文阅读、review/验证、预计 90-120 秒以上。
-- `budgeted_main_then_delegate`：中间地带先让主 agent 在预算内尝试；预算超限或出现写操作/长命令/第二轮以上真实工具，就转 `octoclaw_dispatch`。
+- `budgeted_main_then_delegate`：中间地带先让主 agent 在固定 30s soft runtime budget 内尝试；预算超限后进入升级待执行状态，或出现写操作/长命令/第二轮以上真实工具时转 `octoclaw_dispatch`。
 
 rule、local judge、cheap LLM judge 和 prompt 注入必须统一这套三段式语义；只改 rule 或只改 prompt 都会导致路由抖动。尤其是 `fresh_live_lookup`、`conversation_control.route_hint=delegate`、`fast_first_response` 这些旧信号需要降级，但不能覆盖 `must_delegate` 硬信号。
 
@@ -1025,7 +1025,7 @@ rule、local judge、cheap LLM judge 和 prompt 注入必须统一这套三段�
 - 状态/来源/“刚才发生了什么”能从 native state、WorkContract refs、SQLite/replay 回答。
 - 需要澄清 scope、目标、验收标准。
 - 简单版本/状态/配置查询，且可以用一次只读工具或 native status 完成。
-- `fresh_live_lookup` 但目标明确、结果短、预计 20-30 秒内能完成。
+- `fresh_live_lookup` 但目标明确、结果短、预计 30 秒内能完成。
 - `duration_hint=short` 且 `tool_need_hint=none|maybe`。
 
 默认委派子 agent：
@@ -1042,7 +1042,7 @@ rule、local judge、cheap LLM judge 和 prompt 注入必须统一这套三段�
 
 ```text
 main_fast_path:
-  maxWallMs: 20000-30000
+  maxWallMs: 30000
   maxToolCalls: 1-2
   allowReadOnlyNativeStatus: true
   allowOneFreshLookup: true
@@ -1050,7 +1050,16 @@ main_fast_path:
   forbidMutation: true
 ```
 
-超过预算、需要第二轮以上真实工具、或出现写操作/长命令/测试，就转 delegate。这个规则比继续堆自然语言关键词 gate 更稳定。
+预算计时起点是 `before_prompt_build` 完成、三段式 route/judge bucket 已确定为 `budgeted_main_then_delegate`、主 agent 即将拿到包含 OctoClaw route hint 的 prompt。计时不包含 Slack event、OpenClaw startup、tool bundle、prompt build 或 judge 前置耗时；这些仍通过 `visibleElapsedMs` 单独观测。
+
+30s 到点不是强抢占。如果 OpenClaw/模型运行中没有可靠中断和重新注入能力，OctoClaw 只记录 `budgeted_main_escalated_pending`，不 kill main agent，不 direct spawn，也不发送“任务已启动”。之后的可控边界按以下规则处理：
+
+- main agent 已经产出 final reply：允许正常投递，记录 `budgeted_main_completed_late`，不额外 spawn。
+- main agent 下一步要调用普通工具，尤其写操作、长命令、多步工具、测试/build/review/validation：拦截或改写为 `octoclaw_dispatch`，记录 `budgeted_main_escalated`。
+- runtime 有下一次 prompt 注入点：注入 route hint，要求本轮停止继续分析并调用 `octoclaw_dispatch`。
+- runtime 没有可控边界：只保留 `budgeted_main_escalated_pending`，等下一边界升级。
+
+超预算升级只能进入现有 native planner 链路：`octoclaw_dispatch -> sessions_spawn -> octoclaw_dispatch_confirm`。不能直接调用内部 spawn，不能直接调用 OpenClaw SDK spawn 作为主路径，不能提前发 accepted ACK；“任务已启动”只能在 `sessions_spawn` 返回 accepted 且 `octoclaw_dispatch_confirm` 成功后发送。
 
 需要降级的旧规则：
 
@@ -1082,7 +1091,7 @@ AGENTS.md 或 system prompt 注入只放短规则，不放完整 judge rubric：
 ```text
 优先直接回答当前上下文能完成的问题。
 短任务、简单查证、状态/来源追问默认由主 agent 处理；不要为了查状态或来源启动子 agent。
-如果一次轻量只读工具或 native status 能在 20-30 秒内完成，可以走主线程 fast path。
+如果一次轻量只读工具或 native status 能在 30 秒 main execution budget 内完成，可以走主线程 fast path。
 如果需要长时间工具执行、代码/文件/环境操作、测试、研究、多步验证、并行处理，使用 octoclaw_dispatch 委派。
 不要直接调用 sessions_spawn 绕过 OctoClaw policy。
 不要声称已委派，除非 `octoclaw_dispatch_confirm` 已确认原生 `sessions_spawn` 返回 accepted/runId。
@@ -1218,7 +1227,7 @@ interface MessageDeliveryPort {
 - `main_fast_path_one_lookup`：一次轻量只读查证在主线程完成，`fresh_live_lookup` 不单独强制 delegate。
 - `must_delegate_explicit_subagent`：用户明确要求子 agent/后台/并行时进入 planner/native delegate。
 - `must_delegate_code_test_review`：代码修改、测试、review/验证不能被 main fast path 吃掉。
-- `budgeted_main_then_delegate`：主线程预算超限后转 `octoclaw_dispatch`，并记录预算原因。
+- `budgeted_main_then_delegate`：主线程固定 30s soft runtime budget 超限后先记录 `budgeted_main_escalated_pending`；late final 记录 `budgeted_main_completed_late` 且不 spawn；下一普通工具/注入边界再转 `octoclaw_dispatch` 并记录预算原因。
 - `status_provenance_no_spawn`：状态/来源追问只读 native refs/replay，不创建新 spawn intent。
 - `native_announce_final`：child 不写 completion file，final 通过 native announce 回到 Slack thread。
 - `footer_delegate_provenance`：debug footer 对 child final 显示 `route=delegate` 和 `via=subagent|native_announce`。

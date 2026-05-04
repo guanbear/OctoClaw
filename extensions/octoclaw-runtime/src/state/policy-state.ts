@@ -46,6 +46,8 @@ export interface PolicyStateEntry {
   turn_id?: string;
   messageTurnId?: string;
   message_turn_id?: string;
+  inboundObservedAt?: number;
+  inbound_observed_at?: number;
   replyToMessageId?: string;
   reply_to_id?: string;
   deliveryTarget?: Record<string, unknown>;
@@ -88,6 +90,8 @@ export interface PolicyStateEntry {
   outbound_guard_cancelled_at?: string;
   latestStatus?: import("@octoclaw/contracts/work-contract").WorkContractStatus;
   latestExecutionReceipt?: import("../receipt.js").TurnExecutionReceipt;
+  budgetedMain?: Record<string, unknown>;
+  budgeted_main?: Record<string, unknown>;
   updatedAt?: number;
   createdAt?: number;
   extraState?: Record<string, unknown>;

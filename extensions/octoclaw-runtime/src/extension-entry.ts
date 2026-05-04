@@ -83,6 +83,19 @@ import { evaluateNativeSpawnGate } from "./delegate/native-spawn-gate.js";
 import { isPlannerAllowedForSession, resolveSpawnBackend, shouldRunChildFinalizerRecovery, shouldRunDeliveryOutboxFlush } from "./config/index.js";
 import { findWorkContractByNativeChildSessionKey, loadWorkContract, updateWorkContract } from "./work-contract/store.js";
 import type { WorkContract } from "@octoclaw/contracts/work-contract";
+import {
+  BUDGETED_MAIN_MAX_WALL_MS,
+  buildBudgetedMainMetrics,
+  buildBudgetedMainState,
+  budgetedMainToolEscalationReason,
+  classifyBudgetedMainTool,
+  escalateBudgetedMainDecision,
+  isBudgetedMainDecision,
+  readBudgetedMainState,
+  serializeBudgetedMainState,
+  updateBudgetedMainToolState,
+  type BudgetedMainState,
+} from "./budgeted-main.js";
 
 type UnknownRecord = Record<string, unknown>;
 type HookHandler = (event: UnknownRecord, ctx: UnknownRecord) => unknown;
@@ -135,6 +148,7 @@ const LATENCY_ACK_DELAY_MS = 3500;
 const pendingLatencyAckTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const pendingNeutralInboundAckTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const pendingNeutralInboundAckTextFallbackTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const pendingBudgetedMainTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const lastGroundedPromptByStateKey = new Map<string, string>();
 let warnedMissingDetachedRuntime = false;
 
@@ -1989,6 +2003,297 @@ function updatePolicyState(stateKey: string, mutator: (current: PolicyStateEntry
   policyState.update(key, (current) => mutator(current));
 }
 
+function budgetedMainStateKeys(stateKey: string, ctx: UnknownRecord, state: UnknownRecord): string[] {
+  return Array.from(new Set([
+    stringValue(stateKey),
+    stringValue(state.canonicalSessionKey || state.canonical_session_key),
+    stringValue(state.ackGuardKey || state.ack_guard_key),
+    stringValue(ctx.sessionKey || ctx.session_key),
+    stringValue(ctx.canonicalSessionKey || ctx.canonical_session_key),
+    stringValue(ctx.sessionId || ctx.session_id),
+  ].filter(Boolean)));
+}
+
+function budgetedMainWorkContractId(state: UnknownRecord, decision: UnknownRecord): string {
+  const workContract = asRecord(decision.work_contract);
+  return stringValue(state.workContractId || state.work_contract_id)
+    || stringValue(workContract.workContractId || workContract.work_contract_id)
+    || stringValue(decision.workContractId || decision.work_contract_id);
+}
+
+function budgetedMainSpawnIntentId(state: UnknownRecord): string {
+  return stringValue(state.spawnIntentId || state.spawn_intent_id);
+}
+
+function budgetedMainVisibleStartAt(state: UnknownRecord, now: number): number {
+  const candidate = Number(state.inboundObservedAt || state.inbound_observed_at || state.createdAt || 0);
+  return Number.isFinite(candidate) && candidate > 0 ? candidate : now;
+}
+
+function updateBudgetedMainForContext(input: {
+  stateKey: string;
+  ctx: UnknownRecord;
+  state: UnknownRecord;
+  budgetState: BudgetedMainState;
+  decision?: UnknownRecord;
+  extra?: UnknownRecord;
+}): PolicyStateEntry | null {
+  let selected: PolicyStateEntry | null = null;
+  const serialized = serializeBudgetedMainState(input.budgetState);
+  for (const key of budgetedMainStateKeys(input.stateKey, input.ctx, input.state)) {
+    updatePolicyState(key, (current) => {
+      const next = {
+        ...(current ?? {}),
+        ...(input.extra ?? {}),
+        ...(input.decision ? { decision: input.decision } : {}),
+        budgetedMain: serialized,
+        budgeted_main: serialized,
+      } as PolicyStateEntry;
+      if (!selected || key === input.stateKey) selected = next;
+      return next;
+    });
+  }
+  return selected;
+}
+
+async function recordBudgetedMainEvent(input: {
+  event: string;
+  stateKey: string;
+  ctx: UnknownRecord;
+  state: UnknownRecord;
+  decision: UnknownRecord;
+  budgetState: BudgetedMainState;
+  reason: string;
+  logger?: LoggerLike;
+  now?: number;
+}): Promise<void> {
+  const now = input.now ?? Date.now();
+  const metrics = buildBudgetedMainMetrics({
+    state: input.budgetState,
+    now,
+    reason: input.reason,
+    sessionKey: input.stateKey,
+    workContractId: budgetedMainWorkContractId(input.state, input.decision),
+    spawnIntentId: budgetedMainSpawnIntentId(input.state),
+  });
+  await recordPolicyReplay(
+    input.event,
+    {
+      ...metrics,
+      stateKey: input.stateKey,
+      sessionId: stringValue(input.ctx.sessionId),
+    },
+    input.logger,
+    input.decision,
+  );
+}
+
+function clearBudgetedMainTimer(stateKey: string): void {
+  const timer = pendingBudgetedMainTimers.get(stateKey);
+  if (!timer) return;
+  clearTimeout(timer);
+  pendingBudgetedMainTimers.delete(stateKey);
+}
+
+function scheduleBudgetedMainTimeout(input: {
+  stateKey: string;
+  ctx: UnknownRecord;
+  state: UnknownRecord;
+  decision: UnknownRecord;
+  budgetState: BudgetedMainState;
+  logger?: LoggerLike;
+}): void {
+  if (!input.stateKey || pendingBudgetedMainTimers.has(input.stateKey)) return;
+  const remainingMs = Math.max(0, input.budgetState.maxWallMs - (Date.now() - input.budgetState.startedAt));
+  const timer = setTimeout(() => {
+    pendingBudgetedMainTimers.delete(input.stateKey);
+    const liveState = asRecord(policyState.get(input.stateKey));
+    const liveBudget = readBudgetedMainState(liveState);
+    if (!liveBudget || !liveBudget.active || liveBudget.completedAt || liveBudget.escalatedAt || liveBudget.escalatedPending) return;
+    if (liveState.formal_reply_visible === true
+      || liveState.formalReplyVisible === true
+      || liveState.dispatchExecuted === true
+      || liveState.dispatch_executed === true
+      || liveState.spawnExecuted === true
+      || liveState.spawn_executed === true
+    ) return;
+    const now = Date.now();
+    const pendingBudget: BudgetedMainState = {
+      ...liveBudget,
+      escalatedPending: true,
+      reason: "wall_time_over_budget",
+    };
+    updateBudgetedMainForContext({
+      stateKey: input.stateKey,
+      ctx: input.ctx,
+      state: liveState,
+      budgetState: pendingBudget,
+      extra: {
+        budgeted_main_escalated_pending: true,
+        budgeted_main_escalated_pending_at: new Date(now).toISOString(),
+      },
+    });
+    void recordBudgetedMainEvent({
+      event: "budgeted_main_escalated_pending",
+      stateKey: input.stateKey,
+      ctx: input.ctx,
+      state: liveState,
+      decision: asRecord(liveState.decision || input.decision),
+      budgetState: pendingBudget,
+      reason: "wall_time_over_budget",
+      logger: input.logger,
+      now,
+    }).catch(() => {});
+  }, remainingMs);
+  (timer as unknown as { unref?: () => void }).unref?.();
+  pendingBudgetedMainTimers.set(input.stateKey, timer);
+}
+
+function maybeStartBudgetedMain(input: {
+  stateKey: string;
+  ctx: UnknownRecord;
+  state: UnknownRecord;
+  decision: UnknownRecord;
+  logger?: LoggerLike;
+}): void {
+  if (!input.stateKey || !isBudgetedMainDecision(input.decision)) return;
+  const liveState = asRecord(policyState.get(input.stateKey) || input.state);
+  const existingBudget = readBudgetedMainState(liveState);
+  if (existingBudget?.completedAt || existingBudget?.escalatedAt) return;
+  if (existingBudget?.active) {
+    scheduleBudgetedMainTimeout({
+      ...input,
+      state: liveState,
+      budgetState: existingBudget,
+    });
+    return;
+  }
+  const now = Date.now();
+  const budgetState = buildBudgetedMainState({
+    now,
+    decision: input.decision,
+    visibleStartAt: budgetedMainVisibleStartAt(liveState, now),
+    budgetStartSource: "before_prompt_build_complete",
+    workContractId: budgetedMainWorkContractId(liveState, input.decision),
+    spawnIntentId: budgetedMainSpawnIntentId(liveState),
+  });
+  updateBudgetedMainForContext({
+    stateKey: input.stateKey,
+    ctx: input.ctx,
+    state: liveState,
+    budgetState,
+  });
+  void recordBudgetedMainEvent({
+    event: "budgeted_main_started",
+    stateKey: input.stateKey,
+    ctx: input.ctx,
+    state: liveState,
+    decision: input.decision,
+    budgetState,
+    reason: "budgeted_main_started",
+    logger: input.logger,
+    now,
+  }).catch(() => {});
+  scheduleBudgetedMainTimeout({
+    ...input,
+    state: liveState,
+    budgetState,
+  });
+}
+
+function completeBudgetedMainIfActive(input: {
+  stateKey: string;
+  ctx: UnknownRecord;
+  state: UnknownRecord;
+  decision: UnknownRecord;
+  logger?: LoggerLike;
+}): void {
+  const budgetState = readBudgetedMainState(input.state);
+  if (!input.stateKey || !budgetState?.active || budgetState.completedAt || budgetState.escalatedAt) return;
+  const now = Date.now();
+  const late = budgetState.escalatedPending === true || now - budgetState.startedAt > budgetState.maxWallMs;
+  const reason = late ? "completed_late" : "completed";
+  const completedBudget: BudgetedMainState = {
+    ...budgetState,
+    active: false,
+    completedAt: now,
+    reason,
+  };
+  clearBudgetedMainTimer(input.stateKey);
+  updateBudgetedMainForContext({
+    stateKey: input.stateKey,
+    ctx: input.ctx,
+    state: input.state,
+    budgetState: completedBudget,
+    extra: {
+      budgeted_main_completed: true,
+      budgeted_main_completed_at: new Date(now).toISOString(),
+      ...(late ? { budgeted_main_completed_late: true } : {}),
+    },
+  });
+  void recordBudgetedMainEvent({
+    event: late ? "budgeted_main_completed_late" : "budgeted_main_completed",
+    stateKey: input.stateKey,
+    ctx: input.ctx,
+    state: input.state,
+    decision: input.decision,
+    budgetState: completedBudget,
+    reason,
+    logger: input.logger,
+    now,
+  }).catch(() => {});
+}
+
+async function escalateBudgetedMainForTool(input: {
+  stateKey: string;
+  ctx: UnknownRecord;
+  state: UnknownRecord;
+  decision: UnknownRecord;
+  budgetState: BudgetedMainState;
+  reason: string;
+  logger?: LoggerLike;
+}): Promise<{ state: PolicyStateEntry | null; decision: UnknownRecord }> {
+  const now = Date.now();
+  const escalatedDecision = escalateBudgetedMainDecision(input.decision, input.reason);
+  const escalatedBudget: BudgetedMainState = {
+    ...input.budgetState,
+    active: false,
+    escalatedAt: now,
+    escalatedPending: false,
+    reason: input.reason,
+  };
+  clearBudgetedMainTimer(input.stateKey);
+  const nextState = updateBudgetedMainForContext({
+    stateKey: input.stateKey,
+    ctx: input.ctx,
+    state: input.state,
+    budgetState: escalatedBudget,
+    decision: escalatedDecision,
+    extra: {
+      routeHintSubmitted: true,
+      delegated: false,
+      dispatchRoute: "delegate",
+      dispatchStatus: "budgeted_main_escalated",
+      dispatchExecuted: false,
+      spawnExecuted: false,
+      budgeted_main_escalated: true,
+      budgeted_main_escalated_at: new Date(now).toISOString(),
+    },
+  });
+  await recordBudgetedMainEvent({
+    event: "budgeted_main_escalated",
+    stateKey: input.stateKey,
+    ctx: input.ctx,
+    state: input.state,
+    decision: escalatedDecision,
+    budgetState: escalatedBudget,
+    reason: input.reason,
+    logger: input.logger,
+    now,
+  });
+  return { state: nextState, decision: escalatedDecision };
+}
+
 function bindRouteHintPromptToCurrentContext(ctx: UnknownRecord, toolParams: UnknownRecord): void {
   const task = stringValue(toolParams.task);
   if (!task) return;
@@ -2456,6 +2761,8 @@ export const plugin = {
           canonicalSessionKey: stateKey,
           ackGuardKey: sessionKey,
           inboundMessageTs: anchor.ts,
+          inboundObservedAt: Number(current?.inboundObservedAt || current?.inbound_observed_at || 0) || now,
+          inbound_observed_at: Number(current?.inboundObservedAt || current?.inbound_observed_at || 0) || now,
           replyToMessageId: anchor.ts,
           message_id: anchor.ts,
           deliveryTarget: buildImmutableDeliveryTarget(sessionKey, anchor.ts),
@@ -2746,7 +3053,7 @@ export const plugin = {
         ? getPolicyStateForContext({ ...ctx, canonicalSessionKey: stateKey }).state
         : state;
       const effectiveState = activeRecoveryState ?? state;
-      const effectiveDecision = recoveryCheck.updatedCount > 0
+      let effectiveDecision = recoveryCheck.updatedCount > 0
         ? asRecord(effectiveState?.decision)
         : decision;
       if (stateKey) {
@@ -2755,6 +3062,8 @@ export const plugin = {
           ...buildReactionAckState(preSessionKey),
           ackGuardKey: preSessionKey || current.ackGuardKey || "",
           inboundMessageTs: inboundMessageTs || current.inboundMessageTs,
+          inboundObservedAt: Number(current.inboundObservedAt || current.inbound_observed_at || 0) || Date.now(),
+          inbound_observed_at: Number(current.inboundObservedAt || current.inbound_observed_at || 0) || Date.now(),
           replyToMessageId: inboundMessageTs || current.replyToMessageId,
           deliveryTarget: asRecord(current.deliveryTarget).immutable ? current.deliveryTarget : immutableDeliveryTarget,
           delivery_target: asRecord(current.delivery_target).immutable ? current.delivery_target : immutableDeliveryTarget,
@@ -2765,6 +3074,8 @@ export const plugin = {
         effectiveState.ackGuardKey = preSessionKey || "";
         effectiveState.deliveryTarget = immutableDeliveryTarget;
         effectiveState.delivery_target = immutableDeliveryTarget;
+        effectiveState.inboundObservedAt = Number(effectiveState.inboundObservedAt || effectiveState.inbound_observed_at || 0) || Date.now();
+        effectiveState.inbound_observed_at = effectiveState.inboundObservedAt;
         if (inboundMessageTs) {
           effectiveState.inboundMessageTs = inboundMessageTs;
           effectiveState.replyToMessageId = inboundMessageTs;
@@ -2861,6 +3172,34 @@ export const plugin = {
       metadata.delivery_target = immutableDeliveryTarget;
 
       const prependSystem: string[] = [];
+      const currentBudgetedMainState = readBudgetedMainState(asRecord(effectiveState));
+      if (currentBudgetedMainState?.escalatedPending && stateKey) {
+        const escalated = await escalateBudgetedMainForTool({
+          stateKey,
+          ctx,
+          state: asRecord(effectiveState),
+          decision: effectiveDecision,
+          budgetState: currentBudgetedMainState,
+          reason: "wall_time_over_budget",
+          logger: pi.logger,
+        });
+        effectiveDecision = escalated.decision;
+        prependSystem.push([
+          "[OctoClaw budgeted main escalation]",
+          `The budgeted main execution exceeded ${BUDGETED_MAIN_MAX_WALL_MS}ms before this prompt injection point.`,
+          "Do not continue analysis or call ordinary tools.",
+          "Call octoclaw_dispatch with the original task to enter the native planner path.",
+          "Do not claim the task has started until sessions_spawn is accepted and octoclaw_dispatch_confirm succeeds.",
+        ].join("\n"));
+      } else if (isBudgetedMainDecision(effectiveDecision)) {
+        prependSystem.push([
+          "[OctoClaw budgeted main execution]",
+          `This turn is decision_bucket=budgeted_main_then_delegate with maxWallMs=${BUDGETED_MAIN_MAX_WALL_MS}.`,
+          "Answer directly only if the task can be completed in the main agent with at most one lightweight read-only tool.",
+          "If writing, long commands, multi-step tools, tests/build/review/validation, or more work is needed, call octoclaw_dispatch.",
+          "Do not claim the task has started until sessions_spawn is accepted and octoclaw_dispatch_confirm succeeds.",
+        ].join("\n"));
+      }
       const judgeSucceeded = Boolean(effectiveDecision._judge_succeeded);
       const decisionDelegationEnabled = Boolean(effectiveDecision._delegation_enabled ?? true);
 
@@ -2950,6 +3289,13 @@ export const plugin = {
       if (hasDedupKey && shouldInjectPrependContext) {
         lastGroundedPromptByStateKey.set(stateKey, promptKey);
       }
+      maybeStartBudgetedMain({
+        stateKey,
+        ctx,
+        state: asRecord(effectiveState),
+        decision: effectiveDecision,
+        logger: pi.logger,
+      });
       return buildPromptContextProjection({
         prependSystem,
         contextPayload,
@@ -2986,6 +3332,60 @@ export const plugin = {
           block: true,
           blockReason: "OctoClaw is delivering an existing native subagent completion; do not dispatch or spawn new work for this inter-session announce.",
         };
+      }
+      let budgetDecision = asRecord(state?.decision);
+      const budgetState = readBudgetedMainState(asRecord(state));
+      if (budgetState?.active && !budgetState.completedAt && !budgetState.escalatedAt) {
+        const classification = classifyBudgetedMainTool(toolName, toolParams);
+        const now = Date.now();
+        if (toolName === "octoclaw_dispatch") {
+          const reason = budgetState.escalatedPending || now - budgetState.startedAt >= budgetState.maxWallMs
+            ? "wall_time_over_budget"
+            : "main_agent_called_dispatch";
+          const escalated = await escalateBudgetedMainForTool({
+            stateKey,
+            ctx,
+            state: asRecord(state),
+            decision: budgetDecision,
+            budgetState,
+            reason,
+            logger: pi.logger,
+          });
+          state = escalated.state as PolicyStateEntry | null;
+          budgetDecision = escalated.decision;
+        } else if (classification.counted) {
+          const updatedBudget = updateBudgetedMainToolState(budgetState, classification);
+          const overWall = budgetState.escalatedPending || now - budgetState.startedAt >= budgetState.maxWallMs;
+          const escalationReason = overWall
+            ? "wall_time_over_budget"
+            : budgetedMainToolEscalationReason(updatedBudget, classification);
+          if (escalationReason) {
+            const escalated = await escalateBudgetedMainForTool({
+              stateKey,
+              ctx,
+              state: asRecord(state),
+              decision: budgetDecision,
+              budgetState: updatedBudget,
+              reason: escalationReason,
+              logger: pi.logger,
+            });
+            state = escalated.state as PolicyStateEntry | null;
+            updatePolicyState(stateKey, (current) => ({
+              ...current,
+              blockedTools: [...(Array.isArray(current.blockedTools) ? current.blockedTools.slice(-7) : []), toolName].filter(Boolean),
+            }));
+            return {
+              block: true,
+              blockReason: `OctoClaw budgeted main execution escalated (${escalationReason}). Call octoclaw_dispatch with the original task; do not use ordinary tools or claim the task has started before dispatch_confirm.`,
+            };
+          }
+          state = updateBudgetedMainForContext({
+            stateKey,
+            ctx,
+            state: asRecord(state),
+            budgetState: updatedBudget,
+          }) as PolicyStateEntry | null;
+        }
       }
       if (toolName === "octoclaw_dispatch") {
         const taskPolicyContext = policyState.getDispatchPolicyContext(ctx, stringValue(toolParams.task));
@@ -3322,6 +3722,7 @@ export const plugin = {
       const { key: stateKey, state } = getPolicyStateForContext(ctx);
       if (!stateKey) return;
       lastGroundedPromptByStateKey.delete(stateKey);
+      clearBudgetedMainTimer(stateKey);
       const pendingTimer = pendingLatencyAckTimers.get(stateKey);
       if (pendingTimer) {
         clearTimeout(pendingTimer);
@@ -3538,6 +3939,13 @@ export const plugin = {
       let outputMessage = visibleMessage;
       const outputNoReply = contentText.trim().toUpperCase() === "NO_REPLY";
       if (role === "assistant" && contentText && !noReplySentinel && !outputNoReply) {
+        completeBudgetedMainIfActive({
+          stateKey,
+          ctx,
+          state: stateRecord,
+          decision: asRecord(stateRecord.decision),
+          logger: pi.logger,
+        });
         const projectedText = appendReplyProjectionFooter(contentText, stateRecord, event, ctx);
         if (projectedText && projectedText !== contentText) {
           outputMessage = replaceAssistantMessageText(asRecord(visibleMessage), projectedText);

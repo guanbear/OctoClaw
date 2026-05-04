@@ -167,9 +167,13 @@ Delegation decisions SHALL account for native spawn cold-start cost and SHALL av
 
 #### Scenario: budget escalation
 
-- WHEN a budgeted main fast path exceeds 20-30s, exceeds 1-2 read-only tool calls, needs write/long-running work, or exceeds context budget
-- THEN OctoClaw MAY ask the main agent to use the planner delegation path
-- AND the escalation SHALL be recorded in replay/eval.
+- WHEN a budgeted main fast path exceeds a fixed 30s soft main execution budget, exceeds 1-2 read-only tool calls, needs write/long-running work, or exceeds context budget
+- THEN OctoClaw SHALL record budget metrics including `elapsedMs`, `maxWallMs=30000`, `visibleElapsedMs`, `budgetStartSource`, tool counts, and escalation reason
+- AND timer expiry without a reliable interrupt/reinjection point SHALL record `budgeted_main_escalated_pending` rather than direct spawn or accepted ACK
+- AND a final reply produced after the soft budget SHALL be delivered normally, recorded as `budgeted_main_completed_late`, and SHALL NOT create a spawn
+- AND the next ordinary tool or prompt-injection boundary MAY be blocked or rewritten to require `octoclaw_dispatch`
+- AND escalation SHALL use the planner/native path `octoclaw_dispatch -> sessions_spawn -> octoclaw_dispatch_confirm`
+- AND OctoClaw SHALL NOT direct spawn or claim the task has started before `sessions_spawn` accepted and `octoclaw_dispatch_confirm` succeeds.
 
 ### Requirement: Planner Spawn Context Is Isolated And Compact
 

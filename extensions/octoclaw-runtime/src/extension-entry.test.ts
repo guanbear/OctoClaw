@@ -15,6 +15,7 @@ import { buildMemoryCoverageLayer } from "./resolve/memory-coverage-precheck.js"
 import { buildWorkContractFromPolicy, buildWorkDecisionSeal } from "./work-contract/builders.js";
 import { loadWorkContract, saveWorkContract } from "./work-contract/store.js";
 import { resetNeutralInboundAckDedupeForTests } from "./ack/ack-guard.js";
+import { BUDGETED_MAIN_MAX_WALL_MS } from "./budgeted-main.js";
 
 const fs = fsSync as unknown as {
   mkdtempSync(pathname: string): string;
@@ -60,6 +61,59 @@ function readReplayEvents(): Array<Record<string, unknown>> {
     .split("\n")
     .filter(Boolean)
     .map((line) => JSON.parse(line) as Record<string, unknown>);
+}
+
+function budgetedMainDecision(route = "reply"): Record<string, unknown> {
+  const delegateRoute = route === "delegate";
+  return {
+    runtime_switches: { replay_logging_enabled: true },
+    route_decision: {
+      route,
+      route_source: "rule",
+      decision_bucket: "budgeted_main_then_delegate",
+    },
+    hook_interface: {
+      before_prompt_build: { enabled: true },
+      before_tool_call: {
+        enabled: true,
+        route_hint_required: false,
+        route_hint_tool: "octoclaw_route_hint",
+        delegation_enforcement: true,
+      },
+    },
+    route_hint_policy: { required: false, submitted: false },
+    tool_policy: {
+      allow_direct_tools: !delegateRoute,
+      ...(delegateRoute ? { must_delegate_via: "octoclaw_dispatch" } : {}),
+      allowed_control_tools: ["octoclaw_dispatch", "octoclaw_status", "octoclaw_route_hint"],
+    },
+  };
+}
+
+function budgetedMainState(startedAt: number, extra: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    active: true,
+    startedAt,
+    started_at: startedAt,
+    maxWallMs: BUDGETED_MAIN_MAX_WALL_MS,
+    max_wall_ms: BUDGETED_MAIN_MAX_WALL_MS,
+    budgetStartSource: "before_prompt_build_complete",
+    budget_start_source: "before_prompt_build_complete",
+    reason: "budgeted_main_started",
+    decisionBucket: "budgeted_main_then_delegate",
+    decision_bucket: "budgeted_main_then_delegate",
+    visibleStartAt: startedAt - 2_000,
+    visible_start_at: startedAt - 2_000,
+    toolCount: 0,
+    tool_count: 0,
+    readOnlyToolCount: 0,
+    read_only_tool_count: 0,
+    longToolDetected: false,
+    long_tool_detected: false,
+    writeToolDetected: false,
+    write_tool_detected: false,
+    ...extra,
+  };
 }
 
 beforeEach(() => {
@@ -1210,7 +1264,7 @@ describe("guardOutboundMessageForPolicyState", () => {
 
 
 describe("octoclaw_route_hint policy state aliases", () => {
-  it("keeps deterministic Slack release lookups dispatchable when judge replies", async () => {
+  it("does not treat old Slack acceptance suitability text as hard delegate when judge replies", async () => {
     const previousJudgeFast = process.env.OCTOCLAW_JUDGE_FAST;
     process.env.OCTOCLAW_JUDGE_FAST = JSON.stringify({
       enabled: true,
@@ -1256,20 +1310,19 @@ describe("octoclaw_route_hint policy state aliases", () => {
           },
         },
       });
-      const expectedDeliverable = String((resolved?.decision.request as Record<string, unknown> | undefined)?.task ?? "").slice(0, 200);
       expect(resolved?.decision.route_decision).toMatchObject({
-        route: "delegate",
-        is_new_work: true,
-        expected_deliverable: expectedDeliverable,
+        route: "reply",
+        decision_bucket: "budgeted_main_then_delegate",
+        hard_delegate_signal: false,
       });
-      expect(resolved?.decision).toMatchObject({
-        is_new_work: true,
-        expected_deliverable: expectedDeliverable,
-      });
+      expect(resolved?.decision).not.toMatchObject({ is_new_work: true });
       expect(resolved?.decision.tool_policy).toMatchObject({
-        must_delegate_via: "octoclaw_dispatch",
+        must_delegate_via: "",
       });
-      expect(policyState.getState(sessionKey)?.decision?.route_decision).toMatchObject({ route: "delegate" });
+      expect(policyState.getState(sessionKey)?.decision?.route_decision).toMatchObject({
+        route: "reply",
+        decision_bucket: "budgeted_main_then_delegate",
+      });
     } finally {
       if (previousJudgeFast === undefined) delete process.env.OCTOCLAW_JUDGE_FAST;
       else process.env.OCTOCLAW_JUDGE_FAST = previousJudgeFast;
@@ -1376,6 +1429,355 @@ describe("plugin enabled config", () => {
   });
 });
 
+
+describe("budgeted_main_then_delegate runtime budget", () => {
+  it("starts the 30s soft budget after before_prompt_build and records replay metrics", async () => {
+    const handlers = new Map<string, Function>();
+    plugin.register({
+      on: (event, handler) => handlers.set(event, handler),
+      registerTool: () => {},
+      registerCommand: () => {},
+      logger: {},
+    });
+
+    const key = "agent:main:slack:channel:c0as4dappu3:thread:t-budget-start";
+    const prompt = "查一下 OpenClaw 最新版本号";
+    const now = Date.now();
+    policyState.setState(key, {
+      prompt,
+      decision: budgetedMainDecision(),
+      createdAt: now - 2_000,
+      updatedAt: now,
+    });
+
+    const beforePromptBuild = handlers.get("before_prompt_build");
+    const agentEnd = handlers.get("agent_end");
+    expect(beforePromptBuild).toBeTruthy();
+    const projection = await beforePromptBuild!(
+      { prompt },
+      { sessionKey: key, sessionId: "session-budget-start", agentId: "main", channelId: "slack" },
+    ) as { prependSystemContext?: string } | undefined;
+
+    expect(projection?.prependSystemContext).toContain("budgeted main execution");
+    expect(policyState.getState(key)?.budgetedMain).toMatchObject({
+      active: true,
+      reason: "budgeted_main_started",
+      maxWallMs: BUDGETED_MAIN_MAX_WALL_MS,
+      budgetStartSource: "before_prompt_build_complete",
+    });
+    await waitForFireAndForget();
+    expect(readReplayEvents()).toContainEqual(expect.objectContaining({
+      event: "budgeted_main_started",
+      reason: "budgeted_main_started",
+      max_wall_ms: BUDGETED_MAIN_MAX_WALL_MS,
+      budget_start_source: "before_prompt_build_complete",
+    }));
+    await agentEnd?.({}, { sessionKey: key, sessionId: "session-budget-start", agentId: "main" });
+    policyState.clearState(key);
+  });
+
+  it("records completion within the 30s main execution budget without spawning", async () => {
+    const handlers = new Map<string, Function>();
+    plugin.register({
+      on: (event, handler) => handlers.set(event, handler),
+      registerTool: () => {},
+      registerCommand: () => {},
+      logger: {},
+    });
+
+    const key = "agent:main:slack:channel:c0as4dappu3:thread:t-budget-complete";
+    const now = Date.now();
+    policyState.setState(key, {
+      decision: budgetedMainDecision(),
+      budgetedMain: budgetedMainState(now - 1_000),
+      budgeted_main: budgetedMainState(now - 1_000),
+      createdAt: now - 2_000,
+      updatedAt: now,
+    });
+
+    const beforeMessageWrite = handlers.get("before_message_write");
+    expect(beforeMessageWrite).toBeTruthy();
+    const result = beforeMessageWrite!(
+      { message: { role: "assistant", content: "可以，结论是 A。" } },
+      { sessionKey: key, sessionId: "session-budget-complete", agentId: "main", channelId: "slack" },
+    ) as { message?: { content?: unknown } } | undefined;
+
+    expect(String(result?.message?.content ?? "可以，结论是 A。")).not.toBe("NO_REPLY");
+    expect(policyState.getState(key)?.budgetedMain).toMatchObject({
+      active: false,
+      reason: "completed",
+    });
+    await waitForFireAndForget();
+    const events = readReplayEvents();
+    expect(events).toContainEqual(expect.objectContaining({
+      event: "budgeted_main_completed",
+      reason: "completed",
+      decision_bucket: "budgeted_main_then_delegate",
+      max_wall_ms: BUDGETED_MAIN_MAX_WALL_MS,
+      budget_start_source: "before_prompt_build_complete",
+    }));
+    expect(events).not.toContainEqual(expect.objectContaining({ event: "sessions_spawn_intent_allowed" }));
+    policyState.clearState(key);
+  });
+
+  it("allows a late final reply after soft timeout and does not spawn", async () => {
+    const handlers = new Map<string, Function>();
+    plugin.register({
+      on: (event, handler) => handlers.set(event, handler),
+      registerTool: () => {},
+      registerCommand: () => {},
+      logger: {},
+    });
+
+    const key = "agent:main:slack:channel:c0as4dappu3:thread:t-budget-late-final";
+    const now = Date.now();
+    const lateBudget = budgetedMainState(now - BUDGETED_MAIN_MAX_WALL_MS - 2_000, {
+      escalatedPending: true,
+      escalated_pending: true,
+      reason: "wall_time_over_budget",
+    });
+    policyState.setState(key, {
+      decision: budgetedMainDecision(),
+      budgetedMain: lateBudget,
+      budgeted_main: lateBudget,
+      createdAt: now - 35_000,
+      updatedAt: now,
+    });
+
+    const beforeMessageWrite = handlers.get("before_message_write");
+    expect(beforeMessageWrite).toBeTruthy();
+    beforeMessageWrite!(
+      { message: { role: "assistant", content: "已经直接回答完了。" } },
+      { sessionKey: key, sessionId: "session-budget-late-final", agentId: "main", channelId: "slack" },
+    );
+
+    expect(policyState.getState(key)?.budgetedMain).toMatchObject({
+      active: false,
+      reason: "completed_late",
+    });
+    expect(policyState.getState(key)?.decision?.route_decision).toMatchObject({ route: "reply" });
+    await waitForFireAndForget();
+    const events = readReplayEvents();
+    expect(events).toContainEqual(expect.objectContaining({
+      event: "budgeted_main_completed_late",
+      reason: "completed_late",
+      budgetEscalationReason: "",
+    }));
+    expect(events).not.toContainEqual(expect.objectContaining({ event: "sessions_spawn_intent_allowed" }));
+    expect(events).not.toContainEqual(expect.objectContaining({ event: "dispatch_confirm_completed" }));
+    policyState.clearState(key);
+  });
+
+  it("blocks the next ordinary tool after timeout and requires octoclaw_dispatch", async () => {
+    const handlers = new Map<string, Function>();
+    plugin.register({
+      on: (event, handler) => handlers.set(event, handler),
+      registerTool: () => {},
+      registerCommand: () => {},
+      logger: {},
+    });
+
+    const key = "agent:main:slack:channel:c0as4dappu3:thread:t-budget-timeout-tool";
+    const now = Date.now();
+    const pendingBudget = budgetedMainState(now - BUDGETED_MAIN_MAX_WALL_MS - 1_000, {
+      escalatedPending: true,
+      escalated_pending: true,
+      reason: "wall_time_over_budget",
+    });
+    policyState.setState(key, {
+      decision: budgetedMainDecision(),
+      budgetedMain: pendingBudget,
+      budgeted_main: pendingBudget,
+      createdAt: now - 35_000,
+      updatedAt: now,
+    });
+
+    const beforeToolCall = handlers.get("before_tool_call");
+    expect(beforeToolCall).toBeTruthy();
+    const result = await beforeToolCall!(
+      { toolName: "read", params: { path: "README.md" } },
+      { sessionKey: key, sessionId: "session-budget-timeout-tool", agentId: "main" },
+    ) as { block?: boolean; blockReason?: string } | undefined;
+
+    expect(result?.block).toBe(true);
+    expect(result?.blockReason).toContain("Call octoclaw_dispatch");
+    expect(policyState.getState(key)?.decision?.route_decision).toMatchObject({
+      route: "delegate",
+      route_source: "budgeted_main_escalation",
+    });
+    expect(policyState.getState(key)).toMatchObject({
+      dispatchStatus: "budgeted_main_escalated",
+      dispatchExecuted: false,
+      spawnExecuted: false,
+    });
+    await waitForFireAndForget();
+    const events = readReplayEvents();
+    expect(events).toContainEqual(expect.objectContaining({
+      event: "budgeted_main_escalated",
+      reason: "wall_time_over_budget",
+      budgetEscalationReason: "wall_time_over_budget",
+    }));
+    expect(events).not.toContainEqual(expect.objectContaining({ event: "sessions_spawn_intent_allowed" }));
+    expect(events).not.toContainEqual(expect.objectContaining({ event: "dispatch_confirm_completed" }));
+    policyState.clearState(key);
+  });
+
+  it("allows octoclaw_dispatch after timeout so the native planner path can run", async () => {
+    const handlers = new Map<string, Function>();
+    plugin.register({
+      on: (event, handler) => handlers.set(event, handler),
+      registerTool: () => {},
+      registerCommand: () => {},
+      logger: {},
+    });
+
+    const key = "agent:main:slack:channel:c0as4dappu3:thread:t-budget-timeout-dispatch";
+    const now = Date.now();
+    const pendingBudget = budgetedMainState(now - BUDGETED_MAIN_MAX_WALL_MS - 1_000, {
+      escalatedPending: true,
+      escalated_pending: true,
+      reason: "wall_time_over_budget",
+    });
+    policyState.setState(key, {
+      prompt: "整理这轮 SR-P1 evidence",
+      decision: budgetedMainDecision(),
+      budgetedMain: pendingBudget,
+      budgeted_main: pendingBudget,
+      createdAt: now - 35_000,
+      updatedAt: now,
+    });
+
+    const beforeToolCall = handlers.get("before_tool_call");
+    expect(beforeToolCall).toBeTruthy();
+    const result = await beforeToolCall!(
+      { toolName: "octoclaw_dispatch", params: { task: "整理这轮 SR-P1 evidence" } },
+      { sessionKey: key, sessionId: "session-budget-timeout-dispatch", agentId: "main" },
+    );
+
+    expect(result).toBeUndefined();
+    expect(policyState.getState(key)?.decision?.route_decision).toMatchObject({
+      route: "delegate",
+      route_source: "budgeted_main_escalation",
+    });
+    await waitForFireAndForget();
+    expect(readReplayEvents()).toContainEqual(expect.objectContaining({
+      event: "budgeted_main_escalated",
+      reason: "wall_time_over_budget",
+    }));
+    policyState.clearState(key);
+  });
+
+  it("immediately escalates write and verification tools without waiting for 30s", async () => {
+    const handlers = new Map<string, Function>();
+    plugin.register({
+      on: (event, handler) => handlers.set(event, handler),
+      registerTool: () => {},
+      registerCommand: () => {},
+      logger: {},
+    });
+
+    const beforeToolCall = handlers.get("before_tool_call");
+    expect(beforeToolCall).toBeTruthy();
+    const now = Date.now();
+    const writeKey = "agent:main:slack:channel:c0as4dappu3:thread:t-budget-write-tool";
+    policyState.setState(writeKey, {
+      decision: budgetedMainDecision(),
+      budgetedMain: budgetedMainState(now - 1_000),
+      budgeted_main: budgetedMainState(now - 1_000),
+      createdAt: now - 2_000,
+      updatedAt: now,
+    });
+    const writeResult = await beforeToolCall!(
+      { toolName: "write", params: { path: "docs/example.md", content: "x" } },
+      { sessionKey: writeKey, sessionId: "session-budget-write-tool", agentId: "main" },
+    ) as { block?: boolean; blockReason?: string } | undefined;
+
+    const longKey = "agent:main:slack:channel:c0as4dappu3:thread:t-budget-long-tool";
+    policyState.setState(longKey, {
+      decision: budgetedMainDecision(),
+      budgetedMain: budgetedMainState(now - 1_000),
+      budgeted_main: budgetedMainState(now - 1_000),
+      createdAt: now - 2_000,
+      updatedAt: now,
+    });
+    const longResult = await beforeToolCall!(
+      { toolName: "exec", params: { command: "pnpm test" } },
+      { sessionKey: longKey, sessionId: "session-budget-long-tool", agentId: "main" },
+    ) as { block?: boolean; blockReason?: string } | undefined;
+
+    expect(writeResult?.block).toBe(true);
+    expect(writeResult?.blockReason).toContain("write_tool_detected");
+    expect(longResult?.block).toBe(true);
+    expect(longResult?.blockReason).toContain("long_tool_detected");
+    await waitForFireAndForget();
+    const events = readReplayEvents();
+    expect(events).toContainEqual(expect.objectContaining({
+      event: "budgeted_main_escalated",
+      reason: "write_tool_detected",
+    }));
+    expect(events).toContainEqual(expect.objectContaining({
+      event: "budgeted_main_escalated",
+      reason: "long_tool_detected",
+    }));
+    policyState.clearState(writeKey);
+    policyState.clearState(longKey);
+  });
+
+  it("does not start budget escalation for must_reply or must_delegate buckets", async () => {
+    const handlers = new Map<string, Function>();
+    plugin.register({
+      on: (event, handler) => handlers.set(event, handler),
+      registerTool: () => {},
+      registerCommand: () => {},
+      logger: {},
+    });
+
+    const beforeToolCall = handlers.get("before_tool_call");
+    expect(beforeToolCall).toBeTruthy();
+    const now = Date.now();
+    const replyKey = "agent:main:slack:channel:c0as4dappu3:thread:t-budget-must-reply";
+    policyState.setState(replyKey, {
+      decision: {
+        route_decision: { route: "reply", decision_bucket: "must_reply" },
+        hook_interface: { before_tool_call: { enabled: true, route_hint_required: false, route_hint_tool: "octoclaw_route_hint" } },
+        route_hint_policy: { required: false, submitted: false },
+        tool_policy: { allow_direct_tools: true },
+      },
+      createdAt: now,
+      updatedAt: now,
+    });
+    const replyResult = await beforeToolCall!(
+      { toolName: "read", params: { path: "README.md" } },
+      { sessionKey: replyKey, sessionId: "session-budget-must-reply", agentId: "main" },
+    );
+
+    const delegateKey = "agent:main:slack:channel:c0as4dappu3:thread:t-budget-must-delegate";
+    policyState.setState(delegateKey, {
+      decision: {
+        route_decision: { route: "delegate", decision_bucket: "must_delegate" },
+        hook_interface: { before_tool_call: { enabled: true, route_hint_required: false, route_hint_tool: "octoclaw_route_hint", delegation_enforcement: true } },
+        route_hint_policy: { required: false, submitted: true },
+        tool_policy: { must_delegate_via: "octoclaw_dispatch", allowed_control_tools: ["octoclaw_dispatch", "octoclaw_status", "octoclaw_route_hint"] },
+      },
+      routeHintSubmitted: true,
+      createdAt: now,
+      updatedAt: now,
+    });
+    const delegateResult = await beforeToolCall!(
+      { toolName: "octoclaw_dispatch", params: { task: "run the delegated work" } },
+      { sessionKey: delegateKey, sessionId: "session-budget-must-delegate", agentId: "main" },
+    );
+
+    expect(replyResult).toBeUndefined();
+    expect(delegateResult).toBeUndefined();
+    await waitForFireAndForget();
+    expect(readReplayEvents()).not.toContainEqual(expect.objectContaining({
+      event: expect.stringMatching(/^budgeted_main_/),
+    }));
+    policyState.clearState(replyKey);
+    policyState.clearState(delegateKey);
+  });
+});
 
 describe("before_tool_call route hint guard", () => {
 

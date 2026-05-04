@@ -233,7 +233,7 @@ Tasks:
 - [x] SR-P1 `fresh_live_lookup`, `conversation_control.route_hint=delegate`, and `fast_first_response` are downgraded from hard delegate signals; none can force delegate alone.
 - [x] SR-P1 hard delegate signals still win: explicit background/subagent/parallel request, code edits, tests/builds, long commands, multi-step tools, review/validation, or expected duration over 90-120s.
 - [x] SR-P1 explicit-delegate keyword matching does not treat bare mentions of `opencode`, `glm`, model names, or tools as hard delegate unless the user asks them to do work.
-- [ ] SR-P1 `budgeted_main_then_delegate` can escalate after 20-30s, after 1-2 read-only tool calls, or when write/long-running work becomes necessary.
+- [x] SR-P1 `budgeted_main_then_delegate` uses a fixed 30s soft main execution budget: expiry records `budgeted_main_escalated_pending`, late final records `budgeted_main_completed_late` without spawn, and the next ordinary tool/prompt boundary escalates through `octoclaw_dispatch` with replay metrics.
 - [ ] SR-P1 rule router, local judge, cheap LLM judge, route hints, and AGENTS/system prompt share the same bucket semantics.
 - [x] SR-P1 judge/replay output records `decision_bucket`, `startup_cost_policy`, `duration_hint`, `tool_need_hint`, `reason_codes`, and `hard_delegate_signal`.
 - [x] SR-P1 false-delegate cases are covered by tests/replay fixtures, including `fresh_live_lookup` no longer forcing delegate by itself.
@@ -277,7 +277,8 @@ Evidence 2026-05-04:
 - `completionFileTimeoutCount=0`; no duplicate final visible in Slack transcript; SQLite native intent row is `accepted` with non-empty runId/childSessionKey.
 - SR-P1 focused verification for commit `2366e4e`: `git diff --check`, `./node_modules/.bin/tsc --build extensions/octoclaw-runtime/tsconfig.json`, and `./node_modules/.bin/vitest run extensions/octoclaw-runtime/src/resolve/policy-resolver-judge-fallback.test.ts extensions/octoclaw-runtime/src/resolve/ticket-dry-run.test.ts extensions/octoclaw-runtime/src/tools/registration-planner.test.ts` passed (`79 tests`).
 - Broader SR-P1/planner regression verification: `policy-resolver-judge-fallback`, `llm-judge`, `ticket-dry-run`, `ticket-enforcement`, `registration-planner`, `registration-dispatch-honesty`, `runtime-ledger-hot-path`, `runtime-ledger`, `operator-diagnostics`, and `regression-round4` passed (`206 tests`); `execution-transition-integration` and `delegate-packets` passed (`25 tests`).
-- Open follow-up: SR-P1 routing-time bucket selection is in place, but runtime escalation for `budgeted_main_then_delegate` after wall-clock/tool budget is still unchecked above; SR-P2 latency remains above target because `before_prompt_build` and `sessions_spawn_intent_allowed` dominate accepted ACK time.
+- SR-P1 fixed 30s soft runtime budget local verification: `git diff --check`, `./node_modules/.bin/tsc --build extensions/octoclaw-runtime/tsconfig.json`, and `./node_modules/.bin/vitest run extensions/octoclaw-runtime/src/extension-entry.test.ts extensions/octoclaw-runtime/src/resolve/policy-resolver-judge-fallback.test.ts extensions/octoclaw-runtime/src/tools/registration-planner.test.ts extensions/octoclaw-runtime/src/delegate/native-spawn-gate-confirm.test.ts extensions/octoclaw-runtime/src/delegate/native-spawn-intent.test.ts` passed (`191 tests`). Coverage includes `budgeted_main_started`, `budgeted_main_completed`, `budgeted_main_completed_late`, tool-boundary escalation through `octoclaw_dispatch`, and no direct spawn/accepted ACK on timeout.
+- Open follow-up: SR-P1 routing-time bucket selection and local runtime budget validation are in place; live replay evidence for fixed 30s soft escalation is still pending. SR-P2 latency remains above target because `before_prompt_build` and `sessions_spawn_intent_allowed` dominate accepted ACK time.
 
 
 ## PC13 Slack Delivery Port
@@ -327,7 +328,7 @@ Tasks:
 - [ ] Add `main_fast_path_one_lookup` scenario.
 - [ ] Add `must_delegate_explicit_subagent` scenario.
 - [ ] Add `must_delegate_code_test_review` scenario.
-- [ ] Add `budgeted_main_then_delegate` scenario.
+- [ ] Add `budgeted_main_then_delegate` scenario with fixed 30s soft budget, `budgeted_main_escalated_pending`, late final, and native planner escalation evidence.
 - [ ] Add `status_provenance_no_spawn` scenario.
 - [ ] Add `native_announce_final` scenario.
 - [ ] Add `footer_delegate_provenance` scenario.
