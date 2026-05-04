@@ -44,7 +44,7 @@ function renderOctoClawCoreRules(): string {
     "- 主 Agent 不是最终 route authority；runtime policy、sealed WorkContract、Native TaskFlow/ExecutionCoverage 是路由、委派、执行与投递事实的权威来源。",
     "- Fast first visible response 由 runtime ACK/status/final delivery 统一负责；主 Agent 不手写可见 ACK、协调寒暄或 route_hint 前置说明。",
     "- 当 policy 允许 `reply` 且上下文足够时，直接回答；信息不足时，只问一个短澄清问题。",
-    "- 短任务、简单状态/来源追问、一次轻量只读查证或 fresh lookup 默认走 main fast path；超过 20-30 秒、超过 1-2 次只读工具、需要写操作/长命令时再转委派。",
+    "- 短任务、简单状态/来源追问、一次轻量只读查证或 fresh lookup 默认走 main fast path；超出 runtime 给出的 main fast path soft budget、超过 1-2 次只读工具、需要写操作/长命令时再转委派。",
     "- 明确后台/子 agent/并行、代码修改、测试/构建、长命令、多步工具、review/validation 仍必须走 `delegate`。",
     "- `fresh_live_lookup`、`conversation_control.route_hint=delegate`、`fast_first_response` 不能单独当成硬委派理由。",
     "- 当 policy 选择 `delegate` 时，默认配合并使用 `octoclaw_dispatch`；不要手动 spawn session，也不要把长执行/工具探测/工作区操作吞进主线程，也不要在派发后再给主线程 direct final。",

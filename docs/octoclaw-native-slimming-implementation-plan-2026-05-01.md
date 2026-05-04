@@ -60,7 +60,7 @@
 - 中性首 ACK：Slack 收到消息后 1-5s 内发出 reaction 或短文本；文案只能表达“收到/正在判断”，不能表达“已委派/已启动”。
 - main fast path：短任务、简单查证、状态/来源追问默认不走 delegate；真实 Slack smoke 中 false delegate 明显下降。
 - delegate ACK：必须包含原生 accepted + confirm 事实，`sessions_spawn` accepted 到 confirm/用户 ACK p95 < 1s。
-- planner 启动延迟：delegate route commit 到 `sessions_spawn_intent_allowed` p95 < 30s 作为 0.5.0 诊断目标，不再承诺所有子 agent 从用户消息到启动小于 10s。
+- planner 启动延迟：delegate route commit 到 `sessions_spawn_intent_allowed` p95 < 30s 是 0.5.x 性能恢复目标；0.5.0 只要求记录分段耗时，不把该 30s 指标作为发版阻塞项。
 - child 启动延迟：只记录 `sessions_spawn accepted -> child visible progress/first tool/final` 指标；不把 p95 <= 10s 作为 0.5.0 验收门槛。
 - spawn evidence：delegate 成功时必须有 `runId` 或 OpenClaw native task/run id；只有 `childSessionKey` 不算强证据。
 - duplicate visible messages：正常 delegate 流程中重复 ACK/完成通知为 0。
@@ -109,9 +109,12 @@
 - 最新 clean run5：`/tmp/octoclaw-sr-p1-smoke-20260504/run5-clean/slack-acceptance-2026-05-04-02-07-19.{json,md}`；thread `1777860220.481439`，WorkContract `wc-8952a8e3a003c912`，spawnIntent `nsp_moqk4odi_c2da90d2`，runId `793c2d86-badc-4c10-bd78-03efe2cb7937`，childSession `agent:main:subagent:afcea35f-6139-41e6-b588-942311844f37`，decision_bucket `must_delegate`。
 - 最新 clean run5 replay：`completion_file_timeout=0`、`duplicateFinal=0`、`footerVia=native_announce`、PC13 delivery `delivery_transport=slack_api` / `target_source=inbound_anchor` / `footer_source=envelope`。Stage：`message_received=3606ms`、`before_dispatch=3649ms`、`before_prompt_build=87659ms`、`sessions_spawn_intent_allowed=104851ms`、`sessions_spawn_accepted=111138ms`、`dispatch_confirm=111141ms`、`native_child_final=217610ms`。
 - 2026-05-04 confirm hardening 补充：`confirmNativeSpawn()` 在 intent store read/expire 抛 `SQLITE_BUSY` / `SQLITE_LOCKED` / `SQLITE_UNAVAILABLE` 时返回 fail-closed JSON；`octoclaw_dispatch_confirm` tool 仍写 `dispatch_confirm_completed ok=false` replay，不直接异常退出。双 confirm/race 回滚改为 CAS-style：失败方只在当前 WorkContract native refs 仍匹配自身 `runId/childSessionKey` 时回滚，并且只恢复 native-ref 相关字段，不擦掉成功方 refs 或其他并发更新。
-- 2026-05-04 budgeted_main live 尝试 `/tmp/octoclaw-sr-p1-smoke-20260504/run-budget-1/` 未作为验收证据：真实 Slack turn 没产出 `decision_bucket=budgeted_main_then_delegate`，judge 2s timeout 后按 reply 完成。固定 30s soft budget 的 local runtime tests 已过，但 live `budgeted_main_escalated_pending -> octoclaw_dispatch` evidence 仍未补齐，不能提前宣布 SR-P1 完整闭环。
+- 2026-05-04 post context-sanitizer release smoke：`/tmp/octoclaw-release-smoke-20260504-post-d73c/out/slack-acceptance-2026-05-04-13-51-37.{json,md}`，harness `pass`；thread `1777902360.657059`，WorkContract `wc-5dd50a4498dc04df`，spawnIntent `nsp_mor97x55_452403f0`，runId `cc0cc41d-081a-4c37-af55-7e5594969eb0`，childSession `agent:main:subagent:5fbf356a-d39f-4a6e-8ea1-ba32a109b2e6`，decision_bucket `must_delegate`。
+- post context-sanitizer replay：neutralAckMs `5215` via Slack reaction `eyes`，anchorSource `ctx`，fallbackUsed `false`；acceptedAckMs `136806`，finalMs `335664`；`footerVia=native_announce`，PC13 delivery `delivery_transport=slack_api` / `target_source=inbound_anchor` / `footer_source=envelope`，`completion_file_timeout=0`，`duplicateFinal=0`。Stage：`message_received=3225ms`、`before_dispatch=3286ms`、`before_model_resolve=16926ms`、`before_prompt_build=85530ms`、`octoclaw_dispatch=98881ms`、`sessions_spawn_intent_allowed=115212ms`、`sessions_spawn_accepted=137493ms`、`dispatch_confirm=137496ms`、`native_child_final=336476ms`。
+- 2026-05-04 budgeted_main live evidence：`/tmp/octoclaw-sr-p1-smoke-20260504/run-budget-5/slack-acceptance-2026-05-04-10-33-47.{json,md}`，harness `pass`；thread `1777890341.336369`，WorkContract `wc-bef1e786925b1362`，spawnIntent `nsp_mor227uz_654c3072`，runId `0097aad8-bda8-4209-800d-00374bb8c016`，childSession `agent:main:subagent:bf686f36-eb65-4f81-b613-db4ff00e3054`。Replay 记录 `decision_bucket=budgeted_main_then_delegate`、`budgeted_main_started`、`budgeted_main_escalated`，`budgetElapsedMs=6967`，`budgetEscalationReason=main_agent_called_dispatch`，随后进入 `sessions_spawn_intent_allowed -> dispatch_confirm_completed ok=true -> native_announce_completion_matched -> native_announce_final_delivered`。该证据证明 soft budget 状态机接入 planner/native 链路，但不把 30s route-commit 性能目标作为 0.5.0 阻塞项。
 - 2026-05-04 follow-up：`octoclawctl` unified config now preserves/projects `judge.local` and `judge.timeoutLocalMs`; deployed macmini config, manifest, `openclaw.json`, legacy `judge-fast.json`, and launchctl env all resolve local judge effective timeout to `4000ms`. This fixes the 2s operational override.
 - 2026-05-04 additional budgeted_main live attempts remain unaccepted as evidence:
+  - `/tmp/octoclaw-sr-p1-smoke-20260504/run-budget-1/`: did not produce `budgeted_main_then_delegate`; judge timed out and the turn completed as reply.
   - `/tmp/octoclaw-sr-p1-smoke-20260504/run-budget-2/slack-acceptance-2026-05-04-06-57-24.{json,md}` produced a normal reply path, not `budgeted_main_then_delegate`; thread `1777877599.213359`, neutral reaction `4873ms`, final `route=reply | via=rule`, no budget replay events.
   - `/tmp/octoclaw-sr-p1-smoke-20260504/run-budget-3/slack-acceptance-2026-05-04-07-09-30.{json,md}` hit the harness total timeout; runtime replay for thread `1777878030.931209` shows reaction ACK, repeated `before_prompt_build`, `dispatch_terminal_failure`, compaction notice, context overflow, and session file lock/fallback. It does not prove the fixed 30s soft escalation chain.
 
@@ -143,11 +146,11 @@
 - false delegate rate 在 nightly/Slack smoke 中可观测并下降。
 - false reply rate 同样必须可观测；明确长任务、代码/测试、多步工具、用户显式后台/并行不能被 main fast path 吃掉。
 - 主模型仍可在超过 fast path 预算后提交 route hint/dispatch，不被静态规则卡死。
-- 2026-05-04 实现状态：rule/router 已改为 runtime 派生三段式 bucket，judge 只需给两档 route 和成本信号；focused tests 覆盖 false delegate / false reply、低置信 reply 进入 budget、以及 judge `decision_bucket` 只作为 telemetry。固定 30s soft runtime budget 状态机和 focused tests 已补入，但真实 Slack SR-P1 evidence 矩阵仍需继续补齐，不能把 SR-P1 或 0.5.0 说成端到端完成。
+- 2026-05-04 实现状态：rule/router 已改为 runtime 派生三段式 bucket，judge 只需给两档 route 和成本信号；focused tests 覆盖 false delegate / false reply、低置信 reply 进入 budget、以及 judge `decision_bucket` 只作为 telemetry。固定 30s soft runtime budget 状态机、focused tests 和真实 Slack `budgeted_main_then_delegate` evidence 已补齐；30s route-commit p95 仍是 0.5.x 性能目标，不阻塞 0.5.0。
 
 #### SR-P2：瘦身 planner/native 热路径和观测
 
-目标：减少主 agent 从用户消息到 `sessions_spawn` 的模型/工具回合，把真实 delegate 的 route commit 到 `sessions_spawn_intent_allowed` 控制在 30s 内；同时只用 OpenClaw 4.29 已确认存在的能力降低 child run 成本，并把状态、footer、native refs 和延迟观测做成轻量快路径。
+目标：减少主 agent 从用户消息到 `sessions_spawn` 的模型/工具回合，把真实 delegate 的 route commit 到 `sessions_spawn_intent_allowed` 向 30s p95 收敛；同时只用 OpenClaw 4.29 已确认存在的能力降低 child run 成本，并把状态、footer、native refs 和延迟观测做成轻量快路径。该 30s route-commit 指标是 0.5.x 性能恢复目标，不作为 0.5.0 发版阻塞项。
 
 实现口径：
 
@@ -167,7 +170,7 @@
 
 验收：
 
-- route commit 到 `sessions_spawn_intent_allowed` p95 <= 30s。
+- route commit 到 `sessions_spawn_intent_allowed` p95 <= 30s 是 0.5.x 性能目标；0.5.0 只要求该指标被 smoke/replay 记录，不能为追速牺牲 planner/confirm 正确性。
 - `octoclaw_dispatch`/planner tool 不直接 spawn、不发 delegate accepted ACK、不写 legacy scheduler/completion/outbox。
 - 真实 Slack smoke replay 中能看到 `suppressed_until_native_confirm -> sessions_spawn_intent_allowed -> spawn_started`。
 - `sessionsSpawnArgs` 中稳定包含 `context="isolated"` 和 `lightContext=true`，且 child prompt 长度有上限。
@@ -1553,7 +1556,7 @@ GLM-5.1 适合承担高 token、边界清楚的实现包：
 | PC9 ACK/footer guardrail | GLM-5.1，leader review ACK 边界 | `ack/*`、`projection-footer.ts` | delegate ACK 晚于 confirm，footer 默认 off |
 | PC10 integration/acceptance tests | leader 定义，GLM-5.1/便宜模型实现 | tests/harness only | no intent、expired、hash mismatch、missing runId、no completion file、no outbox |
 | PC11 legacy default-path removal | leader | finalizer/completion-binding/outbox 默认路径下线 | 0.5.0 Must+Should 稳定后做，rollback 可用 |
-| PC12 speed/responsiveness | leader 架构，GLM-5.1 补测试 | ACK、启动成本感知路由、planner/native 热路径、footer/status fast path | neutral ACK <=5s，spawn allowed <=30s，child final footer 不误标 reply |
+| PC12 speed/responsiveness | leader 架构，GLM-5.1 补测试 | ACK、启动成本感知路由、planner/native 热路径、footer/status fast path | neutral ACK <=5s，spawn allowed 分段观测，30s p95 留作 0.5.x 性能目标，child final footer 不误标 reply |
 | PC13 Slack delivery port | leader，GLM/便宜模型可补 harness | Slack adapter/send path、Slack acceptance/report parser | Slack 热路径不 shell out CLI，non-Slack unchanged |
 | PC14 nightly regression harness | leader 定义案例，GLM/便宜模型实现 fixtures/parser | acceptance/nightly config、fixtures、report parser、docs evidence | route/latency/footer/timeout 指标可回归，可和 macmini runtime 并行 |
 

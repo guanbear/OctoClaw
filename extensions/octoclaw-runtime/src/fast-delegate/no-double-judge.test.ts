@@ -117,10 +117,11 @@ describe("before-dispatch fast delegate no-double-judge proof", () => {
 
   it("caches timeout/degraded pass-through for the same turn instead of retrying judge", async () => {
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockRejectedValueOnce(new DOMException("timeout", "AbortError"));
+    const timeoutPrompt = "简单解释一下 OpenClaw native planner handshake 是什么。";
 
-    const beforeDispatch = await resolvePolicyDecisionForContext(prompt, ctx, process.cwd());
-    const beforeModelResolve = await resolvePolicyDecisionForContext({ prompt }, ctx, process.cwd());
-    const beforePromptBuild = await resolvePolicyDecisionForContext({ raw: prompt }, ctx, process.cwd());
+    const beforeDispatch = await resolvePolicyDecisionForContext(timeoutPrompt, ctx, process.cwd());
+    const beforeModelResolve = await resolvePolicyDecisionForContext({ prompt: timeoutPrompt }, ctx, process.cwd());
+    const beforePromptBuild = await resolvePolicyDecisionForContext({ raw: timeoutPrompt }, ctx, process.cwd());
 
     expect(fetchSpy).toHaveBeenCalledTimes(1);
     expect(beforeDispatch?.decision.route_decision).toMatchObject({

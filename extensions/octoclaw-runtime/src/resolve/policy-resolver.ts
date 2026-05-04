@@ -770,6 +770,7 @@ function attachWorkContractToPolicyDecision(input: {
   );
   policyState.update(input.stateKey, (entry) => ({
     ...entry,
+    decision: input.decision,
     workContractId: contract.workContractId,
     latestStatus: contract.status,
     latestExecutionReceipt: receipt,
@@ -2355,6 +2356,20 @@ export async function resolvePolicyDecisionForContext(
 
   if (existing?.decision && promptsEquivalent(asString(existing.prompt), prompt)) {
     const cached = { ...asRecord(existing.decision) };
+    const cachedWorkContractId = asString(
+      cached.workContractId
+        || asRecord(cached.work_contract).workContractId
+        || asRecord(cached.work_contract).work_contract_id
+        || existing.workContractId,
+    );
+    if (cachedWorkContractId) {
+      cached.workContractId = cachedWorkContractId;
+      cached.work_contract = {
+        ...asRecord(cached.work_contract),
+        workContractId: cachedWorkContractId,
+        work_contract_id: cachedWorkContractId,
+      };
+    }
     const routeSeal = stampRouteSealForPolicyState({
       prompt,
       stateKey,
