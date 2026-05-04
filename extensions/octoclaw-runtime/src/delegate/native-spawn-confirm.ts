@@ -1,5 +1,5 @@
 import { emitExecutionTransitionNotification } from "../ack/execution-transition-notifier.js";
-import { saveWorkContract, updateWorkContract } from "../work-contract/store.js";
+import { updateWorkContract } from "../work-contract/store.js";
 import type { NativeBindingRef, WorkContract } from "@octoclaw/contracts/work-contract";
 import { nativeSpawnIntentStore } from "./native-spawn-intent-store.js";
 import type { NativeSpawnIntent } from "./native-spawn-intent.js";
@@ -201,6 +201,121 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error ?? "unknown_error");
 }
 
+function errorCode(error: unknown): string {
+  const record = error && typeof error === "object" && !Array.isArray(error)
+    ? error as Record<string, unknown>
+    : {};
+  return asString(record.code || record.name).toUpperCase();
+}
+
+function nativeIntentStoreError(error: unknown): string {
+  const code = errorCode(error);
+  const message = errorMessage(error).toLowerCase();
+  if (
+    code === "SQLITE_BUSY"
+    || code === "SQLITE_LOCKED"
+    || message.includes("sqlite_busy")
+    || message.includes("sqlite_locked")
+    || message.includes("database is locked")
+    || message.includes("database is busy")
+  ) {
+    return "sqlite_busy";
+  }
+  if (code === "SQLITE_UNAVAILABLE" || message.includes("sqlite_unavailable") || message.includes("sqlite unavailable")) {
+    return "sqlite_unavailable";
+  }
+  return `native_spawn_intent_store_error:${errorMessage(error)}`;
+}
+
+function contractStillHasNativeRefs(input: {
+  contract: WorkContract;
+  intent: NativeSpawnIntent;
+  runId: string;
+  childRunId: string;
+  childSessionKey: string;
+}): boolean {
+  const refs = input.contract.nativeSpawnRefs;
+  const binding = input.contract.delegate?.nativeBinding;
+  const telemetry = input.contract.telemetry;
+  if (refs?.spawnIntentId !== input.intent.spawnIntentId) return false;
+  if (refs.openclawRunId !== input.runId) return false;
+  if (input.childSessionKey && refs.childSessionKey !== input.childSessionKey) return false;
+  if (binding?.runId && binding.runId !== input.runId) return false;
+  if (binding?.childRunId && binding.childRunId !== input.childRunId) return false;
+  if (input.childSessionKey && binding?.childSessionKey && binding.childSessionKey !== input.childSessionKey) return false;
+  if (telemetry.childRunId && telemetry.childRunId !== input.childRunId) return false;
+  if (input.childSessionKey && telemetry.childSessionKey && telemetry.childSessionKey !== input.childSessionKey) return false;
+  return true;
+}
+
+function assignOptionalString<T extends Record<string, unknown>>(target: T, key: keyof T, value: string | undefined): void {
+  if (value === undefined) delete target[key];
+  else target[key] = value as T[keyof T];
+}
+
+function restoreNativeRefFields(current: WorkContract, previous: WorkContract): WorkContract {
+  const delegate = current.delegate
+    ? {
+        ...current.delegate,
+        nativeBinding: previous.delegate?.nativeBinding ?? null,
+      }
+    : current.delegate;
+  const continuity = { ...current.continuity };
+  assignOptionalString(continuity as unknown as Record<string, unknown>, "delegateTaskId", previous.continuity.delegateTaskId);
+  assignOptionalString(continuity as unknown as Record<string, unknown>, "preferredChildSessionKey", previous.continuity.preferredChildSessionKey);
+  assignOptionalString(continuity as unknown as Record<string, unknown>, "preferredRunId", previous.continuity.preferredRunId);
+
+  const telemetry = { ...current.telemetry };
+  for (const key of ["dispatchExecuted", "spawnExecuted", "childSessionKey", "childRunId"] as const) {
+    if (previous.telemetry[key] === undefined) delete telemetry[key];
+    else telemetry[key] = previous.telemetry[key] as never;
+  }
+
+  const visibleIds = { ...current.mainContext.visibleIds };
+  for (const key of ["delegateTaskId", "attemptId", "childSessionKey", "openclawRunId", "spawnIntentId", "spawnBackend", "spawnMode"] as const) {
+    if (previous.mainContext.visibleIds[key] === undefined) delete visibleIds[key];
+    else visibleIds[key] = previous.mainContext.visibleIds[key] as never;
+  }
+
+  const restored: WorkContract = {
+    ...current,
+    delegate,
+    continuity,
+    telemetry,
+    mainContext: {
+      ...current.mainContext,
+      visibleIds,
+      nextAction: previous.mainContext.nextAction,
+    },
+    updatedAt: current.updatedAt,
+  };
+  if (previous.nativeSpawnRefs === undefined) delete restored.nativeSpawnRefs;
+  else restored.nativeSpawnRefs = previous.nativeSpawnRefs;
+  return restored;
+}
+
+function rollbackNativeRefsIfStillCurrent(input: {
+  previous: WorkContract;
+  intent: NativeSpawnIntent;
+  runId: string;
+  childRunId: string;
+  childSessionKey: string;
+}): "rolled_back" | "skipped" | "failed" {
+  let shouldRollback = false;
+  const updated = updateWorkContract(input.intent.workContractId, (current) => {
+    shouldRollback = contractStillHasNativeRefs({
+      contract: current,
+      intent: input.intent,
+      runId: input.runId,
+      childRunId: input.childRunId,
+      childSessionKey: input.childSessionKey,
+    });
+    return shouldRollback ? restoreNativeRefFields(current, input.previous) : current;
+  });
+  if (!updated) return "failed";
+  return shouldRollback ? "rolled_back" : "skipped";
+}
+
 async function maybeSendAcceptedAck(input: {
   confirmInput: ConfirmNativeSpawnInput;
   intent: NativeSpawnIntent;
@@ -297,7 +412,19 @@ export async function confirmNativeSpawn(input: ConfirmNativeSpawnInput): Promis
   }
 
   const sessionKey = asString(input.sessionKey);
-  const existingIntent = nativeSpawnIntentStore.get(spawnIntentId);
+  let existingIntent: NativeSpawnIntent | null;
+  try {
+    existingIntent = nativeSpawnIntentStore.get(spawnIntentId);
+  } catch (error) {
+    return {
+      ok: false,
+      status: "error",
+      error: nativeIntentStoreError(error),
+      spawnIntentId,
+      workContractId,
+      runId,
+    };
+  }
   if (!existingIntent) {
     return {
       ok: false,
@@ -355,7 +482,11 @@ export async function confirmNativeSpawn(input: ConfirmNativeSpawnInput): Promis
     };
   }
   if (existingIntent.status === "spawn_call_started" && parseTime(existingIntent.expiresAt) <= now.getTime()) {
-    nativeSpawnIntentStore.expire(spawnIntentId, { now });
+    try {
+      nativeSpawnIntentStore.expire(spawnIntentId, { now });
+    } catch (error) {
+      return { ok: false, status: "error", error: nativeIntentStoreError(error), spawnIntentId, workContractId, runId };
+    }
     return { ok: false, status: "error", error: "intent_expired", spawnIntentId, workContractId, runId };
   }
 
@@ -385,11 +516,17 @@ export async function confirmNativeSpawn(input: ConfirmNativeSpawnInput): Promis
     now,
   });
   if (!confirm.ok) {
-    const restored = saveWorkContract(refsRecorded.previous);
+    const rollback = rollbackNativeRefsIfStillCurrent({
+      previous: refsRecorded.previous,
+      intent: existingIntent,
+      runId,
+      childRunId,
+      childSessionKey,
+    });
     return {
       ok: false,
       status: confirm.status === "conflict" ? "conflict" : "error",
-      error: restored
+      error: rollback !== "failed"
         ? confirm.error || "confirm_failed"
         : `${confirm.error || "confirm_failed"};native_refs_rollback_failed`,
       spawnIntentId,

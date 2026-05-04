@@ -66,8 +66,8 @@
           "timeoutMs": {
             "type": "number",
             "minimum": 500,
-            "default": 1200,
-            "description": "Judge call timeout in ms. 800ms recommended for local Ollama."
+            "default": 3000,
+            "description": "Judge call timeout in ms. Use timeoutLocalMs for local Ollama."
           },
           "minConfidence": {
             "type": "number",
@@ -84,7 +84,7 @@
           "timeoutLocalMs": {
             "type": "number",
             "minimum": 300,
-            "default": 800,
+            "default": 3000,
             "description": "Timeout for local Ollama judge calls (ms). Falls back to timeoutMs if not set."
           },
           "local": {

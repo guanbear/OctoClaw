@@ -359,6 +359,66 @@ describe("octoclaw_dispatch planner backend", () => {
     ]));
   });
 
+  it("returns fail-closed JSON and replay when confirm intent store read is unavailable", async () => {
+    const contract = seedWorkContract();
+    const sessionsSpawnArgs = {
+      task: "Confirm should fail closed when SQLite read is unavailable.",
+      runtime: "subagent" as const,
+      mode: "run" as const,
+      cleanup: "keep" as const,
+      sandbox: "inherit" as const,
+      context: "isolated" as const,
+      lightContext: true,
+    };
+    const intent = nativeSpawnIntentStore.create({
+      workContractId: contract.workContractId,
+      sessionKey: contract.sessionKey,
+      sessionsSpawnArgs,
+      ttlMs: 60_000,
+    });
+    const started = nativeSpawnIntentStore.transitionToSpawnCallStarted({
+      spawnIntentId: intent.spawnIntentId,
+      sessionKey: contract.sessionKey,
+      sessionsSpawnArgs,
+    });
+    expect(started.ok).toBe(true);
+    const storeError = new Error("sqlite unavailable");
+    (storeError as Error & { code?: string }).code = "SQLITE_UNAVAILABLE";
+    vi.spyOn(nativeSpawnIntentStore, "get").mockImplementationOnce(() => {
+      throw storeError;
+    });
+
+    const response = await confirmTool().execute({
+      spawnIntentId: intent.spawnIntentId,
+      workContractId: contract.workContractId,
+      sessionsSpawnStatus: "accepted",
+      runId: "run-store-unavailable",
+      childSessionKey: "agent:main:subagent:store-unavailable",
+    }, {
+      sessionKey: contract.sessionKey,
+      sessionId: "session-planner-confirm-store-unavailable",
+      cwd: tempWorkspace,
+    });
+
+    const body = JSON.parse(String(response.text));
+    expect(body.ok).toBe(false);
+    expect(body.status).toBe("error");
+    expect(body.error).toBe("sqlite_unavailable");
+    expect(readReplayEvents()).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        event: "dispatch_confirm_completed",
+        sessionKey: contract.sessionKey,
+        sessionId: "session-planner-confirm-store-unavailable",
+        spawn_intent_id: intent.spawnIntentId,
+        work_contract_id: contract.workContractId,
+        ok: false,
+        confirm_status: "error",
+        error: "sqlite_unavailable",
+        run_id: "run-store-unavailable",
+      }),
+    ]));
+  });
+
   it("rejects planner dispatch when admission dry-run does not issue a new-work ticket", async () => {
     process.env.OCTOCLAW_SPAWN_BACKEND = "planner";
     process.env.OCTOCLAW_RUNTIME_LEDGER = "enforce";

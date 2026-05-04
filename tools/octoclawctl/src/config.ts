@@ -18,9 +18,11 @@ export interface OctoclawConfig {
     baseUrl: string;
     apiKey: string;
     timeoutMs: number;
+    timeoutLocalMs: number;
     minConfidence: number;
     shadowMode: boolean;
     judgeAckEnabled: boolean;
+    local: boolean;
   };
   models: {
     mode: "auto" | "custom";
@@ -37,7 +39,7 @@ export function defaultConfig(): OctoclawConfig {
     _updatedAt: new Date(0).toISOString(),
     enabled: true,
     features: { delegation: true, imNotifications: true, statusPanel: true },
-    judge: { enabled: false, modelId: "", baseUrl: "", apiKey: "", timeoutMs: 1200, minConfidence: 0.6, shadowMode: false, judgeAckEnabled: true },
+    judge: { enabled: false, modelId: "", baseUrl: "", apiKey: "", timeoutMs: 3000, timeoutLocalMs: 3000, minConfidence: 0.6, shadowMode: false, judgeAckEnabled: true, local: false },
     models: { mode: "auto", overrides: {} },
     pluginConfig: { enabled: true, delegationEnabled: true },
   };
@@ -111,30 +113,16 @@ export async function syncToOpenClawPluginConfig(openclawHome: string, config: O
         config.judge.baseUrl = baseUrl;
         if (apiKey) config.judge.apiKey = apiKey;
         if (timeoutMs !== null) config.judge.timeoutMs = timeoutMs;
-        if (timeoutLocalMs !== null) (config as unknown as JsonRecord)._legacyTimeoutLocalMs = timeoutLocalMs;
+        if (timeoutLocalMs !== null) config.judge.timeoutLocalMs = timeoutLocalMs;
         if (minConfidence !== null) config.judge.minConfidence = minConfidence;
         if (shadowMode !== null) config.judge.shadowMode = shadowMode;
         if (judgeAckEnabled !== null) config.judge.judgeAckEnabled = judgeAckEnabled;
-        if (local !== null) (config as unknown as JsonRecord)._legacyLocal = local;
+        if (local !== null) config.judge.local = local;
       }
     }
   }
 
   config.pluginConfig = buildPluginConfig(config);
-
-  // Merge legacy fields (timeoutLocalMs, local) that aren't in OctoclawConfig.judge
-  const legacyTimeoutLocalMs = (config as unknown as JsonRecord)._legacyTimeoutLocalMs;
-  const legacyLocal = (config as unknown as JsonRecord)._legacyLocal;
-  if (isRecord(config.pluginConfig.judgeFast)) {
-    if (typeof legacyTimeoutLocalMs === "number") {
-      (config.pluginConfig.judgeFast as JsonRecord).timeoutLocalMs = legacyTimeoutLocalMs;
-    }
-    if (typeof legacyLocal === "boolean") {
-      (config.pluginConfig.judgeFast as JsonRecord).local = legacyLocal;
-    }
-  }
-  delete (config as unknown as JsonRecord)._legacyTimeoutLocalMs;
-  delete (config as unknown as JsonRecord)._legacyLocal;
 
   const manifestPath = path.join(openclawHome, "extensions", "octoclaw-runtime", "openclaw.plugin.json");
   if (fsSync.existsSync(manifestPath)) {
@@ -180,8 +168,10 @@ function buildPluginConfig(config: OctoclawConfig): JsonRecord {
     baseUrl,
     ...(config.judge.apiKey.trim() ? { apiKey: config.judge.apiKey.trim() } : {}),
     timeoutMs: config.judge.timeoutMs,
+    timeoutLocalMs: config.judge.timeoutLocalMs,
     minConfidence: config.judge.minConfidence,
     judgeAckEnabled: config.judge.judgeAckEnabled,
+    local: config.judge.local,
   };
   return pluginConfig;
 }
@@ -229,9 +219,11 @@ function normalizeConfig(raw: JsonRecord): OctoclawConfig {
       baseUrl: typeof judge.baseUrl === "string" ? judge.baseUrl : fallback.judge.baseUrl,
       apiKey: typeof judge.apiKey === "string" ? judge.apiKey : fallback.judge.apiKey,
       timeoutMs: typeof judge.timeoutMs === "number" ? judge.timeoutMs : fallback.judge.timeoutMs,
+      timeoutLocalMs: typeof judge.timeoutLocalMs === "number" ? judge.timeoutLocalMs : fallback.judge.timeoutLocalMs,
       minConfidence: typeof judge.minConfidence === "number" ? judge.minConfidence : fallback.judge.minConfidence,
       shadowMode: typeof judge.shadowMode === "boolean" ? judge.shadowMode : fallback.judge.shadowMode,
       judgeAckEnabled: typeof judge.judgeAckEnabled === "boolean" ? judge.judgeAckEnabled : fallback.judge.judgeAckEnabled,
+      local: typeof judge.local === "boolean" ? judge.local : fallback.judge.local,
     },
     models: {
       mode: models.mode === "custom" ? "custom" : "auto",

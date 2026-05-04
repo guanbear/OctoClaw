@@ -250,6 +250,12 @@ describe("octoclawctl cli", () => {
       const enabledCapture = createIo();
       const enabledExitCode = await main(["config", "set", "judge.enabled", "true"], { OCTOCLAW_HOME: openclawHome }, enabledCapture.io);
       expect(enabledExitCode).toBe(0);
+      const localCapture = createIo();
+      const localExitCode = await main(["config", "set", "judge.local", "true"], { OCTOCLAW_HOME: openclawHome }, localCapture.io);
+      expect(localExitCode).toBe(0);
+      const timeoutLocalCapture = createIo();
+      const timeoutLocalExitCode = await main(["config", "set", "judge.timeoutLocalMs", "3000"], { OCTOCLAW_HOME: openclawHome }, timeoutLocalCapture.io);
+      expect(timeoutLocalExitCode).toBe(0);
       await fs.writeFile(path.join(openclawHome, "openclaw.json"), JSON.stringify({
         channels: { slack: { botToken: "xoxb-test", streaming: { mode: "partial", nativeTransport: true }, nativeStreaming: true } },
       }), "utf8");
@@ -273,12 +279,18 @@ describe("octoclawctl cli", () => {
       expect(deployedManifest.pluginConfig.judgeFast.modelId).toBe("deploy-model");
       const unifiedConfig = JSON.parse(await fs.readFile(path.join(tmpDir, ".octoclaw", "config.json"), "utf8"));
       expect(unifiedConfig.judge.modelId).toBe("deploy-model");
+      expect(unifiedConfig.judge.local).toBe(true);
+      expect(unifiedConfig.judge.timeoutLocalMs).toBe(3000);
       expect(unifiedConfig.pluginConfig.judgeFast.modelId).toBe("deploy-model");
       expect(unifiedConfig.pluginConfig.judgeFast.baseUrl).toBe("http://localhost:11434/v1");
+      expect(unifiedConfig.pluginConfig.judgeFast.local).toBe(true);
+      expect(unifiedConfig.pluginConfig.judgeFast.timeoutLocalMs).toBe(3000);
       const openclawConfig = JSON.parse(await fs.readFile(path.join(openclawHome, "openclaw.json"), "utf8"));
       expect(openclawConfig.plugins.entries["octoclaw-runtime"].config.enabled).toBe(true);
       expect(openclawConfig.plugins.entries["octoclaw-runtime"].config.judgeFast.modelId).toBe("deploy-model");
       expect(openclawConfig.plugins.entries["octoclaw-runtime"].config.judgeFast.baseUrl).toBe("http://localhost:11434/v1");
+      expect(openclawConfig.plugins.entries["octoclaw-runtime"].config.judgeFast.local).toBe(true);
+      expect(openclawConfig.plugins.entries["octoclaw-runtime"].config.judgeFast.timeoutLocalMs).toBe(3000);
       expect(openclawConfig.plugins.entries["octoclaw-runtime"].config.octoclawRoot).toBe(repoRoot);
       expect(openclawConfig.plugins.entries["octoclaw-runtime"].config.workspaceRoot).toBe(path.join(openclawHome, "workspace"));
       expect(openclawConfig.plugins.entries["octoclaw-runtime"].hooks.allowPromptInjection).toBe(true);

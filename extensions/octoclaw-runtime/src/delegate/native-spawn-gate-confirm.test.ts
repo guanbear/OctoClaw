@@ -9,7 +9,7 @@ import { buildExecutionCoverageLayer } from "../resolve/execution-coverage-prech
 import { buildMemoryCoverageLayer } from "../resolve/memory-coverage-precheck.js";
 import { envOverrides } from "../resolve/env.js";
 import { buildWorkContractFromPolicy, buildWorkDecisionSeal } from "../work-contract/builders.js";
-import { loadWorkContract, saveWorkContract } from "../work-contract/store.js";
+import { loadWorkContract, saveWorkContract, updateWorkContract } from "../work-contract/store.js";
 import { confirmNativeSpawn } from "./native-spawn-confirm.js";
 import { evaluateNativeSpawnGate } from "./native-spawn-gate.js";
 import { nativeSpawnIntentStore } from "./native-spawn-intent-store.js";
@@ -340,6 +340,38 @@ describe("confirmNativeSpawn", () => {
     expect(nativeSpawnIntentStore.get(intent.spawnIntentId)?.ackSentAt ?? null).toBeNull();
   });
 
+  it("fails closed when the intent store is unavailable during accepted confirm", async () => {
+    const contract = seedContract("session-confirm-store-unavailable");
+    const intent = nativeSpawnIntentStore.create({
+      workContractId: contract.workContractId,
+      sessionKey: contract.sessionKey,
+      sessionsSpawnArgs: args,
+      ttlMs: 60_000,
+    });
+    expect(evaluateNativeSpawnGate({ sessionKeys: [contract.sessionKey], args }).allowed).toBe(true);
+    const storeError = new Error("database is locked");
+    (storeError as Error & { code?: string }).code = "SQLITE_BUSY";
+    vi.spyOn(nativeSpawnIntentStore, "get").mockImplementationOnce(() => {
+      throw storeError;
+    });
+
+    const result = await confirmNativeSpawn({
+      spawnIntentId: intent.spawnIntentId,
+      workContractId: contract.workContractId,
+      sessionKey: contract.sessionKey,
+      sessionsSpawnStatus: "accepted",
+      runId: "run-store-busy",
+      childSessionKey: "child-store-busy",
+      notify: false,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.status).toBe("error");
+    expect(result.error).toBe("sqlite_busy");
+    expect(loadWorkContract(contract.workContractId)?.nativeSpawnRefs?.openclawRunId ?? null).toBeNull();
+    expect(nativeSpawnIntentStore.get(intent.spawnIntentId)?.status).toBe("spawn_call_started");
+  });
+
   it("rolls back WorkContract native refs when accepted intent transition fails after refs write", async () => {
     const contract = seedContract("session-confirm-transition-fails");
     const intent = nativeSpawnIntentStore.create({
@@ -351,11 +383,20 @@ describe("confirmNativeSpawn", () => {
     expect(evaluateNativeSpawnGate({ sessionKeys: [contract.sessionKey], args }).allowed).toBe(true);
     const startedIntent = nativeSpawnIntentStore.get(intent.spawnIntentId);
     expect(startedIntent?.status).toBe("spawn_call_started");
-    vi.spyOn(nativeSpawnIntentStore, "confirmAccepted").mockReturnValueOnce({
-      ok: false,
-      status: "error",
-      intent: startedIntent ? { ...startedIntent, status: "expired" as const } : undefined,
-      error: "intent_expired",
+    vi.spyOn(nativeSpawnIntentStore, "confirmAccepted").mockImplementationOnce(() => {
+      updateWorkContract(contract.workContractId, (current) => ({
+        ...current,
+        mainContext: {
+          ...current.mainContext,
+          statusLine: "concurrent status update survives rollback",
+        },
+      }));
+      return {
+        ok: false,
+        status: "error",
+        intent: startedIntent ? { ...startedIntent, status: "expired" as const } : undefined,
+        error: "intent_expired",
+      };
     });
 
     const result = await confirmNativeSpawn({
@@ -374,8 +415,101 @@ describe("confirmNativeSpawn", () => {
     expect(restored?.delegate?.nativeBinding ?? null).toBeNull();
     expect(restored?.telemetry.dispatchExecuted ?? false).toBe(false);
     expect(restored?.telemetry.spawnExecuted ?? false).toBe(false);
+    expect(restored?.mainContext.statusLine).toBe("concurrent status update survives rollback");
     expect(nativeSpawnIntentStore.get(intent.spawnIntentId)?.status).toBe("spawn_call_started");
     expect(nativeSpawnIntentStore.get(intent.spawnIntentId)?.ackSentAt ?? null).toBeNull();
+  });
+
+  it("does not rollback over native refs written by a successful racing confirm", async () => {
+    const contract = seedContract("session-confirm-race-rollback");
+    const intent = nativeSpawnIntentStore.create({
+      workContractId: contract.workContractId,
+      sessionKey: contract.sessionKey,
+      sessionsSpawnArgs: args,
+      ttlMs: 60_000,
+    });
+    expect(evaluateNativeSpawnGate({ sessionKeys: [contract.sessionKey], args }).allowed).toBe(true);
+    const startedIntent = nativeSpawnIntentStore.get(intent.spawnIntentId);
+    expect(startedIntent?.status).toBe("spawn_call_started");
+    vi.spyOn(nativeSpawnIntentStore, "confirmAccepted").mockImplementationOnce(() => {
+      updateWorkContract(contract.workContractId, (current) => {
+        const nativeBinding = {
+          ...(current.delegate?.nativeBinding ?? {}),
+          flowId: "sessions_spawn:run-success-race",
+          ownerKey: intent.delegateTaskId || contract.workContractId,
+          controllerId: "octoclaw.delegate",
+          revision: 1,
+          expectedRevision: 1,
+          runId: "run-success-race",
+          childRunId: "run-success-race",
+          childSessionKey: "child-success-race",
+          syncMode: "managed" as const,
+          status: "running" as const,
+          lastMutation: "runTask" as const,
+          lastMutationApplied: true,
+        };
+        return {
+          ...current,
+          delegate: current.delegate ? { ...current.delegate, nativeBinding } : current.delegate,
+          nativeSpawnRefs: {
+            ...current.nativeSpawnRefs,
+            openclawRunId: "run-success-race",
+            childSessionKey: "child-success-race",
+            requesterSessionKey: current.sessionKey,
+            spawnIntentId: intent.spawnIntentId,
+            spawnBackend: "sessions_spawn_planner",
+            spawnMode: "run",
+          },
+          continuity: {
+            ...current.continuity,
+            preferredChildSessionKey: "child-success-race",
+            preferredRunId: "run-success-race",
+          },
+          telemetry: {
+            ...current.telemetry,
+            dispatchExecuted: true,
+            spawnExecuted: true,
+            childSessionKey: "child-success-race",
+            childRunId: "run-success-race",
+          },
+          mainContext: {
+            ...current.mainContext,
+            visibleIds: {
+              ...current.mainContext.visibleIds,
+              childSessionKey: "child-success-race",
+              openclawRunId: "run-success-race",
+              spawnIntentId: intent.spawnIntentId,
+            },
+          },
+        };
+      });
+      return {
+        ok: false,
+        status: "conflict",
+        intent: startedIntent ? { ...startedIntent, status: "accepted" as const, runId: "run-success-race" } : undefined,
+        error: "run_id_conflict",
+        existingRunId: "run-success-race",
+      };
+    });
+
+    const result = await confirmNativeSpawn({
+      spawnIntentId: intent.spawnIntentId,
+      workContractId: contract.workContractId,
+      sessionKey: contract.sessionKey,
+      sessionsSpawnStatus: "accepted",
+      runId: "run-loser-race",
+      childSessionKey: "child-loser-race",
+      notify: false,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.status).toBe("conflict");
+    expect(result.error).toBe("run_id_conflict");
+    const updated = loadWorkContract(contract.workContractId);
+    expect(updated?.nativeSpawnRefs?.openclawRunId).toBe("run-success-race");
+    expect(updated?.nativeSpawnRefs?.childSessionKey).toBe("child-success-race");
+    expect(updated?.delegate?.nativeBinding?.runId).toBe("run-success-race");
+    expect(updated?.telemetry.spawnExecuted).toBe(true);
   });
 
   it("treats same-run confirm as idempotent and different-run confirm as conflict", async () => {
