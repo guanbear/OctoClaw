@@ -2072,6 +2072,14 @@ function budgetedMainVisibleStartAt(state: UnknownRecord, now: number): number {
   return Number.isFinite(candidate) && candidate > 0 ? candidate : now;
 }
 
+function budgetedMainContractSessionKey(stateKey: string, ctx: UnknownRecord, state: UnknownRecord): string {
+  return stringValue(state.canonicalSessionKey || state.canonical_session_key)
+    || stringValue(state.ackGuardKey || state.ack_guard_key)
+    || stringValue(ctx.sessionKey || ctx.session_key)
+    || stringValue(ctx.canonicalSessionKey || ctx.canonical_session_key)
+    || stringValue(stateKey);
+}
+
 function budgetedMainIntentClass(decision: UnknownRecord): IntentClass {
   const routeDecision = asRecord(decision.route_decision);
   const request = asRecord(decision.request);
@@ -2141,19 +2149,22 @@ function budgetedMainCoverageSnapshot(stateKey: string): ContextCoverageSnapshot
 
 function attachBudgetedMainDelegateWorkContract(input: {
   stateKey: string;
+  ctx: UnknownRecord;
   state: UnknownRecord;
   decision: UnknownRecord;
   reason: string;
   now: number;
-}): { decision: UnknownRecord; workContractId: string } {
+}): { decision: UnknownRecord; workContractId: string; contractSessionKey: string } {
   const existingContract = asRecord(input.decision.work_contract);
   if (stringValue(existingContract.route) === "delegate") {
     const existingId = stringValue(existingContract.workContractId || existingContract.work_contract_id || input.decision.workContractId || input.decision.work_contract_id);
-    if (existingId && loadWorkContract(existingId)?.route === "delegate") {
-      return { decision: input.decision, workContractId: existingId };
+    const existing = existingId ? loadWorkContract(existingId) : null;
+    if (existing?.route === "delegate") {
+      return { decision: input.decision, workContractId: existingId, contractSessionKey: existing.sessionKey };
     }
   }
 
+  const contractSessionKey = budgetedMainContractSessionKey(input.stateKey, input.ctx, input.state);
   const routeDecision = asRecord(input.decision.route_decision);
   const expectedDeliverable = stringValue(
     input.decision.expected_deliverable
@@ -2171,7 +2182,7 @@ function attachBudgetedMainDelegateWorkContract(input: {
     "budgeted_main_escalated",
     `budgeted_main_escalation:${input.reason}`,
   ]));
-  const coverage = budgetedMainCoverageSnapshot(input.stateKey);
+  const coverage = budgetedMainCoverageSnapshot(contractSessionKey);
   const decisionSeal = buildWorkDecisionSeal(
     budgetedMainDecisionSource(input.decision),
     "delegate",
@@ -2182,7 +2193,7 @@ function attachBudgetedMainDelegateWorkContract(input: {
     },
   );
   const delegateTaskId = stableId("delegate-task", [
-    input.stateKey,
+    contractSessionKey,
     userAsk,
     input.reason,
     String(input.now),
@@ -2197,7 +2208,7 @@ function attachBudgetedMainDelegateWorkContract(input: {
       read: ["workspace"],
       write: ["workspace"],
       workspaceMode: "write_allowed",
-      scopeFingerprint: stableId("scope", [input.stateKey, userAsk, input.reason]),
+      scopeFingerprint: stableId("scope", [contractSessionKey, userAsk, input.reason]),
     },
     modelProfile: stringValue(routeDecision.worker_pool || routeDecision.model || asRecord(input.decision.request).model) || "default",
     nativeBinding: null,
@@ -2206,7 +2217,7 @@ function attachBudgetedMainDelegateWorkContract(input: {
     nextAction: "dispatch",
   };
   const contract = buildWorkContractFromPolicy(
-    input.stateKey,
+    contractSessionKey,
     userAsk,
     budgetedMainIntentClass(input.decision),
     coverage,
@@ -2214,7 +2225,7 @@ function attachBudgetedMainDelegateWorkContract(input: {
     { delegate },
   );
   if (!saveWorkContract(contract)) {
-    return { decision: input.decision, workContractId: "" };
+    return { decision: input.decision, workContractId: "", contractSessionKey };
   }
 
   return {
@@ -2225,6 +2236,7 @@ function attachBudgetedMainDelegateWorkContract(input: {
       work_contract: compactWorkContractView(contract),
     },
     workContractId: contract.workContractId,
+    contractSessionKey,
   };
 }
 
@@ -2455,6 +2467,7 @@ async function escalateBudgetedMainForTool(input: {
   const escalatedBaseDecision = escalateBudgetedMainDecision(input.decision, input.reason);
   const attached = attachBudgetedMainDelegateWorkContract({
     stateKey: input.stateKey,
+    ctx: input.ctx,
     state: input.state,
     decision: escalatedBaseDecision,
     reason: input.reason,
@@ -2485,6 +2498,7 @@ async function escalateBudgetedMainForTool(input: {
       spawnExecuted: false,
       budgeted_main_escalated: true,
       budgeted_main_escalated_at: new Date(now).toISOString(),
+      ...(attached.contractSessionKey ? { canonicalSessionKey: attached.contractSessionKey, canonical_session_key: attached.contractSessionKey } : {}),
       ...(attached.workContractId ? { workContractId: attached.workContractId, work_contract_id: attached.workContractId } : {}),
     },
   });

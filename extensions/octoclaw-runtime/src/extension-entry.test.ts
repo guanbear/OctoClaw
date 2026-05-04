@@ -1640,6 +1640,7 @@ describe("budgeted_main_then_delegate runtime budget", () => {
     });
 
     const key = "agent:main:slack:channel:c0as4dappu3:thread:t-budget-timeout-dispatch";
+    const runtimeSessionId = "session-budget-timeout-dispatch";
     const now = Date.now();
     const prompt = "整理这轮 SR-P1 evidence";
     const initialReplyContract = buildWorkContractFromPolicy(
@@ -1666,8 +1667,9 @@ describe("budgeted_main_then_delegate runtime budget", () => {
       workContractId: initialReplyContract.workContractId,
       work_contract_id: initialReplyContract.workContractId,
     });
-    policyState.setState(key, {
+    policyState.setState(runtimeSessionId, {
       prompt,
+      canonicalSessionKey: key,
       workContractId: initialReplyContract.workContractId,
       work_contract_id: initialReplyContract.workContractId,
       decision: {
@@ -1691,17 +1693,17 @@ describe("budgeted_main_then_delegate runtime budget", () => {
     expect(beforeToolCall).toBeTruthy();
     const result = await beforeToolCall!(
       { toolName: "octoclaw_dispatch", params: { task: "整理这轮 SR-P1 evidence" } },
-      { sessionKey: key, sessionId: "session-budget-timeout-dispatch", agentId: "main" },
+      { sessionKey: key, sessionId: runtimeSessionId, agentId: "main" },
     );
 
     expect(result).toBeUndefined();
-    expect(policyState.getState(key)?.decision?.route_decision).toMatchObject({
+    expect(policyState.getState(runtimeSessionId)?.decision?.route_decision).toMatchObject({
       route: "delegate",
       route_source: "budgeted_main_escalation",
       is_new_work: true,
     });
-    expect(policyState.getState(key)?.decision).toMatchObject({ is_new_work: true });
-    const escalatedState = policyState.getState(key);
+    expect(policyState.getState(runtimeSessionId)?.decision).toMatchObject({ is_new_work: true });
+    const escalatedState = policyState.getState(runtimeSessionId);
     const escalatedWorkContractId = String(escalatedState?.workContractId ?? "");
     expect(escalatedWorkContractId).toBeTruthy();
     expect(escalatedWorkContractId).not.toBe(initialReplyContract.workContractId);
@@ -1711,13 +1713,19 @@ describe("budgeted_main_then_delegate runtime budget", () => {
       status: "sealed",
     });
     expect(loadWorkContract(initialReplyContract.workContractId)?.route).toBe("reply");
-    expect(loadWorkContract(escalatedWorkContractId)?.route).toBe("delegate");
+    expect(loadWorkContract(escalatedWorkContractId)).toMatchObject({
+      route: "delegate",
+      sessionKey: key,
+    });
+    expect(policyState.getState(runtimeSessionId)?.canonicalSessionKey).toBe(key);
+    expect(policyState.getState(key)?.workContractId).toBe(escalatedWorkContractId);
     await waitForFireAndForget();
     expect(readReplayEvents()).toContainEqual(expect.objectContaining({
       event: "budgeted_main_escalated",
       reason: "wall_time_over_budget",
       workContractId: escalatedWorkContractId,
     }));
+    policyState.clearState(runtimeSessionId);
     policyState.clearState(key);
   });
 
