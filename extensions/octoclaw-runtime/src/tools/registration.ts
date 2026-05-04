@@ -878,6 +878,61 @@ function plannerStringArray(...values: unknown[]): string[] {
   return out.slice(0, PLANNER_CONTEXT_PACKET_MAX_ITEMS);
 }
 
+function plannerAbsoluteScopePath(value: string, cwd: string): string {
+  const home = process.env.HOME || "";
+  const expanded = home && (value === "~" || value.startsWith("~/"))
+    ? `${home.replace(/\/+$/, "")}/${value.slice(2).replace(/^\/+/, "")}`
+    : value;
+  const absolute = expanded.startsWith("/")
+    ? expanded
+    : `${cwd.replace(/\/+$/, "")}/${expanded}`;
+  const parts: string[] = [];
+  for (const part of absolute.split("/")) {
+    if (!part || part === ".") continue;
+    if (part === "..") {
+      parts.pop();
+      continue;
+    }
+    parts.push(part);
+  }
+  return `/${parts.join("/")}`;
+}
+
+function isOpenClawRepoRootPath(value: string): boolean {
+  const parts = value.split("/").filter(Boolean);
+  for (let index = 0; index < parts.length - 2; index += 1) {
+    if (parts[index] === "openclaw" && parts[index + 1] === "repos") {
+      return index + 3 === parts.length;
+    }
+  }
+  return false;
+}
+
+function isBroadPlannerReadScope(value: string, params: { cwd: string; workspaceRoot: string }): boolean {
+  const text = value.trim();
+  if (!text || text === "." || text === "./" || text === "/" || text === "~") return true;
+  const absolute = plannerAbsoluteScopePath(text, params.cwd);
+  const cwd = plannerAbsoluteScopePath(params.cwd, params.cwd);
+  const workspaceRoot = plannerAbsoluteScopePath(params.workspaceRoot, params.cwd);
+  if (absolute === cwd || absolute === workspaceRoot) return true;
+  return isOpenClawRepoRootPath(absolute);
+}
+
+function plannerReadScopeArray(params: { cwd: string; workspaceRoot: string; values: unknown[] }): string[] {
+  const out: string[] = [];
+  const push = (value: unknown): void => {
+    if (Array.isArray(value)) {
+      for (const item of value) push(item);
+      return;
+    }
+    const text = asString(value);
+    if (!text || isBroadPlannerReadScope(text, params) || out.includes(text)) return;
+    out.push(text);
+  };
+  for (const value of params.values) push(value);
+  return out.slice(0, PLANNER_CONTEXT_PACKET_MAX_ITEMS);
+}
+
 function plannerContextRecord(...values: unknown[]): UnknownRecord {
   for (const value of values) {
     const record = asRecord(value);
@@ -949,19 +1004,27 @@ function buildPlannerContextPacket(params: {
     envOverrides.workspaceRoot,
     cwd,
   ) || cwd;
-  const primaryFiles = plannerStringArray(
-    contextRefs.primaryFiles,
-    contextRefs.primary_files,
-    metadata.primaryFiles,
-    metadata.primary_files,
-    routeDecision.primaryFiles,
-    routeDecision.primary_files,
-  );
-  const readScope = plannerStringArray(
-    contextRefs.readScope,
-    contextRefs.read_scope,
-    primaryFiles,
-  );
+  const primaryFiles = plannerReadScopeArray({
+    cwd,
+    workspaceRoot,
+    values: [
+      contextRefs.primaryFiles,
+      contextRefs.primary_files,
+      metadata.primaryFiles,
+      metadata.primary_files,
+      routeDecision.primaryFiles,
+      routeDecision.primary_files,
+    ],
+  });
+  const readScope = plannerReadScopeArray({
+    cwd,
+    workspaceRoot,
+    values: [
+      contextRefs.readScope,
+      contextRefs.read_scope,
+      primaryFiles,
+    ],
+  });
   const writeScope = plannerStringArray(
     contextRefs.writeScope,
     contextRefs.write_scope,
@@ -984,18 +1047,20 @@ function buildPlannerContextPacket(params: {
     workspaceFallback,
   );
   const maxToolCalls = plannerMaxToolCalls(
-    contextRefs.maxToolCalls
-      ?? contextRefs.max_tool_calls
-      ?? metadata.maxToolCalls
-      ?? metadata.max_tool_calls,
+    hasExplicitContextRefs
+      ? contextRefs.maxToolCalls
+        ?? contextRefs.max_tool_calls
+        ?? metadata.maxToolCalls
+        ?? metadata.max_tool_calls
+      : undefined,
     plannerDefaultMaxToolCalls(role, hasExplicitContextRefs),
   );
   const defaultSourcePolicy = hasExplicitContextRefs
     ? "Use explicit refs and local workspace first. Use external web only when the task explicitly needs current outside facts or local refs are insufficient."
     : "Use the supplied task brief first. No explicit refs were provided, so avoid broad workspace inventory; use external web only when the task explicitly needs current outside facts.";
   const sourcePolicy = optionalString(
-    contextRefs.sourcePolicy,
-    contextRefs.source_policy,
+    hasExplicitContextRefs ? contextRefs.sourcePolicy : undefined,
+    hasExplicitContextRefs ? contextRefs.source_policy : undefined,
     defaultSourcePolicy,
   ) || defaultSourcePolicy;
   const threadSummary = optionalString(
