@@ -1918,6 +1918,16 @@ export async function resolveStatelessPolicyDecision(task: string, options: Unkn
         degraded_reasons: asStringArray(asRecord(judgeResult).degraded_reasons),
       };
 
+      const lowRiskJudgeDecisionBucket = coerceStartupDecisionBucket(judgeResult?.decisionBucket ?? judgeResult?.decision_bucket);
+      if (
+        judgeResult?.route === "reply"
+        && !judgeResult.abstainReason
+        && lowRiskJudgeDecisionBucket === "budgeted_main_then_delegate"
+      ) {
+        metadata._judge_decision_bucket = lowRiskJudgeDecisionBucket;
+        judgeShadowLog.low_confidence_budget_bucket_preserved = judgeResult.confidence < judgeConfig.minConfidence;
+      }
+
       // Deterministic hard-boundary fallback when judge timed out (null).
       // Degraded delegate still uses the judge's route; degradation only blocks
       // downstream dispatch authorization, not the route itself.

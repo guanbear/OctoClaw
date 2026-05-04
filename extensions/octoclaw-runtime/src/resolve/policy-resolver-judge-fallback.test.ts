@@ -703,6 +703,55 @@ describe("execution coverage override intent guard", () => {
     );
   });
 
+  it("preserves low-confidence reply budget bucket without treating it as delegate authority", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(jsonResponse({
+      choices: [{
+        message: {
+          content: JSON.stringify({
+            route: "reply",
+            confidence: 0,
+            abstain_reason: null,
+            ack_text: null,
+            decision_bucket: "budgeted_main_then_delegate",
+            startup_cost_policy: {
+              main_fast_path_allowed: true,
+              max_wall_ms: 30_000,
+              max_tool_calls: 2,
+              escalation_triggers: ["budget_expired", "write_or_mutation_needed"],
+            },
+            hard_delegate_signal: false,
+            is_followup_to_recent_execution: false,
+            is_new_work: false,
+            expected_deliverable: null,
+            scope: "remote",
+            tool_need_hint: "none",
+            duration_hint: "short",
+          }),
+        },
+      }],
+    }));
+
+    const decision = await resolveStatelessPolicyDecision(
+      "给我两个版本差异的五句摘要，只读即可。",
+      {
+        metadata: {
+          _judgeFastConfig: localJudgeConfig,
+        },
+      },
+    );
+
+    expect(routeDecisionOf(decision)).toMatchObject({
+      route: "reply",
+      route_source: "rule",
+      final_judge_source: "no_judge",
+      decision_bucket: "budgeted_main_then_delegate",
+      hard_delegate_signal: false,
+    });
+    expect(routeDecisionOf(decision).reason_codes as string[]).toEqual(
+      expect.arrayContaining(["judge_decision_bucket:budgeted_main_then_delegate"]),
+    );
+  });
+
   it("execution_followup + no coverage + judge=delegate → forced reply (hard rule)", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
       judgeResponse("delegate", 0.88),
