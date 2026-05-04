@@ -328,6 +328,20 @@ function isBudgetedMainDispatchEscalationAllowed(input: {
     || routeDecision.dispatch_required === true;
 }
 
+function dispatchPlannerSessionCandidates(...values: unknown[]): string[] {
+  const candidates = new Set<string>();
+  for (const value of values) {
+    const key = asString(value);
+    if (!key) continue;
+    candidates.add(key);
+    const threadIndex = key.indexOf(":thread:");
+    if (threadIndex > 0) {
+      candidates.add(key.slice(0, threadIndex));
+    }
+  }
+  return Array.from(candidates);
+}
+
 export function selectDispatchPolicyDecision(
   stateDecision: unknown,
   policyJsonDecision: unknown,
@@ -2667,7 +2681,17 @@ export function getToolRegistrations(options: ToolRegistrationOptions = {}): Too
 
         if (isDelegatedRoute) {
           const spawnBackend = resolveSpawnBackend();
-          const plannerEnabled = spawnBackend === "planner" && isPlannerAllowedForSession(managedSessionKey || stateKey || asString(params.sessionKey));
+          const plannerSessionCandidates = dispatchPlannerSessionCandidates(
+            managedSessionKey,
+            stateKey,
+            params.sessionKey,
+            initialMetadata.session_key,
+            ctx.sessionKey,
+            ctx.canonicalSessionKey,
+            ctx.sessionId,
+          );
+          const plannerEnabled = spawnBackend === "planner"
+            && plannerSessionCandidates.some((candidate) => isPlannerAllowedForSession(candidate));
           if (spawnBackend === "off") {
             const errorMessage = "spawn_backend_off";
             await recordDispatchTerminalFailure(errorMessage, { route: resolvedRoute });

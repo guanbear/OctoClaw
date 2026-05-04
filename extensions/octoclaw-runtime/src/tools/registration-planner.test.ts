@@ -71,9 +71,9 @@ function coverageSnapshot(): ContextCoverageSnapshot {
   };
 }
 
-function seedWorkContract() {
+function seedWorkContract(sessionKey = "session-planner-dispatch") {
   const contract = buildWorkContractFromPolicy(
-    "session-planner-dispatch",
+    sessionKey,
     "Research OpenClaw sessions_spawn planner behavior and summarize implementation risks.",
     "fresh_live_lookup",
     coverageSnapshot(),
@@ -216,6 +216,31 @@ describe("octoclaw_dispatch planner backend", () => {
     expect(countRows("scheduler_queue", "work_contract_id = ?", [contract.workContractId])).toBe(0);
     expect(countRows("task_attempts", "work_contract_id = ?", [contract.workContractId])).toBe(0);
     expect(countRows("completion_bindings", "work_contract_id = ?", [contract.workContractId])).toBe(0);
+  });
+
+  it("uses planner backend when allowlist matches the base Slack channel for a thread session", async () => {
+    process.env.OCTOCLAW_SPAWN_BACKEND = "planner";
+    process.env.OCTOCLAW_PLANNER_ALLOWLIST = "agent:main:slack:channel:c0as4dappu3";
+    const threadSessionKey = "agent:main:slack:channel:c0as4dappu3:thread:t-budgeted-main";
+    const contract = seedWorkContract(threadSessionKey);
+
+    const response = await dispatchTool().execute({
+      task: contract.userAsk,
+      workContractId: contract.workContractId,
+      policyJson: JSON.stringify(delegateDecision(contract)),
+      timeoutSeconds: 900,
+    }, {
+      sessionKey: threadSessionKey,
+      canonicalSessionKey: threadSessionKey,
+      sessionId: "session-planner-dispatch-thread-alias",
+      cwd: tempWorkspace,
+    });
+
+    const body = JSON.parse(String(response.text));
+    expect(body.ok).toBe(true);
+    expect(body.status).toBe("requires_native_spawn");
+    expect(body.nextTool).toBe("sessions_spawn");
+    expect(nativeSpawnIntentStore.get(body.spawnIntentId)?.status).toBe("planned");
   });
 
   it("uses the dispatch task as planner ticket deliverable when sealed policy omits it", async () => {
