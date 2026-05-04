@@ -341,7 +341,7 @@ describe("content assertions via runSlackAcceptanceHarness", () => {
       [{ ts: "1234567890.000002", text: "任务已启动。" }],
       [
         { ts: "1234567890.000002", text: "任务已启动。" },
-        { ts: "1234567890.000003", text: "OpenClaw 总结\n\n• route=delegate | model=gpt-5.5 · thread | via=native_announce" },
+        { ts: "1234567890.000003", text: "OpenClaw 总结\ncompletion_file_timeout=0\n\n• route=delegate | model=gpt-5.5 · thread | via=native_announce" },
       ],
     ]);
     const config = parseSlackAcceptanceConfig(validConfig({

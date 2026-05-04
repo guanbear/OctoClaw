@@ -253,7 +253,11 @@ export function auditSlackTools(exposedTools: string[]): SlackToolExposureAuditR
 function normalizeAcceptancePattern(pattern: string): string {
   // Footer separators are often written as " |" in JSON configs. A trailing
   // regex alternation would match every message, so treat it as a literal pipe.
-  return pattern.replace(/(^|[^\\])\|(\s*)$/u, "$1\\|$2");
+  const normalized = pattern.replace(/(^|[^\\])\|(\s*)$/u, "$1\\|$2");
+  if (normalized === "completion_file_timeout") {
+    return "completion_file_timeout(?!\\s*[=:]\\s*0\\b)";
+  }
+  return normalized;
 }
 
 function compilePatterns(patterns: string[] | undefined): RegExp[] {
