@@ -125,6 +125,7 @@ interface LoggerLike {
 }
 
 export interface PluginInterface {
+  config?: Record<string, unknown>;
   pluginConfig?: Record<string, unknown>;
   logger?: LoggerLike;
   on?(event: string, handler: HookHandler, options?: Record<string, unknown>): void;
@@ -132,7 +133,10 @@ export interface PluginInterface {
   registerTool?(definition: Record<string, unknown>): void;
   registerCommand?(definition: Record<string, unknown>): void;
   registerDetachedTaskRuntime?(runtime: DetachedTaskLifecycleRuntime): void;
-  runtime?: { subagent?: import("./tools/registration.js").OpenClawSubagentRuntime };
+  runtime?: {
+    config?: { current?: () => unknown };
+    subagent?: import("./tools/registration.js").OpenClawSubagentRuntime;
+  };
 }
 
 export function resolveReactionAckConfig(pluginConfig: UnknownRecord | undefined, judgeFastRaw: UnknownRecord): {
@@ -354,6 +358,25 @@ function asRecord(value: unknown): UnknownRecord {
     : {};
 }
 
+function resolvePluginConfigObject(config: unknown, pluginId: string): UnknownRecord | undefined {
+  const entry = asRecord(asRecord(asRecord(config).plugins).entries)[pluginId];
+  const pluginConfig = asRecord(asRecord(entry).config);
+  return Object.keys(pluginConfig).length > 0 ? pluginConfig : undefined;
+}
+
+function resolveCurrentPluginConfig(pi: PluginInterface, pluginId = "octoclaw-runtime"): UnknownRecord {
+  const startupPluginConfig = asRecord(pi.pluginConfig);
+  const apiPluginConfig = resolvePluginConfigObject(pi.config, pluginId) ?? {};
+  try {
+    const runtimeConfig = pi.runtime?.config?.current?.();
+    const livePluginConfig = resolvePluginConfigObject(runtimeConfig, pluginId);
+    if (livePluginConfig) return { ...startupPluginConfig, ...apiPluginConfig, ...livePluginConfig };
+  } catch (error) {
+    pi.logger?.debug?.(`octoclaw live plugin config read failed: ${String(error)}`);
+  }
+  return { ...startupPluginConfig, ...apiPluginConfig };
+}
+
 function stringValue(value: unknown): string {
   return String(value ?? "").trim();
 }
@@ -362,6 +385,49 @@ function stringArray(value: unknown): string[] {
   return Array.isArray(value)
     ? value.map((item) => stringValue(item)).filter(Boolean)
     : [];
+}
+
+function firstNonEmptyString(...values: unknown[]): string {
+  for (const value of values) {
+    const text = stringValue(value);
+    if (text) return text;
+  }
+  return "";
+}
+
+function parseJsonRecord(value: string): UnknownRecord {
+  try {
+    return asRecord(JSON.parse(value));
+  } catch {
+    return {};
+  }
+}
+
+function toolResultRecord(result: unknown): UnknownRecord {
+  const record = asRecord(result);
+  const details = asRecord(record.details);
+  if (Object.keys(details).length > 0) return { ...record, ...details };
+  const text = stringValue(record.text);
+  if (text) return { ...record, ...parseJsonRecord(text) };
+  const content = Array.isArray(record.content) ? record.content : [];
+  for (const item of content) {
+    const itemText = stringValue(asRecord(item).text);
+    if (!itemText) continue;
+    const parsed = parseJsonRecord(itemText);
+    if (Object.keys(parsed).length > 0) return { ...record, ...parsed };
+  }
+  return record;
+}
+
+function isAcceptedSpeculativeSpawnResult(result: unknown): boolean {
+  const record = toolResultRecord(result);
+  return stringValue(record.status) === "accepted"
+    && Boolean(firstNonEmptyString(record.runId, record.run_id, record.childRunId, record.child_run_id, record.childSessionKey, record.child_session_key));
+}
+
+function speculativeSpawnResultError(result: unknown, fallback?: unknown): string {
+  const record = toolResultRecord(result);
+  return firstNonEmptyString(record.error, fallback, "speculative_preload_spawn_not_accepted");
 }
 
 function normalizeOutboundTargetKey(value: unknown): string {
@@ -2662,6 +2728,7 @@ export const plugin = {
   description: "Runtime policy hooks, dispatch tools, and replay logging for OctoClaw",
   register(pi: PluginInterface): void {
     if (pi.pluginConfig?.enabled === false) return void pi.logger?.info?.("octoclaw-runtime: disabled via config (enabled=false), skipping hook registration");
+    const currentPluginConfig = (): UnknownRecord => resolveCurrentPluginConfig(pi);
 
     envOverrides.octoclawRoot = stringValue(pi.pluginConfig?.octoclawRoot);
     envOverrides.workspaceRoot = stringValue(pi.pluginConfig?.workspaceRoot);
@@ -3661,7 +3728,7 @@ export const plugin = {
         decision: effectiveDecision,
         prompt,
         prependSystem,
-        pluginConfig: asRecord(pi.pluginConfig),
+        pluginConfig: currentPluginConfig(),
         logger: pi.logger,
       }) as PolicyStateEntry;
       const projection = buildPromptContextProjection({
@@ -3826,8 +3893,12 @@ export const plugin = {
         const plannerGateEnabled = resolveSpawnBackend() === "planner"
           && sessionKeys.some((sessionKey) => isPlannerAllowedForSession(sessionKey));
         if (plannerGateEnabled) {
-          if (resolveSpeculativePreloadEnabled() && isMatchingSpeculativePreloadSpawn(state, toolParams)) {
-            const speculative = readSpeculativePreloadState(state);
+          const speculative = readSpeculativePreloadState(state);
+          if (
+            resolveSpeculativePreloadEnabled(currentPluginConfig())
+            && speculative?.status === "hinted"
+            && isMatchingSpeculativePreloadSpawn(state, toolParams)
+          ) {
             const nextSpeculative = speculative
               ? serializeSpeculativePreloadState({
                   ...speculative,
@@ -4231,6 +4302,47 @@ export const plugin = {
       };
     });
 
+    registerLifecycleHook("after_tool_call", async (event, ctx) => {
+      if (!isManagedAgentContext(ctx)) return;
+      if (!resolveSpeculativePreloadEnabled(currentPluginConfig())) return;
+      const toolName = stringValue(event.toolName || ctx.toolName);
+      if (toolName !== "sessions_spawn") return;
+      const toolParams = asRecord(event.params || event.arguments || event.input);
+      const { key: stateKey, state } = getPolicyStateForContext(ctx);
+      const speculative = readSpeculativePreloadState(state);
+      if (!stateKey || !speculative || speculative.status !== "spawn_call_started") return;
+      if (!isMatchingSpeculativePreloadSpawn(state, toolParams)) return;
+
+      const result = event.result;
+      const resultRecord = toolResultRecord(result);
+      const accepted = !stringValue(event.error) && isAcceptedSpeculativeSpawnResult(result);
+      const now = Date.now();
+      const nextSpeculative = serializeSpeculativePreloadState({
+        ...speculative,
+        status: accepted ? "ready" : "stale",
+        updatedAt: now,
+        runId: firstNonEmptyString(resultRecord.runId, resultRecord.run_id, resultRecord.childRunId, resultRecord.child_run_id) || undefined,
+        childSessionKey: firstNonEmptyString(resultRecord.childSessionKey, resultRecord.child_session_key, resultRecord.sessionKey, resultRecord.session_key) || undefined,
+        error: accepted ? undefined : speculativeSpawnResultError(result, event.error),
+      });
+      updatePolicyState(stateKey, (current) => ({
+        ...current,
+        speculativePreload: nextSpeculative,
+        speculative_preload: nextSpeculative,
+      }));
+      await recordPolicyReplay(accepted ? "speculative_preload_spawn_ready" : "speculative_preload_spawn_failed", {
+        sessionKey: stateKey,
+        sessionId: stringValue(ctx.sessionId),
+        toolName,
+        label: speculative.label,
+        status: stringValue(resultRecord.status),
+        run_id: firstNonEmptyString(resultRecord.runId, resultRecord.run_id, resultRecord.childRunId, resultRecord.child_run_id),
+        child_session_key: firstNonEmptyString(resultRecord.childSessionKey, resultRecord.child_session_key, resultRecord.sessionKey, resultRecord.session_key),
+        error: accepted ? "" : speculativeSpawnResultError(result, event.error),
+        durationMs: Number(event.durationMs) || 0,
+      }, pi.logger, asRecord(state?.decision)).catch(() => {});
+    });
+
     registerLifecycleHook("agent_end", async (_event, ctx) => {
       if (!isManagedAgentContext(ctx)) return;
       const { key: stateKey, state } = getPolicyStateForContext(ctx);
@@ -4560,7 +4672,7 @@ export const plugin = {
     }
 
     if (typeof pi.registerTool === "function") {
-      for (const tool of getToolRegistrations({ subagentRuntime: pi.runtime?.subagent, judgeFastRaw, delegationEnabled })) {
+      for (const tool of getToolRegistrations({ subagentRuntime: pi.runtime?.subagent, judgeFastRaw, delegationEnabled, pluginConfigProvider: currentPluginConfig })) {
         pi.registerTool(toOpenClawToolDefinition(tool as unknown as Record<string, unknown>));
       }
     }

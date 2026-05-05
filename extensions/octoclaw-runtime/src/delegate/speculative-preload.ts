@@ -16,9 +16,12 @@ export interface SessionsSendArgs {
 
 export interface SpeculativePreloadState {
   label: string;
-  status: "hinted" | "spawn_call_started" | "dispatched" | "stale";
+  status: "hinted" | "spawn_call_started" | "ready" | "dispatched" | "stale";
   createdAt?: number;
   updatedAt?: number;
+  runId?: string;
+  childSessionKey?: string;
+  error?: string;
   spawnArgs?: UnknownRecord;
 }
 
@@ -39,9 +42,12 @@ export function readSpeculativePreloadState(state: unknown): SpeculativePreloadS
   const status = asString(record.status);
   return {
     label,
-    status: status === "spawn_call_started" || status === "dispatched" || status === "stale" ? status : "hinted",
+    status: status === "spawn_call_started" || status === "ready" || status === "dispatched" || status === "stale" ? status : "hinted",
     createdAt: Number(record.createdAt || record.created_at) || undefined,
     updatedAt: Number(record.updatedAt || record.updated_at) || undefined,
+    runId: asString(record.runId || record.run_id) || undefined,
+    childSessionKey: asString(record.childSessionKey || record.child_session_key) || undefined,
+    error: asString(record.error) || undefined,
     spawnArgs: asRecord(record.spawnArgs || record.spawn_args),
   };
 }
@@ -90,6 +96,7 @@ export function isSpeculativePreloadSpawnArgs(args: unknown): boolean {
     && task === SPECULATIVE_PRELOAD_STANDBY_TASK
     && record.mode === "session"
     && record.thread === true
+    && record.context === "isolated"
     && record.lightContext === true;
 }
 
@@ -126,6 +133,11 @@ export function serializeSpeculativePreloadState(state: SpeculativePreloadState)
     created_at: state.createdAt,
     updatedAt: state.updatedAt,
     updated_at: state.updatedAt,
+    runId: state.runId,
+    run_id: state.runId,
+    childSessionKey: state.childSessionKey,
+    child_session_key: state.childSessionKey,
+    error: state.error,
     spawnArgs: state.spawnArgs,
     spawn_args: state.spawnArgs,
   };

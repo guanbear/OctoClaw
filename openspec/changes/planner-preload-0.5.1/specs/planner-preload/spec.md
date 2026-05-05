@@ -70,16 +70,23 @@ OctoClaw SHALL allow speculative standby `sessions_spawn` only when the tool arg
 - THEN OctoClaw SHALL treat the call as an ordinary `sessions_spawn`
 - AND planner gate rules SHALL require a pending `dispatchMode=new_spawn` intent.
 
-### Requirement: Dispatch Can Send To A Started Speculative Session
+### Requirement: Dispatch Can Send To A Ready Speculative Session
 
-`octoclaw_dispatch` MAY return a `sessions_send` plan when a speculative standby session has already reached `spawn_call_started`.
+`octoclaw_dispatch` MAY return a `sessions_send` plan only when a speculative standby session has reached `ready` after `after_tool_call` observed an accepted native standby spawn result.
 
-#### Scenario: standby started
+#### Scenario: standby ready
 
 - WHEN `octoclaw_dispatch` runs for a delegate route
-- AND the policy state has speculative preload status `spawn_call_started`
+- AND the policy state has speculative preload status `ready`
 - THEN dispatch SHALL create a pending intent with `dispatchMode=send_to_speculative`
 - AND SHALL return `nextTool=sessions_send`, `sessionsSendArgs`, `spawnIntentId`, `workContractId`, canonical hash, and confirm tool.
+
+#### Scenario: standby call started but native result not accepted
+
+- WHEN speculative standby state is only `spawn_call_started`
+- OR `after_tool_call` recorded the standby spawn as failed or stale
+- THEN dispatch SHALL NOT use `sessions_send`
+- AND SHALL fall back to normal `dispatchMode=new_spawn`.
 
 #### Scenario: standby missing
 
@@ -142,7 +149,7 @@ Speculative preload SHALL NOT be enabled by default or broadly allowlisted befor
 #### Scenario: live validation
 
 - WHEN P2 live validation runs
-- THEN artifacts SHALL show `speculative_preload_hint_injected`, `speculative_preload_spawn_allowed`, `dispatchMode=send_to_speculative`, `sessions_send_intent_allowed`, `dispatch_confirm_completed ok=true`, accepted native intent with run id, WorkContract native refs, final footer via native announce, no duplicate final, and `completion_file_timeout=0`.
+- THEN artifacts SHALL show `speculative_preload_hint_injected`, `speculative_preload_spawn_allowed`, `speculative_preload_spawn_ready`, `dispatchMode=send_to_speculative`, `sessions_send_intent_allowed`, `dispatch_confirm_completed ok=true`, accepted native intent with run id, WorkContract native refs, final footer via native announce, no duplicate final, and `completion_file_timeout=0`.
 
 #### Scenario: validation incomplete
 

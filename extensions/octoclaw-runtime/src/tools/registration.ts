@@ -102,6 +102,8 @@ export interface ToolRegistrationOptions {
   subagentRuntime?: OpenClawSubagentRuntime | null;
   judgeFastRaw?: UnknownRecord;
   delegationEnabled?: boolean;
+  pluginConfig?: UnknownRecord;
+  pluginConfigProvider?: () => UnknownRecord;
 }
 
 function isSyntheticTestTaskState(record: RuntimeTaskStateRecord): boolean {
@@ -3277,13 +3279,15 @@ export function getToolRegistrations(options: ToolRegistrationOptions = {}): Too
                 || policyState.get(stateKey)
                 || state,
             );
-            const speculative = resolveSpeculativePreloadEnabled()
+            const pluginConfig = options.pluginConfigProvider?.() ?? options.pluginConfig;
+            const speculative = resolveSpeculativePreloadEnabled(pluginConfig)
               ? readSpeculativePreloadState(liveSpeculativeState)
               : null;
-            const useSpeculativeSend = Boolean(speculative?.label && speculative.status === "spawn_call_started");
+            const useSpeculativeSend = Boolean(speculative?.label && speculative.status === "ready");
             const sessionsSendArgs = useSpeculativeSend && speculative?.label
               ? buildSpeculativeSessionsSendArgs({
                   label: speculative.label,
+                  agentId: asString(ctx.agentId),
                   message: asString(sessionsSpawnArgs.task),
                 }) as unknown as Record<string, unknown>
               : null;

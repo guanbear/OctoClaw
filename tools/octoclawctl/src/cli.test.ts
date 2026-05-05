@@ -170,6 +170,16 @@ describe("octoclawctl cli", () => {
     }
   });
 
+  it("runtime manifest schema permits the speculative preload rollout flag", async () => {
+    const manifestPath = path.join("extensions", "octoclaw-runtime", "openclaw.plugin.json");
+    const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+    const properties = manifest.configSchema?.properties || {};
+
+    expect(manifest.configSchema?.additionalProperties).toBe(false);
+    expect(properties.speculativePreload).toMatchObject({ type: "boolean", default: false });
+    expect(properties.speculative_preload).toMatchObject({ type: "boolean", default: false });
+  });
+
   it("enable and disable update unified config and plugin projections", async () => {
     const tmpDir = path.join(os.homedir(), ".octoclawctl-test-tmp", `toggle-${Date.now()}-${Math.random().toString(36).slice(2)}`);
     const openclawHome = path.join(tmpDir, ".openclaw");

@@ -55,7 +55,8 @@ export function resolveSpawnIntentTtlMs(): number {
 
 export function resolveSpeculativePreloadEnabled(pluginConfig: Record<string, unknown> | undefined = undefined): boolean {
   const configured = pluginConfig?.speculativePreload ?? pluginConfig?.speculative_preload;
-  const raw = String(process.env.OCTOCLAW_SPECULATIVE_PRELOAD ?? configured ?? "").trim().toLowerCase();
+  const envRaw = String(process.env.OCTOCLAW_SPECULATIVE_PRELOAD ?? "").trim();
+  const raw = (envRaw || String(configured ?? "")).trim().toLowerCase();
   return raw === "1" || raw === "true" || raw === "enabled";
 }
 

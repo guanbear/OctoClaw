@@ -68,6 +68,8 @@ export interface PolicyStateEntry {
   sessionBoundary?: { status: string; reason: string };
   workContractId?: string;
   work_contract_id?: string;
+  workContractMaterializationError?: string;
+  work_contract_materialization_error?: string;
   spawnIntentId?: string;
   spawn_intent_id?: string;
   runId?: string;

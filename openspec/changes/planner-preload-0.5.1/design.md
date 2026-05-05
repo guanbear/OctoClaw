@@ -81,7 +81,7 @@ The gate checks exact standby task text, label prefix, `mode="session"`, `thread
 
 ### Dispatch To Speculative Session
 
-If standby spawn has reached `spawn_call_started`, `octoclaw_dispatch` creates a pending `NativeSpawnIntent` with:
+If standby spawn has reached `ready`, `octoclaw_dispatch` creates a pending `NativeSpawnIntent` with:
 
 ```text
 dispatchMode = "send_to_speculative"
@@ -94,7 +94,9 @@ The dispatch response includes:
 - `sessionsSendArgs`;
 - normal `spawnIntentId`, `workContractId`, canonical hash, TTL, and confirm tool.
 
-If standby state is missing or stale, dispatch falls back to normal `dispatchMode=new_spawn` and `sessionsSpawnArgs`.
+`spawn_call_started` means only that the speculative `sessions_spawn` tool call was allowed and started. It is not enough to send user work. `after_tool_call` must observe an accepted native result and mark the speculative state `ready`; failed or unsupported standby spawns become `stale`.
+
+If standby state is missing, stale, failed, or only `spawn_call_started`, dispatch falls back to normal `dispatchMode=new_spawn` and `sessionsSpawnArgs`.
 
 ### Gate Separation
 
@@ -123,6 +125,7 @@ Required evidence:
 
 - `speculative_preload_hint_injected`;
 - `speculative_preload_spawn_allowed`;
+- `speculative_preload_spawn_ready`;
 - `dispatchMode=send_to_speculative`;
 - `sessions_send_intent_allowed`;
 - `dispatch_confirm_completed ok=true`;

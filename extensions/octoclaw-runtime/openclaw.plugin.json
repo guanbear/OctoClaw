@@ -36,6 +36,16 @@
         "default": "",
         "description": "If set, react with this emoji on message receipt (e.g. 'eyes'). Empty to disable. Independent of judge config."
       },
+      "speculativePreload": {
+        "type": "boolean",
+        "default": false,
+        "description": "Enable the experimental 0.5.1 Scheme B speculative native planner preload path. Default off."
+      },
+      "speculative_preload": {
+        "type": "boolean",
+        "default": false,
+        "description": "Alias for speculativePreload."
+      },
       "judgeFast": {
         "type": "object",
         "description": "LLM semantic routing judge (optional, any OpenAI-compatible endpoint)",

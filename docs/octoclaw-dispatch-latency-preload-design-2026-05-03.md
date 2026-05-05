@@ -570,6 +570,24 @@ Gate 逻辑修改需仔细测试，避免破坏现有 intent-matched 路径的�
 
 - `OCTOCLAW_SPECULATIVE_PRELOAD=1` 或 `pluginConfig.speculativePreload=true` 时，`before_prompt_build` 只对 runtime 已判定为 delegate 的 turn 注入 `OCTOCLAW_SPECULATIVE_SPAWN_HINT`，不靠用户文本关键词。plugin config 路径用于 controlled smoke，避免只依赖临时 LaunchAgent env 传递。
 - speculative standby spawn 必须满足固定安全形态：`mode="session"`、`thread=true`、`context="isolated"`、`lightContext=true`、label 前缀 `octoclaw-speculative-`、standby task 精确匹配；否则 planner gate 不放行。
-- `octoclaw_dispatch` 在看到当前 policyState 的 standby spawn 已进入 `spawn_call_started` 后，创建 `dispatchMode="send_to_speculative"` 的 pending intent，并返回 `sessionsSendArgs`；未命中则退回原 `sessionsSpawnArgs` 路径。
+- `octoclaw_dispatch` 只有在 `after_tool_call` 已观察到 standby spawn accepted，并把当前 policyState 标记为 `ready` 后，才创建 `dispatchMode="send_to_speculative"` 的 pending intent 并返回 `sessionsSendArgs`；只到 `spawn_call_started`、失败、unsupported 或 stale 都退回原 `sessionsSpawnArgs` 路径。
 - `sessions_send` 在 planner delegate 路径下必须匹配 pending send intent hash，才会推进到 `spawn_call_started`；`octoclaw_dispatch_confirm` 仍要求 accepted + 非空 runId，ACK 仍晚于 confirm。
-- 本地验收：`extension-entry.test.ts` 覆盖 hint 注入、白名单允许/误 label 拦截、`sessions_send` gate；`registration-planner.test.ts` 覆盖 dispatch 返回 `send_to_speculative` 和 pending intent。
+- 本地验收：`extension-entry.test.ts` 覆盖 hint 注入、白名单允许/误 label 拦截、standby accepted/failed tracking、`sessions_send` gate；`registration-planner.test.ts` 覆盖 dispatch 返回 `send_to_speculative`、call-start-only fallback 和 pending intent。
+
+### 11.2 2026-05-05 live smoke 状态
+
+本地 0.5.1 controlled Slack smoke 已证明两件事：
+
+- 原 planner/native fallback 主链在 speculative preload 开启时仍能成功：`dispatch_mode=new_spawn`、`sessions_spawn_intent_allowed`、`dispatch_confirm_completed ok=true`、native final `via=native_announce`、`delivery_transport=slack_api`、`footer_source=envelope`、`completion_file_timeout=0`、duplicate final `0`。
+- Scheme B 的 full `sessions_send` 主链还不能宣称通过：一次 live attempt 中 standby `sessions_spawn(mode="session")` 被 OpenClaw channel binding 拒绝；后续 hardening 已改为只有 `after_tool_call` 观察到 accepted standby result 才允许 `dispatchMode=send_to_speculative`，否则退回 `new_spawn`。
+
+因此 0.5.1 当前定位是 default-off implementation slice。P3 默认开启或 allowlist 需要后续真实 Slack artifact 证明：
+
+```text
+speculative_preload_hint_injected
+-> speculative_preload_spawn_allowed
+-> speculative_preload_spawn_ready
+-> dispatchMode=send_to_speculative
+-> sessions_send_intent_allowed
+-> dispatch_confirm_completed ok=true
+```

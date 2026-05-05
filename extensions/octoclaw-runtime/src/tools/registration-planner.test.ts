@@ -250,9 +250,11 @@ describe("octoclaw_dispatch planner backend", () => {
       routeHintSubmitted: true,
       speculativePreload: {
         label,
-        status: "spawn_call_started",
+        status: "ready",
         createdAt: Date.now() - 1_000,
         updatedAt: Date.now(),
+        runId: "standby-run",
+        childSessionKey: "agent:main:subagent:standby-ready",
       },
       createdAt: Date.now() - 1_000,
       updatedAt: Date.now(),
@@ -266,6 +268,7 @@ describe("octoclaw_dispatch planner backend", () => {
     }, {
       sessionKey: contract.sessionKey,
       sessionId: "session-planner-speculative-dispatch",
+      agentId: "main",
       cwd: tempWorkspace,
     });
 
@@ -275,6 +278,7 @@ describe("octoclaw_dispatch planner backend", () => {
     expect(body.nextTool).toBe("sessions_send");
     expect(body.sessionsSendArgs).toMatchObject({
       label,
+      agentId: "main",
       timeoutSeconds: 0,
     });
     expect(body.sessionsSendArgs.message).toContain(contract.workContractId);
@@ -297,6 +301,54 @@ describe("octoclaw_dispatch planner backend", () => {
       dispatch_mode: "send_to_speculative",
       speculative_session_label: label,
     }));
+  });
+
+  it("falls back to new spawn when speculative standby has not reached ready", async () => {
+    process.env.OCTOCLAW_SPAWN_BACKEND = "planner";
+    process.env.OCTOCLAW_SPECULATIVE_PRELOAD = "1";
+    const contract = seedWorkContract("session-planner-speculative-fallback");
+    const label = "octoclaw-speculative-notready";
+    policyState.setState(contract.sessionKey, {
+      decision: delegateDecision(contract),
+      routeHintSubmitted: true,
+      speculativePreload: {
+        label,
+        status: "spawn_call_started",
+        createdAt: Date.now() - 1_000,
+        updatedAt: Date.now(),
+      },
+      createdAt: Date.now() - 1_000,
+      updatedAt: Date.now(),
+    } as unknown as Parameters<typeof policyState.setState>[1]);
+
+    const response = await dispatchTool().execute({
+      task: contract.userAsk,
+      workContractId: contract.workContractId,
+      policyJson: JSON.stringify(delegateDecision(contract)),
+      timeoutSeconds: 900,
+    }, {
+      sessionKey: contract.sessionKey,
+      sessionId: "session-planner-speculative-fallback",
+      cwd: tempWorkspace,
+      agentId: "main",
+    });
+
+    const body = JSON.parse(String(response.text));
+    expect(body.ok).toBe(true);
+    expect(body.dispatchMode).toBe("new_spawn");
+    expect(body.nextTool).toBe("sessions_spawn");
+    expect(body.sessionsSendArgs).toBeUndefined();
+    expect(body.sessionsSpawnArgs).toMatchObject({
+      runtime: "subagent",
+      mode: "run",
+      cleanup: "keep",
+      context: "isolated",
+      lightContext: true,
+    });
+    expect(nativeSpawnIntentStore.get(body.spawnIntentId)).toMatchObject({
+      status: "planned",
+      dispatchMode: "new_spawn",
+    });
   });
 
   it("does not treat Slack acceptance metadata or broad contract read scope as explicit child refs", async () => {

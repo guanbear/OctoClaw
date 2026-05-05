@@ -1,6 +1,6 @@
 import type { ScopeMetadata, WorkspaceMode } from "@octoclaw/contracts/schemas";
 import type { DelegateAttempt, DelegateTask } from "@octoclaw/contracts/delegate";
-import type { ContextCoverageSnapshot, ExecutionCoveragePacket, IntentClass, ReplyContract, WorkDecisionSource } from "@octoclaw/contracts/work-contract";
+import type { ContextCoverageSnapshot, ExecutionCoveragePacket, IntentClass, ReplyContract, WorkContract, WorkDecisionSource } from "@octoclaw/contracts/work-contract";
 import type { NativeHelperInvoker } from "../adapter/native-helper.js";
 import { createOctoClawRuntimePlugin } from "../plugin.js";
 import type { PolicyDecision, PolicyJudgeInput } from "@octoclaw/policy/judge";
@@ -72,7 +72,7 @@ import {
 } from "../replay/replay.js";
 import { resolveCurrentRouteSeal, validateRouteSeal } from "./route-seal.js";
 import { buildWorkContractFromPolicy, buildWorkDecisionSeal } from "../work-contract/builders.js";
-import { saveWorkContract } from "../work-contract/store.js";
+import { loadWorkContract, saveWorkContract } from "../work-contract/store.js";
 import { compactWorkContractView } from "@octoclaw/contracts/work-contract";
 import { buildExecutionCoverageLayer } from "./execution-coverage-precheck.js";
 import { buildMemoryCoverageLayer } from "./memory-coverage-precheck.js";
@@ -667,13 +667,32 @@ function intentClassFromPolicy(value: unknown): IntentClass {
     : "undetermined";
 }
 
+function removeWorkContractFromPolicyDecision(decision: UnknownRecord, reason: string, staleWorkContractId = ""): void {
+  delete decision.workContractId;
+  delete decision.work_contract_id;
+  delete decision.work_contract;
+  const routeDecision = asRecord(decision.route_decision);
+  decision.route_decision = {
+    ...routeDecision,
+    reason_codes: Array.from(new Set([
+      ...asStringArray(routeDecision.reason_codes),
+      reason,
+    ])),
+  };
+  decision.work_contract_materialization = {
+    ok: false,
+    reason,
+    staleWorkContractId: staleWorkContractId || undefined,
+  };
+}
+
 function attachWorkContractToPolicyDecision(input: {
   stateKey: string;
   prompt: string;
   metadata: UnknownRecord;
   decision: UnknownRecord;
   routeSeal?: RouteSeal | null;
-}): void {
+}): { ok: true; contract: WorkContract } | { ok: false; error: string; staleWorkContractId?: string } {
   const executionLayer = buildExecutionCoverageLayer([input.stateKey]);
   const memoryLayer = buildMemoryCoverageLayer();
   input.metadata._memory_coverage = memoryLayer;
@@ -742,7 +761,11 @@ function attachWorkContractToPolicyDecision(input: {
     decisionSeal,
     { reply: replyContract },
   );
-  saveWorkContract(contract);
+  if (!saveWorkContract(contract)) {
+    const error = "work_contract_save_failed";
+    removeWorkContractFromPolicyDecision(input.decision, error);
+    return { ok: false, error };
+  }
   const delegationTicketCandidate = buildDelegationTicketDryRun({
     contract,
     decision: input.decision,
@@ -775,6 +798,7 @@ function attachWorkContractToPolicyDecision(input: {
     latestStatus: contract.status,
     latestExecutionReceipt: receipt,
   }));
+  return { ok: true, contract };
 }
 
 function buildDelegateTaskContext(delegateTask: DelegateTask | null | undefined, currentAttempt: DelegateAttempt | null | undefined): UnknownRecord | undefined {
@@ -2362,19 +2386,31 @@ export async function resolvePolicyDecisionForContext(
 
   if (existing?.decision && promptsEquivalent(asString(existing.prompt), prompt)) {
     const cached = { ...asRecord(existing.decision) };
-    const cachedWorkContractId = asString(
+    let cachedWorkContractId = asString(
       cached.workContractId
         || asRecord(cached.work_contract).workContractId
         || asRecord(cached.work_contract).work_contract_id
         || existing.workContractId,
     );
+    let staleCachedWorkContractId = "";
+    let workContractRematerialized = false;
+    let workContractMaterializationError = "";
     if (cachedWorkContractId) {
-      cached.workContractId = cachedWorkContractId;
-      cached.work_contract = {
-        ...asRecord(cached.work_contract),
-        workContractId: cachedWorkContractId,
-        work_contract_id: cachedWorkContractId,
-      };
+      const storedContract = loadWorkContract(cachedWorkContractId);
+      if (storedContract) {
+        cached.workContractId = storedContract.workContractId;
+        cached.work_contract_id = storedContract.workContractId;
+        cached.work_contract = {
+          ...asRecord(cached.work_contract),
+          ...compactWorkContractView(storedContract),
+          workContractId: storedContract.workContractId,
+          work_contract_id: storedContract.workContractId,
+        };
+      } else {
+        staleCachedWorkContractId = cachedWorkContractId;
+        removeWorkContractFromPolicyDecision(cached, "work_contract_cache_missing", cachedWorkContractId);
+        cachedWorkContractId = "";
+      }
     }
     const routeSeal = stampRouteSealForPolicyState({
       prompt,
@@ -2383,6 +2419,21 @@ export async function resolvePolicyDecisionForContext(
       decision: cached,
       savedRouteSeal: savedRouteSeal(existing.routeSeal),
     });
+    if (!asString(cached.workContractId || asRecord(cached.work_contract).workContractId || asRecord(cached.work_contract).work_contract_id)) {
+      const attached = attachWorkContractToPolicyDecision({ stateKey, prompt, metadata, decision: cached, routeSeal });
+      if (attached.ok) {
+        cachedWorkContractId = attached.contract.workContractId;
+        workContractRematerialized = Boolean(staleCachedWorkContractId);
+      } else {
+        workContractMaterializationError = attached.error;
+      }
+    }
+    const nextCachedWorkContractId = asString(
+      cached.workContractId
+        || asRecord(cached.work_contract).workContractId
+        || asRecord(cached.work_contract).work_contract_id
+        || (staleCachedWorkContractId ? "" : existing.workContractId),
+    );
     policyState.set(stateKey, {
       ...existing,
       sessionBoundary: existing.sessionBoundary
@@ -2393,6 +2444,8 @@ export async function resolvePolicyDecisionForContext(
         : undefined,
       updatedAt: Date.now(),
       decision: cached,
+      workContractId: nextCachedWorkContractId,
+      workContractMaterializationError: workContractMaterializationError || undefined,
       routeSeal,
     });
     const resolveElapsedMs = Date.now() - resolveStartedAt;
@@ -2405,13 +2458,61 @@ export async function resolvePolicyDecisionForContext(
         route: asString(asRecord(cached.route_decision).route),
         decision_bucket: asString(asRecord(cached.route_decision).decision_bucket || asRecord(cached.route_decision).decisionBucket),
         workContractId: asString(cached.workContractId || asRecord(cached.work_contract).workContractId || asRecord(cached.work_contract).work_contract_id),
+        staleWorkContractId: staleCachedWorkContractId,
+        workContractRematerialized,
+        workContractMaterializationError,
         usedCachedPolicy: true,
         elapsedMs: resolveElapsedMs,
       },
       logger,
       null,
     ).catch(() => undefined);
-    return { decision: cached, stateKey, state: { ...existing, decision: cached, routeSeal, updatedAt: Date.now() }, usedCachedPolicy: true, resolveElapsedMs };
+    if (staleCachedWorkContractId && workContractRematerialized) {
+      await recordPolicyReplay(
+        "work_contract_cache_rematerialized",
+        {
+          sessionKey: stateKey,
+          sessionId: asString(ctx.sessionId),
+          stateKey,
+          staleWorkContractId: staleCachedWorkContractId,
+          workContractId: asString(cached.workContractId),
+          usedCachedPolicy: true,
+          elapsedMs: resolveElapsedMs,
+        },
+        logger,
+        cached,
+      ).catch(() => undefined);
+    } else if (workContractMaterializationError) {
+      await recordPolicyReplay(
+        "work_contract_materialization_failed",
+        {
+          sessionKey: stateKey,
+          sessionId: asString(ctx.sessionId),
+          stateKey,
+          staleWorkContractId: staleCachedWorkContractId,
+          route: asString(asRecord(cached.route_decision).route),
+          error: workContractMaterializationError,
+          usedCachedPolicy: true,
+          elapsedMs: resolveElapsedMs,
+        },
+        logger,
+        cached,
+      ).catch(() => undefined);
+    }
+    return {
+      decision: cached,
+      stateKey,
+      state: {
+        ...existing,
+        decision: cached,
+        workContractId: nextCachedWorkContractId,
+        workContractMaterializationError: workContractMaterializationError || undefined,
+        routeSeal,
+        updatedAt: Date.now(),
+      },
+      usedCachedPolicy: true,
+      resolveElapsedMs,
+    };
   }
 
   try {
@@ -2458,10 +2559,16 @@ export async function resolvePolicyDecisionForContext(
 
     policyState.set(stateKey, nextState);
 
-    // Build WorkContract from this policy decision
-    attachWorkContractToPolicyDecision({ stateKey, prompt, metadata, decision, routeSeal });
-    nextState.workContractId = asString(decision.workContractId);
-    nextState.latestStatus = "sealed";
+    // Build WorkContract from this policy decision. The decision may only
+    // expose a dispatchable workContractId after the backing store write succeeds.
+    const workContractAttach = attachWorkContractToPolicyDecision({ stateKey, prompt, metadata, decision, routeSeal });
+    if (workContractAttach.ok) {
+      nextState.workContractId = workContractAttach.contract.workContractId;
+      nextState.latestStatus = "sealed";
+    } else {
+      nextState.workContractId = "";
+      nextState.workContractMaterializationError = workContractAttach.error;
+    }
 
     const resolveElapsedMs = Date.now() - resolveStartedAt;
     await recordPolicyReplay(
@@ -2488,6 +2595,22 @@ export async function resolvePolicyDecisionForContext(
       logger,
       decision,
     );
+    if (!workContractAttach.ok) {
+      await recordPolicyReplay(
+        "work_contract_materialization_failed",
+        {
+          sessionKey: stateKey,
+          sessionId: asString(ctx.sessionId),
+          stateKey,
+          route: asString(asRecord(decision.route_decision).route),
+          error: workContractAttach.error,
+          usedCachedPolicy: false,
+          resolveElapsedMs,
+        },
+        logger,
+        decision,
+      ).catch(() => undefined);
+    }
     await recordPolicyReplay(
       "policy_judged",
       {
