@@ -2232,6 +2232,54 @@ describe("speculative preload planner path", () => {
     policyState.clearState(key);
   });
 
+  it("defers octoclaw_dispatch for hinted standby even when generic tool hook enforcement is disabled", async () => {
+    process.env.OCTOCLAW_SPECULATIVE_PRELOAD = "1";
+    process.env.OCTOCLAW_SPAWN_BACKEND = "planner";
+    const handlers = new Map<string, Function>();
+    plugin.register({
+      on: (event, handler) => handlers.set(event, handler),
+      registerTool: () => {},
+      registerCommand: () => {},
+      logger: {},
+    });
+
+    const key = "agent:main:slack:channel:c0as4dappu3:thread:t-spec-preload-hook-disabled";
+    const prompt = "请委派子 agent 做一次 Scheme B review";
+    const decision = budgetedMainDecision("delegate");
+    const hookInterface = decision.hook_interface as Record<string, unknown>;
+    hookInterface.before_tool_call = {
+      ...(hookInterface.before_tool_call as Record<string, unknown>),
+      enabled: false,
+    };
+    policyState.setState(key, {
+      prompt,
+      decision,
+      routeHintSubmitted: true,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    });
+
+    const beforePromptBuild = handlers.get("before_prompt_build");
+    const beforeToolCall = handlers.get("before_tool_call");
+    await beforePromptBuild!(
+      { prompt },
+      { sessionKey: key, sessionId: "session-spec-preload-hook-disabled", agentId: "main", channelId: "slack", cwd: tempWorkspace },
+    );
+    const blocked = await beforeToolCall!(
+      { toolName: "octoclaw_dispatch", params: { task: prompt } },
+      { sessionKey: key, sessionId: "session-spec-preload-hook-disabled", agentId: "main" },
+    ) as { block?: boolean; blockReason?: string } | undefined;
+
+    expect(blocked?.block).toBe(true);
+    expect(blocked?.blockReason).toContain("First call sessions_spawn");
+    await waitForFireAndForget();
+    expect(readReplayEvents()).toContainEqual(expect.objectContaining({
+      event: "speculative_preload_dispatch_deferred",
+      sessionKey: key,
+    }));
+    policyState.clearState(key);
+  });
+
   it("enforces hinted speculative standby across session id aliases", async () => {
     process.env.OCTOCLAW_SPECULATIVE_PRELOAD = "1";
     process.env.OCTOCLAW_SPAWN_BACKEND = "planner";

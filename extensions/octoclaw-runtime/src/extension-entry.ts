@@ -3910,7 +3910,10 @@ export const plugin = {
       }
       const decision = asRecord(state?.decision);
       const hookConfig = asRecord(asRecord(decision.hook_interface).before_tool_call);
-      if (!hookConfig.enabled && toolName !== "sessions_spawn" && toolName !== "sessions_send") return;
+      const speculativeDispatchGuardEnabled = toolName === "octoclaw_dispatch"
+        && resolveSpawnBackend() === "planner"
+        && resolveSpeculativePreloadEnabled(currentPluginConfig());
+      if (!hookConfig.enabled && toolName !== "sessions_spawn" && toolName !== "sessions_send" && !speculativeDispatchGuardEnabled) return;
 
       const routeHintTool = stringValue(hookConfig.route_hint_tool || "octoclaw_route_hint");
       const routeHintIsRequired = routeHintRequired(decision) || Boolean(hookConfig.route_hint_required);
@@ -3936,9 +3939,7 @@ export const plugin = {
       }
 
       if (
-        toolName === "octoclaw_dispatch"
-        && resolveSpawnBackend() === "planner"
-        && resolveSpeculativePreloadEnabled(currentPluginConfig())
+        speculativeDispatchGuardEnabled
       ) {
         const decisionRoute = stringValue(asRecord(decision.route_decision).route);
         const expectedWorkContractId = stateWorkContractId(state);
