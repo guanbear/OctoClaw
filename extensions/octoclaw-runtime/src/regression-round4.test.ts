@@ -268,6 +268,44 @@ describe("regression round 4: scenario 2b — delegated state normalization", ()
     expect(textOf(guarded)).not.toContain("我用");
   });
 
+  it("does not treat OpenClaw product release answers as tool provenance claims", () => {
+    const answer = "OpenClaw 最新版本是 v2026.5.4，主要新增 Meet/Voice Call 实时桥接、Gateway/plugin 性能优化、Slack streaming 进度和外部 channel/secrets 修复。";
+    const guarded = guardAssistantMessageForPolicyState(
+      {
+        role: "assistant",
+        content: [{ type: "text", text: answer }],
+      },
+      {
+        directToolsSeen: [],
+        decision: { route_decision: { route: "reply", task_class: "main_direct" } },
+      },
+    );
+
+    expect(guarded.mode).toBe("pass");
+    expect(textOf(guarded)).toBe(answer);
+  });
+
+  it("still guards command-shaped OpenClaw tool provenance claims without execution evidence", () => {
+    const guarded = guardAssistantMessageForPolicyState(
+      {
+        role: "assistant",
+        content: [{
+          type: "text",
+          text: "我用 openclaw status 查到 Gateway 正在运行。",
+        }],
+      },
+      {
+        directToolsSeen: [],
+        decision: { route_decision: { route: "reply", task_class: "main_direct" } },
+      },
+    );
+
+    expect(guarded.mode).toBe("replace");
+    expect(textOf(guarded)).toBe("我不能确认刚才那句来源声明。");
+    expect(textOf(guarded)).not.toContain("openclaw status");
+    expect(textOf(guarded)).not.toContain("我用");
+  });
+
   it("replaces false sessions_spawn dispatch claim without execution evidence", () => {
     const guarded = guardAssistantMessageForPolicyState(
       {

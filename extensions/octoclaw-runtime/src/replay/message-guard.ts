@@ -174,17 +174,12 @@ export function claimedDirectToolNames(text: string): string[] {
   const add = (name: string) => {
     if (name && !names.includes(name)) names.push(name);
   };
-  for (const name of [
-    "web_fetch",
-    "web_search",
-    "web.run",
-    "exec",
-    "shell",
-    "curl",
-    "openclaw",
-    "github api",
-  ]) {
+  const literalToolNames = ["web_fetch", "web_search", "web.run", "exec", "shell", "curl", "github api"];
+  for (const name of literalToolNames) {
     if (normalized.includes(name)) add(name);
+  }
+  if (/(?:`openclaw\b|\bopenclaw\s+(?:status|message|config|gateway|node|models|plugins|update|version|--version|docs|logs)\b)/iu.test(raw)) {
+    add("openclaw");
   }
   return names;
 }
@@ -192,7 +187,17 @@ export function claimedDirectToolNames(text: string): string[] {
 export function looksLikeToolProvenanceClaim(text: string): boolean {
   const raw = String(text || "");
   if (claimedDirectToolNames(raw).length === 0) return false;
-  return /(我|这次|刚才|实际|确实|已经|子任务|runner|主\s*agent).{0,40}(用|用了|调用|跑|执行|查|抓|fetch|拿到|返回)/iu.test(raw)
+  const toolNamePattern = String.raw`(?:web_fetch|web_search|web\.run|exec|shell|curl|github api|` + "`" + String.raw`openclaw\b|\bopenclaw\s+(?:status|message|config|gateway|node|models|plugins|update|version|--version|docs|logs)\b)`;
+  const sourceVerbThenTool = new RegExp(
+    String.raw`(?:我|这次|刚才|实际|确实|已经|子任务|runner|主\s*agent)[^。！？!?；;\n]{0,40}(?:用|用了|调用|跑|执行|查|抓|fetch|拿到|返回)[^。！？!?；;\n]{0,80}` + toolNamePattern,
+    "iu",
+  );
+  const toolThenSourceResult = new RegExp(
+    toolNamePattern + String.raw`[^。！？!?；;\n]{0,80}(?:查到|拿到|返回|得到|发现|确认|显示|found|got|returned|shows)`,
+    "iu",
+  );
+  return sourceVerbThenTool.test(raw)
+    || toolThenSourceResult.test(raw)
     || /\b(i|this run|that run|actually|used|called|ran|fetched|queried)\b.{0,50}\b(web_fetch|web_search|web\.run|exec|shell|curl|openclaw|github api)\b/iu.test(raw)
     || /direct tools used.{0,80}(实际|actually|used|web_fetch|web_search|exec|unavailable)/iu.test(raw);
 }
