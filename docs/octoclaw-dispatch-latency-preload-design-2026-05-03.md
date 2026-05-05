@@ -2,7 +2,7 @@
 
 日期：2026-05-03
 
-状态：设计草案，待可行性验证后进入 roadmap
+状态：设计草案；Slack B' 已做 controlled probe，功能可续跑但延迟收益未通过
 
 关联文档：
 - [`octoclaw-openclaw-native-slimming-review-2026-05-01.md`](./octoclaw-openclaw-native-slimming-review-2026-05-01.md) Section 13 Deferred
@@ -356,6 +356,38 @@ B' 只有在以下证据同时满足后，才能从 design/probe 进入 implemen
 - native announce / footer / WorkContract refs / confirm ACK 仍走 0.5.0 planner/native 语义。
 - 任一条件失败时，OctoClaw 不重试污染主链，直接退回 `dispatchMode="new_spawn"`。
 
+#### 2026-05-05 controlled probe 结果
+
+本机 OpenClaw 2026.4.29 上验证了 Slack B' 的最小闭环：
+
+- warm run accepted：
+  - `runId=7c28bb58-e6fe-4450-b973-83b379912dec`
+  - `childSessionKey=agent:main:subagent:4983b9e0-8bb3-4cad-93b8-26d0034aa094`
+  - task final 为 `NO_REPLY`，child 没有调用 messaging tool。
+- warm run 冷启动仍很重：
+  - startup `18708ms`
+  - prep `44104ms`
+  - prep 里 `bootstrap-context=848ms`、`bundle-tools=6006ms`、`system-prompt=15611ms`、`stream-setup=14977ms`
+- 精确 `sessions_send(timeoutSeconds:0)` 在临时 probe 配置下返回 accepted：
+  - `runId=bef31383-3355-49fc-b1b9-688651e390e2`
+  - HTTP invoke elapsed `6742ms`
+  - 但该 accepted 只证明投递入队，不能证明 child 已开始执行。
+- 完整等待 `sessions_send(timeoutSeconds:120)` 返回 ok：
+  - `runId=cbf3cadd-a55e-478f-aebc-9b98cfbe9596`
+  - reply `WARM_POOL_CONTINUATION_OK`
+  - end-to-end elapsed `103705ms`
+- 第二段 child run 的模型输入很小，说明没有重新注入完整 bootstrap 内容：
+  - model usage `input=375, output=9, cacheRead=17536`
+  - transcript 中第二段只包含 inter-session message + reply。
+- 但第二段 OpenClaw runner 仍有明显 startup/prep 成本：
+  - startup `17867ms`
+  - prep `42486ms`
+  - prep 里 `bootstrap-context=5ms`，但 `bundle-tools=6051ms`、`system-prompt=15621ms`、`stream-setup=14956ms`
+
+结论：B' 在当前 deployed OpenClaw 4.29 上**功能可行但性能不达标**。它能复用同一个 `childSessionKey` 并减少模型输入/跳过重 bootstrap context，但没有跳过 embedded runner 的工具 bundle、system prompt 和 stream setup，实际完整等待仍约 104s。`timeoutSeconds:0` 的 6.7s accepted 不能作为 task-start latency。0.5.1 不应实现生产 warm pool；保留为 research/probe，生产继续走 ordinary planner/native `new_spawn`。
+
+验证中临时打开过 `agents.defaults.contextInjection="continuation-skip"`、`gateway.tools.allow=["sessions_send"]`、`tools.sessions.visibility="agent"`；验证结束已恢复默认配置。
+
 ---
 
 ## 4. 方案 A：预热 Session Pool（持久化复用）
@@ -678,14 +710,14 @@ Gate 逻辑修改需仔细测试，避免破坏现有 intent-matched 路径的�
 
 ## 11. 推荐优先级
 
-2026-05-05 调整：原始方案 B 的 implementation slice 继续保持 default-off，但不能作为 Slack 成功路径。Slack 0.5.1 只推进 B' live probe：先验证 `mode:"run" + cleanup:"keep" + lightContext:false + sessions_send` 是否真的能在 continuation turn 跳过 bootstrap，再决定是否实现小型 warm pool。任何失败都退回 0.5.0 planner/confirm 主链。
+2026-05-05 调整：原始方案 B 的 implementation slice 继续保持 default-off，但不能作为 Slack 成功路径。Slack B' controlled probe 已证明 `mode:"run" + cleanup:"keep" + lightContext:false + sessions_send` 功能可续跑，但没有带来可接受的 task-start latency：`sessions_send(timeoutSeconds:120)` 完整等待约 `103705ms`，第二段 run 仍有 `startup=17867ms`、`prep=42486ms`。因此 0.5.1 不进入 warm pool implementation，继续退回 0.5.0 planner/confirm 主链。
 
 | 阶段 | 内容 | 前置条件 |
 | --- | --- | --- |
 | **0.5.1 P0** | 保留 30s soft budget，但超时后允许 late final / 一次轻量只读工具；prompt 注入不再强制 delegate | 0.5.0 release branch |
-| **0.5.1 P1** | Slack B' live probe：`mode="run" + cleanup="keep" + lightContext:false` warm run，随后 `sessions_send(timeoutSeconds=0)`，只记录 evidence，不默认改生产路由 | `speculativePreload=false`；controlled smoke |
-| **0.5.1 P2** | 如果 B' probe 通过，实现 default-off 小池：每作用域 1 个 idle slot，命中后 `sessions_send`，失败退回 `new_spawn` | 6.5 连续 artifact 通过 |
-| **0.5.1 P3** | 小池稳定后补 confirm/native refs/ACK/report 字段，并评估高频作用域最多 2 个 slot | 无 visible NO_REPLY、无 duplicate final、task-start latency 有收益 |
+| **0.5.1 P1** | Slack B' live probe：`mode="run" + cleanup="keep" + lightContext:false` warm run，随后 `sessions_send(timeoutSeconds=0/120)`，只记录 evidence，不默认改生产路由 | 已验证：功能可行，性能未通过 |
+| **0.5.1 P2** | 小池 implementation 暂缓；除非 OpenClaw 暴露能跳过 runner prep 的 continuation path，否则不做生产 warm pool | B' 当前阻塞 |
+| **0.5.1 P3** | 若未来 OpenClaw 支持低延迟 persistent session/runner reuse，再补 confirm/native refs/ACK/report 字段，并评估高频作用域最多 2 个 slot | task-start latency 连续 artifact 证明有收益 |
 | **0.5.x 后续** | 非 Slack channel 可继续原始方案 A：SQLite `standby_sessions` 表 + pool 查询 + health check + 补充逻辑 | 对应 channel 支持 subagent thread-binding |
 | **Pool 预热增强**（可选）| heartbeat 或首次 turn 预热 | B' 或方案 A 稳定，有真实高频需求 |
 
@@ -706,7 +738,7 @@ Gate 逻辑修改需仔细测试，避免破坏现有 intent-matched 路径的�
 - 原 planner/native fallback 主链在 speculative preload 开启时仍能成功：`dispatch_mode=new_spawn`、`sessions_spawn_intent_allowed`、`dispatch_confirm_completed ok=true`、native final `via=native_announce`、`delivery_transport=slack_api`、`footer_source=envelope`、`completion_file_timeout=0`、duplicate final `0`。
 - Scheme B 的 full `sessions_send` 主链还不能宣称通过：一次 live attempt 中 standby `sessions_spawn(mode="session")` 被 OpenClaw channel binding 拒绝；后续 hardening 已改为只有 `after_tool_call` 观察到 accepted standby result 才允许 `dispatchMode=send_to_speculative`，否则退回 `new_spawn`。
 
-因此 0.5.1 当前定位是：原始方案 B default-off 且 Slack blocked；Slack 后续只能用 B' artifact 证明：
+因此 0.5.1 当前定位是：原始方案 B default-off 且 Slack blocked；Slack B' 当前也不能进入实现。后续只有在 artifact 同时证明功能和 task-start latency 时，才允许重新打开：
 
 ```text
 warm_run_spawn_accepted(mode=run, cleanup=keep, lightContext=false)
