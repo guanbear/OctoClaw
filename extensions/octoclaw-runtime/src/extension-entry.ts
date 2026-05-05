@@ -79,8 +79,8 @@ import {
 import { recordAckReplay, recordPolicyReplay } from "./replay/replay.js";
 import { policyState, type PolicyStateEntry } from "./state/policy-state.js";
 import { getCommandRegistrations, getToolRegistrations } from "./tools/registration.js";
-import { evaluateNativeSpawnGate } from "./delegate/native-spawn-gate.js";
-import { isPlannerAllowedForSession, resolveSpawnBackend, shouldRunChildFinalizerRecovery, shouldRunDeliveryOutboxFlush } from "./config/index.js";
+import { evaluateNativeSessionsSendGate, evaluateNativeSpawnGate } from "./delegate/native-spawn-gate.js";
+import { isPlannerAllowedForSession, resolveSpawnBackend, resolveSpeculativePreloadEnabled, shouldRunChildFinalizerRecovery, shouldRunDeliveryOutboxFlush } from "./config/index.js";
 import { findWorkContractByNativeChildSessionKey, loadWorkContract, saveWorkContract, updateWorkContract } from "./work-contract/store.js";
 import { compactWorkContractView, type ContextCoverageSnapshot, type DelegateContract, type IntentClass, type WorkContract, type WorkDecisionSource } from "@octoclaw/contracts/work-contract";
 import { buildWorkContractFromPolicy, buildWorkDecisionSeal } from "./work-contract/builders.js";
@@ -99,6 +99,15 @@ import {
   updateBudgetedMainToolState,
   type BudgetedMainState,
 } from "./budgeted-main.js";
+import {
+  buildSpeculativePreloadHint,
+  buildSpeculativePreloadLabel,
+  buildSpeculativePreloadSpawnArgs,
+  isMatchingSpeculativePreloadSpawn,
+  readSpeculativePreloadState,
+  serializeSpeculativePreloadState,
+  speculativePreloadStateForHint,
+} from "./delegate/speculative-preload.js";
 
 type UnknownRecord = Record<string, unknown>;
 type HookHandler = (event: UnknownRecord, ctx: UnknownRecord) => unknown;
@@ -2412,6 +2421,53 @@ function maybeStartBudgetedMain(input: {
   });
 }
 
+function maybeInjectSpeculativePreload(input: {
+  stateKey: string;
+  ctx: UnknownRecord;
+  state: UnknownRecord;
+  decision: UnknownRecord;
+  prompt: string;
+  prependSystem: string[];
+  logger?: LoggerLike;
+}): UnknownRecord {
+  if (!resolveSpeculativePreloadEnabled() || resolveSpawnBackend() !== "planner") return input.state;
+  if (!input.stateKey || !isDelegatedRoute(input.decision)) return input.state;
+  const existing = readSpeculativePreloadState(input.state);
+  if (existing?.label && existing.status !== "stale") return input.state;
+  const label = buildSpeculativePreloadLabel({
+    stateKey: input.stateKey,
+    sessionId: stringValue(input.ctx.sessionId),
+    inboundMessageTs: stringValue(input.state.inboundMessageTs || input.state.inbound_message_ts || input.ctx.messageTs || input.ctx.message_ts),
+    prompt: input.prompt,
+  });
+  const spawnArgs = buildSpeculativePreloadSpawnArgs({
+    label,
+    model: stringValue(asRecord(input.decision.route_decision).model || asRecord(input.decision.route_decision).worker_model),
+    cwd: stringValue(input.ctx.cwd),
+  });
+  const speculative = speculativePreloadStateForHint({ label, spawnArgs });
+  const serialized = serializeSpeculativePreloadState(speculative);
+  const nextState = {
+    ...input.state,
+    speculativePreload: serialized,
+    speculative_preload: serialized,
+  };
+  updatePolicyState(input.stateKey, (current) => ({
+    ...(current ?? {}),
+    speculativePreload: serialized,
+    speculative_preload: serialized,
+  }));
+  input.prependSystem.push(buildSpeculativePreloadHint(spawnArgs));
+  void recordPolicyReplay("speculative_preload_hint_injected", {
+    sessionKey: input.stateKey,
+    sessionId: stringValue(input.ctx.sessionId),
+    label,
+    route: stringValue(asRecord(input.decision.route_decision).route),
+    decision_bucket: stringValue(asRecord(input.decision.route_decision).decision_bucket),
+  }, input.logger, input.decision).catch(() => {});
+  return nextState;
+}
+
 function completeBudgetedMainIfActive(input: {
   stateKey: string;
   ctx: UnknownRecord;
@@ -3361,7 +3417,7 @@ export const plugin = {
       const activeRecoveryState = recoveryCheck.updatedCount > 0 && stateKey
         ? getPolicyStateForContext({ ...ctx, canonicalSessionKey: stateKey }).state
         : state;
-      const effectiveState = activeRecoveryState ?? state;
+      let effectiveState = activeRecoveryState ?? state;
       let effectiveDecision = recoveryCheck.updatedCount > 0
         ? asRecord(effectiveState?.decision)
         : decision;
@@ -3483,21 +3539,12 @@ export const plugin = {
       const prependSystem: string[] = [];
       const currentBudgetedMainState = readBudgetedMainState(asRecord(effectiveState));
       if (currentBudgetedMainState?.escalatedPending && stateKey) {
-        const escalated = await escalateBudgetedMainForTool({
-          stateKey,
-          ctx,
-          state: asRecord(effectiveState),
-          decision: effectiveDecision,
-          budgetState: currentBudgetedMainState,
-          reason: "wall_time_over_budget",
-          logger: pi.logger,
-        });
-        effectiveDecision = escalated.decision;
         prependSystem.push([
-          "[OctoClaw budgeted main escalation]",
-          `The budgeted main execution exceeded ${BUDGETED_MAIN_MAX_WALL_MS}ms before this prompt injection point.`,
-          "Do not continue analysis or call ordinary tools.",
-          "Call octoclaw_dispatch with the original task to enter the native planner path.",
+          "[OctoClaw budgeted main soft-budget notice]",
+          `This budgeted main execution exceeded ${BUDGETED_MAIN_MAX_WALL_MS}ms before this prompt injection point.`,
+          "If you already have enough information, produce the final answer now.",
+          "You may use at most one lightweight read-only tool if it is necessary to finish the answer.",
+          "If writing, long commands, multi-step tools, tests/build/review/validation, or more work is needed, call octoclaw_dispatch with the original task.",
           "Do not claim the task has started until sessions_spawn is accepted and octoclaw_dispatch_confirm succeeds.",
         ].join("\n"));
       } else if (isBudgetedMainDecision(effectiveDecision)) {
@@ -3606,6 +3653,15 @@ export const plugin = {
         decision: effectiveDecision,
         logger: pi.logger,
       });
+      effectiveState = maybeInjectSpeculativePreload({
+        stateKey,
+        ctx,
+        state: asRecord(effectiveState),
+        decision: effectiveDecision,
+        prompt,
+        prependSystem,
+        logger: pi.logger,
+      }) as PolicyStateEntry;
       const projection = buildPromptContextProjection({
         prependSystem,
         contextPayload,
@@ -3682,10 +3738,7 @@ export const plugin = {
           budgetDecision = escalated.decision;
         } else if (classification.counted) {
           const updatedBudget = updateBudgetedMainToolState(budgetState, classification);
-          const overWall = budgetState.escalatedPending || now - budgetState.startedAt >= budgetState.maxWallMs;
-          const escalationReason = overWall
-            ? "wall_time_over_budget"
-            : budgetedMainToolEscalationReason(updatedBudget, classification);
+          const escalationReason = budgetedMainToolEscalationReason(updatedBudget, classification);
           if (escalationReason) {
             const escalated = await escalateBudgetedMainForTool({
               stateKey,
@@ -3735,7 +3788,7 @@ export const plugin = {
       }
       const decision = asRecord(state?.decision);
       const hookConfig = asRecord(asRecord(decision.hook_interface).before_tool_call);
-      if (!hookConfig.enabled && toolName !== "sessions_spawn") return;
+      if (!hookConfig.enabled && toolName !== "sessions_spawn" && toolName !== "sessions_send") return;
 
       const routeHintTool = stringValue(hookConfig.route_hint_tool || "octoclaw_route_hint");
       const routeHintIsRequired = routeHintRequired(decision) || Boolean(hookConfig.route_hint_required);
@@ -3771,6 +3824,29 @@ export const plugin = {
         const plannerGateEnabled = resolveSpawnBackend() === "planner"
           && sessionKeys.some((sessionKey) => isPlannerAllowedForSession(sessionKey));
         if (plannerGateEnabled) {
+          if (resolveSpeculativePreloadEnabled() && isMatchingSpeculativePreloadSpawn(state, toolParams)) {
+            const speculative = readSpeculativePreloadState(state);
+            const nextSpeculative = speculative
+              ? serializeSpeculativePreloadState({
+                  ...speculative,
+                  status: "spawn_call_started",
+                  updatedAt: Date.now(),
+                })
+              : null;
+            updatePolicyState(stateKey, (current) => ({
+              ...current,
+              ...(nextSpeculative ? { speculativePreload: nextSpeculative, speculative_preload: nextSpeculative } : {}),
+              controlToolsSeen: Array.from(new Set([...(Array.isArray(current.controlToolsSeen) ? current.controlToolsSeen : []), toolName])),
+            }));
+            void recordPolicyReplay("speculative_preload_spawn_allowed", {
+              sessionKey: stateKey || "",
+              sessionId: stringValue(ctx.sessionId),
+              route: stringValue(asRecord(decision.route_decision).route),
+              toolName,
+              label: speculative?.label || stringValue(toolParams.label),
+            }, pi.logger, decision).catch(() => {});
+            return;
+          }
           const gate = evaluateNativeSpawnGate({ sessionKeys, args: toolParams as { task: string; [key: string]: unknown }, decision });
           if (!gate.allowed) {
             updatePolicyState(stateKey, (current) => ({
@@ -3860,6 +3936,64 @@ export const plugin = {
             toolName,
             spawn_intent_id: gate.intent.spawnIntentId,
             work_contract_id: gate.intent.workContractId,
+          }, pi.logger).catch(() => {});
+          return;
+        }
+      }
+      if (toolName === "sessions_send") {
+        const sessionKeys = [
+          stateKey,
+          stringValue(ctx.sessionKey),
+          stringValue(ctx.canonicalSessionKey),
+          stringValue(asRecord(decision.request).session_key),
+          ...resolvePolicyStateKeys(ctx),
+        ];
+        const plannerGateEnabled = resolveSpawnBackend() === "planner"
+          && sessionKeys.some((sessionKey) => isPlannerAllowedForSession(sessionKey));
+        const route = stringValue(asRecord(decision.route_decision).route);
+        const speculativeSendExpected = plannerGateEnabled && route === "delegate";
+        if (speculativeSendExpected) {
+          const gate = evaluateNativeSessionsSendGate({ sessionKeys, args: toolParams as { task: string; [key: string]: unknown }, decision });
+          if (!gate.allowed) {
+            updatePolicyState(stateKey, (current) => ({
+              ...current,
+              blockedTools: [...(Array.isArray(current.blockedTools) ? current.blockedTools.slice(-7) : []), toolName].filter(Boolean),
+            }));
+            void recordPolicyReplay("sessions_send_intent_blocked", {
+              sessionKey: stateKey || "",
+              sessionId: stringValue(ctx.sessionId),
+              route,
+              toolName,
+              reason: gate.reason,
+              spawn_intent_id: gate.intent?.spawnIntentId ?? null,
+              expected_hash: gate.expectedHash ?? null,
+              actual_hash: gate.actualHash ?? null,
+            }, pi.logger, decision).catch(() => {});
+            return {
+              block: true,
+              blockReason: gate.reason === "args_hash_mismatch"
+                ? "OctoClaw blocked sessions_send because the arguments do not match the pending speculative send intent. Call octoclaw_dispatch again or use the exact sessionsSendArgs."
+                : "OctoClaw blocked sessions_send because no current pending speculative send intent exists. Call octoclaw_dispatch first.",
+            };
+          }
+          updatePolicyState(stateKey, (current) => ({
+            ...current,
+            delegated: false,
+            spawnIntentId: gate.intent.spawnIntentId,
+            workContractId: gate.intent.workContractId,
+            dispatchStatus: "spawn_call_started",
+            controlToolsSeen: Array.from(new Set([...(Array.isArray(current.controlToolsSeen) ? current.controlToolsSeen : []), toolName])),
+          }));
+          void recordPolicyReplay("sessions_send_intent_allowed", {
+            sessionKey: stateKey || gate.intent.sessionKey,
+            sessionId: stringValue(ctx.sessionId),
+            route,
+            decision_bucket: stringValue(asRecord(decision.route_decision).decision_bucket),
+            toolName,
+            spawn_intent_id: gate.intent.spawnIntentId,
+            work_contract_id: gate.intent.workContractId,
+            dispatch_mode: gate.intent.dispatchMode || "send_to_speculative",
+            speculative_session_label: gate.intent.speculativeSessionLabel || "",
           }, pi.logger).catch(() => {});
           return;
         }

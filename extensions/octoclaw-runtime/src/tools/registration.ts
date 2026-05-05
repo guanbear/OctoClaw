@@ -63,9 +63,10 @@ import { emitExecutionTransitionNotification } from "../ack/execution-transition
 import { scheduleChildCompletionFinalizer } from "../delegate/child-finalizer.js";
 import { createCompletionBinding } from "../runtime-ledger/completion-binding.js";
 import { randomUUID } from "node:crypto";
-import { isPlannerAllowedForSession, resolveSpawnBackend, resolveSpawnIntentTtlMs } from "../config/index.js";
+import { isPlannerAllowedForSession, resolveSpawnBackend, resolveSpawnIntentTtlMs, resolveSpeculativePreloadEnabled } from "../config/index.js";
 import { confirmNativeSpawn } from "../delegate/native-spawn-confirm.js";
 import { nativeSpawnIntentStore } from "../delegate/native-spawn-intent-store.js";
+import { buildSpeculativeSessionsSendArgs, readSpeculativePreloadState, serializeSpeculativePreloadState } from "../delegate/speculative-preload.js";
 import { getModelMap } from "../model-map.js";
 import { detectIMType, buildSlackStatusOutput, type StatusTaskSummary } from "../im-status-renderer.js";
 import { buildDelegationTicketDryRun } from "../runtime-ledger/ticket-dry-run.js";
@@ -1277,18 +1278,25 @@ function plannerDispatchResponse(params: {
   delegateTaskId: string;
   attemptId: string;
   sessionsSpawnArgs: Record<string, unknown>;
+  sessionsSendArgs?: Record<string, unknown>;
+  dispatchMode?: "new_spawn" | "send_to_speculative";
+  speculativeSessionLabel?: string;
   canonicalArgsHash: string;
   expiresAt: string;
   workerPool: string;
   model: string;
 }): Record<string, unknown> {
+  const dispatchMode = params.dispatchMode || "new_spawn";
+  const nextTool = dispatchMode === "send_to_speculative" ? "sessions_send" : "sessions_spawn";
   const body = {
     ok: true,
     route: "delegate",
     status: "requires_native_spawn",
+    dispatch_mode: dispatchMode,
+    dispatchMode,
     delegation_method: "octoclaw_dispatch_planner",
-    next_tool: "sessions_spawn",
-    nextTool: "sessions_spawn",
+    next_tool: nextTool,
+    nextTool,
     confirm_tool: "octoclaw_dispatch_confirm",
     confirmTool: "octoclaw_dispatch_confirm",
     spawn_intent_id: params.spawnIntentId,
@@ -1301,6 +1309,14 @@ function plannerDispatchResponse(params: {
     attemptId: params.attemptId,
     sessions_spawn_args: params.sessionsSpawnArgs,
     sessionsSpawnArgs: params.sessionsSpawnArgs,
+    ...(params.sessionsSendArgs ? {
+      sessions_send_args: params.sessionsSendArgs,
+      sessionsSendArgs: params.sessionsSendArgs,
+    } : {}),
+    ...(params.speculativeSessionLabel ? {
+      speculative_session_label: params.speculativeSessionLabel,
+      speculativeSessionLabel: params.speculativeSessionLabel,
+    } : {}),
     canonical_args_hash: params.canonicalArgsHash,
     canonicalArgsHash: params.canonicalArgsHash,
     expires_at: params.expiresAt,
@@ -1311,7 +1327,9 @@ function plannerDispatchResponse(params: {
     spawn_executed: false,
     materialized: false,
     result_materialized: false,
-    instruction: "Call sessions_spawn exactly with sessionsSpawnArgs, then call octoclaw_dispatch_confirm with spawnIntentId, workContractId, sessionsSpawnStatus, runId, childRunId, and childSessionKey from the native result.",
+    instruction: dispatchMode === "send_to_speculative"
+      ? "Call sessions_send exactly with sessionsSendArgs, then call octoclaw_dispatch_confirm with spawnIntentId, workContractId, sessionsSpawnStatus, runId, childRunId, and childSessionKey from the native sessions_send result. If sessions_send is not accepted, confirm the error; do not claim the task has started."
+      : "Call sessions_spawn exactly with sessionsSpawnArgs, then call octoclaw_dispatch_confirm with spawnIntentId, workContractId, sessionsSpawnStatus, runId, childRunId, and childSessionKey from the native result.",
   };
   return toolResponse(JSON.stringify(body), body);
 }
@@ -3254,6 +3272,23 @@ export function getToolRegistrations(options: ToolRegistrationOptions = {}): Too
               metadata,
               workContract: dispatchWorkContract,
             });
+            const liveSpeculativeState = asRecord(
+              policyState.get(managedSessionKey)
+                || policyState.get(stateKey)
+                || state,
+            );
+            const speculative = resolveSpeculativePreloadEnabled()
+              ? readSpeculativePreloadState(liveSpeculativeState)
+              : null;
+            const useSpeculativeSend = Boolean(speculative?.label && speculative.status === "spawn_call_started");
+            const sessionsSendArgs = useSpeculativeSend && speculative?.label
+              ? buildSpeculativeSessionsSendArgs({
+                  label: speculative.label,
+                  message: asString(sessionsSpawnArgs.task),
+                }) as unknown as Record<string, unknown>
+              : null;
+            const dispatchMode = useSpeculativeSend ? "send_to_speculative" as const : "new_spawn" as const;
+            const nativeIntentArgs = (sessionsSendArgs || sessionsSpawnArgs) as { task: string; [key: string]: unknown };
             let intent: ReturnType<typeof nativeSpawnIntentStore.create>;
             try {
               intent = nativeSpawnIntentStore.create({
@@ -3261,7 +3296,9 @@ export function getToolRegistrations(options: ToolRegistrationOptions = {}): Too
                 delegateTaskId,
                 attemptId,
                 sessionKey: managedSessionKey || stateKey || asString(params.sessionKey),
-                sessionsSpawnArgs: sessionsSpawnArgs as { task: string; [key: string]: unknown },
+                sessionsSpawnArgs: nativeIntentArgs,
+                dispatchMode,
+                speculativeSessionLabel: useSpeculativeSend ? speculative?.label : undefined,
                 ttlMs: resolveSpawnIntentTtlMs(),
               });
             } catch (error) {
@@ -3284,6 +3321,20 @@ export function getToolRegistrations(options: ToolRegistrationOptions = {}): Too
               spawnExecuted: false,
               spawnIntentId: intent.spawnIntentId,
               workContractId,
+              dispatchMode,
+              dispatch_mode: dispatchMode,
+              ...(useSpeculativeSend && speculative?.label ? {
+                speculativePreload: serializeSpeculativePreloadState({
+                  ...speculative,
+                  status: "dispatched",
+                  updatedAt: Date.now(),
+                }),
+                speculative_preload: serializeSpeculativePreloadState({
+                  ...speculative,
+                  status: "dispatched",
+                  updatedAt: Date.now(),
+                }),
+              } : {}),
               updatedAt: Date.now(),
             };
             setPolicyStateForContext(ctx, nextState, managedSessionKey || stateKey);
@@ -3300,6 +3351,8 @@ export function getToolRegistrations(options: ToolRegistrationOptions = {}): Too
               spawn_intent_id: intent.spawnIntentId,
               canonical_args_hash: intent.canonicalArgsHash,
               expires_at: intent.expiresAt,
+              dispatch_mode: dispatchMode,
+              speculative_session_label: useSpeculativeSend ? speculative?.label : "",
               dispatch_executed: false,
               spawn_executed: false,
               materialized: false,
@@ -3311,6 +3364,9 @@ export function getToolRegistrations(options: ToolRegistrationOptions = {}): Too
               delegateTaskId,
               attemptId,
               sessionsSpawnArgs,
+              sessionsSendArgs: sessionsSendArgs || undefined,
+              dispatchMode,
+              speculativeSessionLabel: useSpeculativeSend ? speculative?.label : undefined,
               canonicalArgsHash: intent.canonicalArgsHash,
               expiresAt: intent.expiresAt,
               workerPool: asString(asRecord(cachedDecision.route_decision).worker_pool),

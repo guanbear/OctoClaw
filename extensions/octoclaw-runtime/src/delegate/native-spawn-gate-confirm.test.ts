@@ -11,7 +11,7 @@ import { envOverrides } from "../resolve/env.js";
 import { buildWorkContractFromPolicy, buildWorkDecisionSeal } from "../work-contract/builders.js";
 import { loadWorkContract, saveWorkContract, updateWorkContract } from "../work-contract/store.js";
 import { confirmNativeSpawn } from "./native-spawn-confirm.js";
-import { evaluateNativeSpawnGate } from "./native-spawn-gate.js";
+import { evaluateNativeSessionsSendGate, evaluateNativeSpawnGate } from "./native-spawn-gate.js";
 import { nativeSpawnIntentStore } from "./native-spawn-intent-store.js";
 import type { SessionsSpawnArgs } from "./native-spawn-intent.js";
 
@@ -193,6 +193,66 @@ describe("evaluateNativeSpawnGate", () => {
     });
     expect(followup.allowed).toBe(false);
     expect(followup.reason).toBe("execution_followup_spawn_blocked");
+  });
+
+  it("does not authorize send_to_speculative intents through sessions_spawn", () => {
+    const sendArgs = {
+      message: "Run delegated task through standby session.",
+      label: "octoclaw-speculative-gate",
+      timeoutSeconds: 0,
+    } as unknown as SessionsSpawnArgs;
+    nativeSpawnIntentStore.create({
+      workContractId: "wc-speculative-gate",
+      sessionKey: "session-speculative-gate",
+      sessionsSpawnArgs: sendArgs,
+      dispatchMode: "send_to_speculative",
+      speculativeSessionLabel: "octoclaw-speculative-gate",
+      ttlMs: 60_000,
+    });
+
+    const blocked = evaluateNativeSpawnGate({
+      sessionKeys: ["session-speculative-gate"],
+      args: sendArgs,
+    });
+
+    expect(blocked.allowed).toBe(false);
+    expect(blocked.reason).toBe("missing_pending_intent");
+  });
+
+  it("keeps ordinary spawn and speculative send intents from masking each other", () => {
+    const key = "session-mixed-dispatch-mode";
+    const now = Date.now();
+    const spawnIntent = nativeSpawnIntentStore.create({
+      workContractId: "wc-mixed-spawn",
+      sessionKey: key,
+      sessionsSpawnArgs: args,
+      ttlMs: 60_000,
+      now,
+    });
+    const sendArgs = {
+      message: "Run delegated task through standby session.",
+      label: "octoclaw-speculative-mixed",
+      timeoutSeconds: 0,
+    } as unknown as SessionsSpawnArgs;
+    const sendIntent = nativeSpawnIntentStore.create({
+      workContractId: "wc-mixed-send",
+      sessionKey: key,
+      sessionsSpawnArgs: sendArgs,
+      dispatchMode: "send_to_speculative",
+      speculativeSessionLabel: "octoclaw-speculative-mixed",
+      ttlMs: 60_000,
+      now: now + 1,
+    });
+
+    const spawnGate = evaluateNativeSpawnGate({ sessionKeys: [key], args });
+    const sendGate = evaluateNativeSessionsSendGate({ sessionKeys: [key], args: sendArgs });
+
+    expect(spawnGate.allowed).toBe(true);
+    expect(spawnGate.allowed ? spawnGate.intent.spawnIntentId : "").toBe(spawnIntent.spawnIntentId);
+    expect(sendGate.allowed).toBe(true);
+    expect(sendGate.allowed ? sendGate.intent.spawnIntentId : "").toBe(sendIntent.spawnIntentId);
+    expect(nativeSpawnIntentStore.get(spawnIntent.spawnIntentId)?.status).toBe("spawn_call_started");
+    expect(nativeSpawnIntentStore.get(sendIntent.spawnIntentId)?.status).toBe("spawn_call_started");
   });
 
   it("checks every Slack session alias before blocking on a stale hash mismatch", () => {

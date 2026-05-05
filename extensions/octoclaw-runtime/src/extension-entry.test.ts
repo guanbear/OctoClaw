@@ -1646,7 +1646,56 @@ describe("budgeted_main_then_delegate runtime budget", () => {
     policyState.clearState(key);
   });
 
-  it("blocks the next ordinary tool after timeout and requires octoclaw_dispatch", async () => {
+  it("does not convert a pending soft timeout into delegate at prompt injection", async () => {
+    const handlers = new Map<string, Function>();
+    plugin.register({
+      on: (event, handler) => handlers.set(event, handler),
+      registerTool: () => {},
+      registerCommand: () => {},
+      logger: {},
+    });
+
+    const key = "agent:main:slack:channel:c0as4dappu3:thread:t-budget-prompt-pending";
+    const prompt = "明天北京天气咋样";
+    const now = Date.now();
+    const pendingBudget = budgetedMainState(now - BUDGETED_MAIN_MAX_WALL_MS - 1_000, {
+      escalatedPending: true,
+      escalated_pending: true,
+      reason: "wall_time_over_budget",
+    });
+    policyState.setState(key, {
+      prompt,
+      decision: budgetedMainDecision(),
+      budgetedMain: pendingBudget,
+      budgeted_main: pendingBudget,
+      createdAt: now - 35_000,
+      updatedAt: now,
+    });
+
+    const beforePromptBuild = handlers.get("before_prompt_build");
+    expect(beforePromptBuild).toBeTruthy();
+    const projection = await beforePromptBuild!(
+      { prompt },
+      { sessionKey: key, sessionId: "session-budget-prompt-pending", agentId: "main", channelId: "slack" },
+    ) as { prependSystemContext?: string } | undefined;
+
+    expect(projection?.prependSystemContext).toContain("soft-budget notice");
+    expect(projection?.prependSystemContext).toContain("at most one lightweight read-only tool");
+    expect(policyState.getState(key)?.decision?.route_decision).toMatchObject({
+      route: "reply",
+      decision_bucket: "budgeted_main_then_delegate",
+    });
+    expect(policyState.getState(key)).not.toMatchObject({
+      dispatchStatus: "budgeted_main_escalated",
+    });
+    await waitForFireAndForget();
+    expect(readReplayEvents()).not.toContainEqual(expect.objectContaining({
+      event: "budgeted_main_escalated",
+    }));
+    policyState.clearState(key);
+  });
+
+  it("allows one lightweight read-only tool after soft timeout without escalating", async () => {
     const handlers = new Map<string, Function>();
     plugin.register({
       on: (event, handler) => handlers.set(event, handler),
@@ -1677,8 +1726,116 @@ describe("budgeted_main_then_delegate runtime budget", () => {
       { sessionKey: key, sessionId: "session-budget-timeout-tool", agentId: "main" },
     ) as { block?: boolean; blockReason?: string } | undefined;
 
+    expect(result).toBeUndefined();
+    expect(policyState.getState(key)?.decision?.route_decision).toMatchObject({
+      route: "reply",
+      decision_bucket: "budgeted_main_then_delegate",
+    });
+    expect(policyState.getState(key)?.budgetedMain).toMatchObject({
+      active: true,
+      escalatedPending: true,
+      readOnlyToolCount: 1,
+      toolCount: 1,
+    });
+    await waitForFireAndForget();
+    const events = readReplayEvents();
+    expect(events).not.toContainEqual(expect.objectContaining({
+      event: "budgeted_main_escalated",
+    }));
+    expect(events).not.toContainEqual(expect.objectContaining({ event: "sessions_spawn_intent_allowed" }));
+    expect(events).not.toContainEqual(expect.objectContaining({ event: "dispatch_confirm_completed" }));
+    policyState.clearState(key);
+  });
+
+  it("does not spend the late read-only budget on skill prep reads", async () => {
+    const handlers = new Map<string, Function>();
+    plugin.register({
+      on: (event, handler) => handlers.set(event, handler),
+      registerTool: () => {},
+      registerCommand: () => {},
+      logger: {},
+    });
+
+    const key = "agent:main:slack:channel:c0as4dappu3:thread:t-budget-timeout-skill-read";
+    const now = Date.now();
+    const pendingBudget = budgetedMainState(now - BUDGETED_MAIN_MAX_WALL_MS - 1_000, {
+      escalatedPending: true,
+      escalated_pending: true,
+      reason: "wall_time_over_budget",
+    });
+    policyState.setState(key, {
+      decision: budgetedMainDecision(),
+      budgetedMain: pendingBudget,
+      budgeted_main: pendingBudget,
+      createdAt: now - 35_000,
+      updatedAt: now,
+    });
+
+    const beforeToolCall = handlers.get("before_tool_call");
+    expect(beforeToolCall).toBeTruthy();
+    const prepResult = await beforeToolCall!(
+      { toolName: "read", params: { path: "/Users/guanbear/.openclaw/skills/weather/SKILL.md" } },
+      { sessionKey: key, sessionId: "session-budget-timeout-skill-read", agentId: "main" },
+    );
+    const lookupResult = await beforeToolCall!(
+      { toolName: "exec", params: { command: "curl -s 'https://wttr.in/Beijing?format=j1'" } },
+      { sessionKey: key, sessionId: "session-budget-timeout-skill-read", agentId: "main" },
+    );
+
+    expect(prepResult).toBeUndefined();
+    expect(lookupResult).toBeUndefined();
+    expect(policyState.getState(key)?.budgetedMain).toMatchObject({
+      active: true,
+      escalatedPending: true,
+      readOnlyToolCount: 1,
+      toolCount: 1,
+    });
+    expect(policyState.getState(key)?.decision?.route_decision).toMatchObject({ route: "reply" });
+    await waitForFireAndForget();
+    expect(readReplayEvents()).not.toContainEqual(expect.objectContaining({
+      event: "budgeted_main_escalated",
+    }));
+    policyState.clearState(key);
+  });
+
+  it("blocks a second real read-only tool after soft timeout and requires octoclaw_dispatch", async () => {
+    const handlers = new Map<string, Function>();
+    plugin.register({
+      on: (event, handler) => handlers.set(event, handler),
+      registerTool: () => {},
+      registerCommand: () => {},
+      logger: {},
+    });
+
+    const key = "agent:main:slack:channel:c0as4dappu3:thread:t-budget-timeout-second-tool";
+    const now = Date.now();
+    const pendingBudget = budgetedMainState(now - BUDGETED_MAIN_MAX_WALL_MS - 1_000, {
+      escalatedPending: true,
+      escalated_pending: true,
+      reason: "wall_time_over_budget",
+      readOnlyToolCount: 1,
+      read_only_tool_count: 1,
+      toolCount: 1,
+      tool_count: 1,
+    });
+    policyState.setState(key, {
+      decision: budgetedMainDecision(),
+      budgetedMain: pendingBudget,
+      budgeted_main: pendingBudget,
+      createdAt: now - 35_000,
+      updatedAt: now,
+    });
+
+    const beforeToolCall = handlers.get("before_tool_call");
+    expect(beforeToolCall).toBeTruthy();
+    const result = await beforeToolCall!(
+      { toolName: "web_fetch", params: { url: "https://example.com" } },
+      { sessionKey: key, sessionId: "session-budget-timeout-second-tool", agentId: "main" },
+    ) as { block?: boolean; blockReason?: string } | undefined;
+
     expect(result?.block).toBe(true);
     expect(result?.blockReason).toContain("Call octoclaw_dispatch");
+    expect(result?.blockReason).toContain("multi_step_tool_chain");
     expect(policyState.getState(key)?.decision?.route_decision).toMatchObject({
       route: "delegate",
       route_source: "budgeted_main_escalation",
@@ -1694,8 +1851,8 @@ describe("budgeted_main_then_delegate runtime budget", () => {
     const events = readReplayEvents();
     expect(events).toContainEqual(expect.objectContaining({
       event: "budgeted_main_escalated",
-      reason: "wall_time_over_budget",
-      budgetEscalationReason: "wall_time_over_budget",
+      reason: "multi_step_tool_chain",
+      budgetEscalationReason: "multi_step_tool_chain",
     }));
     expect(events).not.toContainEqual(expect.objectContaining({ event: "sessions_spawn_intent_allowed" }));
     expect(events).not.toContainEqual(expect.objectContaining({ event: "dispatch_confirm_completed" }));
@@ -1910,6 +2067,132 @@ describe("budgeted_main_then_delegate runtime budget", () => {
     }));
     policyState.clearState(replyKey);
     policyState.clearState(delegateKey);
+  });
+});
+
+describe("speculative preload planner path", () => {
+  afterEach(() => {
+    delete process.env.OCTOCLAW_SPECULATIVE_PRELOAD;
+    delete process.env.OCTOCLAW_SPAWN_BACKEND;
+  });
+
+  it("injects a standby sessions_spawn hint and allows only the matching speculative spawn", async () => {
+    process.env.OCTOCLAW_SPECULATIVE_PRELOAD = "1";
+    process.env.OCTOCLAW_SPAWN_BACKEND = "planner";
+    const handlers = new Map<string, Function>();
+    plugin.register({
+      on: (event, handler) => handlers.set(event, handler),
+      registerTool: () => {},
+      registerCommand: () => {},
+      logger: {},
+    });
+
+    const key = "agent:main:slack:channel:c0as4dappu3:thread:t-spec-preload";
+    const prompt = "用子 agent 做一次实现 review";
+    policyState.setState(key, {
+      prompt,
+      decision: budgetedMainDecision("delegate"),
+      routeHintSubmitted: true,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    });
+
+    const beforePromptBuild = handlers.get("before_prompt_build");
+    const beforeToolCall = handlers.get("before_tool_call");
+    expect(beforePromptBuild).toBeTruthy();
+    expect(beforeToolCall).toBeTruthy();
+
+    const projection = await beforePromptBuild!(
+      { prompt },
+      { sessionKey: key, sessionId: "session-spec-preload", agentId: "main", channelId: "slack", cwd: tempWorkspace },
+    ) as { prependSystemContext?: string } | undefined;
+
+    expect(projection?.prependSystemContext).toContain("OCTOCLAW_SPECULATIVE_SPAWN_HINT");
+    const speculative = (policyState.getState(key) as unknown as Record<string, unknown>)?.speculativePreload as Record<string, unknown>;
+    expect(speculative).toMatchObject({ status: "hinted" });
+    const spawnArgs = speculative.spawnArgs as Record<string, unknown>;
+    expect(spawnArgs).toMatchObject({
+      mode: "session",
+      thread: true,
+      lightContext: true,
+      context: "isolated",
+    });
+
+    const allowed = await beforeToolCall!(
+      { toolName: "sessions_spawn", params: spawnArgs },
+      { sessionKey: key, sessionId: "session-spec-preload", agentId: "main" },
+    );
+    const blocked = await beforeToolCall!(
+      { toolName: "sessions_spawn", params: { ...spawnArgs, label: "octoclaw-speculative-wrong" } },
+      { sessionKey: key, sessionId: "session-spec-preload", agentId: "main" },
+    ) as { block?: boolean; blockReason?: string } | undefined;
+
+    expect(allowed).toBeUndefined();
+    expect((policyState.getState(key) as unknown as Record<string, unknown>)?.speculativePreload).toMatchObject({ status: "spawn_call_started" });
+    expect(blocked?.block).toBe(true);
+    expect(blocked?.blockReason).toContain("Call octoclaw_dispatch");
+    await waitForFireAndForget();
+    const events = readReplayEvents();
+    expect(events).toContainEqual(expect.objectContaining({
+      event: "speculative_preload_hint_injected",
+      sessionKey: key,
+    }));
+    expect(events).toContainEqual(expect.objectContaining({
+      event: "speculative_preload_spawn_allowed",
+      sessionKey: key,
+    }));
+    policyState.clearState(key);
+  });
+
+  it("gates sessions_send through a pending send_to_speculative intent", async () => {
+    process.env.OCTOCLAW_SPAWN_BACKEND = "planner";
+    const handlers = new Map<string, Function>();
+    plugin.register({
+      on: (event, handler) => handlers.set(event, handler),
+      registerTool: () => {},
+      registerCommand: () => {},
+      logger: {},
+    });
+
+    const key = "agent:main:slack:channel:c0as4dappu3:thread:t-spec-send";
+    const args = {
+      label: "octoclaw-speculative-testsend",
+      message: "Run the actual delegated task.",
+      timeoutSeconds: 0,
+    };
+    const intent = nativeSpawnIntentStore.create({
+      workContractId: "wc-speculative-send",
+      sessionKey: key,
+      sessionsSpawnArgs: args as unknown as { task: string; [key: string]: unknown },
+      dispatchMode: "send_to_speculative",
+      speculativeSessionLabel: "octoclaw-speculative-testsend",
+      ttlMs: 60_000,
+    });
+    policyState.setState(key, {
+      decision: budgetedMainDecision("delegate"),
+      routeHintSubmitted: true,
+      spawnIntentId: intent.spawnIntentId,
+      workContractId: intent.workContractId,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    });
+
+    const beforeToolCall = handlers.get("before_tool_call");
+    expect(beforeToolCall).toBeTruthy();
+    const allowed = await beforeToolCall!(
+      { toolName: "sessions_send", params: args },
+      { sessionKey: key, sessionId: "session-spec-send", agentId: "main" },
+    );
+
+    expect(allowed).toBeUndefined();
+    expect(nativeSpawnIntentStore.get(intent.spawnIntentId)?.status).toBe("spawn_call_started");
+    await waitForFireAndForget();
+    expect(readReplayEvents()).toContainEqual(expect.objectContaining({
+      event: "sessions_send_intent_allowed",
+      spawn_intent_id: intent.spawnIntentId,
+      dispatch_mode: "send_to_speculative",
+    }));
+    policyState.clearState(key);
   });
 });
 

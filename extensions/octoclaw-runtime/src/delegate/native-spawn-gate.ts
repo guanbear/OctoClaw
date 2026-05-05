@@ -20,10 +20,67 @@ export type NativeSpawnGateDecision =
       actualHash?: string;
     };
 
+export type NativeSessionsSendGateDecision =
+  | { allowed: true; intent: NativeSpawnIntent; reason: "matched_speculative_send_intent" }
+  | {
+      allowed: false;
+      reason: string;
+      intent?: NativeSpawnIntent;
+      expectedHash?: string;
+      actualHash?: string;
+    };
+
 function asRecord(value: unknown): UnknownRecord {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value)
     ? value as UnknownRecord
     : {};
+}
+
+export function evaluateNativeSessionsSendGate(input: NativeSpawnGateInput): NativeSessionsSendGateDecision {
+  if (executionFollowupBlocked(input.decision)) {
+    return { allowed: false, reason: "execution_followup_spawn_blocked" };
+  }
+
+  const keys = uniqueSessionKeys(input.sessionKeys);
+  if (keys.length === 0) return { allowed: false, reason: "missing_session_key" };
+
+  const actualHash = hashSessionsSpawnArgs(input.args);
+  let firstMismatch: NativeSessionsSendGateDecision | null = null;
+  let firstTransitionFailure: NativeSessionsSendGateDecision | null = null;
+  for (const sessionKey of keys) {
+    let pending: NativeSpawnIntent | null;
+    try {
+      pending = nativeSpawnIntentStore.findPendingForSession(sessionKey, { now: input.now, dispatchMode: "send_to_speculative" });
+    } catch (error) {
+      firstTransitionFailure ??= { allowed: false, reason: storeErrorReason(error) };
+      continue;
+    }
+    if (!pending) continue;
+    if (pending.canonicalArgsHash !== actualHash) {
+      firstMismatch ??= {
+        allowed: false,
+        reason: "args_hash_mismatch",
+        intent: pending,
+        expectedHash: pending.canonicalArgsHash,
+        actualHash,
+      };
+      continue;
+    }
+
+    const started = nativeSpawnIntentStore.transitionToSpawnCallStarted({
+      spawnIntentId: pending.spawnIntentId,
+      sessionKey,
+      sessionsSpawnArgs: input.args,
+      now: input.now,
+    });
+    if (!started.ok) {
+      firstTransitionFailure ??= { allowed: false, reason: started.error || "intent_transition_failed", intent: started.intent ?? pending };
+      continue;
+    }
+    return { allowed: true, reason: "matched_speculative_send_intent", intent: started.intent };
+  }
+
+  return firstTransitionFailure ?? firstMismatch ?? { allowed: false, reason: "missing_pending_intent" };
 }
 
 function asString(value: unknown): string {
@@ -85,7 +142,7 @@ export function evaluateNativeSpawnGate(input: NativeSpawnGateInput): NativeSpaw
   for (const sessionKey of keys) {
     let pending: NativeSpawnIntent | null;
     try {
-      pending = nativeSpawnIntentStore.findPendingForSession(sessionKey, { now: input.now });
+      pending = nativeSpawnIntentStore.findPendingForSession(sessionKey, { now: input.now, dispatchMode: "new_spawn" });
     } catch (error) {
       firstTransitionFailure ??= { allowed: false, reason: storeErrorReason(error) };
       continue;

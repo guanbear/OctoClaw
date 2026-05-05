@@ -14,6 +14,8 @@ export interface CreateNativeSpawnIntentInput {
   attemptId?: string;
   sessionKey: string;
   sessionsSpawnArgs: SessionsSpawnArgs;
+  dispatchMode?: "new_spawn" | "send_to_speculative";
+  speculativeSessionLabel?: string;
   ttlMs: number;
   now?: Date | number;
   sqlite?: SqliteProvider;
@@ -26,6 +28,8 @@ export interface CreateIntentParams {
   attemptId?: string;
   sessionKey: string;
   sessionsSpawnArgs: SessionsSpawnArgs;
+  dispatchMode?: "new_spawn" | "send_to_speculative";
+  speculativeSessionLabel?: string;
   ttlMs: number;
   now?: Date | number;
 }
@@ -71,6 +75,7 @@ export type ConfirmFailResult = NativeSpawnIntentTransitionResult;
 type StoreOptions = { dbPath?: string; sqlite?: SqliteProvider };
 type StoreRuntimeOptions = StoreOptions & { persist?: boolean; memory?: Map<string, NativeSpawnIntent> };
 type OpenedIntentDb = ReturnType<typeof openDb>;
+type FindPendingOptions = { now?: Date | number; dbPath?: string; sqlite?: SqliteProvider; dispatchMode?: NativeSpawnIntent["dispatchMode"] };
 
 const SQLITE_BUSY_RETRY_DELAYS_MS = [0, 5, 25, 75] as const;
 
@@ -173,6 +178,7 @@ function normalizeIntent(intent: NativeSpawnIntent): NativeSpawnIntent {
     ...intent,
     canonicalArgsHash: hash,
     planHash: hash,
+    dispatchMode: intent.dispatchMode || "new_spawn",
     runId: runId || null,
     openclawRunId: runId || undefined,
   };
@@ -296,17 +302,24 @@ function readIntent(spawnIntentId: string, opts?: StoreRuntimeOptions): NativeSp
   }
 }
 
-function findPendingInMemory(memory: Map<string, NativeSpawnIntent>, sessionKey: string, nowMs: number): NativeSpawnIntent | null {
+function findPendingInMemory(
+  memory: Map<string, NativeSpawnIntent>,
+  sessionKey: string,
+  nowMs: number,
+  dispatchMode?: NativeSpawnIntent["dispatchMode"],
+): NativeSpawnIntent | null {
   let latest: NativeSpawnIntent | null = null;
   for (const intent of memory.values()) {
-    if (intent.sessionKey !== sessionKey) continue;
+    const normalized = normalizeIntent(intent);
+    if (normalized.sessionKey !== sessionKey) continue;
+    if (dispatchMode && normalized.dispatchMode !== dispatchMode) continue;
     if (intent.status !== "planned") continue;
     if (parseTime(intent.expiresAt) <= nowMs) {
       const expired = { ...intent, status: "expired" as const, updatedAt: new Date(nowMs).toISOString() };
       memory.set(expired.spawnIntentId, normalizeIntent(expired));
       continue;
     }
-    if (!latest || parseTime(intent.createdAt) >= parseTime(latest.createdAt)) latest = intent;
+    if (!latest || parseTime(normalized.createdAt) >= parseTime(latest.createdAt)) latest = normalized;
   }
   return latest ? cloneIntent(latest) : null;
 }
@@ -337,6 +350,8 @@ export class NativeSpawnIntentStore {
       canonicalArgsHash,
       planHash: canonicalArgsHash,
       sessionsSpawnArgs: input.sessionsSpawnArgs,
+      dispatchMode: input.dispatchMode || "new_spawn",
+      speculativeSessionLabel: input.speculativeSessionLabel || null,
       status: "planned",
       runId: null,
       ttlMs,
@@ -351,7 +366,7 @@ export class NativeSpawnIntentStore {
     return readIntent(spawnIntentId, this.options(opts));
   }
 
-  findPendingForSession(sessionKey: string, opts?: { now?: Date | number; dbPath?: string; sqlite?: SqliteProvider } | number): NativeSpawnIntent | null {
+  findPendingForSession(sessionKey: string, opts?: FindPendingOptions | number): NativeSpawnIntent | null {
     const key = asString(sessionKey);
     if (!key) return null;
     const options = typeof opts === "number" ? { now: opts } : opts;
@@ -361,7 +376,7 @@ export class NativeSpawnIntentStore {
     const opened = openDb(runtimeOptions);
     if (!opened.db) {
       failIfPersistentUnavailable(opened);
-      return findPendingInMemory(this.memory, key, nowMs);
+      return findPendingInMemory(this.memory, key, nowMs, options?.dispatchMode);
     }
     try {
       const rows = withSqliteBusyRetry(() => opened.db!.prepare(
@@ -372,6 +387,7 @@ export class NativeSpawnIntentStore {
       for (const row of rows) {
         const intent = parseIntent(row);
         if (!intent) continue;
+        if (options?.dispatchMode && intent.dispatchMode !== options.dispatchMode) continue;
         if (parseTime(intent.expiresAt) <= nowMs) {
           upsertDbIntent(opened.db, { ...intent, status: "expired", updatedAt: now.toISOString() });
           continue;

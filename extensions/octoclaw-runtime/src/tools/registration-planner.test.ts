@@ -19,7 +19,7 @@ const fs = fsSync as unknown as {
 };
 const osModule = os as unknown as { tmpdir(): string };
 
-const ENV_KEYS = ["OCTOCLAW_SPAWN_BACKEND", "OCTOCLAW_PLANNER_ALLOWLIST", "OCTOCLAW_SPAWN_INTENT_TTL_MS", "OCTOCLAW_RUNTIME_LEDGER", "OCTOCLAW_SCHEDULER_ENABLED"];
+const ENV_KEYS = ["OCTOCLAW_SPAWN_BACKEND", "OCTOCLAW_PLANNER_ALLOWLIST", "OCTOCLAW_SPAWN_INTENT_TTL_MS", "OCTOCLAW_RUNTIME_LEDGER", "OCTOCLAW_SCHEDULER_ENABLED", "OCTOCLAW_SPECULATIVE_PRELOAD"];
 let originalEnv: Record<string, string | undefined>;
 let tempWorkspace = "";
 
@@ -237,6 +237,65 @@ describe("octoclaw_dispatch planner backend", () => {
       work_contract_id: contract.workContractId,
       spawn_intent_id: body.spawnIntentId,
       elapsedMs: expect.any(Number),
+    }));
+  });
+
+  it("returns sessions_send plan when speculative preload standby was started", async () => {
+    process.env.OCTOCLAW_SPAWN_BACKEND = "planner";
+    process.env.OCTOCLAW_SPECULATIVE_PRELOAD = "1";
+    const contract = seedWorkContract("session-planner-speculative-dispatch");
+    const label = "octoclaw-speculative-dispatchtest";
+    policyState.setState(contract.sessionKey, {
+      decision: delegateDecision(contract),
+      routeHintSubmitted: true,
+      speculativePreload: {
+        label,
+        status: "spawn_call_started",
+        createdAt: Date.now() - 1_000,
+        updatedAt: Date.now(),
+      },
+      createdAt: Date.now() - 1_000,
+      updatedAt: Date.now(),
+    } as unknown as Parameters<typeof policyState.setState>[1]);
+
+    const response = await dispatchTool().execute({
+      task: contract.userAsk,
+      workContractId: contract.workContractId,
+      policyJson: JSON.stringify(delegateDecision(contract)),
+      timeoutSeconds: 900,
+    }, {
+      sessionKey: contract.sessionKey,
+      sessionId: "session-planner-speculative-dispatch",
+      cwd: tempWorkspace,
+    });
+
+    const body = JSON.parse(String(response.text));
+    expect(body.ok).toBe(true);
+    expect(body.dispatchMode).toBe("send_to_speculative");
+    expect(body.nextTool).toBe("sessions_send");
+    expect(body.sessionsSendArgs).toMatchObject({
+      label,
+      timeoutSeconds: 0,
+    });
+    expect(body.sessionsSendArgs.message).toContain(contract.workContractId);
+    expect(body.sessionsSpawnArgs).toMatchObject({
+      runtime: "subagent",
+      mode: "run",
+      cleanup: "keep",
+      context: "isolated",
+      lightContext: true,
+    });
+    const intent = nativeSpawnIntentStore.get(body.spawnIntentId);
+    expect(intent).toMatchObject({
+      status: "planned",
+      dispatchMode: "send_to_speculative",
+      speculativeSessionLabel: label,
+    });
+    expect(intent?.sessionsSpawnArgs).toMatchObject(body.sessionsSendArgs);
+    expect(readReplayEvents()).toContainEqual(expect.objectContaining({
+      event: "dispatch_planner_intent_created",
+      dispatch_mode: "send_to_speculative",
+      speculative_session_label: label,
     }));
   });
 

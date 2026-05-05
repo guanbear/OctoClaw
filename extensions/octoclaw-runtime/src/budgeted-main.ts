@@ -46,6 +46,7 @@ export interface BudgetedMainMetrics {
 export interface BudgetedMainToolClassification {
   toolName: string;
   counted: boolean;
+  budgetNeutral: boolean;
   readOnly: boolean;
   longToolDetected: boolean;
   writeToolDetected: boolean;
@@ -180,6 +181,16 @@ function commandText(params: UnknownRecord): string {
   return asString(params.command || params.cmd || params.shell || params.script || params.input);
 }
 
+function pathText(params: UnknownRecord): string {
+  return asString(params.path || params.file || params.filePath || params.file_path || params.uri);
+}
+
+function isSkillRead(toolName: string, params: UnknownRecord): boolean {
+  if (toolName !== "read") return false;
+  const path = pathText(params).replace(/\\/gu, "/");
+  return /(?:^|\/)skills\/[^/]+\/SKILL\.md$/u.test(path);
+}
+
 function explicitWriteSignal(params: UnknownRecord): boolean {
   const readOnly = asBoolean(params.readOnly ?? params.read_only);
   if (readOnly === true) return false;
@@ -218,7 +229,21 @@ export function classifyBudgetedMainTool(toolNameInput: unknown, paramsInput: un
     return {
       toolName,
       counted: false,
+      budgetNeutral: false,
       readOnly: false,
+      longToolDetected: false,
+      writeToolDetected: false,
+      multiStepToolDetected: false,
+      escalationReason: "",
+    };
+  }
+
+  if (isSkillRead(toolName, params)) {
+    return {
+      toolName,
+      counted: false,
+      budgetNeutral: true,
+      readOnly: true,
       longToolDetected: false,
       writeToolDetected: false,
       multiStepToolDetected: false,
@@ -244,6 +269,7 @@ export function classifyBudgetedMainTool(toolNameInput: unknown, paramsInput: un
   return {
     toolName,
     counted: true,
+    budgetNeutral: false,
     readOnly,
     longToolDetected,
     writeToolDetected,

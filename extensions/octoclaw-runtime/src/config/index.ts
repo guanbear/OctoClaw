@@ -53,6 +53,11 @@ export function resolveSpawnIntentTtlMs(): number {
   return Math.max(5_000, Math.min(raw, 300_000));
 }
 
+export function resolveSpeculativePreloadEnabled(): boolean {
+  const raw = String(process.env.OCTOCLAW_SPECULATIVE_PRELOAD ?? "").trim().toLowerCase();
+  return raw === "1" || raw === "true" || raw === "enabled";
+}
+
 export function resolveLegacyCompletionFileEnabled(): boolean {
   return String(process.env.OCTOCLAW_LEGACY_COMPLETION_FILE ?? "").trim() === "1";
 }

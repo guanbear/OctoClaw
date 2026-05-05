@@ -169,6 +169,7 @@
 - footer route 优先 accepted native refs / child result provenance / `childSessionKey/runId`，不能被 child announce 后 parent 的新 `route=reply` 覆盖成 `reply`。
 - Slack smoke 必须记录 neutral ACK、policy/judge、dispatch intent、spawn allowed、accepted confirm、child final、footer provenance 的分段时间。
 - hard confirm 不变：只能 `planned -> spawn_call_started -> accepted`；不能为了速度允许 `planned -> accepted`。
+- 0.5.1 方案 B 已进入 feature-flag 实现切片：`OCTOCLAW_SPECULATIVE_PRELOAD=1` 时，delegate turn 可在 `before_prompt_build` 注入 standby `sessions_spawn(mode="session", thread=true, lightContext=true, context="isolated")`，随后 `octoclaw_dispatch` 可返回 `dispatchMode="send_to_speculative"` + `sessionsSendArgs`。`sessions_send` 仍必须匹配 pending intent hash，confirm/ACK 语义不变；默认关闭，待 Section 6 live 验证后再决定是否默认启用。
 
 验收：
 
@@ -1029,7 +1030,7 @@ admission 规则：
 
 - `must_reply/main_fast_path`：当前上下文或一次轻量只读工具可完成，且无写操作、无长命令、无多步研究。
 - `must_delegate`：有硬委派信号，例如用户明确要求子 agent/后台/并行、代码修改/测试/构建、多步工具、大量上下文阅读、review/验证，或明显无法放进固定 30s main execution budget。
-- `budgeted_main_then_delegate`：中间地带先让主 agent 在固定 30s soft runtime budget 内尝试；预算超限后进入升级待执行状态，或出现写操作/长命令/第二轮以上真实工具时转 `octoclaw_dispatch`。
+- `budgeted_main_then_delegate`：中间地带先让主 agent 在固定 30s soft runtime budget 内尝试；预算超限后进入升级待执行状态，仍允许 late final 或一次轻量只读工具完成；出现写操作、长命令、多步工具、测试/build/review/validation，或超时后第二个真实只读工具时转 `octoclaw_dispatch`。
 
 rule、local judge、cheap LLM judge 和 prompt 注入必须统一为“judge 两档 route + runtime 成本派生三档”的语义；只改 rule 或只改 prompt 都会导致路由抖动。尤其是 `fresh_live_lookup`、`conversation_control.route_hint=delegate`、`fast_first_response` 这些旧信号需要降级，但不能覆盖 `must_delegate` 硬信号。
 
@@ -1070,8 +1071,9 @@ main_fast_path:
 30s 到点不是强抢占。如果 OpenClaw/模型运行中没有可靠中断和重新注入能力，OctoClaw 只记录 `budgeted_main_escalated_pending`，不 kill main agent，不 direct spawn，也不发送“任务已启动”。之后的可控边界按以下规则处理：
 
 - main agent 已经产出 final reply：允许正常投递，记录 `budgeted_main_completed_late`，不额外 spawn。
-- main agent 下一步要调用普通工具，尤其写操作、长命令、多步工具、测试/build/review/validation：拦截或改写为 `octoclaw_dispatch`，记录 `budgeted_main_escalated`。
-- runtime 有下一次 prompt 注入点：注入 route hint，要求本轮停止继续分析并调用 `octoclaw_dispatch`。
+- main agent 下一步只需要一次轻量只读工具：允许执行，避免天气、版本号这类单步查证被误升级；skill `SKILL.md` 读取等准备动作不消耗这次真实只读额度。
+- main agent 下一步要调用写操作、长命令、多步工具、测试/build/review/validation，或超时后第二个真实只读工具：拦截或改写为 `octoclaw_dispatch`，记录 `budgeted_main_escalated`。
+- runtime 有下一次 prompt 注入点：注入 soft-budget notice，要求已有足够信息就 final；如果还需要危险/多步工作才调用 `octoclaw_dispatch`。
 - runtime 没有可控边界：只保留 `budgeted_main_escalated_pending`，等下一边界升级。
 
 超预算升级只能进入现有 native planner 链路：`octoclaw_dispatch -> sessions_spawn -> octoclaw_dispatch_confirm`。不能直接调用内部 spawn，不能直接调用 OpenClaw SDK spawn 作为主路径，不能提前发 accepted ACK；“任务已启动”只能在 `sessions_spawn` 返回 accepted 且 `octoclaw_dispatch_confirm` 成功后发送。
@@ -1267,7 +1269,7 @@ interface MessageDeliveryPort {
 - `main_fast_path_one_lookup`：一次轻量只读查证在主线程完成，`fresh_live_lookup` 不单独强制 delegate。
 - `must_delegate_explicit_subagent`：用户明确要求子 agent/后台/并行时进入 planner/native delegate。
 - `must_delegate_code_test_review`：代码修改、测试、review/验证不能被 main fast path 吃掉。
-- `budgeted_main_then_delegate`：主线程固定 30s soft runtime budget 超限后先记录 `budgeted_main_escalated_pending`；late final 记录 `budgeted_main_completed_late` 且不 spawn；下一普通工具/注入边界再转 `octoclaw_dispatch` 并记录预算原因。
+- `budgeted_main_then_delegate`：主线程固定 30s soft runtime budget 超限后先记录 `budgeted_main_escalated_pending`；late final 记录 `budgeted_main_completed_late` 且不 spawn；prompt 注入只给 soft-budget notice；一次轻量只读工具可继续完成；写/长/多步或第二个真实只读工具再转 `octoclaw_dispatch` 并记录预算原因。
 - `status_provenance_no_spawn`：状态/来源追问只读 native refs/replay，不创建新 spawn intent。
 - `native_announce_final`：child 不写 completion file，final 通过 native announce 回到 Slack thread。
 - `footer_delegate_provenance`：debug footer 对 child final 显示 `route=delegate` 和 `via=subagent|native_announce`。

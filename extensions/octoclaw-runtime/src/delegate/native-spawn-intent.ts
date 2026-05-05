@@ -16,9 +16,11 @@ export interface SessionsSpawnAttachment {
 
 export interface SessionsSpawnArgs {
   task: string;
+  message?: string;
   label?: string;
   runtime?: "subagent" | "acp";
   agentId?: string;
+  sessionKey?: string;
   resumeSessionId?: string;
   model?: string;
   thinking?: string;
@@ -46,6 +48,8 @@ export interface NativeSpawnIntent {
   canonicalArgsHash: string;
   planHash: string;
   sessionsSpawnArgs: SessionsSpawnArgs;
+  dispatchMode?: "new_spawn" | "send_to_speculative";
+  speculativeSessionLabel?: string | null;
   status: NativeSpawnIntentStatus;
   runId: string | null;
   openclawRunId?: string;
@@ -84,13 +88,16 @@ function normalizeSessionsSpawnArgs(args: SessionsSpawnArgs): Record<string, unk
     task: asNonEmptyString(record.task),
   };
 
+  const message = asNonEmptyString(record.message);
+  if (message) normalized.message = message;
+
   const label = asNonEmptyString(record.label);
   if (label) normalized.label = label;
 
   const runtime = record.runtime === "acp" ? "acp" : record.runtime === "subagent" ? "subagent" : "";
   if (runtime && runtime !== "subagent") normalized.runtime = runtime;
 
-  for (const key of ["agentId", "resumeSessionId", "model", "thinking", "cwd", "streamTo"] as const) {
+  for (const key of ["agentId", "sessionKey", "resumeSessionId", "model", "thinking", "cwd", "streamTo"] as const) {
     const value = asNonEmptyString(record[key]);
     if (value) normalized[key] = value;
   }
@@ -102,6 +109,7 @@ function normalizeSessionsSpawnArgs(args: SessionsSpawnArgs): Record<string, unk
   } else if (backCompatTimeout !== undefined && backCompatTimeout > 0) {
     normalized.runTimeoutSeconds = backCompatTimeout;
   }
+  if (message && backCompatTimeout !== undefined) normalized.timeoutSeconds = backCompatTimeout;
 
   if (record.thread === true) normalized.thread = true;
   if (record.mode === "run" || record.mode === "session") normalized.mode = record.mode;
