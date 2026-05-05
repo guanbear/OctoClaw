@@ -39,13 +39,20 @@ The feature is guarded by:
 OCTOCLAW_SPECULATIVE_PRELOAD=1
 ```
 
-Default is off.
+or by explicit runtime plugin config:
+
+```text
+pluginConfig.speculativePreload=true
+```
+
+Default is off. The plugin config path exists because live OpenClaw hook workers may not reliably inherit temporary LaunchAgent environment changes during controlled smoke runs.
 
 ### Hint Injection
 
 `before_prompt_build` may inject an `OCTOCLAW_SPECULATIVE_SPAWN_HINT` only when all are true:
 
 - speculative preload flag is enabled;
+- the flag came from environment or explicit plugin config;
 - spawn backend is planner;
 - runtime route decision is already delegate;
 - current policy state has no non-stale speculative preload state.

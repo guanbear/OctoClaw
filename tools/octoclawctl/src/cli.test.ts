@@ -149,6 +149,13 @@ describe("octoclawctl cli", () => {
       expect(saved.judge.modelId).toBe("test-model");
       expect(saved.pluginConfig.judgeFast).toBeUndefined();
 
+      const setSpeculativeCapture = createIo();
+      const setSpeculativeExitCode = await main(["config", "set", "pluginConfig.speculativePreload", "true"], { OCTOCLAW_HOME: openclawHome }, setSpeculativeCapture.io);
+      expect(setSpeculativeExitCode).toBe(0);
+      expect(setSpeculativeCapture.stdout[0]).toBe("set pluginConfig.speculativePreload");
+      const savedWithSpeculative = JSON.parse(await fs.readFile(path.join(tmpDir, ".octoclaw", "config.json"), "utf8"));
+      expect(savedWithSpeculative.pluginConfig.speculativePreload).toBe(true);
+
       const getCapture = createIo();
       const getExitCode = await main(["config", "get", "judge.modelId"], { OCTOCLAW_HOME: openclawHome }, getCapture.io);
       expect(getExitCode).toBe(0);

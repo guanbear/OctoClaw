@@ -20,6 +20,7 @@
 ## P1 Scheme B Feature-Flag Implementation
 
 - [x] Add `OCTOCLAW_SPECULATIVE_PRELOAD=1` config resolver; default off.
+- [x] Support explicit `pluginConfig.speculativePreload=true` so controlled live smokes do not depend on transient LaunchAgent env propagation.
 - [x] Add speculative preload helper for label, standby spawn args, hint text, state serialization, and `sessions_send` args.
 - [x] Inject `OCTOCLAW_SPECULATIVE_SPAWN_HINT` only for runtime delegate decisions, not user-text keywords.
 - [x] Allow only exact matching standby `sessions_spawn(mode="session", thread=true, context="isolated", lightContext=true)` through the speculative whitelist.
@@ -41,6 +42,7 @@
 Attempt notes:
 
 - 2026-05-05 attempt `/tmp/octoclaw-051-spec-preload-20260505T031657Z` was stopped after producing no report and no Scheme B replay events. Replay showed DM `reply/budgeted_main_then_delegate` events instead of `speculative_preload_*` / `sessions_send`; this is not accepted P2 evidence. The launchctl flag was unset and gateway restarted.
+- 2026-05-05 attempt `/tmp/octoclaw-051-spec-preload-20260505T033234Z` used the Slack acceptance user token and reached channel `C0AS4DAPPU3` with `route=delegate` / `decision_bucket=must_delegate`, but did not produce `speculative_preload_hint_injected`. `octoclaw_dispatch` then failed with `blocked_by_recent_delegated_execution_guard:recent_delegated_without_new_work_ticket`. This is not accepted P2 evidence; follow-up patch added pluginConfig flag support and inconsistent delegate/new-work repair.
 
 ## P3 Rollout Decision
 
@@ -54,6 +56,7 @@ Attempt notes:
 - [x] `./node_modules/.bin/tsc --build extensions/octoclaw-runtime/tsconfig.json --pretty false`
 - [x] `./node_modules/.bin/vitest run extensions/octoclaw-runtime/src/extension-entry.test.ts extensions/octoclaw-runtime/src/tools/registration-planner.test.ts extensions/octoclaw-runtime/src/delegate/native-spawn-gate-confirm.test.ts extensions/octoclaw-runtime/src/delegate/native-spawn-intent.test.ts`
 - [x] `./node_modules/.bin/vitest run extensions/octoclaw-runtime/src/extension-entry-neutral-ack.test.ts extensions/octoclaw-runtime/src/resolve/policy-resolver-judge-fallback.test.ts extensions/octoclaw-runtime/src/tools/registration-dispatch-honesty.test.ts extensions/octoclaw-runtime/src/fast-delegate/probe.test.ts extensions/octoclaw-runtime/src/fast-delegate/no-double-judge.test.ts extensions/octoclaw-runtime/src/fast-delegate/draft.test.ts`
+- [x] `./node_modules/.bin/vitest run extensions/octoclaw-runtime/src/extension-entry.test.ts extensions/octoclaw-runtime/src/resolve/policy-resolver-judge-fallback.test.ts extensions/octoclaw-runtime/src/tools/registration-planner.test.ts tools/octoclawctl/src/cli.test.ts`
 
 ## Commits
 

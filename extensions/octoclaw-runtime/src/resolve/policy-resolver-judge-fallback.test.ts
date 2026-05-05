@@ -1827,5 +1827,48 @@ describe("SR-P1 startup-cost-aware delegation tightening", () => {
         hard_delegate_signal: true,
       });
     });
+
+    it("repairs inconsistent delegate judge output that marks obvious new work as not new", async () => {
+      vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+        judgeSignalResponse({
+          route: "delegate",
+          confidence: 0.88,
+          decision_bucket: "must_delegate",
+          hard_delegate_signal: true,
+          is_followup_to_recent_execution: false,
+          is_new_work: false,
+          expected_deliverable: null,
+          tool_need_hint: "required",
+          duration_hint: "medium",
+          scope: "local",
+        }),
+      );
+
+      const prompt = "请明确委派子 agent 做一个只读检查，最后给验收摘要。";
+      const decision = await resolveStatelessPolicyDecision(prompt, {
+        metadata: {
+          _judgeFastConfig: localJudgeConfig,
+          conversation_control: {
+            source: "explicit_conversation_control",
+            explicit_delegate_request: true,
+          },
+        },
+      });
+
+      expect(routeDecisionOf(decision)).toMatchObject({
+        route: "delegate",
+        decision_bucket: "must_delegate",
+        is_new_work: true,
+        expected_deliverable: prompt,
+      });
+      expect(decision).toMatchObject({
+        is_new_work: true,
+        expected_deliverable: prompt,
+      });
+      expect(buildDelegationTicketDryRun({ decision, payload: { task: prompt } })).toMatchObject({
+        ticket_decision: "ticket_would_issue",
+        is_new_work: true,
+      });
+    });
   });
 });

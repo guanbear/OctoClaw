@@ -2196,7 +2196,12 @@ export async function resolveStatelessPolicyDecision(task: string, options: Unkn
       || asBoolean(finalConversationControl.require_state_grounding)
       || startupClassification.hardDelegateSignal
     );
-  const seededIsNewWork = judgeIsNewWork ?? (deterministicNewWorkDelegate ? true : undefined);
+  const overrideInconsistentJudgeNewWork = deterministicNewWorkDelegate
+    && judgeIsNewWork === false
+    && judgeIsFollowupToRecentExecution !== true;
+  const seededIsNewWork = overrideInconsistentJudgeNewWork
+    ? true
+    : judgeIsNewWork ?? (deterministicNewWorkDelegate ? true : undefined);
   const seededExpectedDeliverable = judgeExpectedDeliverable ?? (deterministicNewWorkDelegate ? prompt.slice(0, 200) : null);
 
   const seeded: UnknownRecord = {
@@ -2267,6 +2272,7 @@ export async function resolveStatelessPolicyDecision(task: string, options: Unkn
     is_new_work: seededIsNewWork,
     expected_deliverable: seededExpectedDeliverable,
     _delegate_reason_codes: delegateReasonCodes,
+    _judge_new_work_override: overrideInconsistentJudgeNewWork || undefined,
     _decision_bucket: startupClassification.decisionBucket,
     _startup_cost_policy: startupClassification.startupCostPolicy,
     _duration_hint: startupClassification.durationHint,

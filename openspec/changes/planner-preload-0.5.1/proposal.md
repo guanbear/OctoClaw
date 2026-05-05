@@ -34,6 +34,6 @@ A 0.5.1 slice is acceptable only when:
 - It preserves the 0.5.0 strict planner/confirm state machine: `planned -> spawn_call_started -> accepted`; never `planned -> accepted`.
 - It preserves WorkContract as metadata/semantic truth and OpenClaw native run/session state as execution truth.
 - It records replay events for budget escalation, speculative preload hint/spawn, `sessions_send` gate allow/block, confirm, ACK, and final delivery where applicable.
-- It keeps Scheme B behind `OCTOCLAW_SPECULATIVE_PRELOAD=1` until live validation passes.
+- It keeps Scheme B behind `OCTOCLAW_SPECULATIVE_PRELOAD=1` or explicit `pluginConfig.speculativePreload=true` until live validation passes.
 - It proves locally that ordinary `sessions_spawn` and speculative `sessions_send` intents cannot mask each other.
 - It includes Slack live artifacts before any rollout/default-enable task is marked complete.

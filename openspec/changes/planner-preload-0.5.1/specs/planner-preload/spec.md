@@ -35,7 +35,7 @@ The 30s budget for `budgeted_main_then_delegate` SHALL be a soft main execution 
 
 ### Requirement: Speculative Preload Is Feature Flagged
 
-Scheme B speculative preload SHALL be disabled by default and SHALL only run when `OCTOCLAW_SPECULATIVE_PRELOAD=1` (or equivalent enabled value) is set.
+Scheme B speculative preload SHALL be disabled by default and SHALL only run when `OCTOCLAW_SPECULATIVE_PRELOAD=1` (or equivalent enabled value) or explicit `pluginConfig.speculativePreload=true` is set.
 
 #### Scenario: flag disabled
 
@@ -46,6 +46,7 @@ Scheme B speculative preload SHALL be disabled by default and SHALL only run whe
 #### Scenario: flag enabled for delegate route
 
 - WHEN the flag is enabled
+- AND the flag source is environment or explicit plugin config
 - AND the backend is planner
 - AND the runtime decision route is delegate
 - THEN OctoClaw MAY inject `OCTOCLAW_SPECULATIVE_SPAWN_HINT`

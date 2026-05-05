@@ -2144,6 +2144,43 @@ describe("speculative preload planner path", () => {
     policyState.clearState(key);
   });
 
+  it("can enable speculative preload from plugin config without a process env flag", async () => {
+    process.env.OCTOCLAW_SPAWN_BACKEND = "planner";
+    const handlers = new Map<string, Function>();
+    plugin.register({
+      pluginConfig: { speculativePreload: true },
+      on: (event, handler) => handlers.set(event, handler),
+      registerTool: () => {},
+      registerCommand: () => {},
+      logger: {},
+    });
+
+    const key = "agent:main:slack:channel:c0as4dappu3:thread:t-spec-preload-config";
+    const prompt = "请委派子 agent 做一次只读验收";
+    policyState.setState(key, {
+      prompt,
+      decision: budgetedMainDecision("delegate"),
+      routeHintSubmitted: true,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    });
+
+    const beforePromptBuild = handlers.get("before_prompt_build");
+    const projection = await beforePromptBuild!(
+      { prompt },
+      { sessionKey: key, sessionId: "session-spec-preload-config", agentId: "main", channelId: "slack", cwd: tempWorkspace },
+    ) as { prependSystemContext?: string } | undefined;
+
+    expect(projection?.prependSystemContext).toContain("OCTOCLAW_SPECULATIVE_SPAWN_HINT");
+    expect((policyState.getState(key) as unknown as Record<string, unknown>)?.speculativePreload).toMatchObject({ status: "hinted" });
+    await waitForFireAndForget();
+    expect(readReplayEvents()).toContainEqual(expect.objectContaining({
+      event: "speculative_preload_hint_injected",
+      sessionKey: key,
+    }));
+    policyState.clearState(key);
+  });
+
   it("gates sessions_send through a pending send_to_speculative intent", async () => {
     process.env.OCTOCLAW_SPAWN_BACKEND = "planner";
     const handlers = new Map<string, Function>();

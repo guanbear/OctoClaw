@@ -2428,9 +2428,10 @@ function maybeInjectSpeculativePreload(input: {
   decision: UnknownRecord;
   prompt: string;
   prependSystem: string[];
+  pluginConfig?: UnknownRecord;
   logger?: LoggerLike;
 }): UnknownRecord {
-  if (!resolveSpeculativePreloadEnabled() || resolveSpawnBackend() !== "planner") return input.state;
+  if (!resolveSpeculativePreloadEnabled(input.pluginConfig) || resolveSpawnBackend() !== "planner") return input.state;
   if (!input.stateKey || !isDelegatedRoute(input.decision)) return input.state;
   const existing = readSpeculativePreloadState(input.state);
   if (existing?.label && existing.status !== "stale") return input.state;
@@ -3660,6 +3661,7 @@ export const plugin = {
         decision: effectiveDecision,
         prompt,
         prependSystem,
+        pluginConfig: asRecord(pi.pluginConfig),
         logger: pi.logger,
       }) as PolicyStateEntry;
       const projection = buildPromptContextProjection({

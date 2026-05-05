@@ -149,11 +149,15 @@ async function readLegacyJudgeFastConfig(openclawHome: string): Promise<JsonReco
 
 function buildPluginConfig(config: OctoclawConfig): JsonRecord {
   const pluginConfig: JsonRecord = {
+    ...config.pluginConfig,
     enabled: config.enabled,
     delegationEnabled: config.features.delegation,
   };
 
-  if (!config.judge.enabled) return pluginConfig;
+  if (!config.judge.enabled) {
+    delete pluginConfig.judgeFast;
+    return pluginConfig;
+  }
 
   const modelId = config.judge.modelId.trim();
   const baseUrl = config.judge.baseUrl.trim();

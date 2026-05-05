@@ -558,7 +558,7 @@ Gate 逻辑修改需仔细测试，避免破坏现有 intent-matched 路径的�
 | 阶段 | 内容 | 前置条件 |
 | --- | --- | --- |
 | **0.5.1 P0** | 保留 30s soft budget，但超时后允许 late final / 一次轻量只读工具；prompt 注入不再强制 delegate | 0.5.0 release branch |
-| **0.5.1 P1** | 方案 B feature-flag 实现：`before_prompt_build` 注入 standby spawn、speculative spawn 白名单、`octoclaw_dispatch` 返回 `dispatchMode=send_to_speculative`、`sessions_send` 走 pending intent gate、confirm 继续 fail-closed | `OCTOCLAW_SPECULATIVE_PRELOAD=1`；默认关闭 |
+| **0.5.1 P1** | 方案 B feature-flag 实现：`before_prompt_build` 注入 standby spawn、speculative spawn 白名单、`octoclaw_dispatch` 返回 `dispatchMode=send_to_speculative`、`sessions_send` 走 pending intent gate、confirm 继续 fail-closed | `OCTOCLAW_SPECULATIVE_PRELOAD=1` 或 `pluginConfig.speculativePreload=true`；默认关闭 |
 | **0.5.1 P2** | Section 6 live 验证：续 turn 延迟、`sessions_send` native announce、gate 安全、confirm ACK/footer | P1 本地 tests 通过 |
 | **0.5.1 P3** | 如果 P2 证明收益稳定，再默认开启或按 allowlist 开启；记录 accepted ACK / task-start 分段延迟 | 连续 Slack smoke 稳定 |
 | **0.5.x 后续** | 方案 A：SQLite `standby_sessions` 表 + pool 查询 + health check + 补充逻辑 | 方案 B 在 nightly smoke 中稳定 |
@@ -568,7 +568,7 @@ Gate 逻辑修改需仔细测试，避免破坏现有 intent-matched 路径的�
 
 当前实现是 feature-flag implementation slice，不默认改变线上行为：
 
-- `OCTOCLAW_SPECULATIVE_PRELOAD=1` 时，`before_prompt_build` 只对 runtime 已判定为 delegate 的 turn 注入 `OCTOCLAW_SPECULATIVE_SPAWN_HINT`，不靠用户文本关键词。
+- `OCTOCLAW_SPECULATIVE_PRELOAD=1` 或 `pluginConfig.speculativePreload=true` 时，`before_prompt_build` 只对 runtime 已判定为 delegate 的 turn 注入 `OCTOCLAW_SPECULATIVE_SPAWN_HINT`，不靠用户文本关键词。plugin config 路径用于 controlled smoke，避免只依赖临时 LaunchAgent env 传递。
 - speculative standby spawn 必须满足固定安全形态：`mode="session"`、`thread=true`、`context="isolated"`、`lightContext=true`、label 前缀 `octoclaw-speculative-`、standby task 精确匹配；否则 planner gate 不放行。
 - `octoclaw_dispatch` 在看到当前 policyState 的 standby spawn 已进入 `spawn_call_started` 后，创建 `dispatchMode="send_to_speculative"` 的 pending intent，并返回 `sessionsSendArgs`；未命中则退回原 `sessionsSpawnArgs` 路径。
 - `sessions_send` 在 planner delegate 路径下必须匹配 pending send intent hash，才会推进到 `spawn_call_started`；`octoclaw_dispatch_confirm` 仍要求 accepted + 非空 runId，ACK 仍晚于 confirm。
