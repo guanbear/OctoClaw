@@ -1509,6 +1509,8 @@ describe("budgeted_main_then_delegate runtime budget", () => {
     ) as { prependSystemContext?: string } | undefined;
 
     expect(projection?.prependSystemContext).toContain("budgeted main execution");
+    expect(projection?.prependSystemContext).toContain("metadataJson.context_refs");
+    expect(projection?.prependSystemContext).toContain("one lightweight read-only lookup");
     expect(policyState.getState(key)?.budgetedMain).toMatchObject({
       active: true,
       reason: "budgeted_main_started",

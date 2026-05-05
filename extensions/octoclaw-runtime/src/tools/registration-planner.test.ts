@@ -270,6 +270,36 @@ describe("octoclaw_dispatch planner backend", () => {
     expect(nativeSpawnIntentStore.get(body.spawnIntentId)?.sessionsSpawnArgs.cwd).toBe(liveRoot);
   });
 
+  it("uses configured live OctoClaw root instead of the generic OpenClaw workspace cwd", async () => {
+    process.env.OCTOCLAW_SPAWN_BACKEND = "planner";
+    const liveRoot = path.join(tempWorkspace, "live", "OctoClaw");
+    const openclawWorkspace = path.join(tempWorkspace, ".openclaw", "workspace");
+    fsSync.mkdirSync(liveRoot, { recursive: true });
+    fsSync.mkdirSync(openclawWorkspace, { recursive: true });
+    envOverrides.octoclawRoot = liveRoot;
+    envOverrides.workspaceRoot = openclawWorkspace;
+    const contract = seedWorkContract();
+
+    const response = await dispatchTool().execute({
+      task: contract.userAsk,
+      workContractId: contract.workContractId,
+      policyJson: JSON.stringify(delegateDecision(contract)),
+    }, {
+      sessionKey: contract.sessionKey,
+      sessionId: "session-planner-live-root-from-workspace",
+      cwd: openclawWorkspace,
+    });
+
+    const body = JSON.parse(String(response.text));
+    expect(body.ok).toBe(true);
+    expect(body.sessionsSpawnArgs.cwd).toBe(liveRoot);
+    expect(body.sessionsSpawnArgs.task).toContain(`"cwd": "${liveRoot}"`);
+    expect(body.sessionsSpawnArgs.task).toContain(`"workspaceRoot": "${liveRoot}"`);
+    expect(body.sessionsSpawnArgs.task).toContain("missing_context_refs");
+    expect(body.sessionsSpawnArgs.task).not.toContain(`"cwd": "${openclawWorkspace}"`);
+    expect(nativeSpawnIntentStore.get(body.spawnIntentId)?.sessionsSpawnArgs.cwd).toBe(liveRoot);
+  });
+
   it("returns sessions_send plan when speculative preload standby was started", async () => {
     process.env.OCTOCLAW_SPAWN_BACKEND = "planner";
     process.env.OCTOCLAW_SPECULATIVE_PRELOAD = "1";

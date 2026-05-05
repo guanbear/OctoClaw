@@ -1224,7 +1224,8 @@ function buildPlannerContextPacket(params: {
       : "- No primaryFiles/readScope/artifactRefs were supplied. Treat the task as bounded by the brief; avoid broad workspace inventory and use only narrowly targeted read-only checks when indispensable.",
     "- Do not run broad discovery under /Users, memory/wiki search, or web search unless explicit refs fail and the task requires it.",
     "- If a fast file search tool is unavailable, use a scoped fallback under cwd/workspaceRoot only.",
-    "- Keep within maxToolCalls when possible; deliver partial findings with caveats instead of exhausting the native run timeout.",
+    "- Treat maxToolCalls as a hard budget. If the budget or context is insufficient, stop and return partial findings or a missing_context_refs blocker.",
+    "- Do not search package installs, shell history, or unrelated OpenClaw state to discover a repo. If cwd/workspaceRoot do not contain the needed source, report missing_context_refs.",
     "- Native announce handles final delivery; do not write legacy completion files unless explicitly instructed by a rollback path.",
   ].join("\n");
 }
