@@ -198,22 +198,24 @@ interface SpeculativeDispatchSelection {
   status: string;
 }
 
+interface SpeculativeDispatchCandidate {
+  key: string;
+  state: UnknownRecord;
+  speculative: SpeculativePreloadState;
+  updatedAt: number;
+}
+
 function speculativeTimestamp(state: UnknownRecord, speculative: SpeculativePreloadState): number {
   const speculativeRecord = speculative as unknown as UnknownRecord;
   const numeric = Number(speculative.updatedAt || speculativeRecord.updated_at || speculative.createdAt || speculativeRecord.created_at || state.updatedAt || state.createdAt || 0);
   return Number.isFinite(numeric) ? numeric : 0;
 }
 
-function selectSpeculativePreloadForDispatch(input: {
+function selectLatestSpeculativePreloadCandidate(input: {
   keys: unknown[];
   fallbackState?: UnknownRecord | null;
-}): SpeculativeDispatchSelection {
-  const candidates: Array<{
-    key: string;
-    state: UnknownRecord;
-    speculative: SpeculativePreloadState;
-    updatedAt: number;
-  }> = [];
+}): SpeculativeDispatchCandidate | null {
+  const candidates: SpeculativeDispatchCandidate[] = [];
   const seen = new Set<string>();
   const addCandidate = (key: string, state: UnknownRecord | null | undefined) => {
     if (!state) return;
@@ -238,7 +240,14 @@ function selectSpeculativePreloadForDispatch(input: {
   addCandidate("", input.fallbackState ?? null);
 
   candidates.sort((left, right) => right.updatedAt - left.updatedAt);
-  const latest = candidates[0];
+  return candidates[0] ?? null;
+}
+
+function selectSpeculativePreloadForDispatch(input: {
+  keys: unknown[];
+  fallbackState?: UnknownRecord | null;
+}): SpeculativeDispatchSelection {
+  const latest = selectLatestSpeculativePreloadCandidate(input);
   if (!latest) {
     return { speculative: null, candidateKey: "", reason: "no_speculative_state", status: "" };
   }
@@ -1435,6 +1444,37 @@ function plannerDispatchResponse(params: {
     instruction: dispatchMode === "send_to_speculative"
       ? "Call sessions_send exactly with sessionsSendArgs, then call octoclaw_dispatch_confirm with spawnIntentId, workContractId, sessionsSpawnStatus, runId, childRunId, and childSessionKey from the native sessions_send result. If sessions_send is not accepted, confirm the error; do not claim the task has started."
       : "Call sessions_spawn exactly with sessionsSpawnArgs, then call octoclaw_dispatch_confirm with spawnIntentId, workContractId, sessionsSpawnStatus, runId, childRunId, and childSessionKey from the native result.",
+  };
+  return toolResponse(JSON.stringify(body), body);
+}
+
+function speculativePreloadStandbyRequiredResponse(params: {
+  label: string;
+  sessionsSpawnArgs: Record<string, unknown>;
+  candidateKey: string;
+  status: string;
+}): Record<string, unknown> {
+  const body = {
+    ok: false,
+    route: "delegate",
+    status: "speculative_standby_required",
+    dispatch_mode: "standby_required",
+    dispatchMode: "standby_required",
+    delegation_method: "octoclaw_dispatch_planner",
+    next_tool: "sessions_spawn",
+    nextTool: "sessions_spawn",
+    sessions_spawn_args: params.sessionsSpawnArgs,
+    sessionsSpawnArgs: params.sessionsSpawnArgs,
+    speculative_session_label: params.label,
+    speculativeSessionLabel: params.label,
+    speculative_selection_candidate_key: params.candidateKey,
+    speculative_selection_status: params.status,
+    dispatch_executed: false,
+    spawn_executed: false,
+    materialized: false,
+    result_materialized: false,
+    retryable: true,
+    instruction: "Call sessions_spawn exactly with sessionsSpawnArgs first. After sessions_spawn returns accepted, call octoclaw_dispatch again with the original task so OctoClaw can create a send_to_speculative intent. Do not claim the task has started before octoclaw_dispatch_confirm succeeds.",
   };
   return toolResponse(JSON.stringify(body), body);
 }
@@ -3379,19 +3419,49 @@ export function getToolRegistrations(options: ToolRegistrationOptions = {}): Too
             });
             const pluginConfig = options.pluginConfigProvider?.() ?? options.pluginConfig;
             const speculativePreloadEnabled = resolveSpeculativePreloadEnabled(pluginConfig);
+            const speculativeSelectionKeys = [
+              managedSessionKey,
+              stateKey,
+              params.sessionKey,
+              metadata.session_key,
+              initialMetadata.session_key,
+              ctx.sessionKey,
+              ctx.canonicalSessionKey,
+              ctx.sessionId,
+              ...plannerSessionCandidates,
+            ];
+            const latestSpeculative = speculativePreloadEnabled
+              ? selectLatestSpeculativePreloadCandidate({
+                  keys: speculativeSelectionKeys,
+                  fallbackState: state,
+                })
+              : null;
+            const latestSpawnArgs = asRecord(latestSpeculative?.speculative.spawnArgs);
+            if (latestSpeculative?.speculative.status === "hinted" && Object.keys(latestSpawnArgs).length > 0) {
+              await recordPolicyReplay("speculative_preload_dispatch_deferred", {
+                sessionKey: latestSpeculative.key || managedSessionKey || stateKey || asString(params.sessionKey),
+                sessionId: asString(ctx.sessionId),
+                route: resolvedRoute,
+                toolName: "octoclaw_dispatch",
+                label: latestSpeculative.speculative.label,
+                reason: "standby_spawn_required",
+                status: latestSpeculative.speculative.status,
+                candidate_key: latestSpeculative.key,
+                dispatch_executed: false,
+                spawn_executed: false,
+                materialized: false,
+                elapsedMs: Date.now() - dispatchToolStartedAt,
+              }, toolLogger(ctx), null).catch(() => undefined);
+              return speculativePreloadStandbyRequiredResponse({
+                label: latestSpeculative.speculative.label,
+                sessionsSpawnArgs: latestSpawnArgs,
+                candidateKey: latestSpeculative.key,
+                status: latestSpeculative.speculative.status,
+              });
+            }
             const speculativeSelection = speculativePreloadEnabled
               ? selectSpeculativePreloadForDispatch({
-                  keys: [
-                    managedSessionKey,
-                    stateKey,
-                    params.sessionKey,
-                    metadata.session_key,
-                    initialMetadata.session_key,
-                    ctx.sessionKey,
-                    ctx.canonicalSessionKey,
-                    ctx.sessionId,
-                    ...plannerSessionCandidates,
-                  ],
+                  keys: speculativeSelectionKeys,
                   fallbackState: state,
                 })
               : { speculative: null, candidateKey: "", reason: "disabled", status: "" };

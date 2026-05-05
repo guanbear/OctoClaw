@@ -363,6 +363,66 @@ describe("octoclaw_dispatch planner backend", () => {
     }));
   });
 
+  it("requires hinted speculative standby before creating a planner intent", async () => {
+    process.env.OCTOCLAW_SPAWN_BACKEND = "planner";
+    process.env.OCTOCLAW_SPECULATIVE_PRELOAD = "1";
+    const contract = seedWorkContract("session-planner-speculative-hinted");
+    const label = "octoclaw-speculative-hinted";
+    const spawnArgs = {
+      task: "Standby worker. Do not execute any task. Await task assignment via sessions_send.",
+      label,
+      runtime: "subagent",
+      mode: "session",
+      thread: true,
+      cleanup: "keep",
+      sandbox: "inherit",
+      context: "isolated",
+      lightContext: true,
+      cwd: tempWorkspace,
+      runTimeoutSeconds: 300,
+    };
+    policyState.setState(contract.sessionKey, {
+      decision: delegateDecision(contract),
+      routeHintSubmitted: true,
+      speculativePreload: {
+        label,
+        status: "hinted",
+        createdAt: Date.now() - 1_000,
+        updatedAt: Date.now(),
+        spawnArgs,
+      },
+      createdAt: Date.now() - 1_000,
+      updatedAt: Date.now(),
+    } as unknown as Parameters<typeof policyState.setState>[1]);
+
+    const response = await dispatchTool().execute({
+      task: contract.userAsk,
+      workContractId: contract.workContractId,
+      policyJson: JSON.stringify(delegateDecision(contract)),
+      timeoutSeconds: 900,
+    }, {
+      sessionKey: contract.sessionKey,
+      sessionId: "session-planner-speculative-hinted",
+      agentId: "main",
+      cwd: tempWorkspace,
+    });
+
+    const body = JSON.parse(String(response.text));
+    expect(body.ok).toBe(false);
+    expect(body.status).toBe("speculative_standby_required");
+    expect(body.nextTool).toBe("sessions_spawn");
+    expect(body.sessionsSpawnArgs).toEqual(spawnArgs);
+    expect(body.spawnIntentId).toBeUndefined();
+    expect(nativeSpawnIntentStore.findPendingForSession(contract.sessionKey)).toBeNull();
+    expect(readReplayEvents()).toContainEqual(expect.objectContaining({
+      event: "speculative_preload_dispatch_deferred",
+      label,
+      reason: "standby_spawn_required",
+      dispatch_executed: false,
+      spawn_executed: false,
+    }));
+  });
+
   it("falls back to new spawn when speculative standby has not reached ready", async () => {
     process.env.OCTOCLAW_SPAWN_BACKEND = "planner";
     process.env.OCTOCLAW_SPECULATIVE_PRELOAD = "1";
