@@ -1,5 +1,12 @@
 # Tasks
 
+## PC0 OpenSpec Setup
+
+- [x] Create this 0.5.1 change with `proposal.md`, `design.md`, `tasks.md`, and `specs/planner-preload/spec.md`.
+- [x] Keep P0/P1/P2/P3 scope, non-goals, rollout gates, and verification commands aligned across the OpenSpec files.
+- [x] Map implemented code slices back to this task list before commit.
+- [ ] Do not mark live Scheme B validation complete until real Slack artifacts prove the full native `sessions_send` path.
+
 ## P0 SR-P1 Soft-Budget Recovery
 
 - [x] Treat the fixed 30s value as a soft runtime budget, not a hard prompt-injection redirect.
@@ -31,6 +38,10 @@
 - [ ] Prove Scheme B path: `speculative_preload_hint_injected -> speculative_preload_spawn_allowed -> dispatchMode=send_to_speculative -> sessions_send_intent_allowed -> dispatch_confirm_completed ok=true`.
 - [ ] Restore default-off flag after validation unless P3 explicitly approves an allowlist.
 
+Attempt notes:
+
+- 2026-05-05 attempt `/tmp/octoclaw-051-spec-preload-20260505T031657Z` was stopped after producing no report and no Scheme B replay events. Replay showed DM `reply/budgeted_main_then_delegate` events instead of `speculative_preload_*` / `sessions_send`; this is not accepted P2 evidence. The launchctl flag was unset and gateway restarted.
+
 ## P3 Rollout Decision
 
 - [ ] Decide default-off, allowlist, or default-on using P2 evidence.
@@ -47,3 +58,4 @@
 ## Commits
 
 - [x] `9ae92dd feat(runtime): add speculative preload planner slice`
+- [x] `aa37aaa docs(openspec): add 0.5.1 planner preload change`
