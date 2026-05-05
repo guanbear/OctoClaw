@@ -57,12 +57,14 @@ export function buildSpeculativePreloadLabel(input: {
   sessionId?: string;
   inboundMessageTs?: string;
   prompt?: string;
+  nonce?: string;
 }): string {
   return stableId(SPECULATIVE_PRELOAD_LABEL_PREFIX.replace(/-$/u, ""), [
     input.stateKey,
     input.sessionId || "",
     input.inboundMessageTs || "",
     input.prompt || "",
+    input.nonce || "",
   ]);
 }
 
@@ -103,8 +105,10 @@ export function isSpeculativePreloadSpawnArgs(args: unknown): boolean {
 export function buildSpeculativePreloadHint(spawnArgs: UnknownRecord): string {
   return [
     "OCTOCLAW_SPECULATIVE_SPAWN_HINT:",
-    "If your route analysis confirms this task should be delegated, include this standby spawn in your first tool call before octoclaw_dispatch:",
+    "If runtime route is delegate, your first control-plane action must be this exact standby spawn before octoclaw_dispatch:",
     `sessions_spawn(${JSON.stringify(spawnArgs)})`,
+    "These are runtime-generated exact args, not a hand-written spawn command.",
+    "Do not call octoclaw_dispatch first while this hint is active.",
     "This standby worker must not execute user work yet. After octoclaw_dispatch returns dispatchMode=send_to_speculative, call sessions_send with the returned sessionsSendArgs.",
     "If you answer directly, do not mention the standby worker and do not send an accepted/delegated ACK.",
   ].join("\n");

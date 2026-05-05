@@ -108,6 +108,7 @@ import {
   serializeSpeculativePreloadState,
   speculativePreloadStateForHint,
 } from "./delegate/speculative-preload.js";
+import { resolvePlannerNativeCwd } from "./delegate/planner-cwd.js";
 
 type UnknownRecord = Record<string, unknown>;
 type HookHandler = (event: UnknownRecord, ctx: UnknownRecord) => unknown;
@@ -2492,25 +2493,60 @@ function maybeInjectSpeculativePreload(input: {
   ctx: UnknownRecord;
   state: UnknownRecord;
   decision: UnknownRecord;
+  route: string;
   prompt: string;
   prependSystem: string[];
   pluginConfig?: UnknownRecord;
   logger?: LoggerLike;
 }): UnknownRecord {
-  if (!resolveSpeculativePreloadEnabled(input.pluginConfig) || resolveSpawnBackend() !== "planner") return input.state;
-  if (!input.stateKey || !isDelegatedRoute(input.decision)) return input.state;
+  if (!resolveSpeculativePreloadEnabled(input.pluginConfig)) return input.state;
+  const spawnBackend = resolveSpawnBackend();
+  if (spawnBackend !== "planner") {
+    void recordPolicyReplay("speculative_preload_skipped", {
+      sessionKey: input.stateKey,
+      sessionId: stringValue(input.ctx.sessionId),
+      route: input.route,
+      reason: "spawn_backend_not_planner",
+      spawn_backend: spawnBackend,
+    }, input.logger, input.decision).catch(() => {});
+    return input.state;
+  }
+  const routeDecisionRoute = stringValue(asRecord(input.decision.route_decision).route);
+  const delegateRoute = input.route === "delegate" || routeDecisionRoute === "delegate" || isDelegatedRoute(input.decision);
+  if (!input.stateKey || !delegateRoute) {
+    void recordPolicyReplay("speculative_preload_skipped", {
+      sessionKey: input.stateKey,
+      sessionId: stringValue(input.ctx.sessionId),
+      route: input.route,
+      route_decision_route: routeDecisionRoute,
+      reason: !input.stateKey ? "missing_state_key" : "route_not_delegate",
+    }, input.logger, input.decision).catch(() => {});
+    return input.state;
+  }
   const existing = readSpeculativePreloadState(input.state);
-  if (existing?.label && existing.status !== "stale") return input.state;
+  if (existing?.label && existing.status !== "stale") {
+    void recordPolicyReplay("speculative_preload_skipped", {
+      sessionKey: input.stateKey,
+      sessionId: stringValue(input.ctx.sessionId),
+      route: input.route,
+      route_decision_route: routeDecisionRoute,
+      reason: "existing_speculative_state",
+      status: existing.status,
+      label: existing.label,
+    }, input.logger, input.decision).catch(() => {});
+    return input.state;
+  }
   const label = buildSpeculativePreloadLabel({
     stateKey: input.stateKey,
     sessionId: stringValue(input.ctx.sessionId),
     inboundMessageTs: stringValue(input.state.inboundMessageTs || input.state.inbound_message_ts || input.ctx.messageTs || input.ctx.message_ts),
     prompt: input.prompt,
+    nonce: stringValue(existing?.updatedAt || input.state.updatedAt || input.state.updated_at || input.state.createdAt || input.state.created_at || Date.now()),
   });
   const spawnArgs = buildSpeculativePreloadSpawnArgs({
     label,
     model: stringValue(asRecord(input.decision.route_decision).model || asRecord(input.decision.route_decision).worker_model),
-    cwd: stringValue(input.ctx.cwd),
+    cwd: resolvePlannerNativeCwd(stringValue(input.ctx.cwd)),
   });
   const speculative = speculativePreloadStateForHint({ label, spawnArgs });
   const serialized = serializeSpeculativePreloadState(speculative);
@@ -2519,11 +2555,13 @@ function maybeInjectSpeculativePreload(input: {
     speculativePreload: serialized,
     speculative_preload: serialized,
   };
-  updatePolicyState(input.stateKey, (current) => ({
-    ...(current ?? {}),
-    speculativePreload: serialized,
-    speculative_preload: serialized,
-  }));
+  const aliasKeys = Array.from(new Set([
+    input.stateKey,
+    ...resolvePolicyStateKeys(input.ctx),
+  ].map((value) => stringValue(value)).filter(Boolean)));
+  for (const key of aliasKeys) {
+    policyState.set(key, nextState as PolicyStateEntry);
+  }
   input.prependSystem.push(buildSpeculativePreloadHint(spawnArgs));
   void recordPolicyReplay("speculative_preload_hint_injected", {
     sessionKey: input.stateKey,
@@ -2531,6 +2569,7 @@ function maybeInjectSpeculativePreload(input: {
     label,
     route: stringValue(asRecord(input.decision.route_decision).route),
     decision_bucket: stringValue(asRecord(input.decision.route_decision).decision_bucket),
+    alias_count: aliasKeys.length,
   }, input.logger, input.decision).catch(() => {});
   return nextState;
 }
@@ -3726,6 +3765,7 @@ export const plugin = {
         ctx,
         state: asRecord(effectiveState),
         decision: effectiveDecision,
+        route,
         prompt,
         prependSystem,
         pluginConfig: currentPluginConfig(),
@@ -3748,6 +3788,8 @@ export const plugin = {
           prependSystemCount: prependSystem.length,
           injectedPolicyProjection: shouldInjectPrependContext,
           projectionReturned: Boolean(projection),
+          speculative_preload_enabled: resolveSpeculativePreloadEnabled(currentPluginConfig()),
+          speculative_preload_state: stringValue(readSpeculativePreloadState(effectiveState)?.status),
         },
         pi.logger,
         null,
@@ -3882,6 +3924,35 @@ export const plugin = {
         metadata.message_id = storedInboundTs;
       }
 
+      if (
+        toolName === "octoclaw_dispatch"
+        && resolveSpawnBackend() === "planner"
+        && resolveSpeculativePreloadEnabled(currentPluginConfig())
+      ) {
+        const speculative = readSpeculativePreloadState(state);
+        const spawnArgs = asRecord(speculative?.spawnArgs);
+        const decisionRoute = stringValue(asRecord(decision.route_decision).route);
+        if (decisionRoute === "delegate" && speculative?.status === "hinted" && Object.keys(spawnArgs).length > 0) {
+          void recordPolicyReplay("speculative_preload_dispatch_deferred", {
+            sessionKey: stateKey || "",
+            sessionId: stringValue(ctx.sessionId),
+            route: decisionRoute,
+            toolName,
+            label: speculative.label,
+            reason: "standby_spawn_required",
+          }, pi.logger, decision).catch(() => {});
+          return {
+            block: true,
+            blockReason: [
+              "OctoClaw speculative preload is active for this delegated route.",
+              `First call sessions_spawn exactly with these runtime-generated args: ${JSON.stringify(spawnArgs)}.`,
+              "After sessions_spawn returns, call octoclaw_dispatch with the original task.",
+              "If sessions_spawn is rejected or unavailable, call octoclaw_dispatch after the failed result so OctoClaw can fall back to new_spawn.",
+            ].join(" "),
+          };
+        }
+      }
+
       if (toolName === "sessions_spawn") {
         const sessionKeys = [
           stateKey,
@@ -3893,30 +3964,53 @@ export const plugin = {
         const plannerGateEnabled = resolveSpawnBackend() === "planner"
           && sessionKeys.some((sessionKey) => isPlannerAllowedForSession(sessionKey));
         if (plannerGateEnabled) {
-          const speculative = readSpeculativePreloadState(state);
+          const speculativeMatches: Array<{ key: string; state: UnknownRecord; speculative: NonNullable<ReturnType<typeof readSpeculativePreloadState>> }> = [];
+          for (const key of Array.from(new Set(sessionKeys.map((value) => stringValue(value)).filter(Boolean)))) {
+            const candidateState = asRecord(policyState.get(key));
+            const candidateSpeculative = readSpeculativePreloadState(candidateState);
+            if (candidateSpeculative?.status !== "hinted") continue;
+            if (!isMatchingSpeculativePreloadSpawn(candidateState, toolParams)) continue;
+            speculativeMatches.push({ key, state: candidateState, speculative: candidateSpeculative });
+          }
+          const directSpeculative = readSpeculativePreloadState(state);
           if (
-            resolveSpeculativePreloadEnabled(currentPluginConfig())
-            && speculative?.status === "hinted"
+            stateKey
+            && speculativeMatches.every((match) => match.key !== stateKey)
+            && directSpeculative?.status === "hinted"
             && isMatchingSpeculativePreloadSpawn(state, toolParams)
           ) {
-            const nextSpeculative = speculative
-              ? serializeSpeculativePreloadState({
-                  ...speculative,
-                  status: "spawn_call_started",
-                  updatedAt: Date.now(),
-                })
-              : null;
-            updatePolicyState(stateKey, (current) => ({
-              ...current,
-              ...(nextSpeculative ? { speculativePreload: nextSpeculative, speculative_preload: nextSpeculative } : {}),
-              controlToolsSeen: Array.from(new Set([...(Array.isArray(current.controlToolsSeen) ? current.controlToolsSeen : []), toolName])),
-            }));
+            speculativeMatches.push({ key: stateKey, state: asRecord(state), speculative: directSpeculative });
+          }
+          if (resolveSpeculativePreloadEnabled(currentPluginConfig()) && speculativeMatches.length > 0) {
+            const now = Date.now();
+            for (const match of speculativeMatches) {
+              const nextSpeculative = serializeSpeculativePreloadState({
+                ...match.speculative,
+                status: "spawn_call_started",
+                updatedAt: now,
+              });
+              updatePolicyState(match.key, (current) => ({
+                ...current,
+                speculativePreload: nextSpeculative,
+                speculative_preload: nextSpeculative,
+                controlToolsSeen: Array.from(new Set([...(Array.isArray(current.controlToolsSeen) ? current.controlToolsSeen : []), toolName])),
+              }));
+            }
+            const preferredReplayKeys = new Set([
+              stringValue(ctx.sessionKey),
+              stringValue(ctx.canonicalSessionKey),
+              stringValue(asRecord(decision.request).session_key),
+              stringValue(stateKey),
+            ].filter(Boolean));
+            const replayMatch = speculativeMatches.find((match) => preferredReplayKeys.has(match.key)) || speculativeMatches[0];
+            const replaySessionKey = stringValue(ctx.sessionKey) || stringValue(ctx.canonicalSessionKey) || replayMatch.key || stateKey || "";
             void recordPolicyReplay("speculative_preload_spawn_allowed", {
-              sessionKey: stateKey || "",
+              sessionKey: replaySessionKey,
               sessionId: stringValue(ctx.sessionId),
               route: stringValue(asRecord(decision.route_decision).route),
               toolName,
-              label: speculative?.label || stringValue(toolParams.label),
+              label: replayMatch.speculative.label || stringValue(toolParams.label),
+              alias_count: speculativeMatches.length,
             }, pi.logger, decision).catch(() => {});
             return;
           }
@@ -4308,39 +4402,68 @@ export const plugin = {
       const toolName = stringValue(event.toolName || ctx.toolName);
       if (toolName !== "sessions_spawn") return;
       const toolParams = asRecord(event.params || event.arguments || event.input);
-      const { key: stateKey, state } = getPolicyStateForContext(ctx);
-      const speculative = readSpeculativePreloadState(state);
-      if (!stateKey || !speculative || speculative.status !== "spawn_call_started") return;
-      if (!isMatchingSpeculativePreloadSpawn(state, toolParams)) return;
+      const { key: resolvedStateKey, state: resolvedState } = getPolicyStateForContext(ctx);
+      const candidateKeys = Array.from(new Set([
+        resolvedStateKey,
+        ...resolvePolicyStateKeys(ctx),
+      ].map((value) => stringValue(value)).filter(Boolean)));
+      const matches: Array<{ key: string; state: UnknownRecord; speculative: NonNullable<ReturnType<typeof readSpeculativePreloadState>> }> = [];
+      for (const key of candidateKeys) {
+        const candidateState = asRecord(policyState.get(key));
+        const speculative = readSpeculativePreloadState(candidateState);
+        if (!speculative || speculative.status !== "spawn_call_started") continue;
+        if (!isMatchingSpeculativePreloadSpawn(candidateState, toolParams)) continue;
+        matches.push({ key, state: candidateState, speculative });
+      }
+      if (resolvedStateKey && matches.length === 0) {
+        const speculative = readSpeculativePreloadState(resolvedState);
+        if (speculative?.status === "spawn_call_started" && isMatchingSpeculativePreloadSpawn(resolvedState, toolParams)) {
+          matches.push({ key: resolvedStateKey, state: asRecord(resolvedState), speculative });
+        }
+      }
+      if (matches.length === 0) return;
 
       const result = event.result;
       const resultRecord = toolResultRecord(result);
       const accepted = !stringValue(event.error) && isAcceptedSpeculativeSpawnResult(result);
       const now = Date.now();
-      const nextSpeculative = serializeSpeculativePreloadState({
-        ...speculative,
-        status: accepted ? "ready" : "stale",
-        updatedAt: now,
-        runId: firstNonEmptyString(resultRecord.runId, resultRecord.run_id, resultRecord.childRunId, resultRecord.child_run_id) || undefined,
-        childSessionKey: firstNonEmptyString(resultRecord.childSessionKey, resultRecord.child_session_key, resultRecord.sessionKey, resultRecord.session_key) || undefined,
-        error: accepted ? undefined : speculativeSpawnResultError(result, event.error),
-      });
-      updatePolicyState(stateKey, (current) => ({
-        ...current,
-        speculativePreload: nextSpeculative,
-        speculative_preload: nextSpeculative,
-      }));
+      const runId = firstNonEmptyString(resultRecord.runId, resultRecord.run_id, resultRecord.childRunId, resultRecord.child_run_id) || undefined;
+      const childSessionKey = firstNonEmptyString(resultRecord.childSessionKey, resultRecord.child_session_key, resultRecord.sessionKey, resultRecord.session_key) || undefined;
+      const error = accepted ? undefined : speculativeSpawnResultError(result, event.error);
+      for (const match of matches) {
+        const nextSpeculative = serializeSpeculativePreloadState({
+          ...match.speculative,
+          status: accepted ? "ready" : "stale",
+          updatedAt: now,
+          runId,
+          childSessionKey,
+          error,
+        });
+        updatePolicyState(match.key, (current) => ({
+          ...current,
+          speculativePreload: nextSpeculative,
+          speculative_preload: nextSpeculative,
+        }));
+      }
+      const preferredReplayKeys = new Set([
+        stringValue(ctx.sessionKey),
+        stringValue(ctx.canonicalSessionKey),
+        stringValue(resolvedStateKey),
+      ].filter(Boolean));
+      const replayMatch = matches.find((match) => preferredReplayKeys.has(match.key)) || matches[0];
+      const replaySessionKey = stringValue(ctx.sessionKey) || stringValue(ctx.canonicalSessionKey) || replayMatch.key;
       await recordPolicyReplay(accepted ? "speculative_preload_spawn_ready" : "speculative_preload_spawn_failed", {
-        sessionKey: stateKey,
+        sessionKey: replaySessionKey,
         sessionId: stringValue(ctx.sessionId),
         toolName,
-        label: speculative.label,
+        label: replayMatch.speculative.label,
         status: stringValue(resultRecord.status),
-        run_id: firstNonEmptyString(resultRecord.runId, resultRecord.run_id, resultRecord.childRunId, resultRecord.child_run_id),
-        child_session_key: firstNonEmptyString(resultRecord.childSessionKey, resultRecord.child_session_key, resultRecord.sessionKey, resultRecord.session_key),
-        error: accepted ? "" : speculativeSpawnResultError(result, event.error),
+        run_id: runId || "",
+        child_session_key: childSessionKey || "",
+        error: error || "",
+        alias_count: matches.length,
         durationMs: Number(event.durationMs) || 0,
-      }, pi.logger, asRecord(state?.decision)).catch(() => {});
+      }, pi.logger, asRecord(replayMatch.state?.decision)).catch(() => {});
     });
 
     registerLifecycleHook("agent_end", async (_event, ctx) => {

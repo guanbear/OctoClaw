@@ -208,12 +208,37 @@ function stripInternalToolProvenanceGuardText(text: string): string {
 function stripUngroundedToolProvenanceClaims(text: string, ungroundedClaims: string[]): string {
   const claimSet = new Set(ungroundedClaims.map((item) => item.toLowerCase()));
   const segments = String(text || "").match(/[^。！？!?；;\n]+[。！？!?；;]?|\n+/gu) ?? [String(text || "")];
-  const kept = segments.filter((segment) => {
+  const kept = segments.map((segment) => {
     const normalized = segment.toLowerCase();
     const mentionsUngroundedTool = Array.from(claimSet).some((tool) => normalized.includes(tool));
-    return !(mentionsUngroundedTool && looksLikeToolProvenanceClaim(segment));
-  }).join("");
+    if (!mentionsUngroundedTool || !looksLikeToolProvenanceClaim(segment)) return segment;
+    return extractAnswerAfterToolProvenance(segment, ungroundedClaims);
+  }).filter(Boolean).join("");
   return kept.replace(/\n{3,}/g, "\n\n").trim();
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+}
+
+function extractAnswerAfterToolProvenance(segment: string, ungroundedClaims: string[]): string {
+  const raw = String(segment || "");
+  const toolAlternation = ungroundedClaims.map(escapeRegExp).join("|");
+  if (!toolAlternation) return "";
+  const sourceThenAnswer = new RegExp(
+    String.raw`(?:我|这次|刚才|实际|确实|已经|主\s*agent|i|this run|that run)[^。！？!?；;\n]{0,80}(?:用|用了|调用|跑|执行|查|抓|fetch|used|called|ran|fetched|queried)[^。！？!?；;\n]{0,60}(?:${toolAlternation})[^。！？!?；;\n]{0,40}(?:查到|拿到|返回|得到|发现|确认|显示|found|got|returned|shows)[：:，,、\s]*([\s\S]+)`,
+    "iu",
+  );
+  const answer = sourceThenAnswer.exec(raw)?.[1]?.trim() || "";
+  if (
+    answer.length >= 8
+    && /(openclaw|版本|发布|release|新增|修复|特性|feature|latest|v\d|天气|温度|降水|北京)/iu.test(answer)
+  ) {
+    return answer;
+  }
+  const directConclusion = raw.match(/(?:结论是|结论：|结论:|核心是|结果是|最新(?:版本)?是|latest(?: version)? is)[\s\S]*/iu)?.[0];
+  if (directConclusion && directConclusion.trim().length >= 8) return directConclusion.trim();
+  return "";
 }
 
 function hasStatusProjectionToolEvidence(state: Record<string, unknown>): boolean {
@@ -238,7 +263,7 @@ export function ungroundedToolProvenanceReply(
 ): { mode: string; message: Record<string, unknown> } {
   void state;
   void claimedTools;
-  const text = "我继续按当前问题回答。";
+  const text = "我不能确认刚才那句来源声明。";
   return { mode: "replace", message: { role: "assistant", content: [{ type: "text", text }] } };
 }
 
@@ -339,7 +364,7 @@ export function guardAssistantMessageForPolicyState(
   }
   const cleanedInternalToolGuard = stripInternalToolProvenanceGuardText(replyText);
   if (cleanedInternalToolGuard !== replyText) {
-    const safeText = cleanedInternalToolGuard || "我继续按当前问题回答。";
+    const safeText = cleanedInternalToolGuard || "我不能确认刚才那句来源声明。";
     return { mode: "replace", message: replaceAssistantMessageText(message, safeText) };
   }
   const claimedTools = claimedDirectToolNames(replyText);

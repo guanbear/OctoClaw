@@ -126,6 +126,7 @@ beforeEach(() => {
   for (const key of ENV_KEYS) delete process.env[key];
   tempWorkspace = fs.mkdtempSync(path.join(osModule.tmpdir(), "octoclaw-registration-planner-"));
   envOverrides.workspaceRoot = tempWorkspace;
+  envOverrides.octoclawRoot = "";
   nativeSpawnIntentStore.clearForTests();
   for (const { key } of policyState.entries()) policyState.clear(key);
 });
@@ -134,6 +135,7 @@ afterEach(() => {
   nativeSpawnIntentStore.clearForTests();
   for (const { key } of policyState.entries()) policyState.clear(key);
   envOverrides.workspaceRoot = "";
+  envOverrides.octoclawRoot = "";
   process.env = originalEnv;
   if (tempWorkspace) fs.rmSync(tempWorkspace, { recursive: true, force: true });
   tempWorkspace = "";
@@ -238,6 +240,34 @@ describe("octoclaw_dispatch planner backend", () => {
       spawn_intent_id: body.spawnIntentId,
       elapsedMs: expect.any(Number),
     }));
+  });
+
+  it("uses configured live OctoClaw root instead of OpenClaw managed mirror cwd", async () => {
+    process.env.OCTOCLAW_SPAWN_BACKEND = "planner";
+    const liveRoot = path.join(tempWorkspace, "live", "OctoClaw");
+    const mirrorRoot = path.join(tempWorkspace, ".openclaw", "workspace", "openclaw", "repos", "octoclaw");
+    fsSync.mkdirSync(liveRoot, { recursive: true });
+    fsSync.mkdirSync(mirrorRoot, { recursive: true });
+    envOverrides.octoclawRoot = liveRoot;
+    const contract = seedWorkContract();
+
+    const response = await dispatchTool().execute({
+      task: contract.userAsk,
+      workContractId: contract.workContractId,
+      policyJson: JSON.stringify(delegateDecision(contract)),
+    }, {
+      sessionKey: contract.sessionKey,
+      sessionId: "session-planner-live-root",
+      cwd: mirrorRoot,
+    });
+
+    const body = JSON.parse(String(response.text));
+    expect(body.ok).toBe(true);
+    expect(body.sessionsSpawnArgs.cwd).toBe(liveRoot);
+    expect(body.sessionsSpawnArgs.task).toContain(`"cwd": "${liveRoot}"`);
+    expect(body.sessionsSpawnArgs.task).toContain(`"workspaceRoot": "${liveRoot}"`);
+    expect(body.sessionsSpawnArgs.task).not.toContain(`"cwd": "${mirrorRoot}"`);
+    expect(nativeSpawnIntentStore.get(body.spawnIntentId)?.sessionsSpawnArgs.cwd).toBe(liveRoot);
   });
 
   it("returns sessions_send plan when speculative preload standby was started", async () => {
@@ -349,6 +379,72 @@ describe("octoclaw_dispatch planner backend", () => {
       status: "planned",
       dispatchMode: "new_spawn",
     });
+  });
+
+  it("falls back when a fresher alias marks speculative standby stale", async () => {
+    process.env.OCTOCLAW_SPAWN_BACKEND = "planner";
+    process.env.OCTOCLAW_SPECULATIVE_PRELOAD = "1";
+    const contract = seedWorkContract("session-planner-speculative-alias-primary");
+    const aliasKey = "runtime-session-speculative-alias";
+    const label = "octoclaw-speculative-alias-stale";
+    const oldReadyAt = Date.now() - 5_000;
+    const freshStaleAt = Date.now();
+    policyState.setState(contract.sessionKey, {
+      decision: delegateDecision(contract),
+      routeHintSubmitted: true,
+      speculativePreload: {
+        label,
+        status: "ready",
+        createdAt: oldReadyAt,
+        updatedAt: oldReadyAt,
+        runId: "old-standby-run",
+        childSessionKey: "agent:main:subagent:old-standby",
+      },
+      createdAt: oldReadyAt,
+      updatedAt: oldReadyAt,
+    } as unknown as Parameters<typeof policyState.setState>[1]);
+    policyState.setState(aliasKey, {
+      prompt: contract.userAsk,
+      decision: delegateDecision(contract),
+      routeHintSubmitted: true,
+      speculativePreload: {
+        label,
+        status: "stale",
+        createdAt: oldReadyAt,
+        updatedAt: freshStaleAt,
+        error: "sessions_spawn(mode=\"session\") is not available on this channel",
+      },
+      createdAt: freshStaleAt,
+      updatedAt: freshStaleAt,
+    } as unknown as Parameters<typeof policyState.setState>[1]);
+
+    const response = await dispatchTool().execute({
+      task: contract.userAsk,
+      workContractId: contract.workContractId,
+      policyJson: JSON.stringify(delegateDecision(contract)),
+      timeoutSeconds: 900,
+    }, {
+      sessionKey: aliasKey,
+      canonicalSessionKey: contract.sessionKey,
+      sessionId: aliasKey,
+      cwd: tempWorkspace,
+      agentId: "main",
+    });
+
+    const body = JSON.parse(String(response.text));
+    expect(body.ok).toBe(true);
+    expect(body.dispatchMode).toBe("new_spawn");
+    expect(body.nextTool).toBe("sessions_spawn");
+    expect(body.sessionsSendArgs).toBeUndefined();
+    expect(nativeSpawnIntentStore.get(body.spawnIntentId)).toMatchObject({
+      status: "planned",
+      dispatchMode: "new_spawn",
+    });
+    expect(readReplayEvents()).toContainEqual(expect.objectContaining({
+      event: "dispatch_planner_intent_created",
+      dispatch_mode: "new_spawn",
+      speculative_session_label: "",
+    }));
   });
 
   it("does not treat Slack acceptance metadata or broad contract read scope as explicit child refs", async () => {

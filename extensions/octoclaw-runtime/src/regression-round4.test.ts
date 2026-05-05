@@ -241,10 +241,31 @@ describe("regression round 4: scenario 2b — delegated state normalization", ()
     );
 
     expect(guarded.mode).toBe("replace");
-    expect(textOf(guarded)).toBe("我继续按当前问题回答。");
+    expect(textOf(guarded)).toBe("我不能确认刚才那句来源声明。");
     expect(textOf(guarded)).not.toContain("工具来源");
     expect(textOf(guarded)).not.toContain("exec");
     expect(textOf(guarded)).not.toContain("direct tools");
+  });
+
+  it("keeps lookup answer content when stripping an ungrounded tool-source prefix", () => {
+    const guarded = guardAssistantMessageForPolicyState(
+      {
+        role: "assistant",
+        content: [{
+          type: "text",
+          text: "我用 web_search 查到 OpenClaw 最新版本是 v2026.5.4-beta.1，主要新增插件安装恢复、Gateway 性能和 Slack/Matrix 修复。",
+        }],
+      },
+      {
+        directToolsSeen: [],
+        decision: { route_decision: { route: "reply", task_class: "main_direct" } },
+      },
+    );
+
+    expect(guarded.mode).toBe("replace");
+    expect(textOf(guarded)).toBe("OpenClaw 最新版本是 v2026.5.4-beta.1，主要新增插件安装恢复、Gateway 性能和 Slack/Matrix 修复。");
+    expect(textOf(guarded)).not.toContain("web_search");
+    expect(textOf(guarded)).not.toContain("我用");
   });
 
   it("replaces false sessions_spawn dispatch claim without execution evidence", () => {

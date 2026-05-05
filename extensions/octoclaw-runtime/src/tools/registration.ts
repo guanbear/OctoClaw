@@ -61,12 +61,18 @@ import { materializeWorkContractSuccess, materializeWorkContractFailure } from "
 import { markChildSessionPreferred, selectPreferredChildSession } from "../work-contract/continuity.js";
 import { emitExecutionTransitionNotification } from "../ack/execution-transition-notifier.js";
 import { scheduleChildCompletionFinalizer } from "../delegate/child-finalizer.js";
+import { isOpenClawManagedOctoClawRepoPath, resolvePlannerNativeCwd } from "../delegate/planner-cwd.js";
 import { createCompletionBinding } from "../runtime-ledger/completion-binding.js";
 import { randomUUID } from "node:crypto";
 import { isPlannerAllowedForSession, resolveSpawnBackend, resolveSpawnIntentTtlMs, resolveSpeculativePreloadEnabled } from "../config/index.js";
 import { confirmNativeSpawn } from "../delegate/native-spawn-confirm.js";
 import { nativeSpawnIntentStore } from "../delegate/native-spawn-intent-store.js";
-import { buildSpeculativeSessionsSendArgs, readSpeculativePreloadState, serializeSpeculativePreloadState } from "../delegate/speculative-preload.js";
+import {
+  buildSpeculativeSessionsSendArgs,
+  readSpeculativePreloadState,
+  serializeSpeculativePreloadState,
+  type SpeculativePreloadState,
+} from "../delegate/speculative-preload.js";
 import { getModelMap } from "../model-map.js";
 import { detectIMType, buildSlackStatusOutput, type StatusTaskSummary } from "../im-status-renderer.js";
 import { buildDelegationTicketDryRun } from "../runtime-ledger/ticket-dry-run.js";
@@ -183,6 +189,82 @@ function hasExplicitFalse(values: unknown[]): boolean {
 function asNumber(value: unknown): number | undefined {
   const numeric = Number(value);
   return Number.isFinite(numeric) ? numeric : undefined;
+}
+
+interface SpeculativeDispatchSelection {
+  speculative: SpeculativePreloadState | null;
+  candidateKey: string;
+  reason: string;
+  status: string;
+}
+
+function speculativeTimestamp(state: UnknownRecord, speculative: SpeculativePreloadState): number {
+  const speculativeRecord = speculative as unknown as UnknownRecord;
+  const numeric = Number(speculative.updatedAt || speculativeRecord.updated_at || speculative.createdAt || speculativeRecord.created_at || state.updatedAt || state.createdAt || 0);
+  return Number.isFinite(numeric) ? numeric : 0;
+}
+
+function selectSpeculativePreloadForDispatch(input: {
+  keys: unknown[];
+  fallbackState?: UnknownRecord | null;
+}): SpeculativeDispatchSelection {
+  const candidates: Array<{
+    key: string;
+    state: UnknownRecord;
+    speculative: SpeculativePreloadState;
+    updatedAt: number;
+  }> = [];
+  const seen = new Set<string>();
+  const addCandidate = (key: string, state: UnknownRecord | null | undefined) => {
+    if (!state) return;
+    const speculative = readSpeculativePreloadState(state);
+    if (!speculative?.label) return;
+    const dedupeKey = key || `fallback:${candidates.length}`;
+    if (seen.has(dedupeKey)) return;
+    seen.add(dedupeKey);
+    candidates.push({
+      key,
+      state,
+      speculative,
+      updatedAt: speculativeTimestamp(state, speculative),
+    });
+  };
+
+  for (const rawKey of input.keys) {
+    const key = asString(rawKey);
+    if (!key) continue;
+    addCandidate(key, asRecord(policyState.get(key)));
+  }
+  addCandidate("", input.fallbackState ?? null);
+
+  candidates.sort((left, right) => right.updatedAt - left.updatedAt);
+  const latest = candidates[0];
+  if (!latest) {
+    return { speculative: null, candidateKey: "", reason: "no_speculative_state", status: "" };
+  }
+  const status = latest.speculative.status;
+  if (status !== "ready") {
+    return {
+      speculative: null,
+      candidateKey: latest.key,
+      reason: `latest_speculative_${status || "unknown"}`,
+      status,
+    };
+  }
+  if (!latest.speculative.runId && !latest.speculative.childSessionKey) {
+    return {
+      speculative: null,
+      candidateKey: latest.key,
+      reason: "ready_missing_native_refs",
+      status,
+    };
+  }
+  return {
+    speculative: latest.speculative,
+    candidateKey: latest.key,
+    reason: "ready",
+    status,
+  };
 }
 
 function optionalString(...values: unknown[]): string | undefined {
@@ -911,6 +993,18 @@ function isOpenClawRepoRootPath(value: string): boolean {
   return false;
 }
 
+function plannerWorkspaceRootCandidate(value: unknown, params: { rawCwd: string; cwd: string }): string {
+  const text = asString(value);
+  if (!text) return "";
+  if (
+    params.cwd !== params.rawCwd
+    && (text === params.rawCwd || text === envOverrides.workspaceRoot || isOpenClawManagedOctoClawRepoPath(text))
+  ) {
+    return "";
+  }
+  return text;
+}
+
 function isBroadPlannerReadScope(value: string, params: { cwd: string; workspaceRoot: string }): boolean {
   const text = value.trim();
   if (!text || text === "." || text === "./" || text === "/" || text === "~") return true;
@@ -998,13 +1092,20 @@ function buildPlannerContextPacket(params: {
     routeDecision.contextRefs,
   );
   const delegateScope = params.workContract?.delegate?.scope;
-  const cwd = asString(params.cwd, resolveWorkspaceRoot());
+  const rawCwd = asString(params.cwd, resolveWorkspaceRoot());
+  const cwd = resolvePlannerNativeCwd(rawCwd) || rawCwd;
+  const defaultWorkspaceRoot = cwd !== rawCwd ? cwd : envOverrides.workspaceRoot || cwd;
+  const workspaceRootFallbacks = cwd !== rawCwd
+    ? [
+        defaultWorkspaceRoot,
+        plannerWorkspaceRootCandidate(metadata.workspaceRoot, { rawCwd, cwd }),
+        plannerWorkspaceRootCandidate(metadata.workspace_root, { rawCwd, cwd }),
+      ]
+    : [metadata.workspaceRoot, metadata.workspace_root, defaultWorkspaceRoot];
   const workspaceRoot = optionalString(
-    contextRefs.workspaceRoot,
-    contextRefs.workspace_root,
-    metadata.workspaceRoot,
-    metadata.workspace_root,
-    envOverrides.workspaceRoot,
+    plannerWorkspaceRootCandidate(contextRefs.workspaceRoot, { rawCwd, cwd }),
+    plannerWorkspaceRootCandidate(contextRefs.workspace_root, { rawCwd, cwd }),
+    ...workspaceRootFallbacks,
     cwd,
   ) || cwd;
   const primaryFiles = plannerReadScopeArray({
@@ -1237,6 +1338,7 @@ function buildPlannerSessionsSpawnArgs(params: {
   metadata?: UnknownRecord | null;
   workContract?: WorkContract | null;
 }): Record<string, unknown> {
+  const cwd = resolvePlannerNativeCwd(params.cwd);
   const requestedTimeout = Number.isFinite(params.timeoutSeconds)
     ? Math.max(0, Math.floor(params.timeoutSeconds ?? 0))
     : params.expectedSeconds > 0
@@ -1264,7 +1366,7 @@ function buildPlannerSessionsSpawnArgs(params: {
     label: truncateText(params.label || params.expectedDeliverable || params.task, 80),
     runtime: "subagent",
     ...(params.selectedModel ? { model: params.selectedModel } : {}),
-    ...(params.cwd ? { cwd: params.cwd } : {}),
+    ...(cwd ? { cwd } : {}),
     ...(timeout !== undefined ? { runTimeoutSeconds: timeout } : {}),
     mode: "run",
     cleanup: "keep",
@@ -3274,16 +3376,36 @@ export function getToolRegistrations(options: ToolRegistrationOptions = {}): Too
               metadata,
               workContract: dispatchWorkContract,
             });
-            const liveSpeculativeState = asRecord(
-              policyState.get(managedSessionKey)
-                || policyState.get(stateKey)
-                || state,
-            );
             const pluginConfig = options.pluginConfigProvider?.() ?? options.pluginConfig;
-            const speculative = resolveSpeculativePreloadEnabled(pluginConfig)
-              ? readSpeculativePreloadState(liveSpeculativeState)
-              : null;
-            const useSpeculativeSend = Boolean(speculative?.label && speculative.status === "ready");
+            const speculativePreloadEnabled = resolveSpeculativePreloadEnabled(pluginConfig);
+            const speculativeSelection = speculativePreloadEnabled
+              ? selectSpeculativePreloadForDispatch({
+                  keys: [
+                    managedSessionKey,
+                    stateKey,
+                    params.sessionKey,
+                    metadata.session_key,
+                    initialMetadata.session_key,
+                    ctx.sessionKey,
+                    ctx.canonicalSessionKey,
+                    ctx.sessionId,
+                    ...plannerSessionCandidates,
+                  ],
+                  fallbackState: state,
+                })
+              : { speculative: null, candidateKey: "", reason: "disabled", status: "" };
+            const speculative = speculativeSelection.speculative;
+            const useSpeculativeSend = Boolean(speculative?.label);
+            if (speculativePreloadEnabled && !useSpeculativeSend) {
+              await recordPolicyReplay("speculative_preload_dispatch_fallback", {
+                sessionKey: managedSessionKey || stateKey || asString(params.sessionKey),
+                sessionId: asString(ctx.sessionId),
+                route: resolvedRoute,
+                reason: speculativeSelection.reason,
+                status: speculativeSelection.status,
+                candidate_key: speculativeSelection.candidateKey,
+              }, toolLogger(ctx), cachedDecision).catch(() => undefined);
+            }
             const sessionsSendArgs = useSpeculativeSend && speculative?.label
               ? buildSpeculativeSessionsSendArgs({
                   label: speculative.label,
@@ -3360,6 +3482,10 @@ export function getToolRegistrations(options: ToolRegistrationOptions = {}): Too
               dispatch_executed: false,
               spawn_executed: false,
               materialized: false,
+              speculative_preload_enabled: speculativePreloadEnabled,
+              speculative_selection_reason: speculativeSelection.reason,
+              speculative_selection_status: speculativeSelection.status,
+              speculative_selection_candidate_key: speculativeSelection.candidateKey,
               elapsedMs: Date.now() - dispatchToolStartedAt,
             }, toolLogger(ctx), null);
             return plannerDispatchResponse({
