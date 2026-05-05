@@ -2124,6 +2124,15 @@ function updatePolicyState(stateKey: string, mutator: (current: PolicyStateEntry
   policyState.update(key, (current) => mutator(current));
 }
 
+function stateWorkContractId(state: unknown): string {
+  const record = asRecord(state);
+  const decision = asRecord(record.decision);
+  const workContract = asRecord(decision.work_contract);
+  return stringValue(record.workContractId || record.work_contract_id)
+    || stringValue(workContract.workContractId || workContract.work_contract_id)
+    || stringValue(decision.workContractId || decision.work_contract_id);
+}
+
 function budgetedMainStateKeys(stateKey: string, ctx: UnknownRecord, state: UnknownRecord): string[] {
   return Array.from(new Set([
     stringValue(stateKey),
@@ -3931,23 +3940,52 @@ export const plugin = {
         && resolveSpawnBackend() === "planner"
         && resolveSpeculativePreloadEnabled(currentPluginConfig())
       ) {
-        const speculative = readSpeculativePreloadState(state);
-        const spawnArgs = asRecord(speculative?.spawnArgs);
         const decisionRoute = stringValue(asRecord(decision.route_decision).route);
-        if (decisionRoute === "delegate" && speculative?.status === "hinted" && Object.keys(spawnArgs).length > 0) {
+        const expectedWorkContractId = stateWorkContractId(state);
+        const deferredCandidates: Array<{
+          key: string;
+          speculative: NonNullable<ReturnType<typeof readSpeculativePreloadState>>;
+          spawnArgs: UnknownRecord;
+        }> = [];
+        const addDeferredCandidate = (key: string, candidateState: unknown): void => {
+          const candidateKey = stringValue(key);
+          if (!candidateKey || deferredCandidates.some((candidate) => candidate.key === candidateKey)) return;
+          const candidateRecord = asRecord(candidateState);
+          if (expectedWorkContractId && stateWorkContractId(candidateRecord) !== expectedWorkContractId) return;
+          const candidateSpeculative = readSpeculativePreloadState(candidateRecord);
+          const candidateSpawnArgs = asRecord(candidateSpeculative?.spawnArgs);
+          if (candidateSpeculative?.status !== "hinted" || Object.keys(candidateSpawnArgs).length === 0) return;
+          deferredCandidates.push({ key: candidateKey, speculative: candidateSpeculative, spawnArgs: candidateSpawnArgs });
+        };
+        for (const key of Array.from(new Set([
+          stateKey,
+          stringValue(ctx.sessionKey),
+          stringValue(ctx.canonicalSessionKey),
+          stringValue(asRecord(decision.request).session_key),
+          ...resolvePolicyStateKeys(ctx),
+        ].map((value) => stringValue(value)).filter(Boolean)))) {
+          addDeferredCandidate(key, policyState.get(key));
+        }
+        if (stateKey) addDeferredCandidate(stateKey, state);
+        if (deferredCandidates.length === 0 && expectedWorkContractId) {
+          for (const entry of policyState.entries()) addDeferredCandidate(entry.key, entry.state);
+        }
+        const deferred = deferredCandidates[0];
+        if (decisionRoute === "delegate" && deferred) {
           void recordPolicyReplay("speculative_preload_dispatch_deferred", {
-            sessionKey: stateKey || "",
+            sessionKey: deferred.key || stateKey || "",
             sessionId: stringValue(ctx.sessionId),
             route: decisionRoute,
             toolName,
-            label: speculative.label,
+            label: deferred.speculative.label,
             reason: "standby_spawn_required",
+            alias_count: deferredCandidates.length,
           }, pi.logger, decision).catch(() => {});
           return {
             block: true,
             blockReason: [
               "OctoClaw speculative preload is active for this delegated route.",
-              `First call sessions_spawn exactly with these runtime-generated args: ${JSON.stringify(spawnArgs)}.`,
+              `First call sessions_spawn exactly with these runtime-generated args: ${JSON.stringify(deferred.spawnArgs)}.`,
               "After sessions_spawn returns, call octoclaw_dispatch with the original task.",
               "If sessions_spawn is rejected or unavailable, call octoclaw_dispatch after the failed result so OctoClaw can fall back to new_spawn.",
             ].join(" "),
@@ -3982,6 +4020,15 @@ export const plugin = {
             && isMatchingSpeculativePreloadSpawn(state, toolParams)
           ) {
             speculativeMatches.push({ key: stateKey, state: asRecord(state), speculative: directSpeculative });
+          }
+          if (speculativeMatches.length === 0) {
+            for (const entry of policyState.entries()) {
+              const candidateState = asRecord(entry.state);
+              const candidateSpeculative = readSpeculativePreloadState(candidateState);
+              if (candidateSpeculative?.status !== "hinted") continue;
+              if (!isMatchingSpeculativePreloadSpawn(candidateState, toolParams)) continue;
+              speculativeMatches.push({ key: entry.key, state: candidateState, speculative: candidateSpeculative });
+            }
           }
           if (resolveSpeculativePreloadEnabled(currentPluginConfig()) && speculativeMatches.length > 0) {
             const now = Date.now();
@@ -4421,6 +4468,15 @@ export const plugin = {
         const speculative = readSpeculativePreloadState(resolvedState);
         if (speculative?.status === "spawn_call_started" && isMatchingSpeculativePreloadSpawn(resolvedState, toolParams)) {
           matches.push({ key: resolvedStateKey, state: asRecord(resolvedState), speculative });
+        }
+      }
+      if (matches.length === 0) {
+        for (const entry of policyState.entries()) {
+          const candidateState = asRecord(entry.state);
+          const speculative = readSpeculativePreloadState(candidateState);
+          if (speculative?.status !== "spawn_call_started") continue;
+          if (!isMatchingSpeculativePreloadSpawn(candidateState, toolParams)) continue;
+          matches.push({ key: entry.key, state: candidateState, speculative });
         }
       }
       if (matches.length === 0) return;

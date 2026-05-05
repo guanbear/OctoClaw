@@ -2232,6 +2232,82 @@ describe("speculative preload planner path", () => {
     policyState.clearState(key);
   });
 
+  it("enforces hinted speculative standby across session id aliases", async () => {
+    process.env.OCTOCLAW_SPECULATIVE_PRELOAD = "1";
+    process.env.OCTOCLAW_SPAWN_BACKEND = "planner";
+    const handlers = new Map<string, Function>();
+    plugin.register({
+      on: (event, handler) => handlers.set(event, handler),
+      registerTool: () => {},
+      registerCommand: () => {},
+      logger: {},
+    });
+
+    const key = "agent:main:slack:channel:c0as4dappu3:thread:t-spec-preload-alias";
+    const aliasKey = "runtime-session-spec-preload-alias";
+    const workContractId = "wc-spec-preload-alias";
+    const prompt = "用子 agent 做一次实现 review";
+    policyState.setState(key, {
+      prompt,
+      workContractId,
+      decision: budgetedMainDecision("delegate"),
+      routeHintSubmitted: true,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    });
+
+    const beforePromptBuild = handlers.get("before_prompt_build");
+    const beforeToolCall = handlers.get("before_tool_call");
+    const afterToolCall = handlers.get("after_tool_call");
+    await beforePromptBuild!(
+      { prompt },
+      { sessionKey: key, sessionId: aliasKey, agentId: "main", channelId: "slack", cwd: tempWorkspace },
+    );
+    policyState.setState(aliasKey, {
+      prompt,
+      workContractId,
+      decision: budgetedMainDecision("delegate"),
+      routeHintSubmitted: true,
+      createdAt: Date.now() + 1,
+      updatedAt: Date.now() + 1,
+    });
+    const speculative = (policyState.getState(key) as unknown as Record<string, unknown>)?.speculativePreload as Record<string, unknown>;
+
+    const prematureDispatch = await beforeToolCall!(
+      { toolName: "octoclaw_dispatch", params: { task: prompt } },
+      { sessionKey: key, sessionId: aliasKey, agentId: "main" },
+    ) as { block?: boolean; blockReason?: string } | undefined;
+    expect(prematureDispatch?.block).toBe(true);
+    expect(prematureDispatch?.blockReason).toContain("First call sessions_spawn");
+
+    const allowed = await beforeToolCall!(
+      { toolName: "sessions_spawn", params: speculative.spawnArgs },
+      { sessionKey: key, sessionId: aliasKey, agentId: "main" },
+    );
+    expect(allowed).toBeUndefined();
+    expect((policyState.getState(key) as unknown as Record<string, unknown>)?.speculativePreload).toMatchObject({ status: "spawn_call_started" });
+
+    await afterToolCall!(
+      {
+        toolName: "sessions_spawn",
+        params: speculative.spawnArgs,
+        result: {
+          status: "accepted",
+          runId: "run-spec-preload-alias",
+          childSessionKey: "agent:main:subagent:spec-preload-alias",
+        },
+      },
+      { sessionKey: key, sessionId: aliasKey, agentId: "main" },
+    );
+    expect((policyState.getState(key) as unknown as Record<string, unknown>)?.speculativePreload).toMatchObject({
+      status: "ready",
+      runId: "run-spec-preload-alias",
+      childSessionKey: "agent:main:subagent:spec-preload-alias",
+    });
+    policyState.clearState(key);
+    policyState.clearState(aliasKey);
+  });
+
   it("points speculative standby at configured live OctoClaw root when ctx cwd is an OpenClaw mirror", async () => {
     process.env.OCTOCLAW_SPECULATIVE_PRELOAD = "1";
     process.env.OCTOCLAW_SPAWN_BACKEND = "planner";
