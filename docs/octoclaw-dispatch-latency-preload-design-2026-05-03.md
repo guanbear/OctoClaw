@@ -37,7 +37,7 @@
 
 `lightContext=true` 优化后仍需 5-10s。slimming review Section 13 把 **warm worker pool / A2A 常驻 worker** 列为 Deferred 研究项，原因是"不承诺 child start p95 <= 10s"——即机制存在，但无法对端到端延迟做强保证。
 
-**解法**：本文的方案 B/A，通过 `mode: "session"` + `sessions_send` continuation turn 跳过 bootstrap。
+**解法**：本文的方案 B/A，通过 `mode: "session"` + `sessions_send` continuation turn 跳过 bootstrap。2026-05-05 实测修正：这条原始路径只适用于已支持 subagent thread-binding 的 channel；当前 Slack extension 不支持，Slack 需要走 Section 3.7 的 B' 验证方案。
 
 ### 1.2 本文的定位
 
@@ -147,9 +147,27 @@ export type PluginHookBeforePromptBuildResult = {
 
 **根本约束**：OctoClaw plugin 无法直接从插件上下文调用 `sessions_spawn`。所有 spawn 必须通过主 agent 的 tool call 触发。这是两个方案都面临的架构边界，也是 warm worker pool 在 slimming review 中被列为"研究项"的根本原因。
 
+### 2.6 Slack 事实修正：原始方案 B 当前不可验收
+
+2026-05-05 对本机 OpenClaw 4.29 deployed dist 复核后确认：
+
+- Slack extension dist 中没有 `subagent_spawning` hook。
+- `sessions_spawn(mode="session", thread=true)` 会先调用 `ensureThreadBindingForSubagentSpawn()`。
+- 当前 Slack 请求没有可用 subagent thread-binding session 模式时，OpenClaw 返回：
+  `sessions_spawn(mode="session") is only available on channels that expose thread bindings...`
+- OpenClaw 错误提示本身给出的替代方向是：用 `mode="run"` 做 one-shot subagent work，或用 `sessions_send(sessionKey=...)` 继续向 persistent session 发消息。
+
+**结论**：
+
+- 原始方案 B（`mode:"session" + thread:true`）不再作为 Slack 0.5.1 验收路径。
+- 原始方案 B/A 只保留给 Discord / Telegram / Feishu 等已经实现 subagent thread-binding hook 的 channel。
+- Slack 只进入 B' live probe：`mode:"run" + cleanup:"keep"` 创建保留 transcript 的 warm session，再用 `sessions_send(sessionKey=...)` 验证 continuation turn 是否能跳过 bootstrap。
+
 ---
 
 ## 3. 方案 B：投机并行 spawn（`before_prompt_build` 注入）
+
+> 2026-05-05 修正：本节原始方案需要 channel 支持 subagent thread-binding。当前 Slack 不支持，因此 Slack 不按本节验收；Slack 采用 Section 3.7 的 B' 验证方案。
 
 ### 3.1 设计原理
 
@@ -274,6 +292,70 @@ route=reply 时已经 spawn 了 speculative session：
 - pool 中没有可用的 idle standby session（否则直接走方案 A）
 - 当前 thread 有 `thread=true` 绑定（`mode: "session"` 的前提）
 
+### 3.7 Slack-compatible B'：`mode="run" + cleanup="keep"` warm pool probe
+
+Slack 当前没有可用的 subagent thread-binding hook，所以不能创建 `mode="session"` standby session。可验证的替代方案是 B'：
+
+1. 后台创建 warm session，不阻塞当前用户请求：
+
+```ts
+sessions_spawn({
+  mode: "run",
+  cleanup: "keep",
+  expectsCompletionMessage: false,
+  context: "isolated",
+  lightContext: false,
+  task: "Reply ONLY: NO_REPLY"
+})
+```
+
+2. 记录返回的 `childSessionKey` / `runId`，等待 warm run 正常结束且没有可见 Slack 消息。
+3. 后续真实 delegate 命中 idle warm session 时，不再 fresh spawn，而是：
+
+```ts
+sessions_send({
+  sessionKey: childSessionKey,
+  message: actualTask,
+  timeoutSeconds: 0
+})
+```
+
+4. `sessions_send` accepted 后仍必须走 OctoClaw confirm / WorkContract native refs / accepted ACK 语义，不能直接宣称任务已启动。
+
+#### `lightContext:false` 的原因和代价
+
+`lightContext:true` 会设置 `bootstrapContextMode="lightweight"`。OpenClaw 源码中 lightweight run 不写 `openclaw:bootstrap-context:full` marker；后续 `sessions_send` 即使是同一 session，也未必能触发 full bootstrap continuation skip。
+
+因此 B' probe 必须先用 `lightContext:false` 完整 bootstrap 一次，验证后续 turn 是否能通过 `agents.defaults.contextInjection="continuation-skip"` 跳过 bootstrap。
+
+代价：
+
+- 首次 warm run 可能 30-60s，不能放在当前请求主链。
+- 每个 warm slot 都消耗一次完整 bootstrap、模型额度、subagent 并发和 transcript 存储。
+- 如果后续 `sessions_send` 没有被识别为 continuation-skip，预热成本就是浪费，必须 fail closed 回普通 planner/native。
+
+#### 多备用 warm slot 策略
+
+多预热技术上可行，但默认必须克制：
+
+- 默认每个作用域只保留 1 个 idle warm slot。
+- 高频频道或连续 delegate 命中后最多升到 2 个。
+- Pool key 先按 `agentId + requesterSessionKey/Slack anchor`，不做全局跨频道大池。
+- TTL 默认 5-10 分钟；过期、send 失败、run lost、bootstrap 未完成都标记 stale 并清理。
+- warm pool 不能占满 OpenClaw subagent 并发；本机当前 `maxConcurrent=8` 时，warm slot 总数应明显低于真实 delegate 并发预算。
+- 命中并派发后异步补 1 个 slot；不要每条消息都补。
+
+#### B' live probe 成功标准
+
+B' 只有在以下证据同时满足后，才能从 design/probe 进入 implementation：
+
+- warm run `mode="run" + cleanup="keep" + lightContext:false` accepted，并保留可 `sessions_send` 的 `childSessionKey`。
+- warm run 回复 `NO_REPLY` 后没有 Slack 可见空消息、没有重复 final、没有内部 announce 污染 parent。
+- `sessions_send(sessionKey, timeoutSeconds:0)` 返回 accepted + 非空 `runId`。
+- 第二段 run 的 bootstrap evidence 显示 continuation skip：`bootstrapFiles=[]` 且 `contextFiles=[]`，或等价 OpenClaw trace 字段。
+- native announce / footer / WorkContract refs / confirm ACK 仍走 0.5.0 planner/native 语义。
+- 任一条件失败时，OctoClaw 不重试污染主链，直接退回 `dispatchMode="new_spawn"`。
+
 ---
 
 ## 4. 方案 A：预热 Session Pool（持久化复用）
@@ -282,7 +364,7 @@ route=reply 时已经 spawn 了 speculative session：
 
 方案 B 在 route=reply 时会留下一个 bootstrap 完成的 idle standby session。方案 A **持久化管理这些 per-thread session**，让后续 delegate turn 直接复用，跳过 speculative spawn 的 tool call 开销。
 
-**重要约束**：因为 `mode: "session"` 要求 `thread=true`，pool 是 **per-thread** 的，不是全局 worker pool。Pool key = `(agentId, threadId)`，每个 Slack thread 最多 N 个 standby slot。
+**重要约束**：因为 `mode: "session"` 要求 `thread=true`，pool 是 **per-thread** 的，不是全局 worker pool。Pool key = `(agentId, threadId)`，每个支持 thread-binding 的 channel thread 最多 N 个 standby slot；当前 Slack 不适用原始方案 A。
 
 本质：方案 B 是方案 A 的冷启动路径。方案 A 是方案 B 的稳态形态。
 
@@ -372,14 +454,14 @@ async function probeStandbySession(sessionKey: string): Promise<boolean> {
 
 ### 5.1 进化步骤
 
-**步骤 1：实现方案 B**
+**步骤 1：实现方案 B（仅限支持 subagent thread-binding 的 channel）**
 
 - `before_prompt_build` hook 条件注入 speculative spawn 指令
 - `before_tool_call` gate 新增 speculative spawn 白名单
 - `octoclaw_dispatch` 返回 `dispatchMode: "new_spawn" | "send_to_speculative"`
 - `octoclaw_dispatch_confirm` 兼容 `sessions_send` 路径
 
-验收：投机 spawn 能跑通，child bootstrap 与主 agent LLM turn 并行化，整体 delegate 延迟 < 20s。
+验收：投机 spawn 能跑通，child bootstrap 与主 agent LLM turn 并行化，整体 delegate 延迟 < 20s。Slack 当前不满足此步骤的 channel 前置条件，应先走 Section 3.7 的 B' live probe。
 
 **步骤 2：加 pool 回收**
 
@@ -402,8 +484,8 @@ async function probeStandbySession(sessionKey: string): Promise<boolean> {
 
 | 情况 | 行为 |
 | --- | --- |
-| pool 有 idle session（同 thread）| 方案 A 路径（sessions_send，1 turn）|
-| pool 为空，precheck 信号强 | 方案 B 路径（speculative spawn，2 turns）|
+| pool 有 idle session（同 thread）| 方案 A 路径（sessions_send，1 turn；非 Slack 原始路径）|
+| pool 为空，precheck 信号强 | 方案 B 路径（speculative spawn，2 turns；Slack 退化到 B' probe 或普通 planner/native）|
 | pool 为空，precheck 信号弱 | 普通 planner/confirm 路径（sessions_spawn，2-3 turns）|
 | pool session health check 失败 | 标记 stale，退化到方案 B |
 
@@ -414,6 +496,8 @@ async function probeStandbySession(sessionKey: string): Promise<boolean> {
 ## 6. 可行性验证步骤
 
 ### 6.1 验证 1：continuation turn 确实跳过 bootstrap
+
+适用范围：支持 subagent thread-binding 的 channel。Slack 使用 6.5。
 
 **方法**：
 
@@ -456,11 +540,43 @@ async function probeStandbySession(sessionKey: string): Promise<boolean> {
 
 **成功标准**：health check 在 500ms 内返回；session expire 后正确返回失败。
 
+### 6.5 验证 5：Slack B' `run + keep` warm session
+
+**方法**：
+
+1. 保持 `speculativePreload=false`，不要影响线上主链。
+2. 显式设置或记录当前 `agents.defaults.contextInjection`；B' 需要验证 `continuation-skip`，不能在 `always` 模式下假装通过。
+3. 手动或 controlled harness 创建：
+
+```ts
+sessions_spawn({
+  mode: "run",
+  cleanup: "keep",
+  expectsCompletionMessage: false,
+  context: "isolated",
+  lightContext: false,
+  task: "Reply ONLY: NO_REPLY"
+})
+```
+
+4. 记录 `runId`、`childSessionKey`、warm run 结束时间、是否有任何 Slack 可见消息。
+5. 用 `sessions_send({ sessionKey: childSessionKey, message: "输出 DONE", timeoutSeconds: 0 })` 发送真实任务。
+6. 从 OpenClaw run report / session trace / replay 里确认第二段 run 是否跳过 bootstrap context。
+
+**成功标准**：
+
+- warm run accepted 且保留 `childSessionKey`。
+- warm run 不投递 Slack 可见 final，不污染 parent 内部 announce。
+- `sessions_send` accepted + 非空 `runId`。
+- 第二段 run 有 continuation-skip 证据：`bootstrapFiles=[]`、`contextFiles=[]` 或等价 trace 字段。
+- native announce / footer / confirm ACK / WorkContract refs 正常。
+- 失败时没有重试循环，退回普通 `dispatchMode="new_spawn"`。
+
 ---
 
 ## 7. 验收标准
 
-### 7.1 方案 B 验收
+### 7.1 方案 B 验收（非 Slack 原始路径）
 
 - child bootstrap 阶段 p50 < 3s（续 turn，无 bootstrap）。
 - delegate 整体路径 T=0 到任务开始 p50 < 20s（基线约 45-90s）。
@@ -469,7 +585,16 @@ async function probeStandbySession(sessionKey: string): Promise<boolean> {
 - 误判连续时 pool 不无限堆积；expired session 自动移除。
 - `before_tool_call` gate 在 speculative spawn 开启后不产生误阻。
 
-### 7.2 方案 A 验收（在方案 B 稳定后）
+### 7.2 Slack B' 验收
+
+- warm pool 默认关闭，只能通过 feature flag / controlled smoke 开启。
+- 默认每个作用域 1 个 idle slot；连续命中后最多 2 个。
+- warm run 不阻塞当前请求；当前请求仍走 planner/native 或 reply。
+- B' 命中后，真实任务通过 `sessions_send` 进入既有 confirm/native refs/ACK 链路。
+- B' 不产生 visible `NO_REPLY`、空 final、重复 final、completion timeout 或 parent 内部事件泄漏。
+- B' 的收益以 task-start latency 证明，不只看 accepted ACK。
+
+### 7.3 方案 A 验收（在方案 B/B' 稳定后）
 
 - pool 命中路径 T=0 到任务开始 p50 < 8s。
 - pool 命中时主 agent 只需 1 次 LLM turn（Slack smoke 可见 `sessions_send` 而非 `sessions_spawn`）。
@@ -483,11 +608,11 @@ async function probeStandbySession(sessionKey: string): Promise<boolean> {
 
 ### 8.1 `mode: "session"` per-thread 约束（非全局 worker pool）
 
-`mode: "session"` 强制 `thread=true`，pool slot 与 Slack thread 绑定，不同 thread 不能共享同一个 standby session。
+`mode: "session"` 强制 `thread=true`，pool slot 与 channel thread 绑定，不同 thread 不能共享同一个 standby session。当前 Slack extension 没有 `subagent_spawning` hook，因此这不是"per-thread 约束"，而是原始方案 B/A 的 Slack hard block。
 
 **影响**：高频单 thread 对话收益最大；不同 thread 每条都是冷启动（直到该 thread 自己积累 pool）。
 
-**当前建议**：Pool 按 `(agentId, threadId)` 管理，接受跨 thread 无法复用。若 OpenClaw 后续放开 thread 绑定要求，再扩展为 global pool。
+**当前建议**：非 Slack channel 的 Pool 按 `(agentId, threadId)` 管理，接受跨 thread 无法复用。Slack 不使用 `mode:"session"` pool；只验证 `mode:"run" + cleanup:"keep"` B' 小池。
 
 ### 8.2 OctoClaw plugin 无法直接 spawn
 
@@ -546,30 +671,30 @@ Gate 逻辑修改需仔细测试，避免破坏现有 intent-matched 路径的�
 **进入 roadmap 的前置条件**：
 
 1. 0.5.0 Must ship 已在真实 Slack smoke 中稳定。
-2. 完成 Section 6 的四项可行性验证（尤其是验证 6.1：续 turn p50 < 3s）。
+2. 完成 Section 6 的可行性验证。Slack 必须额外完成 6.5，不能用原始 `mode:"session"` 验证替代。
 3. 普通 reply 路径已经正常（parent 链路不是主要瓶颈）；如果 reply 也慢，应先做 reply fast path 和 `before_dispatch fast delegate`。
 
 ---
 
 ## 11. 推荐优先级
 
-2026-05-05 调整：0.5.1 先做方案 B 的可回退实现切片，而不是先做方案 A pool 或 direct backend。原因是方案 B 只依赖 OpenClaw 4.29 已有 `sessions_spawn(mode="session")` 和 `sessions_send(timeoutSeconds=0)`，可以 feature flag 关闭，且任何失败都退回 0.5.0 planner/confirm 主链；方案 A 需要新增 `standby_sessions` 持久池、health check 和补充逻辑，风险更高。
+2026-05-05 调整：原始方案 B 的 implementation slice 继续保持 default-off，但不能作为 Slack 成功路径。Slack 0.5.1 只推进 B' live probe：先验证 `mode:"run" + cleanup:"keep" + lightContext:false + sessions_send` 是否真的能在 continuation turn 跳过 bootstrap，再决定是否实现小型 warm pool。任何失败都退回 0.5.0 planner/confirm 主链。
 
 | 阶段 | 内容 | 前置条件 |
 | --- | --- | --- |
 | **0.5.1 P0** | 保留 30s soft budget，但超时后允许 late final / 一次轻量只读工具；prompt 注入不再强制 delegate | 0.5.0 release branch |
-| **0.5.1 P1** | 方案 B feature-flag 实现：`before_prompt_build` 注入 standby spawn、speculative spawn 白名单、`octoclaw_dispatch` 返回 `dispatchMode=send_to_speculative`、`sessions_send` 走 pending intent gate、confirm 继续 fail-closed | `OCTOCLAW_SPECULATIVE_PRELOAD=1` 或 `pluginConfig.speculativePreload=true`；默认关闭 |
-| **0.5.1 P2** | Section 6 live 验证：续 turn 延迟、`sessions_send` native announce、gate 安全、confirm ACK/footer | P1 本地 tests 通过 |
-| **0.5.1 P3** | 如果 P2 证明收益稳定，再默认开启或按 allowlist 开启；记录 accepted ACK / task-start 分段延迟 | 连续 Slack smoke 稳定 |
-| **0.5.x 后续** | 方案 A：SQLite `standby_sessions` 表 + pool 查询 + health check + 补充逻辑 | 方案 B 在 nightly smoke 中稳定 |
-| **Pool 预热增强**（可选）| heartbeat 或首次 turn 预热 | 方案 A 稳定，有真实高频需求 |
+| **0.5.1 P1** | Slack B' live probe：`mode="run" + cleanup="keep" + lightContext:false` warm run，随后 `sessions_send(timeoutSeconds=0)`，只记录 evidence，不默认改生产路由 | `speculativePreload=false`；controlled smoke |
+| **0.5.1 P2** | 如果 B' probe 通过，实现 default-off 小池：每作用域 1 个 idle slot，命中后 `sessions_send`，失败退回 `new_spawn` | 6.5 连续 artifact 通过 |
+| **0.5.1 P3** | 小池稳定后补 confirm/native refs/ACK/report 字段，并评估高频作用域最多 2 个 slot | 无 visible NO_REPLY、无 duplicate final、task-start latency 有收益 |
+| **0.5.x 后续** | 非 Slack channel 可继续原始方案 A：SQLite `standby_sessions` 表 + pool 查询 + health check + 补充逻辑 | 对应 channel 支持 subagent thread-binding |
+| **Pool 预热增强**（可选）| heartbeat 或首次 turn 预热 | B' 或方案 A 稳定，有真实高频需求 |
 
-### 11.1 0.5.1 P1 实现状态
+### 11.1 既有原始方案 B 实现状态
 
-当前实现是 feature-flag implementation slice，不默认改变线上行为：
+当前已有的是原始方案 B feature-flag implementation slice，不默认改变线上行为；对 Slack 只能作为 fail-closed fallback 保护，不能作为通过证据：
 
 - `OCTOCLAW_SPECULATIVE_PRELOAD=1` 或 `pluginConfig.speculativePreload=true` 时，`before_prompt_build` 只对 runtime 已判定为 delegate 的 turn 注入 `OCTOCLAW_SPECULATIVE_SPAWN_HINT`，不靠用户文本关键词。plugin config 路径用于 controlled smoke，避免只依赖临时 LaunchAgent env 传递。
-- speculative standby spawn 必须满足固定安全形态：`mode="session"`、`thread=true`、`context="isolated"`、`lightContext=true`、label 前缀 `octoclaw-speculative-`、standby task 精确匹配；否则 planner gate 不放行。
+- 原始 speculative standby spawn 必须满足固定安全形态：`mode="session"`、`thread=true`、`context="isolated"`、`lightContext=true`、label 前缀 `octoclaw-speculative-`、standby task 精确匹配；否则 planner gate 不放行。
 - `octoclaw_dispatch` 只有在 `after_tool_call` 已观察到 standby spawn accepted，并把当前 policyState 标记为 `ready` 后，才创建 `dispatchMode="send_to_speculative"` 的 pending intent 并返回 `sessionsSendArgs`；只到 `spawn_call_started`、失败、unsupported 或 stale 都退回原 `sessionsSpawnArgs` 路径。
 - `sessions_send` 在 planner delegate 路径下必须匹配 pending send intent hash，才会推进到 `spawn_call_started`；`octoclaw_dispatch_confirm` 仍要求 accepted + 非空 runId，ACK 仍晚于 confirm。
 - 本地验收：`extension-entry.test.ts` 覆盖 hint 注入、白名单允许/误 label 拦截、standby accepted/failed tracking、`sessions_send` gate；`registration-planner.test.ts` 覆盖 dispatch 返回 `send_to_speculative`、call-start-only fallback 和 pending intent。
@@ -581,13 +706,14 @@ Gate 逻辑修改需仔细测试，避免破坏现有 intent-matched 路径的�
 - 原 planner/native fallback 主链在 speculative preload 开启时仍能成功：`dispatch_mode=new_spawn`、`sessions_spawn_intent_allowed`、`dispatch_confirm_completed ok=true`、native final `via=native_announce`、`delivery_transport=slack_api`、`footer_source=envelope`、`completion_file_timeout=0`、duplicate final `0`。
 - Scheme B 的 full `sessions_send` 主链还不能宣称通过：一次 live attempt 中 standby `sessions_spawn(mode="session")` 被 OpenClaw channel binding 拒绝；后续 hardening 已改为只有 `after_tool_call` 观察到 accepted standby result 才允许 `dispatchMode=send_to_speculative`，否则退回 `new_spawn`。
 
-因此 0.5.1 当前定位是 default-off implementation slice。P3 默认开启或 allowlist 需要后续真实 Slack artifact 证明：
+因此 0.5.1 当前定位是：原始方案 B default-off 且 Slack blocked；Slack 后续只能用 B' artifact 证明：
 
 ```text
-speculative_preload_hint_injected
--> speculative_preload_spawn_allowed
--> speculative_preload_spawn_ready
--> dispatchMode=send_to_speculative
+warm_run_spawn_accepted(mode=run, cleanup=keep, lightContext=false)
+-> warm_run_completed_no_visible_reply
+-> sessions_send_accepted(runId non-empty)
+-> continuation_skip_evidence(bootstrapFiles=[], contextFiles=[])
+-> dispatchMode=send_to_warm_session
 -> sessions_send_intent_allowed
 -> dispatch_confirm_completed ok=true
 ```
