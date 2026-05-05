@@ -2433,7 +2433,7 @@ describe("speculative preload planner path", () => {
         params: speculative.spawnArgs,
         result: {
           status: "error",
-          error: "sessions_spawn(mode=\"session\") is not available on this channel",
+          error: "child session patch failed: session file locked",
           childSessionKey: "agent:main:subagent:failed-standby",
         },
       },
@@ -2442,7 +2442,7 @@ describe("speculative preload planner path", () => {
 
     expect((policyState.getState(key) as unknown as Record<string, unknown>)?.speculativePreload).toMatchObject({
       status: "stale",
-      error: "sessions_spawn(mode=\"session\") is not available on this channel",
+      error: "child session patch failed: session file locked",
     });
     await waitForFireAndForget();
     expect(readReplayEvents()).toContainEqual(expect.objectContaining({
@@ -2456,6 +2456,114 @@ describe("speculative preload planner path", () => {
     const retrySpeculative = (policyState.getState(key) as unknown as Record<string, unknown>)?.speculativePreload as Record<string, unknown>;
     expect(retrySpeculative).toMatchObject({ status: "hinted" });
     expect(retrySpeculative.label).not.toBe(firstLabel);
+    policyState.clearState(key);
+  });
+
+  it("records failed speculative standby even if the host rejects before before_tool_call marks it started", async () => {
+    process.env.OCTOCLAW_SPECULATIVE_PRELOAD = "1";
+    process.env.OCTOCLAW_SPAWN_BACKEND = "planner";
+    const handlers = new Map<string, Function>();
+    plugin.register({
+      on: (event, handler) => handlers.set(event, handler),
+      registerTool: () => {},
+      registerCommand: () => {},
+      logger: {},
+    });
+
+    const key = "agent:main:slack:channel:c0as4dappu3:thread:t-spec-preload-host-rejected";
+    const prompt = "用子 agent 做一次实现 review";
+    policyState.setState(key, {
+      prompt,
+      decision: budgetedMainDecision("delegate"),
+      routeHintSubmitted: true,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    });
+
+    await handlers.get("before_prompt_build")!(
+      { prompt },
+      { sessionKey: key, sessionId: "session-spec-preload-host-rejected", agentId: "main", channelId: "slack", cwd: tempWorkspace },
+    );
+    const speculative = (policyState.getState(key) as unknown as Record<string, unknown>)?.speculativePreload as Record<string, unknown>;
+    expect(speculative).toMatchObject({ status: "hinted" });
+
+    await handlers.get("after_tool_call")!(
+      {
+        toolName: "sessions_spawn",
+        params: speculative.spawnArgs,
+        result: {
+          status: "error",
+          error: "sessions_spawn(mode=\"session\") is only available on channels that expose thread bindings. This request is not running on a channel that can bind a subagent thread.",
+        },
+      },
+      { sessionKey: key, sessionId: "session-spec-preload-host-rejected", agentId: "main" },
+    );
+
+    expect((policyState.getState(key) as unknown as Record<string, unknown>)?.speculativePreload).toMatchObject({
+      status: "stale",
+      error: expect.stringContaining("thread bindings"),
+    });
+    await waitForFireAndForget();
+    expect(readReplayEvents()).toContainEqual(expect.objectContaining({
+      event: "speculative_preload_spawn_failed",
+      sessionKey: key,
+      error: expect.stringContaining("thread bindings"),
+    }));
+    policyState.clearState(key);
+  });
+
+  it("does not reinject speculative standby after the host reports thread bindings unavailable", async () => {
+    process.env.OCTOCLAW_SPECULATIVE_PRELOAD = "1";
+    process.env.OCTOCLAW_SPAWN_BACKEND = "planner";
+    const handlers = new Map<string, Function>();
+    plugin.register({
+      on: (event, handler) => handlers.set(event, handler),
+      registerTool: () => {},
+      registerCommand: () => {},
+      logger: {},
+    });
+
+    const key = "agent:main:slack:channel:c0as4dappu3:thread:t-spec-preload-threadbinding-missing";
+    const prompt = "用子 agent 做一次实现 review";
+    policyState.setState(key, {
+      prompt,
+      decision: budgetedMainDecision("delegate"),
+      routeHintSubmitted: true,
+      speculativePreload: {
+        label: "octoclaw-speculative-threadbinding-missing",
+        status: "stale",
+        createdAt: Date.now() - 1_000,
+        updatedAt: Date.now() - 1_000,
+        spawnArgs: {
+          task: "Standby worker. Do not execute any task. Await task assignment via sessions_send.",
+          label: "octoclaw-speculative-threadbinding-missing",
+          mode: "session",
+          thread: true,
+          context: "isolated",
+          lightContext: true,
+        },
+        error: "sessions_spawn(mode=\"session\") is only available on channels that expose thread bindings. This request is not running on a channel that can bind a subagent thread.",
+      },
+      createdAt: Date.now() - 1_000,
+      updatedAt: Date.now(),
+    } as unknown as Parameters<typeof policyState.setState>[1]);
+
+    const projection = await handlers.get("before_prompt_build")!(
+      { prompt },
+      { sessionKey: key, sessionId: "session-spec-preload-threadbinding-missing", agentId: "main", channelId: "slack", cwd: tempWorkspace },
+    ) as { prependSystemContext?: string } | undefined;
+
+    expect(projection?.prependSystemContext || "").not.toContain("OCTOCLAW_SPECULATIVE_SPAWN_HINT");
+    expect((policyState.getState(key) as unknown as Record<string, unknown>)?.speculativePreload).toMatchObject({
+      label: "octoclaw-speculative-threadbinding-missing",
+      status: "stale",
+    });
+    await waitForFireAndForget();
+    expect(readReplayEvents()).toContainEqual(expect.objectContaining({
+      event: "speculative_preload_skipped",
+      sessionKey: key,
+      reason: "thread_binding_unavailable",
+    }));
     policyState.clearState(key);
   });
 

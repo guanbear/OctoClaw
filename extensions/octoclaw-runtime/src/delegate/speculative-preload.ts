@@ -84,6 +84,7 @@ export function buildSpeculativePreloadSpawnArgs(input: {
     sandbox: "inherit",
     context: "isolated",
     lightContext: true,
+    expectsCompletionMessage: false,
     ...(input.model ? { model: input.model } : {}),
     ...(input.cwd ? { cwd: input.cwd } : {}),
     runTimeoutSeconds: input.runTimeoutSeconds || 300,

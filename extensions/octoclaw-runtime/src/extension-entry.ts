@@ -433,6 +433,20 @@ function speculativeSpawnResultError(result: unknown, fallback?: unknown): strin
   return firstNonEmptyString(record.error, fallback, "speculative_preload_spawn_not_accepted");
 }
 
+function speculativePreloadThreadBindingUnavailable(error: unknown): boolean {
+  const text = stringValue(error).toLowerCase();
+  if (!text) return false;
+  return (
+    text.includes("sessions_spawn(mode=\"session\")")
+    && (text.includes("thread binding") || text.includes("thread bindings"))
+    && (text.includes("not running on a channel") || text.includes("unavailable") || text.includes("disabled"))
+  ) || (
+    text.includes("thread=true")
+    && (text.includes("thread binding") || text.includes("thread bindings"))
+    && text.includes("not running on a channel")
+  );
+}
+
 function normalizeOutboundTargetKey(value: unknown): string {
   return stringValue(value)
     .toLowerCase()
@@ -2535,6 +2549,19 @@ function maybeInjectSpeculativePreload(input: {
     return input.state;
   }
   const existing = readSpeculativePreloadState(input.state);
+  if (existing?.status === "stale" && speculativePreloadThreadBindingUnavailable(existing.error)) {
+    void recordPolicyReplay("speculative_preload_skipped", {
+      sessionKey: input.stateKey,
+      sessionId: stringValue(input.ctx.sessionId),
+      route: input.route,
+      route_decision_route: routeDecisionRoute,
+      reason: "thread_binding_unavailable",
+      status: existing.status,
+      label: existing.label,
+      error: existing.error || "",
+    }, input.logger, input.decision).catch(() => {});
+    return input.state;
+  }
   if (existing?.label && existing.status !== "stale") {
     void recordPolicyReplay("speculative_preload_skipped", {
       sessionKey: input.stateKey,
@@ -4461,13 +4488,16 @@ export const plugin = {
       for (const key of candidateKeys) {
         const candidateState = asRecord(policyState.get(key));
         const speculative = readSpeculativePreloadState(candidateState);
-        if (!speculative || speculative.status !== "spawn_call_started") continue;
+        if (!speculative || (speculative.status !== "spawn_call_started" && speculative.status !== "hinted")) continue;
         if (!isMatchingSpeculativePreloadSpawn(candidateState, toolParams)) continue;
         matches.push({ key, state: candidateState, speculative });
       }
       if (resolvedStateKey && matches.length === 0) {
         const speculative = readSpeculativePreloadState(resolvedState);
-        if (speculative?.status === "spawn_call_started" && isMatchingSpeculativePreloadSpawn(resolvedState, toolParams)) {
+        if (
+          (speculative?.status === "spawn_call_started" || speculative?.status === "hinted")
+          && isMatchingSpeculativePreloadSpawn(resolvedState, toolParams)
+        ) {
           matches.push({ key: resolvedStateKey, state: asRecord(resolvedState), speculative });
         }
       }
@@ -4475,7 +4505,7 @@ export const plugin = {
         for (const entry of policyState.entries()) {
           const candidateState = asRecord(entry.state);
           const speculative = readSpeculativePreloadState(candidateState);
-          if (speculative?.status !== "spawn_call_started") continue;
+          if (speculative?.status !== "spawn_call_started" && speculative?.status !== "hinted") continue;
           if (!isMatchingSpeculativePreloadSpawn(candidateState, toolParams)) continue;
           matches.push({ key: entry.key, state: candidateState, speculative });
         }
