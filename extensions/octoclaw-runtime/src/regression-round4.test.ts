@@ -633,6 +633,42 @@ describe("regression round 4: scenario 2b — delegated state normalization", ()
     expect(guarded.mode).toBe("replace");
     expect(String((guarded.message as { content?: Array<{ text?: string }> })?.content?.[0]?.text ?? "")).toBe("NO_REPLY");
   });
+
+  it("preserves budgeted-main direct answer when only read-only tools ran and no spawn was accepted", () => {
+    const answer = "我查了 GitHub Releases API，截至现在 5 月的正式 release 主要有 3 个：2026.5.2、2026.5.3、2026.5.4。";
+    const guarded = guardAssistantMessageForPolicyState(
+      { role: "assistant", content: [{ type: "text", text: answer }] },
+      {
+        delegated: false,
+        dispatchRoute: "delegate",
+        dispatchStatus: "budgeted_main_escalated",
+        dispatchExecuted: false,
+        spawnExecuted: false,
+        resultMaterialized: false,
+        directToolsSeen: ["web_fetch"],
+        budgetedMain: {
+          readOnlyToolCount: 1,
+          active: false,
+          escalatedAt: Date.now(),
+        },
+        decision: {
+          route: "delegate",
+          route_decision: {
+            route: "delegate",
+            route_source: "budgeted_main_escalation",
+            decision_bucket: "budgeted_main_then_delegate",
+            dispatch_required: true,
+          },
+          tool_policy: {
+            must_delegate_via: "octoclaw_dispatch",
+          },
+        },
+      },
+    );
+
+    expect(guarded.mode).toBe("pass");
+    expect(textOf(guarded)).toBe(answer);
+  });
 });
 
 

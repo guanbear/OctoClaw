@@ -235,10 +235,53 @@ describe("octoclaw_dispatch planner backend", () => {
       elapsedMs: expect.any(Number),
     }));
     expect(events).toContainEqual(expect.objectContaining({
+      event: "dispatch_backend_selected",
+      spawn_backend: "planner",
+      planner_enabled: true,
+      planner_allowed_candidates: expect.arrayContaining([contract.sessionKey]),
+    }));
+    expect(events).toContainEqual(expect.objectContaining({
       event: "dispatch_planner_intent_created",
       work_contract_id: contract.workContractId,
       spawn_intent_id: body.spawnIntentId,
       elapsedMs: expect.any(Number),
+    }));
+  });
+
+  it("fails closed with explicit planner_not_allowed instead of falling through to legacy taskFlow", async () => {
+    process.env.OCTOCLAW_SPAWN_BACKEND = "planner";
+    process.env.OCTOCLAW_PLANNER_ALLOWLIST = "agent:main:slack:channel:c0as4dappu3";
+    const contract = seedWorkContract("agent:main:slack:default:direct:u0al9t5u89z");
+
+    const response = await dispatchTool().execute({
+      task: contract.userAsk,
+      workContractId: contract.workContractId,
+      policyJson: JSON.stringify(delegateDecision(contract)),
+    }, {
+      sessionKey: contract.sessionKey,
+      sessionId: "session-planner-dm-not-allowed",
+      cwd: tempWorkspace,
+    });
+
+    const body = JSON.parse(String(response.text));
+    expect(body.ok).toBe(false);
+    expect(body.error).toBe("planner_not_allowed_for_session");
+    expect(body.error).not.toContain("taskflow_unavailable");
+    expect(nativeSpawnIntentStore.findPendingForSession(contract.sessionKey)).toBeNull();
+    const events = readReplayEvents();
+    expect(events).toContainEqual(expect.objectContaining({
+      event: "dispatch_backend_selected",
+      spawn_backend: "planner",
+      planner_enabled: false,
+      planner_allowlist_size: 1,
+    }));
+    expect(events).toContainEqual(expect.objectContaining({
+      event: "dispatch_planner_not_allowed",
+      error: "planner_not_allowed_for_session",
+    }));
+    expect(events).not.toContainEqual(expect.objectContaining({
+      event: "dispatch_capability_failure",
+      error: expect.stringContaining("taskflow_unavailable"),
     }));
   });
 

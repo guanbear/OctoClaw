@@ -64,7 +64,7 @@ import { scheduleChildCompletionFinalizer } from "../delegate/child-finalizer.js
 import { isOpenClawManagedOctoClawRepoPath, resolvePlannerNativeCwd } from "../delegate/planner-cwd.js";
 import { createCompletionBinding } from "../runtime-ledger/completion-binding.js";
 import { randomUUID } from "node:crypto";
-import { isPlannerAllowedForSession, resolveSpawnBackend, resolveSpawnIntentTtlMs, resolveSpeculativePreloadEnabled } from "../config/index.js";
+import { isPlannerAllowedForSession, resolvePlannerAllowlist, resolveSpawnBackend, resolveSpawnIntentTtlMs, resolveSpeculativePreloadEnabled } from "../config/index.js";
 import { confirmNativeSpawn } from "../delegate/native-spawn-confirm.js";
 import { nativeSpawnIntentStore } from "../delegate/native-spawn-intent-store.js";
 import {
@@ -3266,10 +3266,42 @@ export function getToolRegistrations(options: ToolRegistrationOptions = {}): Too
             asRecord(state?.delivery_target).sessionKey,
             asRecord(state?.delivery_target).session_key,
           );
+          const plannerAllowedCandidates = plannerSessionCandidates.filter((candidate) => isPlannerAllowedForSession(candidate));
           const plannerEnabled = spawnBackend === "planner"
-            && plannerSessionCandidates.some((candidate) => isPlannerAllowedForSession(candidate));
+            && plannerAllowedCandidates.length > 0;
+          await recordPolicyReplay("dispatch_backend_selected", {
+            sessionKey: managedSessionKey || stateKey || asString(params.sessionKey),
+            sessionId: asString(ctx.sessionId),
+            route: resolvedRoute,
+            spawn_backend: spawnBackend,
+            planner_enabled: plannerEnabled,
+            planner_session_candidates: plannerSessionCandidates.slice(0, 12),
+            planner_allowed_candidates: plannerAllowedCandidates.slice(0, 12),
+            planner_allowlist_size: resolvePlannerAllowlist().length,
+            helper_invoker_present: Boolean(helperInvoker),
+          }, toolLogger(ctx), null).catch(() => undefined);
           if (spawnBackend === "off") {
             const errorMessage = "spawn_backend_off";
+            await recordDispatchTerminalFailure(errorMessage, { route: resolvedRoute });
+            return dispatchHonestyFailure({
+              route: resolvedRoute,
+              error: errorMessage,
+              retryable: false,
+              terminal: true,
+            });
+          }
+          if (spawnBackend === "planner" && !plannerEnabled) {
+            const errorMessage = "planner_not_allowed_for_session";
+            await recordPolicyReplay("dispatch_planner_not_allowed", {
+              sessionKey: managedSessionKey || stateKey || asString(params.sessionKey),
+              sessionId: asString(ctx.sessionId),
+              route: resolvedRoute,
+              error: errorMessage,
+              planner_session_candidates: plannerSessionCandidates.slice(0, 12),
+              planner_allowlist_size: resolvePlannerAllowlist().length,
+              retryable: false,
+              terminal: true,
+            }, toolLogger(ctx), null);
             await recordDispatchTerminalFailure(errorMessage, { route: resolvedRoute });
             return dispatchHonestyFailure({
               route: resolvedRoute,

@@ -1,7 +1,7 @@
 import fsSync from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ROUTE_SEAL_SCHEMA_VERSION, type RouteSeal } from "@octoclaw/contracts/route-seal";
 import type { ContextCoverageSnapshot, CoverageAuthority, IntentClass, WorkContract, WorkRoute } from "@octoclaw/contracts/work-contract";
 import type { NativeHelperInvoker } from "../adapter/native-helper.js";
@@ -171,6 +171,13 @@ function failingHelper(): NativeHelperInvoker {
 }
 
 const tempLedgerPaths: string[] = [];
+const ENV_KEYS = [
+  "OCTOCLAW_SPAWN_BACKEND",
+  "OCTOCLAW_PLANNER_ALLOWLIST",
+  "OCTOCLAW_SPECULATIVE_PRELOAD",
+  "OCTOCLAW_WORK_CONTRACT_LEDGER_PATH",
+] as const;
+let previousEnv: Partial<Record<(typeof ENV_KEYS)[number], string | undefined>> = {};
 
 function useTempWorkContractLedger(): string {
   const dir = fs.mkdtempSync(path.join(osModule.tmpdir(), "octoclaw-wp4-"));
@@ -251,8 +258,24 @@ describe("dispatchReplyToMessageId", () => {
 });
 
 describe("octoclaw_dispatch honesty", () => {
-  afterEach(() => {
+  beforeEach(() => {
+    previousEnv = {};
+    for (const key of ENV_KEYS) {
+      previousEnv[key] = process.env[key];
+    }
+    process.env.OCTOCLAW_SPAWN_BACKEND = "legacy";
+    delete process.env.OCTOCLAW_PLANNER_ALLOWLIST;
+    delete process.env.OCTOCLAW_SPECULATIVE_PRELOAD;
     delete process.env.OCTOCLAW_WORK_CONTRACT_LEDGER_PATH;
+  });
+
+  afterEach(() => {
+    for (const key of ENV_KEYS) {
+      const value = previousEnv[key];
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    previousEnv = {};
     for (const entry of policyState.entries()) {
       policyState.clear(entry.key);
     }

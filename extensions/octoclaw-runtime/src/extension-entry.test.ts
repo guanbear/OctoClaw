@@ -25,6 +25,15 @@ const osModule = os as unknown as { tmpdir(): string };
 let tempWorkspace = "";
 let originalRuntimeDbPath: string | undefined;
 let originalWorkspaceEnv: string | undefined;
+const ENV_KEYS = [
+  "OCTOCLAW_SPAWN_BACKEND",
+  "OCTOCLAW_PLANNER_ALLOWLIST",
+  "OCTOCLAW_SPECULATIVE_PRELOAD",
+  "OCTOCLAW_LEGACY_COMPLETION_FILE",
+  "OCTOCLAW_DISABLE_CHILD_FINALIZER",
+  "OCTOCLAW_DISABLE_DELIVERY_OUTBOX",
+] as const;
+let originalEnv: Partial<Record<(typeof ENV_KEYS)[number], string | undefined>> = {};
 
 function coverageSnapshot(): ContextCoverageSnapshot {
   const execution = buildExecutionCoverageLayer(["missing"]);
@@ -119,6 +128,11 @@ function budgetedMainState(startedAt: number, extra: Record<string, unknown> = {
 beforeEach(() => {
   originalRuntimeDbPath = process.env.OCTOCLAW_RUNTIME_DB_PATH;
   originalWorkspaceEnv = process.env.WORKSPACE;
+  originalEnv = {};
+  for (const key of ENV_KEYS) {
+    originalEnv[key] = process.env[key];
+    delete process.env[key];
+  }
   tempWorkspace = fs.mkdtempSync(path.join(osModule.tmpdir(), "octoclaw-extension-entry-"));
   envOverrides.workspaceRoot = tempWorkspace;
   envOverrides.octoclawRoot = "";
@@ -129,12 +143,21 @@ beforeEach(() => {
 afterEach(() => {
   nativeSpawnIntentStore.clearForTests();
   resetNeutralInboundAckDedupeForTests();
+  for (const entry of policyState.entries()) {
+    policyState.clear(entry.key);
+  }
   envOverrides.workspaceRoot = "";
   envOverrides.octoclawRoot = "";
   if (originalRuntimeDbPath === undefined) delete process.env.OCTOCLAW_RUNTIME_DB_PATH;
   else process.env.OCTOCLAW_RUNTIME_DB_PATH = originalRuntimeDbPath;
   if (originalWorkspaceEnv === undefined) delete process.env.WORKSPACE;
   else process.env.WORKSPACE = originalWorkspaceEnv;
+  for (const key of ENV_KEYS) {
+    const value = originalEnv[key];
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
+  originalEnv = {};
   originalRuntimeDbPath = undefined;
   originalWorkspaceEnv = undefined;
   if (tempWorkspace) fs.rmSync(tempWorkspace, { recursive: true, force: true });

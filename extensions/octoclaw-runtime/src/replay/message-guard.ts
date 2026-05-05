@@ -143,6 +143,56 @@ function hasPreDispatchReplyCorrection(state: Record<string, unknown>): boolean 
     && spawnExecuted !== true;
 }
 
+function decisionBucketForGuard(state: Record<string, unknown>): string {
+  const decision = asRecord(state.decision);
+  const routeDecision = asRecord(decision.route_decision);
+  const startupCostPolicy = asRecord(routeDecision.startup_cost_policy || decision._startup_cost_policy);
+  return String(
+    routeDecision.decision_bucket
+      ?? decision._decision_bucket
+      ?? startupCostPolicy.decision_bucket
+      ?? "",
+  ).trim();
+}
+
+function budgetedMainReadOnlyToolCount(state: Record<string, unknown>): number {
+  const budgetedMain = asRecord(state.budgetedMain || state.budgeted_main);
+  const value = Number(budgetedMain.readOnlyToolCount ?? budgetedMain.read_only_tool_count ?? 0);
+  return Number.isFinite(value) ? value : 0;
+}
+
+function hasDirectToolEvidence(state: Record<string, unknown>): boolean {
+  const tools = [
+    ...asStringArray(state.directToolsSeen),
+    ...asStringArray(state.direct_tools_seen),
+    ...asStringArray(state.toolsUsed),
+    ...asStringArray(state.tools_used),
+  ].map((item) => item.trim()).filter(Boolean);
+  return tools.some((tool) => {
+    const normalized = tool.toLowerCase();
+    return normalized
+      && !normalized.startsWith("octoclaw_")
+      && normalized !== "sessions_spawn"
+      && normalized !== "sessions_send"
+      && normalized !== "subagents";
+  });
+}
+
+function allowsBudgetedMainDirectFinal(state: Record<string, unknown>): boolean {
+  if (decisionBucketForGuard(state) !== "budgeted_main_then_delegate") return false;
+  const dispatchStatus = String(state.dispatchStatus ?? state.dispatch_status ?? "").trim();
+  if ([
+    "requires_native_spawn",
+    "spawn_call_started",
+    "spawn_confirmed",
+    "already_started",
+  ].includes(dispatchStatus)) return false;
+  if (state.delegated === true) return false;
+  if (state.spawnExecuted === true || state.spawn_executed === true) return false;
+  if (state.resultMaterialized === true || state.result_materialized === true) return false;
+  return hasDirectToolEvidence(state) || budgetedMainReadOnlyToolCount(state) > 0;
+}
+
 
 export function genericGreetingFallbackReply(state: Record<string, unknown>): { mode: string; message: Record<string, unknown> } {
   const decision = asRecord(state.decision);
@@ -347,6 +397,7 @@ export function guardAssistantMessageForPolicyState(
     && !looksLikeTransientProcessingAck(replyText)
     && !genericGreetingReply
     && !correctedToReplyBeforeDispatch
+    && !allowsBudgetedMainDirectFinal(state)
   ) {
     const fallback = delegationFailureReply(state);
     return { mode: fallback.mode, message: replaceAssistantMessageText(message, assistantMessageText(fallback.message)) };
