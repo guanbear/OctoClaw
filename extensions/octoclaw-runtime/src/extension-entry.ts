@@ -1,4 +1,6 @@
 import { createHash } from "node:crypto";
+import fsSync from "node:fs";
+import path from "node:path";
 import {
   buildConversationGrounding,
   buildDirectLookupGuard,
@@ -45,7 +47,7 @@ import {
   resolvePolicyStateKeys,
 } from "./resolve/session.js";
 import { checkActiveTaskRecovery, resolvePolicyDecisionForContext } from "./resolve/policy-resolver.js";
-import { envOverrides, resolveReplayLogPath, resolveTaskStatePath, resolveWorkspaceRoot, stableId } from "./resolve/env.js";
+import { envOverrides, resolveMainAgentSessionsPath, resolveReplayLogPath, resolveTaskStatePath, resolveWorkspaceRoot, stableId } from "./resolve/env.js";
 import {
   DEFAULT_TASK_STATE_RETENTION_MIN_RUN_INTERVAL_MS,
   pruneTaskStateCache,
@@ -903,7 +905,8 @@ function extractNativeAnnounceCompletion(event: UnknownRecord, prompt: string): 
   const provenance = nativeAnnounceProvenance(event);
   const sourceTool = stringValue(provenance.sourceTool || provenance.source_tool)
     || regexGroup(text, /\bsourceTool=([^\s]+)/u);
-  if (sourceTool !== "subagent_announce" && !text.includes("sourceTool=subagent_announce")) {
+  const internalSubagentCompletion = /\[Internal task completion event\][\s\S]*\bsource:\s*subagent\b/iu.test(text);
+  if (sourceTool !== "subagent_announce" && !text.includes("sourceTool=subagent_announce") && !internalSubagentCompletion) {
     return null;
   }
   const sourceSessionFromPrompt = regexGroup(text, /\bsourceSession=([^\s]+)/u)
@@ -927,6 +930,88 @@ function extractNativeAnnounceCompletion(event: UnknownRecord, prompt: string): 
       || regexGroup(text, /\bsession_id:\s*([^\s]+)/u),
     sourceTool: "subagent_announce",
     status,
+    resultText,
+    resultHash: createHash("sha256").update(resultText).digest("hex").slice(0, 16),
+  };
+}
+
+function addNativeChildSessionFileCandidate(candidates: Set<string>, candidate: unknown, baseDir: string): void {
+  const text = stringValue(candidate);
+  if (!text) return;
+  candidates.add(path.isAbsolute(text) ? text : path.join(baseDir, text));
+}
+
+function nativeChildSessionFileCandidates(childSessionKey: string, runId?: string): string[] {
+  const sessionsPath = resolveMainAgentSessionsPath();
+  const sessionsDir = path.dirname(sessionsPath);
+  const refs = new Set([childSessionKey, runId].map(stringValue).filter(Boolean));
+  const candidates = new Set<string>();
+  for (const ref of refs) {
+    addNativeChildSessionFileCandidate(candidates, `${ref}.jsonl`, sessionsDir);
+  }
+  try {
+    const registry = JSON.parse(fsSync.readFileSync(sessionsPath, "utf8")) as unknown;
+    if (registry && typeof registry === "object" && !Array.isArray(registry)) {
+      for (const [key, value] of Object.entries(registry as UnknownRecord)) {
+        const record = asRecord(value);
+        const values = [
+          key,
+          record.sessionKey,
+          record.sessionId,
+          record.runId,
+          record.childRunId,
+          record.controlKey,
+          record.channelSessionKey,
+          record.bindingKey,
+          record.threadKey,
+        ].map(stringValue);
+        if (!values.some((candidate) => refs.has(candidate))) continue;
+        addNativeChildSessionFileCandidate(candidates, record.sessionFile, sessionsDir);
+        const sessionId = stringValue(record.sessionId);
+        if (sessionId) addNativeChildSessionFileCandidate(candidates, `${sessionId}.jsonl`, sessionsDir);
+      }
+    }
+  } catch {}
+  return [...candidates];
+}
+
+function readNativeChildSessionCompletion(childSessionKey: string, runId?: string): NativeAnnounceCompletion | null {
+  const sourceSessionKey = stringValue(childSessionKey);
+  if (!sourceSessionKey) return null;
+  let resultText = "";
+  let sourceSessionId = "";
+  for (const filePath of nativeChildSessionFileCandidates(sourceSessionKey, runId)) {
+    let lines: string[];
+    try {
+      lines = fsSync.readFileSync(filePath, "utf8").split(/\n/u).filter(Boolean);
+    } catch {
+      continue;
+    }
+    for (const line of lines) {
+      let record: UnknownRecord;
+      try {
+        record = JSON.parse(line) as UnknownRecord;
+      } catch {
+        continue;
+      }
+      if (record.type === "session") {
+        sourceSessionId ||= stringValue(record.id);
+      }
+      if (record.type !== "message") continue;
+      const message = asRecord(record.message);
+      if (stringValue(message.role).toLowerCase() !== "assistant") continue;
+      const text = extractMessageText(message.content);
+      if (!text || text.trim().toUpperCase() === "NO_REPLY") continue;
+      resultText = text;
+    }
+    if (resultText) break;
+  }
+  if (!resultText) return null;
+  return {
+    sourceSessionKey,
+    sourceSessionId,
+    sourceTool: "subagent_announce",
+    status: "completed",
     resultText,
     resultHash: createHash("sha256").update(resultText).digest("hex").slice(0, 16),
   };
@@ -1492,6 +1577,138 @@ async function handleNativeAnnounceCompletion(input: {
       delivered,
     }),
   };
+}
+
+async function handleNativeSubagentEndedCompletion(input: {
+  event: UnknownRecord;
+  ctx: UnknownRecord;
+  pluginConfig?: UnknownRecord;
+  logger?: unknown;
+  cwd?: string;
+  sendMessage?: NativeAnnounceSendMessage;
+}): Promise<void> {
+  const childSessionKey = stringValue(input.event.targetSessionKey || input.ctx.childSessionKey);
+  const runId = stringValue(input.event.runId || input.ctx.runId);
+  if (!childSessionKey) return;
+  const matchedContract = findWorkContractByNativeChildSessionKey(childSessionKey);
+  if (!matchedContract) return;
+  if (nativeAnnounceDeliveryAlreadySent(matchedContract)) {
+    void recordPolicyReplay(
+      "native_announce_subagent_ended_duplicate",
+      {
+        sessionKey: matchedContract.sessionKey || stringValue(input.ctx.requesterSessionKey),
+        workContractId: matchedContract.workContractId,
+        sourceSessionKey: childSessionKey,
+        runId,
+      },
+      input.logger,
+      null,
+    ).catch(() => {});
+    return;
+  }
+  const completion = readNativeChildSessionCompletion(childSessionKey, runId);
+  if (!completion) {
+    void recordPolicyReplay(
+      "native_announce_subagent_ended_no_result",
+      {
+        sessionKey: matchedContract.sessionKey || stringValue(input.ctx.requesterSessionKey),
+        workContractId: matchedContract.workContractId,
+        sourceSessionKey: childSessionKey,
+        runId,
+        reason: "child_session_result_unavailable",
+      },
+      input.logger,
+      null,
+    ).catch(() => {});
+    return;
+  }
+  const stateCtx: UnknownRecord = {
+    ...input.ctx,
+    sessionKey: matchedContract.sessionKey || stringValue(input.ctx.requesterSessionKey || input.ctx.sessionKey),
+  };
+  const stateKey = resolvePolicyStateKey(stateCtx);
+  const currentState = asRecord(getPolicyStateForContext(stateCtx).state);
+  const directDeliveryEnabled = nativeAnnounceDirectDeliveryEnabled(input.pluginConfig);
+  const directDelivery: SendIMResult & { sessionKey: string; replyToMessageId: string } = directDeliveryEnabled
+    ? await deliverNativeAnnounceCompletion({
+        contract: matchedContract,
+        completion,
+        state: currentState,
+        event: input.event,
+        ctx: stateCtx,
+        cwd: input.cwd || stringValue(stateCtx.cwd) || process.cwd(),
+        sendMessage: input.sendMessage,
+      })
+    : { sent: false, error: "direct_delivery_disabled", sessionKey: "", replyToMessageId: "" };
+  const delivered = directDelivery.sent;
+  const now = Date.now();
+  const nowIso = new Date(now).toISOString();
+  const updatedContract = markNativeAnnounceCompletionOnContract(
+    matchedContract.workContractId,
+    completion,
+    delivered,
+    nowIso,
+  ) ?? matchedContract;
+  cancelChildCompletionFinalizer(updatedContract.workContractId);
+  applyNativeAnnounceCompletionState({
+    ctx: stateCtx,
+    stateKey,
+    contract: updatedContract,
+    completion,
+    delivered,
+    now,
+  });
+  void recordPolicyReplay(
+    "native_announce_completion_matched",
+    {
+      sessionKey: updatedContract.sessionKey || stateKey,
+      sessionId: stringValue(stateCtx.sessionId),
+      workContractId: updatedContract.workContractId,
+      sourceSessionKey: completion.sourceSessionKey,
+      sourceTool: completion.sourceTool,
+      resultHash: completion.resultHash,
+      delivered,
+      directDeliveryAttempted: directDeliveryEnabled,
+      directDeliverySent: directDelivery.sent,
+      directDeliveryError: directDelivery.error || "",
+      delivery_transport: directDelivery.transport || "",
+      deliveryTransport: directDelivery.transport || "",
+      target_source: directDelivery.targetSource || "",
+      targetSource: directDelivery.targetSource || "",
+      footer_source: directDelivery.footerSource || "",
+      footerSource: directDelivery.footerSource || "",
+      deliverySessionKey: directDelivery.sessionKey || updatedContract.sessionKey || stateKey,
+      replyToMessageId: directDelivery.replyToMessageId || "",
+      hookName: "subagent_ended",
+      runId,
+    },
+    input.logger,
+    null,
+  ).catch(() => {});
+  if (directDelivery.sent) {
+    void recordPolicyReplay(
+      "native_announce_final_delivered",
+      {
+        sessionKey: updatedContract.sessionKey || stateKey,
+        sessionId: stringValue(stateCtx.sessionId),
+        workContractId: updatedContract.workContractId,
+        resultHash: completion.resultHash,
+        deliverySessionKey: directDelivery.sessionKey,
+        replyToMessageId: directDelivery.replyToMessageId,
+        messageId: directDelivery.messageId || "",
+        delivery_transport: directDelivery.transport || "",
+        deliveryTransport: directDelivery.transport || "",
+        target_source: directDelivery.targetSource || "",
+        targetSource: directDelivery.targetSource || "",
+        footer_source: directDelivery.footerSource || "",
+        footerSource: directDelivery.footerSource || "",
+        hookName: "subagent_ended",
+        runId,
+      },
+      input.logger,
+      null,
+    ).catch(() => {});
+  }
 }
 
 
@@ -3260,6 +3477,17 @@ export const plugin = {
         pi.logger?.warn?.(`octoclaw neutral inbound ACK failed: ${String(error)}`);
       });
     }, 260);
+
+    registerLifecycleHook("subagent_ended", async (event, ctx) => {
+      await handleNativeSubagentEndedCompletion({
+        event,
+        ctx,
+        pluginConfig: pi.pluginConfig,
+        logger: pi.logger,
+        cwd: stringValue(ctx.cwd) || process.cwd(),
+        sendMessage: nativeAnnounceSendOverride(pi.pluginConfig),
+      });
+    }, 210);
 
     registerLifecycleHook("before_model_resolve", async (event, ctx) => {
       if (!isManagedAgentContext(ctx)) return;

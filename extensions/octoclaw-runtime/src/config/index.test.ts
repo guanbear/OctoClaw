@@ -279,8 +279,8 @@ describe("resolvePlannerSpawnConfig", () => {
 });
 
 describe("shouldRunChildFinalizerRecovery", () => {
-  it("does not run child finalizer recovery by default", () => {
-    expect(shouldRunChildFinalizerRecovery()).toBe(false);
+  it("runs child finalizer recovery by default as native announce backstop", () => {
+    expect(shouldRunChildFinalizerRecovery()).toBe(true);
   });
 
   it("runs in explicit legacy backend by default", () => {
@@ -288,15 +288,21 @@ describe("shouldRunChildFinalizerRecovery", () => {
     expect(shouldRunChildFinalizerRecovery()).toBe(true);
   });
 
-  it("does not run in planner backend by default", () => {
+  it("runs in planner backend by default", () => {
     process.env.OCTOCLAW_SPAWN_BACKEND = "planner";
-    expect(shouldRunChildFinalizerRecovery()).toBe(false);
+    expect(shouldRunChildFinalizerRecovery()).toBe(true);
   });
 
   it("runs in planner backend when legacy completion file is explicitly enabled", () => {
     process.env.OCTOCLAW_SPAWN_BACKEND = "planner";
     process.env.OCTOCLAW_LEGACY_COMPLETION_FILE = "1";
     expect(shouldRunChildFinalizerRecovery()).toBe(true);
+  });
+
+  it("does not run in planner backend when child finalizer is explicitly disabled", () => {
+    process.env.OCTOCLAW_SPAWN_BACKEND = "planner";
+    process.env.OCTOCLAW_DISABLE_CHILD_FINALIZER = "1";
+    expect(shouldRunChildFinalizerRecovery()).toBe(false);
   });
 
   it("does not run in legacy backend when child finalizer is explicitly disabled", () => {

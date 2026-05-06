@@ -122,6 +122,66 @@ function readCompletionFile(workContractId: string): WorkerCompletionResult | nu
   }
 }
 
+function extractSessionMessageText(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content
+    .map((part) => {
+      if (typeof part === "string") return part;
+      if (!isRecord(part)) return "";
+      if (typeof part.text === "string") return part.text;
+      if (typeof part.content === "string") return part.content;
+      return "";
+    })
+    .filter(Boolean)
+    .join("\n")
+    .trim();
+}
+
+function readNativeChildSessionCompletion(options: ChildCompletionFinalizerOptions): WorkerCompletionResult | null {
+  if (!options.childSessionKey) return null;
+  let latestText = "";
+  let sawTerminalAssistant = false;
+  for (const filePath of childSessionFileCandidates(options)) {
+    let lines: string[];
+    try {
+      lines = fsSync.readFileSync(filePath, "utf-8").split(/\n/u).filter(Boolean);
+    } catch {
+      continue;
+    }
+    for (const line of lines) {
+      let record: unknown;
+      try {
+        record = JSON.parse(line) as unknown;
+      } catch {
+        continue;
+      }
+      if (!isRecord(record) || record.type !== "message") continue;
+      const message = isRecord(record.message) ? record.message : {};
+      if (stringValue(message.role).toLowerCase() !== "assistant") continue;
+      const text = extractSessionMessageText(message.content);
+      if (!text || text.trim().toUpperCase() === "NO_REPLY") continue;
+      latestText = text;
+      const stopReason = stringValue(message.stopReason || message.stop_reason || record.stopReason || record.stop_reason).toLowerCase();
+      if (!stopReason || ["stop", "end_turn", "completed"].includes(stopReason)) {
+        sawTerminalAssistant = true;
+      }
+    }
+    if (latestText && sawTerminalAssistant) break;
+  }
+  if (!latestText || !sawTerminalAssistant) return null;
+  return {
+    schemaVersion: "octoclaw.worker_completion/v1",
+    workContractId: options.workContractId,
+    childSessionKey: options.childSessionKey,
+    delegateTaskId: options.delegateTaskId,
+    status: "success",
+    summary: latestText,
+    artifacts: [],
+    completedAt: new Date().toISOString(),
+  };
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
@@ -287,6 +347,9 @@ function isWorkContractCompletionMaterialized(options: ChildCompletionFinalizerO
 }
 
 function formatDeliveryMessage(completion: WorkerCompletionResult, options: ChildCompletionFinalizerOptions): string {
+  if (isNativePlannerFinalizer(options)) {
+    return completion.summary;
+  }
   const icon = completion.status === "success" ? "✅" : completion.status === "partial" ? "⚠️" : "❌";
   const title = completion.status === "success"
     ? "子任务完成"
@@ -298,6 +361,14 @@ function formatDeliveryMessage(completion: WorkerCompletionResult, options: Chil
   if (completion.status === "failure" && completion.errorMessage) lines.push("", `错误：${completion.errorMessage}`);
   lines.push("", `[route=delegate | model=${shortModelName(options.modelId)} | workContract=${options.workContractId}]`);
   return lines.join("\n");
+}
+
+function isNativePlannerFinalizer(options: ChildCompletionFinalizerOptions): boolean {
+  if (options.nativeFlowId?.startsWith("sessions_spawn:")) return true;
+  if (options.runId && options.childSessionKey?.startsWith("agent:")) return true;
+  const contract = loadWorkContract(options.workContractId, options.taskStatePath);
+  return contract?.nativeSpawnRefs?.spawnBackend === "sessions_spawn_planner"
+    || Boolean(contract?.nativeSpawnRefs?.openclawRunId && contract?.nativeSpawnRefs?.childSessionKey);
 }
 
 function taskIds(options: ChildCompletionFinalizerOptions): Record<string, string | undefined> {
@@ -518,7 +589,7 @@ function queueOutboxDelivery(options: ChildCompletionFinalizerOptions, message: 
 async function sendCompletionMessage(
   options: ChildCompletionFinalizerOptions,
   message: string,
-): Promise<{ sent: boolean; error: string }> {
+): Promise<{ sent: boolean; error: string; transport?: string; targetSource?: string; footerSource?: string }> {
   const deliverySessionKey = resolveFinalDeliverySessionKey(options);
   if (options.sendFinalMessage) {
     const result = await options.sendFinalMessage({
@@ -535,13 +606,28 @@ async function sendCompletionMessage(
     replyToMessageId: resolveFinalReplyToMessageId(options) || undefined,
     timeoutMs: 8000,
     cwd: options.cwd || resolveWorkspaceRoot(),
-    deliveryKind: "legacy_fallback",
+    deliveryKind: isNativePlannerFinalizer(options) ? "native_child_final" : "legacy_fallback",
     deliveryTargetSource: resolveFinalReplyToMessageId(options) ? "inbound_anchor" : "session_fallback",
-    footerMode: "off",
+    deliveryProvenance: isNativePlannerFinalizer(options)
+      ? {
+          route: "delegate",
+          via: "native_announce",
+          workContractId: options.workContractId,
+          runId: options.runId || options.childRunId,
+          childSessionKey: options.childSessionKey,
+        }
+      : undefined,
+    footerMode: isNativePlannerFinalizer(options) ? "debug" : "off",
+    dedupeKey: isNativePlannerFinalizer(options)
+      ? `native_announce:${options.workContractId}:${options.runId || options.childRunId || options.childSessionKey}`
+      : undefined,
   });
   return {
     sent: result.sent,
     error: result.error === "no_im_adapter" ? "no_im_adapter_queued_for_retry" : result.error || "",
+    transport: result.transport,
+    targetSource: result.targetSource,
+    footerSource: result.footerSource,
   };
 }
 
@@ -670,7 +756,8 @@ export async function finalizeChildSessionOnce(
   if (isCompletionAlreadyMaterialized(options) || isWorkContractCompletionMaterialized(options)) {
     return { status: "completed", sent: false };
   }
-  const completion = readCompletionFile(options.workContractId);
+  const completion = readCompletionFile(options.workContractId)
+    ?? (isNativePlannerFinalizer(options) ? readNativeChildSessionCompletion(options) : null);
   if (!completion) return { status: "pending" };
   const bindingResult = observeCompletionBinding({
     workContractId: options.workContractId,
@@ -750,13 +837,40 @@ export async function finalizeChildSessionOnce(
     await options.onSuccess?.();
     void appendJsonl(resolveReplayLogPath(), {
       schema_version: "octoclaw.runtime_policy.replay_event/v1",
-      event: "completion_file_delivered",
+      event: isNativePlannerFinalizer(options) ? "native_announce_completion_matched" : "completion_file_delivered",
       at: new Date().toISOString(),
       workContractId: options.workContractId,
       parentSessionKey: options.parentSessionKey,
       deliverySessionKey: resolveFinalDeliverySessionKey(options),
+      sourceSessionKey: options.childSessionKey,
+      sourceTool: isNativePlannerFinalizer(options) ? "subagent_announce" : undefined,
+      delivered: true,
+      directDeliveryAttempted: isNativePlannerFinalizer(options),
+      directDeliverySent: isNativePlannerFinalizer(options),
+      delivery_transport: result.transport,
+      target_source: result.targetSource || (resolveFinalReplyToMessageId(options) ? "inbound_anchor" : "session_fallback"),
+      footer_source: result.footerSource,
+      hookName: isNativePlannerFinalizer(options) ? "child_finalizer_native_session" : undefined,
+      runId: options.runId || options.childRunId,
       resultText: completion.summary ? String(completion.summary).slice(0, 200) : "",
     }).catch(() => {});
+    if (isNativePlannerFinalizer(options)) {
+      void appendJsonl(resolveReplayLogPath(), {
+        schema_version: "octoclaw.runtime_policy.replay_event/v1",
+        event: "native_announce_final_delivered",
+        at: new Date().toISOString(),
+        workContractId: options.workContractId,
+        parentSessionKey: options.parentSessionKey,
+        deliverySessionKey: resolveFinalDeliverySessionKey(options),
+        replyToMessageId: resolveFinalReplyToMessageId(options) || undefined,
+        sourceSessionKey: options.childSessionKey,
+        delivery_transport: result.transport,
+        target_source: result.targetSource || (resolveFinalReplyToMessageId(options) ? "inbound_anchor" : "session_fallback"),
+        footer_source: result.footerSource,
+        hookName: "child_finalizer_native_session",
+        runId: options.runId || options.childRunId,
+      }).catch(() => {});
+    }
     return {
       status: result.sent ? "completed" : "delivery_failed",
       resultText: completion.summary,
@@ -858,6 +972,37 @@ function asBool(value: unknown): boolean {
   return value === true || value === "true";
 }
 
+function recordValue(record: Record<string, unknown>, ...paths: string[][]): string {
+  for (const pathParts of paths) {
+    let current: unknown = record;
+    for (const part of pathParts) {
+      if (!isRecord(current)) {
+        current = undefined;
+        break;
+      }
+      current = current[part];
+    }
+    const value = asStr(current);
+    if (value) return value;
+  }
+  return "";
+}
+
+function embeddedRecordObject(record: Record<string, unknown>, ...paths: string[][]): Record<string, unknown> | undefined {
+  for (const pathParts of paths) {
+    let current: unknown = record;
+    for (const part of pathParts) {
+      if (!isRecord(current)) {
+        current = undefined;
+        break;
+      }
+      current = current[part];
+    }
+    if (isRecord(current)) return current;
+  }
+  return undefined;
+}
+
 /**
  * Recover pending child completion finalizers from durable task-state.json.
  *
@@ -901,19 +1046,61 @@ export function recoverPendingChildCompletionFinalizers(options?: {
     if (!asBool(record.spawnExecuted) && !asBool(record.spawn_executed)) continue;
     if (asBool(record.resultMaterialized) || asBool(record.result_materialized)) continue;
 
-    const childSessionKey = asStr(record.childSessionKey || record.child_session_key);
-    const parentSessionKey = asStr(record.sessionKey || record.session_key);
-    const deliverySessionKey = asStr(record.deliverySessionKey || record.delivery_session_key);
-    const deliveryTarget = (record.deliveryTarget && typeof record.deliveryTarget === "object" ? record.deliveryTarget : record.delivery_target) as Record<string, unknown> | undefined;
-    const replyToMessageId = asStr(record.replyToMessageId || record.reply_to_message_id);
+    const childSessionKey = recordValue(record,
+      ["childSessionKey"], ["child_session_key"],
+      ["workContract", "nativeSpawnRefs", "childSessionKey"], ["workContract", "native_spawn_refs", "child_session_key"],
+      ["work_contract", "nativeSpawnRefs", "childSessionKey"], ["work_contract", "native_spawn_refs", "child_session_key"],
+      ["workContract", "delegate", "nativeBinding", "childSessionKey"], ["work_contract", "delegate", "nativeBinding", "childSessionKey"],
+      ["workContract", "telemetry", "childSessionKey"], ["work_contract", "telemetry", "childSessionKey"],
+    );
+    const parentSessionKey = recordValue(record,
+      ["sessionKey"], ["session_key"],
+      ["workContract", "sessionKey"], ["workContract", "session_key"],
+      ["work_contract", "sessionKey"], ["work_contract", "session_key"],
+      ["workContract", "nativeSpawnRefs", "requesterSessionKey"], ["workContract", "native_spawn_refs", "requester_session_key"],
+      ["work_contract", "nativeSpawnRefs", "requesterSessionKey"], ["work_contract", "native_spawn_refs", "requester_session_key"],
+    );
+    const deliverySessionKey = recordValue(record,
+      ["deliverySessionKey"], ["delivery_session_key"],
+      ["workContract", "deliverySessionKey"], ["workContract", "delivery_session_key"],
+      ["work_contract", "deliverySessionKey"], ["work_contract", "delivery_session_key"],
+    );
+    const deliveryTarget = embeddedRecordObject(record,
+      ["deliveryTarget"], ["delivery_target"],
+      ["workContract", "deliveryTarget"], ["workContract", "delivery_target"],
+      ["work_contract", "deliveryTarget"], ["work_contract", "delivery_target"],
+    );
+    const replyToMessageId = recordValue(record,
+      ["replyToMessageId"], ["reply_to_message_id"],
+      ["workContract", "replyToMessageId"], ["workContract", "reply_to_message_id"],
+      ["work_contract", "replyToMessageId"], ["work_contract", "reply_to_message_id"],
+    );
     if (!childSessionKey || !parentSessionKey) continue;
 
-    const delegateTaskId = asStr(record.taskId || record.task_id || workContractId);
-    const nativeTaskId = asStr(record.nativeTaskId || record.native_task_id || delegateTaskId);
-    const nativeFlowId = asStr(record.nativeFlowId || record.native_flow_id || record.flowId || record.flow_id);
-    const runId = asStr(record.runId || record.run_id);
-    const childRunId = asStr(record.childRunId || record.child_run_id);
-    const modelId = asStr(record.modelProfile || record.model_profile || record.model);
+    const delegateTaskId = recordValue(record,
+      ["taskId"], ["task_id"],
+      ["workContract", "delegate", "delegateTaskId"], ["work_contract", "delegate", "delegateTaskId"],
+    ) || workContractId;
+    const nativeTaskId = recordValue(record, ["nativeTaskId"], ["native_task_id"]) || delegateTaskId;
+    const nativeFlowId = recordValue(record,
+      ["nativeFlowId"], ["native_flow_id"], ["flowId"], ["flow_id"],
+      ["workContract", "delegate", "nativeBinding", "flowId"], ["work_contract", "delegate", "nativeBinding", "flowId"],
+    );
+    const runId = recordValue(record,
+      ["runId"], ["run_id"],
+      ["workContract", "nativeSpawnRefs", "openclawRunId"], ["workContract", "native_spawn_refs", "openclaw_run_id"],
+      ["work_contract", "nativeSpawnRefs", "openclawRunId"], ["work_contract", "native_spawn_refs", "openclaw_run_id"],
+      ["workContract", "delegate", "nativeBinding", "runId"], ["work_contract", "delegate", "nativeBinding", "runId"],
+    );
+    const childRunId = recordValue(record,
+      ["childRunId"], ["child_run_id"],
+      ["workContract", "delegate", "nativeBinding", "childRunId"], ["work_contract", "delegate", "nativeBinding", "childRunId"],
+      ["workContract", "telemetry", "childRunId"], ["work_contract", "telemetry", "childRunId"],
+    );
+    const modelId = recordValue(record,
+      ["modelProfile"], ["model_profile"], ["model"],
+      ["workContract", "delegate", "modelProfile"], ["work_contract", "delegate", "modelProfile"],
+    );
     const hasLateCompletion = Boolean(readCompletionFile(workContractId));
     const finalizerOptions: ChildCompletionFinalizerOptions = {
       childSessionKey,

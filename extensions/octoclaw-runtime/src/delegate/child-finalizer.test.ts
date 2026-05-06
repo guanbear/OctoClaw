@@ -32,14 +32,26 @@ function writeOpenClawSessionRegistry(openclawHome: string, sessionId: string, c
   }, null, 2), "utf-8");
 }
 
-function registerCapturingSlackAdapter(captured: string[], matcher: (sessionKey: string) => boolean): void {
+function registerCapturingSlackAdapter(
+  captured: string[] | Array<{ sessionKey: string; message: string; params: IMSendParams }>,
+  matcher: (sessionKey: string) => boolean,
+  captureDetails = false,
+): void {
   const adapter: IMAdapter = {
     channel: "slack",
     capabilityLevel: "L2",
     canHandle: matcher,
     resolveTarget: () => ({ channel: "slack", target: "channel:CNOTIFY" }),
     send: async (params: IMSendParams) => {
-      captured.push(params.message);
+      if (captureDetails) {
+        (captured as Array<{ sessionKey: string; message: string; params: IMSendParams }>).push({
+          sessionKey: params.sessionKey,
+          message: params.message,
+          params,
+        });
+      } else {
+        (captured as string[]).push(params.message);
+      }
       return { sent: true, delivered: true, messageId: "1777557115.000001" };
     },
     react: async (_params: IMReactParams) => ({ ok: true }),
@@ -207,6 +219,88 @@ describe("child completion finalizer — completion file protocol", () => {
       spawnExecuted: true,
       resultMaterialized: true,
     });
+  });
+
+  it("delivers native planner child session JSONL when OpenClaw announce flow does not write a completion file", async () => {
+    tmpDir = fs.mkdtempSync(path.join("/tmp", "octoclaw-completion-"));
+    envOverrides.workspaceRoot = tmpDir;
+    const previousOpenClawHome = process.env.OPENCLAW_HOME;
+    process.env.OPENCLAW_HOME = tmpDir;
+    const taskStatePath = path.join(tmpDir, "tmp", "octopus", "task-state.json");
+    const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
+    const childSessionKey = "agent:main:subagent:native-jsonl";
+    const childSessionId = "session-native-jsonl";
+    const runId = "run-native-jsonl";
+    fs.mkdirSync(sessionsDir, { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, "openclaw.json"), "{}", "utf-8");
+    fs.writeFileSync(path.join(sessionsDir, "sessions.json"), JSON.stringify({
+      [childSessionKey]: {
+        sessionId: childSessionId,
+        sessionFile: path.join(sessionsDir, `${childSessionId}.jsonl`),
+        runId,
+        status: "done",
+      },
+    }), "utf-8");
+    fs.writeFileSync(path.join(sessionsDir, `${childSessionId}.jsonl`), [
+      JSON.stringify({ type: "session", id: childSessionId }),
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "已确认收到本条任务。\n\nOCTOCLAW_5_4_DELEGATE_SMOKE_OK" }],
+          stopReason: "stop",
+        },
+      }),
+      "",
+    ].join("\n"), "utf-8");
+
+    const sent: Array<{ sessionKey: string; message: string; params: IMSendParams }> = [];
+    registerCapturingSlackAdapter(
+      sent,
+      (sessionKey) => sessionKey === "agent:main:slack:channel:c0as4dappu3:thread:1778053382.592879",
+      true,
+    );
+
+    try {
+      const result = await finalizeChildSessionOnce({
+        taskStatePath,
+        childSessionKey,
+        delegateTaskId: "delegate-task:wc-native-jsonl",
+        workContractId: "wc-native-jsonl",
+        parentSessionKey: "agent:main:slack:channel:c0as4dappu3:thread:1778053382.592879",
+        replyToMessageId: "1778053382.592879",
+        nativeFlowId: `sessions_spawn:${runId}`,
+        runId,
+        modelId: "gpt-5.5",
+      });
+
+      expect(result).toMatchObject({ status: "completed", sent: true });
+      expect(sent).toHaveLength(1);
+      expect(sent[0]?.message).toContain("OCTOCLAW_5_4_DELEGATE_SMOKE_OK");
+      expect(sent[0]?.message).not.toContain("子任务完成");
+      expect(sent[0]?.params.deliveryKind).toBe("native_child_final");
+      expect(sent[0]?.params.deliveryProvenance).toMatchObject({
+        route: "delegate",
+        via: "native_announce",
+        workContractId: "wc-native-jsonl",
+        runId,
+        childSessionKey,
+      });
+      expect(sent[0]?.params.footerMode).toBe("debug");
+      const taskState = JSON.parse(fs.readFileSync(taskStatePath, "utf-8"));
+      expect(taskState.tasks[0]).toMatchObject({
+        id: "wc-native-jsonl",
+        status: "completed",
+        resultMaterialized: true,
+        delivery_status: "delivered",
+      });
+      const replay = fs.readFileSync(path.join(tmpDir, "tmp", "octopus", "runtime-policy-replay.jsonl"), "utf-8");
+      expect(replay).toContain("native_announce_completion_matched");
+      expect(replay).toContain("native_announce_final_delivered");
+    } finally {
+      if (previousOpenClawHome === undefined) delete process.env.OPENCLAW_HOME;
+      else process.env.OPENCLAW_HOME = previousOpenClawHome;
+    }
   });
 
   it("blocks final delivery when completion binding mismatches expected child session", async () => {
@@ -1036,6 +1130,106 @@ describe("child completion finalizer — durable recovery", () => {
       resultMaterialized: true,
       result_materialized: true,
     });
+  });
+
+  it("recovery uses embedded native planner refs when top-level session fields are empty", async () => {
+    vi.useFakeTimers();
+    tmpDir = fs.mkdtempSync(path.join("/tmp", "octoclaw-recovery-"));
+    envOverrides.workspaceRoot = tmpDir;
+    const previousOpenClawHome = process.env.OPENCLAW_HOME;
+    process.env.OPENCLAW_HOME = tmpDir;
+
+    const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
+    const childSessionKey = "agent:main:subagent:native-recovery";
+    const childSessionId = "session-native-recovery";
+    const runId = "run-native-recovery";
+    fs.mkdirSync(sessionsDir, { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, "openclaw.json"), "{}", "utf-8");
+    fs.writeFileSync(path.join(sessionsDir, "sessions.json"), JSON.stringify({
+      [childSessionKey]: {
+        sessionId: childSessionId,
+        sessionFile: path.join(sessionsDir, `${childSessionId}.jsonl`),
+        runId,
+        status: "done",
+      },
+    }), "utf-8");
+    fs.writeFileSync(path.join(sessionsDir, `${childSessionId}.jsonl`), [
+      JSON.stringify({ type: "session", id: childSessionId }),
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "native recovery final" }],
+          stopReason: "stop",
+        },
+      }),
+      "",
+    ].join("\n"), "utf-8");
+
+    const sent: Array<{ sessionKey: string; message: string; params: IMSendParams }> = [];
+    registerCapturingSlackAdapter(
+      sent,
+      (sessionKey) => sessionKey === "agent:main:slack:channel:c0as4dappu3:thread:1778053382.592879",
+      true,
+    );
+
+    const taskStatePath = writeTaskState(tmpDir, [{
+      id: "wc-native-recovery",
+      workContractId: "wc-native-recovery",
+      route: "delegate",
+      sessionKey: "",
+      childSessionKey: "",
+      dispatchExecuted: true,
+      spawnExecuted: true,
+      resultMaterialized: false,
+      status: "running",
+      workContract: {
+        workContractId: "wc-native-recovery",
+        route: "delegate",
+        sessionKey: "agent:main:slack:channel:c0as4dappu3:thread:1778053382.592879",
+        nativeSpawnRefs: {
+          openclawRunId: runId,
+          childSessionKey,
+          requesterSessionKey: "agent:main:slack:channel:c0as4dappu3:thread:1778053382.592879",
+          spawnBackend: "sessions_spawn_planner",
+        },
+        delegate: {
+          delegateTaskId: "delegate-task:wc-native-recovery",
+          nativeBinding: {
+            flowId: `sessions_spawn:${runId}`,
+            runId,
+            childRunId: runId,
+            childSessionKey,
+          },
+        },
+      },
+    }]);
+
+    try {
+      const recovery = recoverPendingChildCompletionFinalizers({
+        taskStatePath,
+        cwd: tmpDir,
+      });
+
+      expect(recovery.scanned).toBe(1);
+      expect(recovery.scheduled).toBe(1);
+
+      await vi.advanceTimersByTimeAsync(4_000);
+
+      expect(sent).toHaveLength(1);
+      expect(sent[0]?.sessionKey).toBe("agent:main:slack:channel:c0as4dappu3:thread:1778053382.592879");
+      expect(sent[0]?.message).toBe("native recovery final");
+      expect(sent[0]?.params.deliveryKind).toBe("native_child_final");
+      expect(sent[0]?.params.deliveryProvenance).toMatchObject({
+        via: "native_announce",
+        workContractId: "wc-native-recovery",
+        runId,
+        childSessionKey,
+      });
+    } finally {
+      if (previousOpenClawHome === undefined) delete process.env.OPENCLAW_HOME;
+      else process.env.OPENCLAW_HOME = previousOpenClawHome;
+    }
   });
 
   it("recovery skips already materialized or missing identity records", () => {

@@ -7,6 +7,19 @@
   "extensions": [
     "./dist/extension-entry.js"
   ],
+  "contracts": {
+    "tools": [
+      "octoclaw_route_hint",
+      "octoclaw_policy_decide",
+      "octoclaw_route",
+      "octoclaw_dispatch",
+      "octoclaw_dispatch_confirm",
+      "octoclaw_spawn",
+      "octoclaw_task_action",
+      "octoclaw_status",
+      "octoclaw_crash_recovery"
+    ]
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

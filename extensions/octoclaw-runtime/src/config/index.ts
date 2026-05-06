@@ -107,16 +107,13 @@ export function resolvePlannerSpawnConfig(): PlannerSpawnConfig {
 
 /**
  * Whether the child-finalizer recovery interval should run at startup.
- * In planner backend, child completion is handled by OpenClaw native announce,
- * so the legacy finalizer is skipped unless an explicit legacy flag overrides.
- * In legacy backend, the finalizer runs unless explicitly disabled.
+ * In planner backend this is now a native-announce backstop: OpenClaw should
+ * deliver child finals itself, but OctoClaw recovers completed child session
+ * JSONL when native announce fails or the gateway restarts mid-run.
  */
 export function shouldRunChildFinalizerRecovery(): boolean {
   const backend = resolveSpawnBackend();
   if (backend === "off") return false;
-  if (backend === "planner") {
-    return resolveLegacyCompletionFileEnabled();
-  }
   return !resolveLegacyChildFinalizerDisabled();
 }
 
