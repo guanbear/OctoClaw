@@ -48,6 +48,20 @@ The order matters. Trace comes first so cache work is driven by measured bottlen
 
 ## 4. Phase 1: Perf Trace Benchmark
 
+Current upstream PR status:
+
+- PR 1 opened: <https://github.com/openclaw/openclaw/pull/78381>
+- branch: `guanbear:prep-metrics-pr1`
+- commit: `91c20ac1 feat(embedded-runner): expose prep stage timings`
+- scope: observability-only exposure of existing embedded prep stage snapshots on run metadata and `agent_end`
+- state at filing: `mergeStateStatus=CLEAN`, `size: S`, `proof: supplied`
+- validation recorded in PR:
+  - focused embedded runner context-engine test: 37 passed
+  - focused stage timing test: 4 passed
+  - `pnpm tsgo:core`
+  - `git diff --check`
+  - real behavior proof: patched CLI build/version run returned `OpenClaw 2026.5.6 (91c20ac)`
+
 ### 4.1 Phase 1A: OctoClaw Plugin-Layer Coarse Benchmark
 
 Before changing OpenClaw core, OctoClaw can collect useful coarse timing from existing hook boundaries.
@@ -148,6 +162,13 @@ const streamSetupMs = findStage(prepStages, "stream-setup")?.durationMs;
 
 The upstream PR should not change behavior, cache anything, or add OctoClaw-specific logic. It should only expose timings that OpenClaw already records internally so downstream plugins and OpenClaw diagnostics can consume them.
 
+2026-05-06 implementation status:
+
+- Implemented in upstream PR 1: <https://github.com/openclaw/openclaw/pull/78381>
+- The implementation keeps `prepStages` optional on public surfaces.
+- `PluginHookAgentEndEvent` uses a public structural stage summary type instead of importing embedded-runner internals into the plugin API.
+- The PR intentionally does not add convenience fields such as `bundleToolsMs`; downstream consumers can derive those from `prepStages.stages` after upstream agrees on the generic stage summary shape.
+
 Likely code touch points:
 
 - `src/agents/pi-embedded-runner/types.ts`: add optional `prepStages` to `EmbeddedPiRunMeta`.
@@ -237,7 +258,7 @@ Perf trace does not speed anything up directly. Its value is correctness: it tel
 - Upstream prep metrics split `bundleToolsMs`, `systemPromptMs`, and `streamSetupMs` without changing run behavior.
 - Benchmark produces comparable p50/p95 summaries before and after cache work.
 
-## 5. Phase 2: Worker Tool Allowlist Propagation
+## 5. Phase 2: PR 2 Worker Tool Allowlist / Pre-Bundle Filtering
 
 ### 5.1 Source Finding
 
@@ -255,17 +276,97 @@ The current gap is the subagent/native spawn boundary:
 - OctoClaw already has role profiles with `allowedTools` (`worker_research`, `worker_code`, `worker_review`), but current planner `sessionsSpawnArgs` do not include a corresponding OpenClaw-native allowlist.
 - This gap is still present in local OpenClaw `2026.5.4`; `sessions-spawn-tool.ts` exposes `context`/`lightContext` but not `toolsAllow`.
 
-### 5.2 What To Build
+### 5.2 PR 2 Design
 
-Upstream OpenClaw PR 2 should add `toolsAllow` to the native subagent spawn path and pass it through to the child `agent` gateway call.
+Upstream OpenClaw PR 2 should be the smallest behavior-affecting performance PR after PR 1. The core idea is not to invent a new filtering layer. OpenClaw already has embedded-run `toolsAllow` handling that filters tools, skips unreachable bundled runtimes, and switches allowlisted runs to minimal prompt mode. PR 2 should make `sessions_spawn` able to pass that existing allowlist into child embedded runs so the current pre-bundle filtering can actually apply to native subagents.
+
+In other words:
+
+```text
+sessions_spawn(toolsAllow)
+  -> SpawnSubagentParams.toolsAllow
+  -> callSubagentGateway({ method: "agent", params: { toolsAllow } })
+  -> RunEmbeddedPiAgentParams.toolsAllow
+  -> existing embedded attempt filtering / construction plan / minimal prompt path
+```
+
+This is upstream-friendly because it reuses existing primitives:
+
+- `RunEmbeddedPiAgentParams.toolsAllow?: string[]`
+- `applyEmbeddedAttemptToolsAllow()`
+- `resolveEmbeddedAttemptToolConstructionPlan()`
+- `shouldCreateBundleMcpRuntimeForAttempt()`
+- `shouldCreateBundleLspRuntimeForAttempt()`
+- existing minimal prompt behavior when `params.toolsAllow?.length` is set
 
 Likely upstream changes:
 
 - add `toolsAllow?: string[]` to `SpawnSubagentParams`;
-- add `toolsAllow` to the `sessions_spawn` tool schema;
-- normalize and validate tool names as strings;
-- pass `toolsAllow` into the `callSubagentGateway({ method: "agent", params })` payload;
-- add tests that `toolsAllow` reaches embedded run params and causes bundle MCP/runtime tools outside the allowlist to be skipped.
+- add `toolsAllow` to the `sessions_spawn` tool schema with a description that it applies to `runtime="subagent"` only;
+- parse `toolsAllow` as an optional array of strings, preserving existing embedded-run semantics:
+  - `undefined`: no restriction, current behavior;
+  - `[]`: no tools;
+  - `["*"]`: all tools;
+  - named tools/groups such as `read`, `exec`, `web_fetch`, `group:plugins`, `bundle-mcp`, or provider/plugin tool ids;
+- reject malformed non-string entries fail-closed with a `ToolInputError`;
+- for `runtime="acp"`, either reject `toolsAllow` as unsupported or ignore it with explicit diagnostics; prefer rejection because ACP does not use the embedded runner tool construction path;
+- pass `toolsAllow` through `spawnSubagentDirect()` into the child `agent` gateway params;
+- add tests that `toolsAllow` reaches embedded run params and causes bundle MCP/LSP/runtime tools outside the allowlist to be skipped through the already-existing construction-plan logic.
+
+PR 2 should not:
+
+- add a cache;
+- add OctoClaw-specific role names;
+- introduce user-text keyword matching;
+- change default `sessions_spawn` behavior when `toolsAllow` is omitted;
+- weaken before-tool-call policy checks or target-agent allowlist checks;
+- bypass existing provider/tool policy, sandbox, owner-only, or channel policy guards.
+
+### 5.2.1 Upstream Code Touch Points
+
+Expected files on OpenClaw `main`:
+
+- `src/agents/tools/sessions-spawn-tool.ts`
+  - schema: add optional `toolsAllow`;
+  - execute: read/validate the array;
+  - pass to `spawnSubagentDirect` for `runtime="subagent"`;
+  - keep ACP unsupported or explicitly rejected.
+- `src/agents/subagent-spawn.ts`
+  - type: add `toolsAllow?: string[]` to `SpawnSubagentParams`;
+  - gateway call: include `toolsAllow` in `method: "agent"` params.
+- Existing embedded-run files should not need behavior changes unless tests reveal a missing propagation point:
+  - `src/agents/pi-embedded-runner/run/params.ts`
+  - `src/agents/pi-embedded-runner/run/attempt.ts`
+  - `src/agents/pi-embedded-runner/run/attempt-tool-construction-plan.ts`
+
+### 5.2.2 PR 2 Test Matrix
+
+Minimum upstream tests:
+
+- `sessions_spawn` schema exposes `toolsAllow` as an optional string array.
+- `sessions_spawn(runtime="subagent", toolsAllow:["read","web_fetch"])` forwards the exact normalized allowlist to `spawnSubagentDirect`.
+- `spawnSubagentDirect({ toolsAllow })` passes `toolsAllow` into the child `agent` gateway params.
+- `toolsAllow` omitted leaves the child gateway params unchanged versus current behavior.
+- `toolsAllow: []` is preserved and reaches the child as an explicit no-tools allowlist.
+- malformed values such as `toolsAllow:[123]` fail closed before spawning.
+- `runtime="acp"` with `toolsAllow` fails clearly, or the chosen behavior is tested if upstream prefers ignore-with-diagnostics.
+- focused embedded-run tests continue to prove:
+  - non-bundle allowlists skip bundle MCP startup;
+  - non-LSP allowlists skip bundle LSP startup;
+  - allowlisted runs use existing minimal prompt behavior;
+  - before-tool-call guards remain active.
+
+Recommended validation commands after implementation:
+
+```sh
+node scripts/run-vitest.mjs run --config test/vitest/vitest.agents-tools.config.ts src/agents/tools/sessions-spawn-tool.test.ts --reporter=dot
+node scripts/run-vitest.mjs run --config test/vitest/vitest.agents-core.config.ts src/agents/subagent-spawn.test.ts src/agents/subagent-spawn.context.test.ts --reporter=dot
+node scripts/run-vitest.mjs run --config test/vitest/vitest.agents-pi-embedded.config.ts src/agents/pi-embedded-runner/run/attempt-tool-construction-plan.test.ts --reporter=dot
+pnpm tsgo:core
+git diff --check
+```
+
+Use the exact upstream shard config if these paths have moved by the time PR 2 is implemented.
 
 Downstream OctoClaw changes after the upstream field exists:
 
@@ -295,6 +396,7 @@ Expected impact depends on how many tools are excluded. For worker roles that on
 - Tests prove `toolsAllow` triggers the existing minimal prompt/skills stripping path.
 - OctoClaw tests prove role profiles produce stable `toolsAllow` and the planner gate hash includes it.
 - Slack/native smoke proves final delivery and confirm semantics are unchanged.
+- PR body includes a `Real behavior proof` section if opened from the external fork, following OpenClaw's current PR gate.
 
 ## 6. Phase 3: Tool Schema / Tool Bundle Cache
 

@@ -56,12 +56,19 @@ Attempt notes:
 - [x] Confirm remaining 5.4 gaps: `prepStages.snapshot()` is not exposed to `EmbeddedPiRunMeta` / `agent_end`, and `sessions_spawn` does not accept/forward `toolsAllow`.
 - [ ] Implement OctoClaw-only coarse prep benchmark replay event: `prePromptBuildMs`, `postPromptPreLlmMs`, `llmMs`, `visibleElapsedMs`.
 - [ ] Extend nightly classifier/report with p50/p95 for coarse prep timing by route bucket, channel, and agent lane.
-- [ ] Draft upstream OpenClaw PR 1 using `docs/openclaw-prep-performance-upstream-design-2026-05-06.md` Section 8: observability-only prep stages on embedded run metadata / `agent_end`, reusing 5.4's existing `createEmbeddedRunStageTracker()` and `prepStages.mark("bundle-tools" | "system-prompt" | "stream-setup")`.
-- [ ] Record upstream PR 1 link, changed files, and upstream focused test output.
+- [x] Draft upstream OpenClaw PR 1 using `docs/openclaw-prep-performance-upstream-design-2026-05-06.md` Section 8: observability-only prep stages on embedded run metadata / `agent_end`, reusing 5.4's existing `createEmbeddedRunStageTracker()` and `prepStages.mark("bundle-tools" | "system-prompt" | "stream-setup")`.
+- [x] Record upstream PR 1 link, changed files, and upstream focused test output.
+  - PR: <https://github.com/openclaw/openclaw/pull/78381>
+  - branch: `guanbear:prep-metrics-pr1`
+  - commit: `91c20ac1 feat(embedded-runner): expose prep stage timings`
+  - changed files: `src/agents/pi-embedded-runner/run.ts`, `src/agents/pi-embedded-runner/run/attempt.ts`, `src/agents/pi-embedded-runner/run/types.ts`, `src/agents/pi-embedded-runner/types.ts`, `src/plugins/hook-types.ts`, `src/agents/pi-embedded-runner/run/attempt.spawn-workspace.context-engine.test.ts`
+  - verification: focused embedded runner context-engine test 37 passed; focused stage timing test 4 passed; `pnpm tsgo:core`; `git diff --check`
+  - PR gate: `Real behavior proof` supplied with real patched CLI build/version output.
 - [ ] After PR 1 is merged or locally patched, deploy matching OpenClaw build to macmini and rerun baseline verifier.
 - [ ] Collect post-PR prep benchmark artifact from real Slack/simple reply and planner-native delegate paths.
 - [ ] Validate PR 1 has no behavior changes, no prompt/tool output changes, no user text/secrets in trace output, and disabled/zero-overhead default behavior.
-- [ ] Draft upstream OpenClaw PR 2: add `toolsAllow` to `sessions_spawn` / `SpawnSubagentParams` and forward it to child embedded runs, reusing existing `toolsAllow` filtering and minimal prompt behavior.
+- [x] Prepare upstream OpenClaw PR 2 design: add `toolsAllow` to `sessions_spawn` / `SpawnSubagentParams` and forward it to child embedded runs, reusing existing `toolsAllow` filtering, pre-bundle construction planning, and minimal prompt behavior.
+- [ ] Draft upstream OpenClaw PR 2 code: implement the `sessions_spawn` `toolsAllow` propagation design and focused tests from `docs/openclaw-prep-performance-upstream-design-2026-05-06.md` Section 5.
 - [ ] After PR 2 is available in deployed OpenClaw, map OctoClaw delegation profile `allowedTools` to planner `sessionsSpawnArgs.toolsAllow`, include it in canonical hash/gate tests, and collect child prep evidence.
 - [ ] After PR 1/2 evidence, draft upstream OpenClaw PR 3: memory-only tool schema/cache with conservative cache key, invalidation tests, and kill switch.
 - [ ] Only after tool schema evidence, draft upstream OpenClaw PR 4/5: system prompt fragment stability contract, stable prompt cache, and conservative lazy fragment selection behind flags.
