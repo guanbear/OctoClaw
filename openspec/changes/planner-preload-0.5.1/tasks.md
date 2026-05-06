@@ -51,7 +51,10 @@ Attempt notes:
 - [x] Add upstream-facing design doc: `docs/openclaw-prep-performance-upstream-design-2026-05-06.md`.
 - [ ] Implement OctoClaw-only coarse prep benchmark replay event: `prePromptBuildMs`, `postPromptPreLlmMs`, `llmMs`, `visibleElapsedMs`.
 - [ ] Extend nightly classifier/report with p50/p95 for coarse prep timing by route bucket, channel, and agent lane.
-- [ ] Draft upstream OpenClaw PR 1: observability-only prep stages on embedded run metadata / `agent_end`, reusing existing `createEmbeddedRunStageTracker()` and `prepStages.mark("bundle-tools" | "system-prompt" | "stream-setup")`.
+- [ ] Draft upstream OpenClaw PR 1 using `docs/openclaw-prep-performance-upstream-design-2026-05-06.md` Section 8: observability-only prep stages on embedded run metadata / `agent_end`, reusing existing `createEmbeddedRunStageTracker()` and `prepStages.mark("bundle-tools" | "system-prompt" | "stream-setup")`.
+- [ ] Record upstream PR 1 link, changed files, and upstream focused test output.
+- [ ] After PR 1 is merged or locally patched, deploy matching OpenClaw build to macmini and rerun baseline verifier.
+- [ ] Collect post-PR prep benchmark artifact from real Slack/simple reply and planner-native delegate paths.
 - [ ] Validate PR 1 has no behavior changes, no prompt/tool output changes, no user text/secrets in trace output, and disabled/zero-overhead default behavior.
 - [ ] After PR 1 evidence, draft upstream OpenClaw PR 2: memory-only tool schema cache with conservative cache key, invalidation tests, and kill switch.
 - [ ] Only after tool schema evidence, draft upstream OpenClaw PR 3/4: system prompt fragment stability contract, stable prompt cache, and conservative lazy fragment selection behind flags.

@@ -391,14 +391,135 @@ Recommended split:
 
 | PR | Scope | Risk |
 | --- | --- | --- |
-| 1 | perf trace spans + benchmark report command | low |
+| 1 | expose existing embedded prep stage summary in run metadata / `agent_end` | low |
 | 2 | tool schema cache with memory-only LRU and kill switch | medium-low |
 | 3 | prompt fragment stability contract and stable prompt cache | medium |
 | 4 | conservative lazy fragment selection behind flag | medium-high |
 
-PR 1 should land before any cache PR. PR 2 can be proposed once trace confirms tool schema work is a major prep span. PR 3/4 should wait until prompt build/token size is measured and golden prompt fixtures exist.
+PR 1 should land before any cache PR. PR 2 can be proposed once stage evidence confirms tool schema / bundle work is a major prep span. PR 3/4 should wait until prompt build/token size is measured and golden prompt fixtures exist.
 
-## 8. OctoClaw 0.5.1 Planning Impact
+## 8. Upstream Landing Plan
+
+This landing plan belongs in this design doc rather than a separate OctoClaw OpenSpec change. The upstream code changes are OpenClaw changes; OctoClaw OpenSpec should only track the downstream evidence, validation, and rollout decisions.
+
+### 8.1 Local Source Baseline
+
+Before opening an upstream PR, verify that the source tree matches the deployed OpenClaw baseline used for evidence:
+
+```text
+source: /Users/guanbear/workspace/openclaw-4.29-src
+deployed: /Users/guanbear/.local/lib/node_modules/openclaw
+version: 2026.4.29
+commit: a448042c2edd94a4e8ee86d5ed90a5ed9fe8e4cd
+```
+
+Use OctoClaw's baseline verifier before trusting source-level conclusions:
+
+```sh
+node scripts/verify-openclaw-baseline.mjs \
+  --source /Users/guanbear/workspace/openclaw-4.29-src \
+  --deploy-root /Users/guanbear/.local/lib/node_modules/openclaw \
+  --require-gateway
+```
+
+If source and deployed OpenClaw differ, stop and align the baseline before writing the PR.
+
+### 8.2 PR 1 Implementation Shape
+
+PR 1 should be a minimal observability-only change.
+
+Likely upstream files:
+
+- `src/agents/pi-embedded-runner/types.ts`
+- `src/plugins/hook-types.ts`
+- `src/agents/pi-embedded-runner/run/attempt.ts`
+- focused tests near `src/agents/pi-embedded-runner/run/attempt-stage-timing.test.ts`, `src/agents/pi-embedded-runner/run/attempt.test.ts`, or hook payload tests.
+
+Implementation outline:
+
+1. Export or reuse the existing `EmbeddedRunStageSummary` type where `EmbeddedPiRunMeta` and `PluginHookAgentEndEvent` can reference it.
+2. Add optional `prepStages?: EmbeddedRunStageSummary` to `EmbeddedPiRunMeta`.
+3. Add optional `prepStages?: EmbeddedRunStageSummary` to `PluginHookAgentEndEvent`.
+4. In `runEmbeddedAttempt`, take `const prepStageSummary = prepStages.snapshot()` near finalization and pass it into returned meta and `agent_end`.
+5. Keep the existing warning log behavior unchanged.
+
+PR 1 must not:
+
+- change prompt text;
+- change tool inventory;
+- change hook timing;
+- add cache behavior;
+- emit raw user text, full prompts, secrets, or full tool schemas;
+- introduce OctoClaw-specific naming.
+
+### 8.3 PR 1 Verification
+
+Minimum upstream verification:
+
+```sh
+pnpm test -- src/agents/pi-embedded-runner/run/attempt-stage-timing.test.ts
+pnpm test -- src/plugins/hooks.phase-hooks.test.ts src/plugins/hooks.model-override-wiring.test.ts
+```
+
+Add or update focused tests to prove:
+
+- `prepStages` contains stage names and durations when an embedded run reaches `agent_end`;
+- existing `durationMs` remains unchanged;
+- hooks still run when `prepStages` is absent or empty;
+- no prompt text or tool schema content is added to the hook event.
+
+If upstream has a preferred command set, use their contributor docs over these local commands.
+
+### 8.4 PR 1 Description Template
+
+Use a concise upstream-oriented PR description:
+
+```text
+Title: Expose embedded run prep stage timings in run metadata
+
+Summary:
+- Reuses the existing embedded run stage tracker.
+- Adds optional prepStages to embedded run metadata and agent_end hook events.
+- Does not change prompt construction, tool inventory, routing, or execution behavior.
+
+Why:
+- Downstream plugins and OpenClaw diagnostics need to distinguish bundle-tools, system-prompt, stream-setup, and model latency before proposing cache changes.
+
+Validation:
+- focused timing/hook tests
+- no prompt/tool behavior changes
+```
+
+Avoid mentioning OctoClaw-specific Slack incidents as the main justification. They can be referenced as downstream motivation only if needed.
+
+### 8.5 PR 2 Gate: Tool Schema Cache
+
+Do not start PR 2 until PR 1 or OctoClaw coarse benchmark shows a meaningful repeated cost in `bundle-tools`, tool schema normalization, or related prep stages.
+
+Before coding PR 2, write the cache key tests first. The first cache PR should be memory-only and default-enabled only if the key is complete and the kill switch works; otherwise ship behind an explicit opt-in flag.
+
+### 8.6 PR 3/4 Gate: System Prompt Lazy/Cache
+
+Do not start prompt lazy/cache until prompt-stage evidence is stable and golden prompt tests exist. This work has the highest behavior risk, so it should be split:
+
+1. fragment stability contract and stable prompt cache;
+2. lazy fragment selection behind a flag.
+
+The lazy selection rule must be derived from runtime state, provider capabilities, and already-computed route/tool visibility. It must not be based on user-text keyword matching.
+
+### 8.7 Downstream OctoClaw Tracking
+
+OctoClaw should track this upstream line in `openspec/changes/planner-preload-0.5.1/tasks.md` only as downstream evidence:
+
+- coarse replay timing implemented;
+- upstream PR 1 drafted/opened/merged;
+- local OpenClaw deployment includes PR 1;
+- post-PR benchmark artifact collected;
+- cache PR gates satisfied or rejected.
+
+Do not mark 0.5.1 performance complete just because a PR is opened. Completion needs local deployment plus measured p50/p95 improvement or a documented no-go result.
+
+## 9. OctoClaw 0.5.1 Planning Impact
 
 The warm pool line remains recorded as a failed/blocked latency experiment for Slack. The next 0.5.1 performance line should therefore prioritize upstream prep performance:
 
