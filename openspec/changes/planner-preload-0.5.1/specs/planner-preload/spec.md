@@ -160,6 +160,12 @@ Speculative preload SHALL NOT be enabled by default or broadly allowlisted befor
 
 0.5.1 responsiveness work SHALL treat OpenClaw embedded prep as a measured upstream performance track, not as an OctoClaw routing workaround.
 
+#### Scenario: OpenClaw release rebaseline
+
+- WHEN the local OpenClaw runtime is upgraded to a newer official release
+- THEN OctoClaw SHALL verify that consulted source, deployed package, and running gateway match the same OpenClaw version/commit
+- AND SHALL update the prep performance plan to distinguish official capabilities already present from remaining upstream gaps.
+
 #### Scenario: OctoClaw-only coarse benchmark
 
 - WHEN OctoClaw observes an inbound message and later lifecycle hooks for the same turn

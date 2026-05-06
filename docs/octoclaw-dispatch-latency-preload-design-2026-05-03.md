@@ -63,7 +63,7 @@ child 启动优化 → 有可用 warm session 则 sessions_send；没有则 sess
 
 ---
 
-## 2. OpenClaw v2026.4.29 源码验证
+## 2. OpenClaw 源码验证与 5.4 复核
 
 ### 2.1 关键机制：continuation turn 跳过 bootstrap
 
@@ -147,7 +147,26 @@ export type PluginHookBeforePromptBuildResult = {
 
 **根本约束**：OctoClaw plugin 无法直接从插件上下文调用 `sessions_spawn`。所有 spawn 必须通过主 agent 的 tool call 触发。这是两个方案都面临的架构边界，也是 warm worker pool 在 slimming review 中被列为"研究项"的根本原因。
 
-### 2.6 Slack 事实修正：原始方案 B 当前不可验收
+### 2.6 OpenClaw 2026.5.4 复核
+
+2026-05-06 已把本机 OpenClaw 从 `2026.4.29` 升级到官方 `2026.5.4`：
+
+- source：`/Users/guanbear/workspace/openclaw-5.4-src`
+- deployed：`/Users/guanbear/.local/lib/node_modules/openclaw`
+- commit：`325df3efefe9c0887d9357732e68fc8556e78d79`
+- baseline verifier 已通过，gateway 正在使用 5.4 deployed root。
+
+5.4 改变了后续 0.5.1 性能方案的事实边界：
+
+- embedded runner 已内置 `prepStages` 并在慢路径日志里输出 `bundle-tools`、`system-prompt`、`stream-setup` 等阶段；
+- embedded run 层已有 `toolsAllow` 过滤，并且 `toolsAllow` 存在时会走 minimal prompt、strip skills catalog；
+- OpenClaw 源码已有 `threadBindings` / `spawnSessions` 相关能力，Slack thread-binding 需要在 5.4 上重新实测，不能继续只引用 4.29 失败结论；
+- 但 `sessions_spawn` 公开 schema / `SpawnSubagentParams` 仍没有 `toolsAllow`，所以 OctoClaw 还不能把 worker role allowlist 传给 native child run；
+- `agent_end` hook / `EmbeddedPiRunMeta` 仍没有稳定携带 `prepStages.snapshot()`，所以自动报表仍需要上游补一个观测面，或先临时解析日志。
+
+结论：5.4 不足以直接恢复 warm pool 为主路径；它让下一步从“新增观测和能力”收窄为“暴露已有观测 + 补 `sessions_spawn.toolsAllow` 缺口 + 重新跑 5.4 baseline/smoke”。
+
+### 2.7 Slack 事实修正：原始方案 B 当前不可验收
 
 2026-05-05 对本机 OpenClaw 4.29 deployed dist 复核后确认：
 
@@ -384,7 +403,7 @@ B' 只有在以下证据同时满足后，才能从 design/probe 进入 implemen
   - prep `42486ms`
   - prep 里 `bootstrap-context=5ms`，但 `bundle-tools=6051ms`、`system-prompt=15621ms`、`stream-setup=14956ms`
 
-结论：B' 在当前 deployed OpenClaw 4.29 上**功能可行但性能不达标**。它能复用同一个 `childSessionKey` 并减少模型输入/跳过重 bootstrap context，但没有跳过 embedded runner 的工具 bundle、system prompt 和 stream setup，实际完整等待仍约 104s。`timeoutSeconds:0` 的 6.7s accepted 不能作为 task-start latency。0.5.1 不应实现生产 warm pool；保留为 research/probe，生产继续走 ordinary planner/native `new_spawn`。
+结论：B' 在当时 deployed OpenClaw 4.29 上**功能可行但性能不达标**。它能复用同一个 `childSessionKey` 并减少模型输入/跳过重 bootstrap context，但没有跳过 embedded runner 的工具 bundle、system prompt 和 stream setup，实际完整等待仍约 104s。`timeoutSeconds:0` 的 6.7s accepted 不能作为 task-start latency。0.5.1 不应实现生产 warm pool；保留为 research/probe，生产继续走 ordinary planner/native `new_spawn`。
 
 验证中临时打开过 `agents.defaults.contextInjection="continuation-skip"`、`gateway.tools.allow=["sessions_send"]`、`tools.sessions.visibility="agent"`；验证结束已恢复默认配置。
 
@@ -710,13 +729,15 @@ Gate 逻辑修改需仔细测试，避免破坏现有 intent-matched 路径的�
 
 ## 11. 推荐优先级
 
-2026-05-05 调整：原始方案 B 的 implementation slice 继续保持 default-off，但不能作为 Slack 成功路径。Slack B' controlled probe 已证明 `mode:"run" + cleanup:"keep" + lightContext:false + sessions_send` 功能可续跑，但没有带来可接受的 task-start latency：`sessions_send(timeoutSeconds:120)` 完整等待约 `103705ms`，第二段 run 仍有 `startup=17867ms`、`prep=42486ms`。因此 0.5.1 不进入 warm pool implementation，继续退回 0.5.0 planner/confirm 主链。
+2026-05-05 调整：原始方案 B 的 implementation slice 继续保持 default-off，但不能作为 Slack 成功路径。Slack B' controlled probe 已证明 `mode:"run" + cleanup:"keep" + lightContext:false + sessions_send` 功能可续跑，但没有带来可接受的 task-start latency：`sessions_send(timeoutSeconds:120)` 完整等待约 `103705ms`，第二段 run 仍有 `startup=17867ms`、`prep=42486ms`。
+
+2026-05-06 调整：本机 OpenClaw 已升级到 `2026.5.4`，所以 4.29 的性能数字只保留为历史 baseline，不再作为 5.4 的最终结论。0.5.1 仍不进入 warm pool production implementation；先在 5.4 上重新采集 simple reply / planner-native delegate / Slack thread-binding evidence，再决定是否恢复任何 warm-pool 工作。
 
 | 阶段 | 内容 | 前置条件 |
 | --- | --- | --- |
 | **0.5.1 P0** | 保留 30s soft budget，但超时后允许 late final / 一次轻量只读工具；prompt 注入不再强制 delegate | 0.5.0 release branch |
 | **0.5.1 P1** | Slack B' live probe：`mode="run" + cleanup="keep" + lightContext:false` warm run，随后 `sessions_send(timeoutSeconds=0/120)`，只记录 evidence，不默认改生产路由 | 已验证：功能可行，性能未通过 |
-| **0.5.1 P2** | 小池 implementation 暂缓；除非 OpenClaw 暴露能跳过 runner prep 的 continuation path，否则不做生产 warm pool | B' 当前阻塞 |
+| **0.5.1 P2** | 小池 implementation 暂缓；在 OpenClaw 5.4 上重新验证 thread binding / continuation latency；除非 artifact 证明 task-start latency 有收益，否则不做生产 warm pool | B' 当前阻塞，5.4 待复测 |
 | **0.5.1 P3** | 转向 OpenClaw prep performance：先做 OctoClaw replay 粗 benchmark，再做上游 observability-only prep stages 暴露，随后按证据推进 tool schema cache，最后 system prompt lazy/cache | 见 `openclaw-prep-performance-upstream-design-2026-05-06.md` |
 | **0.5.1 P4** | 若未来 OpenClaw 支持低延迟 persistent session/runner reuse，再补 confirm/native refs/ACK/report 字段，并评估高频作用域最多 2 个 slot | task-start latency 连续 artifact 证明有收益 |
 | **0.5.x 后续** | 非 Slack channel 可继续原始方案 A：SQLite `standby_sessions` 表 + pool 查询 + health check + 补充逻辑 | 对应 channel 支持 subagent thread-binding |
@@ -727,8 +748,8 @@ Gate 逻辑修改需仔细测试，避免破坏现有 intent-matched 路径的�
 Slack B' controlled probe 证明 warm continuation 功能可用但不能显著降低 task-start latency；第二段 run 仍然有明显 `startup` / `prep` 成本。因此 0.5.1 的主性能线不再继续扩大 warm pool，而是先做 OpenClaw embedded prep 的可观测和缓存优化设计：
 
 1. **OctoClaw 粗 benchmark**：不改 OpenClaw，通过 ACK guard / `before_prompt_build` / `llm_input` / `llm_output` / `agent_end` 边界记录 `prePromptBuildMs`、`postPromptPreLlmMs`、`llmMs`、`visibleElapsedMs`，进 nightly p50/p95。
-2. **上游 PR 1：prep stages 暴露**：最小行为零变化 PR，复用 OpenClaw 2026.4.29 已有的 `createEmbeddedRunStageTracker()` / `prepStages.mark("bundle-tools" | "system-prompt" | "stream-setup")`，把 `prepStages.snapshot()` 暴露到 embedded run metadata / `agent_end`，为后续 cache PR 提供硬证据。
-3. **上游 PR 2：`sessions_spawn` toolsAllow**：OpenClaw run 层已经支持 `toolsAllow` 并在 allowlist 存在时使用 minimal prompt / strip skills catalog；缺的是 native subagent spawn 边界。先把 `toolsAllow` 加到 `sessions_spawn` / `SpawnSubagentParams` 并透传到 child embedded run，再由 OctoClaw 把 delegation profile `allowedTools` 写入 planner `sessionsSpawnArgs.toolsAllow`。
+2. **上游 PR 1：prep stages 暴露**：最小行为零变化 PR，复用 OpenClaw 2026.5.4 已有的 `createEmbeddedRunStageTracker()` / `prepStages.mark("bundle-tools" | "system-prompt" | "stream-setup")`，把 `prepStages.snapshot()` 暴露到 embedded run metadata / `agent_end`，为后续 cache PR 提供硬证据。5.4 已经会把慢 prep stages 写日志，但这还不是稳定 hook/report surface。
+3. **上游 PR 2：`sessions_spawn` toolsAllow**：OpenClaw embedded run 层已经支持 `toolsAllow` 并在 allowlist 存在时使用 minimal prompt / strip skills catalog；缺的是 native subagent spawn 边界。先把 `toolsAllow` 加到 `sessions_spawn` / `SpawnSubagentParams` 并透传到 child embedded run，再由 OctoClaw 把 delegation profile `allowedTools` 写入 planner `sessionsSpawnArgs.toolsAllow`。
 4. **上游 PR 3：tool schema/cache**：在 evidence 显示 schema/bundle 成本仍明显后，做 memory-only LRU、保守 cache key、失效测试和 kill switch；不缓存授权结果，不绕过 before-tool-call guard。
 5. **上游 PR 4/5：system prompt lazy/cache**：最后再做 prompt fragment 稳定性 contract、stable prompt cache、保守 lazy fragment selection。选择依据必须是 runtime state，不靠用户文本关键词。
 

@@ -49,9 +49,14 @@ Attempt notes:
 ## P3 OpenClaw Prep Performance Upstream Track
 
 - [x] Add upstream-facing design doc: `docs/openclaw-prep-performance-upstream-design-2026-05-06.md`.
+- [x] Pull official OpenClaw `v2026.5.4` source to `/Users/guanbear/workspace/openclaw-5.4-src`.
+- [x] Upgrade local deployed OpenClaw to `2026.5.4` and restart gateway.
+- [x] Verify source/deployed/gateway baseline against commit `325df3efefe9c0887d9357732e68fc8556e78d79`.
+- [x] Rebaseline the upstream plan: 5.4 already logs embedded prep stages and has embedded-run `toolsAllow` filtering/minimal prompt behavior.
+- [x] Confirm remaining 5.4 gaps: `prepStages.snapshot()` is not exposed to `EmbeddedPiRunMeta` / `agent_end`, and `sessions_spawn` does not accept/forward `toolsAllow`.
 - [ ] Implement OctoClaw-only coarse prep benchmark replay event: `prePromptBuildMs`, `postPromptPreLlmMs`, `llmMs`, `visibleElapsedMs`.
 - [ ] Extend nightly classifier/report with p50/p95 for coarse prep timing by route bucket, channel, and agent lane.
-- [ ] Draft upstream OpenClaw PR 1 using `docs/openclaw-prep-performance-upstream-design-2026-05-06.md` Section 8: observability-only prep stages on embedded run metadata / `agent_end`, reusing existing `createEmbeddedRunStageTracker()` and `prepStages.mark("bundle-tools" | "system-prompt" | "stream-setup")`.
+- [ ] Draft upstream OpenClaw PR 1 using `docs/openclaw-prep-performance-upstream-design-2026-05-06.md` Section 8: observability-only prep stages on embedded run metadata / `agent_end`, reusing 5.4's existing `createEmbeddedRunStageTracker()` and `prepStages.mark("bundle-tools" | "system-prompt" | "stream-setup")`.
 - [ ] Record upstream PR 1 link, changed files, and upstream focused test output.
 - [ ] After PR 1 is merged or locally patched, deploy matching OpenClaw build to macmini and rerun baseline verifier.
 - [ ] Collect post-PR prep benchmark artifact from real Slack/simple reply and planner-native delegate paths.
@@ -72,6 +77,7 @@ Attempt notes:
 
 - [x] `git diff --check`
 - [x] `./node_modules/.bin/tsc --build extensions/octoclaw-runtime/tsconfig.json --pretty false`
+- [x] `node scripts/verify-openclaw-baseline.mjs --source /Users/guanbear/workspace/openclaw-5.4-src --deploy-root /Users/guanbear/.local/lib/node_modules/openclaw --require-gateway`
 - [x] `./node_modules/.bin/vitest run extensions/octoclaw-runtime/src/extension-entry.test.ts extensions/octoclaw-runtime/src/tools/registration-planner.test.ts extensions/octoclaw-runtime/src/delegate/native-spawn-gate-confirm.test.ts extensions/octoclaw-runtime/src/delegate/native-spawn-intent.test.ts`
 - [x] `./node_modules/.bin/vitest run extensions/octoclaw-runtime/src/extension-entry-neutral-ack.test.ts extensions/octoclaw-runtime/src/resolve/policy-resolver-judge-fallback.test.ts extensions/octoclaw-runtime/src/tools/registration-dispatch-honesty.test.ts extensions/octoclaw-runtime/src/fast-delegate/probe.test.ts extensions/octoclaw-runtime/src/fast-delegate/no-double-judge.test.ts extensions/octoclaw-runtime/src/fast-delegate/draft.test.ts`
 - [x] `./node_modules/.bin/vitest run extensions/octoclaw-runtime/src/extension-entry.test.ts extensions/octoclaw-runtime/src/resolve/policy-resolver-judge-fallback.test.ts extensions/octoclaw-runtime/src/tools/registration-planner.test.ts tools/octoclawctl/src/cli.test.ts`

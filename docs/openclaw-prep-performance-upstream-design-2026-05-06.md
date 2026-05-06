@@ -9,6 +9,14 @@ Related OctoClaw context:
 - `docs/octoclaw-dispatch-latency-preload-design-2026-05-03.md`
 - `openspec/changes/planner-preload-0.5.1/`
 
+Current local OpenClaw baseline after 2026-05-06 upgrade:
+
+- source: `/Users/guanbear/workspace/openclaw-5.4-src`
+- deployed: `/Users/guanbear/.local/lib/node_modules/openclaw`
+- version: `2026.5.4`
+- commit: `325df3efefe9c0887d9357732e68fc8556e78d79`
+- verification: `node scripts/verify-openclaw-baseline.mjs --source /Users/guanbear/workspace/openclaw-5.4-src --deploy-root /Users/guanbear/.local/lib/node_modules/openclaw --require-gateway`
+
 ## 1. Problem Statement
 
 OctoClaw 0.5.0/0.5.1 live Slack evidence shows that warm child sessions are not enough to fix perceived latency. Even simple main-agent replies can spend tens of seconds before model output begins. The repeated cost appears to sit in OpenClaw embedded-run preparation rather than only in child bootstrap.
@@ -84,7 +92,7 @@ This gives immediate production evidence without waiting for an upstream OpenCla
 
 After coarse timing confirms that prep is the bottleneck, submit a small upstream OpenClaw PR that exposes prep subspans through existing run metadata/hook payloads.
 
-OpenClaw 2026.4.29 already has the right internal primitive:
+OpenClaw 2026.5.4 already has the right internal primitive and logs slow prep stages:
 
 - `src/agents/pi-embedded-runner/run/attempt-stage-timing.ts`
   - `createEmbeddedRunStageTracker()`
@@ -97,6 +105,13 @@ OpenClaw 2026.4.29 already has the right internal primitive:
   - additional marks for workspace, skills, bootstrap context, session resource loader, and agent session creation.
 
 Therefore the best upstream PR is not to add a parallel timestamp system. It should reuse the existing stage tracker and expose its `snapshot()` in the existing run metadata/hook surface.
+
+2026.5.4 status:
+
+- `prepStages.snapshot()` is logged by OpenClaw when slow enough.
+- `EmbeddedPiRunMeta` does not yet include `prepStages`.
+- `agent_end` hook payload currently includes `durationMs` but not the prep stage summary.
+- OctoClaw can parse logs for manual evidence, but stable downstream reporting still needs hook/meta exposure.
 
 Minimal type shape:
 
@@ -226,7 +241,7 @@ Perf trace does not speed anything up directly. Its value is correctness: it tel
 
 ### 5.1 Source Finding
 
-OpenClaw 2026.4.29 already supports explicit tool allowlists at the embedded attempt layer:
+OpenClaw 2026.5.4 already supports explicit tool allowlists at the embedded attempt layer:
 
 - `src/agents/pi-embedded-runner/run/params.ts` has `toolsAllow?: string[]`.
 - `src/agents/pi-embedded-runner/run/attempt.ts` filters tool registrations with `applyEmbeddedAttemptToolsAllow()`.
@@ -238,6 +253,7 @@ The current gap is the subagent/native spawn boundary:
 - `SpawnSubagentParams` in `src/agents/subagent-spawn.ts` does not expose `toolsAllow`.
 - The `sessions_spawn` public tool shape therefore cannot pass a role-specific allowlist into the child `agent` run.
 - OctoClaw already has role profiles with `allowedTools` (`worker_research`, `worker_code`, `worker_review`), but current planner `sessionsSpawnArgs` do not include a corresponding OpenClaw-native allowlist.
+- This gap is still present in local OpenClaw `2026.5.4`; `sessions-spawn-tool.ts` exposes `context`/`lightContext` but not `toolsAllow`.
 
 ### 5.2 What To Build
 
@@ -467,17 +483,17 @@ This landing plan belongs in this design doc rather than a separate OctoClaw Ope
 Before opening an upstream PR, verify that the source tree matches the deployed OpenClaw baseline used for evidence:
 
 ```text
-source: /Users/guanbear/workspace/openclaw-4.29-src
+source: /Users/guanbear/workspace/openclaw-5.4-src
 deployed: /Users/guanbear/.local/lib/node_modules/openclaw
-version: 2026.4.29
-commit: a448042c2edd94a4e8ee86d5ed90a5ed9fe8e4cd
+version: 2026.5.4
+commit: 325df3efefe9c0887d9357732e68fc8556e78d79
 ```
 
 Use OctoClaw's baseline verifier before trusting source-level conclusions:
 
 ```sh
 node scripts/verify-openclaw-baseline.mjs \
-  --source /Users/guanbear/workspace/openclaw-4.29-src \
+  --source /Users/guanbear/workspace/openclaw-5.4-src \
   --deploy-root /Users/guanbear/.local/lib/node_modules/openclaw \
   --require-gateway
 ```
@@ -593,6 +609,7 @@ OctoClaw should track this upstream line in `openspec/changes/planner-preload-0.
 - coarse replay timing implemented;
 - upstream PR 1 drafted/opened/merged;
 - local OpenClaw deployment includes PR 1;
+- official OpenClaw release rebaseline recorded when upstream capabilities already exist;
 - post-PR benchmark artifact collected;
 - cache PR gates satisfied or rejected.
 
@@ -607,3 +624,10 @@ perf trace benchmark -> sessions_spawn toolsAllow -> tool schema/cache -> system
 ```
 
 This line improves both direct main-agent replies and delegate/subagent paths, while preserving the 0.5.0 planner/native correctness boundary.
+
+After the 2026.5.4 local upgrade, the priority remains the same but the PR shape is narrower:
+
+1. Use 5.4's existing slow prep-stage logs for immediate manual evidence.
+2. Upstream PR 1 only needs to expose those existing stage summaries to `EmbeddedPiRunMeta` / `agent_end`.
+3. Upstream PR 2 remains necessary because `sessions_spawn` still cannot pass `toolsAllow` to child runs.
+4. Re-run Slack simple reply and planner-native delegate baselines on 5.4 before claiming any cache or warm-pool conclusion.

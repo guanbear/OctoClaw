@@ -121,6 +121,8 @@ Confirm semantics do not change:
 
 P2 requires real Slack artifacts with speculative preload flag enabled and then disabled/restored after validation.
 
+After the local OpenClaw upgrade to `2026.5.4`, old 4.29 Slack warm-session failures remain historical evidence but are not enough for a 5.4 decision. Any renewed Scheme B/B' validation must first record the 5.4 source/deployed/gateway baseline, then re-check Slack thread-binding behavior and continuation latency.
+
 Required evidence:
 
 - `speculative_preload_hint_injected`;
@@ -139,3 +141,21 @@ Required evidence:
 ## Rollout
 
 0.5.1 P1 can ship as default-off code. Any default enablement or allowlist rollout is P3 and requires P2 live evidence first.
+
+## P3: OpenClaw 2026.5.4 Prep Performance Track
+
+Local OpenClaw is now aligned to official `2026.5.4`:
+
+```text
+source: /Users/guanbear/workspace/openclaw-5.4-src
+deployed: /Users/guanbear/.local/lib/node_modules/openclaw
+commit: 325df3efefe9c0887d9357732e68fc8556e78d79
+```
+
+5.4 already has embedded prep-stage tracking and logs slow `bundle-tools`, `system-prompt`, and `stream-setup` spans. The remaining observability gap is that `prepStages.snapshot()` is not yet exposed in `EmbeddedPiRunMeta` or `agent_end`, so automated OctoClaw reports still need either coarse hook timing or an upstream hook/meta surface.
+
+5.4 also has embedded-run `toolsAllow` filtering and minimal prompt behavior, but native `sessions_spawn` still does not accept or forward `toolsAllow`. The next upstream optimization should therefore be:
+
+```text
+coarse benchmark / 5.4 prep logs -> expose prepStages to meta/hooks -> sessions_spawn.toolsAllow -> tool schema cache -> system prompt cache
+```
