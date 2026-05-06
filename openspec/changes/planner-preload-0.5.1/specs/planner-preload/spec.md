@@ -155,3 +155,35 @@ Speculative preload SHALL NOT be enabled by default or broadly allowlisted befor
 
 - WHEN P2 evidence is missing or fails
 - THEN speculative preload SHALL remain default off.
+
+### Requirement: Prep Performance Work Is Evidence First
+
+0.5.1 responsiveness work SHALL treat OpenClaw embedded prep as a measured upstream performance track, not as an OctoClaw routing workaround.
+
+#### Scenario: OctoClaw-only coarse benchmark
+
+- WHEN OctoClaw observes an inbound message and later lifecycle hooks for the same turn
+- THEN it MAY record coarse replay timing for `prePromptBuildMs`, `postPromptPreLlmMs`, `llmMs`, and `visibleElapsedMs`
+- AND it SHALL NOT log raw user text, full prompts, secrets, or full tool schemas.
+
+#### Scenario: upstream prep metrics
+
+- WHEN OpenClaw exposes embedded run prep metrics
+- THEN the first upstream change SHALL be observability-only
+- AND it SHOULD reuse OpenClaw's existing embedded run stage tracker where available
+- AND it SHOULD expose stage timings that include at least `bundle-tools`, `system-prompt`, `stream-setup`, and total prep elapsed
+- AND it SHALL NOT change model routing, prompt text, tool availability, or execution behavior.
+
+#### Scenario: tool schema cache
+
+- WHEN benchmark evidence shows tool schema preparation is a meaningful prep cost
+- THEN a tool schema cache MAY be added behind a kill switch
+- AND cache keys SHALL include provider/schema dialect, effective tool policy, plugin/MCP tool signatures, model/tool-call mode, and OpenClaw/schema sanitizer version
+- AND cached schema SHALL NOT cache authorization decisions or bypass before-tool-call guards.
+
+#### Scenario: system prompt lazy/cache
+
+- WHEN benchmark evidence shows system prompt construction or prompt size is a meaningful prep cost
+- THEN stable prompt fragments MAY be cached behind a kill switch
+- AND dynamic per-turn data such as route hints, work-contract/native refs, Slack anchors, user text, and memory retrievals SHALL remain outside stable cache entries
+- AND lazy fragment selection SHALL be driven by runtime state, not bare user-text keyword matching.

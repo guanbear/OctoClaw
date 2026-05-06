@@ -717,11 +717,25 @@ Gate 逻辑修改需仔细测试，避免破坏现有 intent-matched 路径的�
 | **0.5.1 P0** | 保留 30s soft budget，但超时后允许 late final / 一次轻量只读工具；prompt 注入不再强制 delegate | 0.5.0 release branch |
 | **0.5.1 P1** | Slack B' live probe：`mode="run" + cleanup="keep" + lightContext:false` warm run，随后 `sessions_send(timeoutSeconds=0/120)`，只记录 evidence，不默认改生产路由 | 已验证：功能可行，性能未通过 |
 | **0.5.1 P2** | 小池 implementation 暂缓；除非 OpenClaw 暴露能跳过 runner prep 的 continuation path，否则不做生产 warm pool | B' 当前阻塞 |
-| **0.5.1 P3** | 若未来 OpenClaw 支持低延迟 persistent session/runner reuse，再补 confirm/native refs/ACK/report 字段，并评估高频作用域最多 2 个 slot | task-start latency 连续 artifact 证明有收益 |
+| **0.5.1 P3** | 转向 OpenClaw prep performance：先做 OctoClaw replay 粗 benchmark，再做上游 observability-only prep stages 暴露，随后按证据推进 tool schema cache，最后 system prompt lazy/cache | 见 `openclaw-prep-performance-upstream-design-2026-05-06.md` |
+| **0.5.1 P4** | 若未来 OpenClaw 支持低延迟 persistent session/runner reuse，再补 confirm/native refs/ACK/report 字段，并评估高频作用域最多 2 个 slot | task-start latency 连续 artifact 证明有收益 |
 | **0.5.x 后续** | 非 Slack channel 可继续原始方案 A：SQLite `standby_sessions` 表 + pool 查询 + health check + 补充逻辑 | 对应 channel 支持 subagent thread-binding |
 | **Pool 预热增强**（可选）| heartbeat 或首次 turn 预热 | B' 或方案 A 稳定，有真实高频需求 |
 
-### 11.1 既有原始方案 B 实现状态
+### 11.1 OpenClaw prep performance track
+
+Slack B' controlled probe 证明 warm continuation 功能可用但不能显著降低 task-start latency；第二段 run 仍然有明显 `startup` / `prep` 成本。因此 0.5.1 的主性能线不再继续扩大 warm pool，而是先做 OpenClaw embedded prep 的可观测和缓存优化设计：
+
+1. **OctoClaw 粗 benchmark**：不改 OpenClaw，通过 ACK guard / `before_prompt_build` / `llm_input` / `llm_output` / `agent_end` 边界记录 `prePromptBuildMs`、`postPromptPreLlmMs`、`llmMs`、`visibleElapsedMs`，进 nightly p50/p95。
+2. **上游 PR 1：prep stages 暴露**：最小行为零变化 PR，复用 OpenClaw 2026.4.29 已有的 `createEmbeddedRunStageTracker()` / `prepStages.mark("bundle-tools" | "system-prompt" | "stream-setup")`，把 `prepStages.snapshot()` 暴露到 embedded run metadata / `agent_end`，为后续 cache PR 提供硬证据。
+3. **上游 PR 2：tool schema cache**：在 evidence 显示 schema/bundle 成本明显后，做 memory-only LRU、保守 cache key、失效测试和 kill switch；不缓存授权结果，不绕过 before-tool-call guard。
+4. **上游 PR 3/4：system prompt lazy/cache**：最后再做 prompt fragment 稳定性 contract、stable prompt cache、保守 lazy fragment selection。选择依据必须是 runtime state，不靠用户文本关键词。
+
+这条线同时改善主 agent 自己 reply 和 delegate/subagent 路径；区别只是主 reply 主要受 prompt/schema prep 影响，delegate 还叠加 child run prep。详细设计见：
+
+- [`openclaw-prep-performance-upstream-design-2026-05-06.md`](./openclaw-prep-performance-upstream-design-2026-05-06.md)
+
+### 11.2 既有原始方案 B 实现状态
 
 当前已有的是原始方案 B feature-flag implementation slice，不默认改变线上行为；对 Slack 只能作为 fail-closed fallback 保护，不能作为通过证据：
 
@@ -731,7 +745,7 @@ Gate 逻辑修改需仔细测试，避免破坏现有 intent-matched 路径的�
 - `sessions_send` 在 planner delegate 路径下必须匹配 pending send intent hash，才会推进到 `spawn_call_started`；`octoclaw_dispatch_confirm` 仍要求 accepted + 非空 runId，ACK 仍晚于 confirm。
 - 本地验收：`extension-entry.test.ts` 覆盖 hint 注入、白名单允许/误 label 拦截、standby accepted/failed tracking、`sessions_send` gate；`registration-planner.test.ts` 覆盖 dispatch 返回 `send_to_speculative`、call-start-only fallback 和 pending intent。
 
-### 11.2 2026-05-05 live smoke 状态
+### 11.3 2026-05-05 live smoke 状态
 
 本地 0.5.1 controlled Slack smoke 已证明两件事：
 

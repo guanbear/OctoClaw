@@ -46,7 +46,18 @@ Attempt notes:
 - 2026-05-05 attempt `/tmp/octoclaw-051-spec-preload-20260505T041647Z` reached `dispatchMode=send_to_speculative`, but replay/session logs showed the speculative `sessions_spawn(mode="session")` returned an OpenClaw channel binding error before `octoclaw_dispatch`; the old implementation treated call-start as ready and then blocked `sessions_send` by hash mismatch. This is not accepted P2 evidence; follow-up patch requires `after_tool_call` accepted result before `ready`, includes `agentId` in `sessionsSendArgs`, and fails closed to `new_spawn` when standby is failed or unsupported.
 - 2026-05-05 attempt `/tmp/octoclaw-051-spec-preload-20260505T045934Z` proved fail-soft fallback after the `ready` hardening: real Slack thread `1777957174.840009`, WorkContract `wc-35688563ada5b134`, spawn intent `nsp_mos5v2mj_56832d8c`, runId `2f2544da-7880-4294-ab99-986ccca45350`, child session `agent:main:subagent:20454009-7f22-4447-9d20-97203e81281a`. Replay showed `dispatch_mode=new_spawn`, `sessions_spawn_intent_allowed`, `dispatch_confirm_completed ok=true`, `native_announce_final_delivered`, footer `via=native_announce`, delivery transport `slack_api`, target source `inbound_anchor`, footer source `envelope`, `completion_file_timeout=0`, duplicate final `0`. Harness overall gate failed only because accepted ACK arrived after the 120s harness window; runtime planner/confirm/final path succeeded. This is not accepted Scheme B `sessions_send` evidence.
 
-## P3 Rollout Decision
+## P3 OpenClaw Prep Performance Upstream Track
+
+- [x] Add upstream-facing design doc: `docs/openclaw-prep-performance-upstream-design-2026-05-06.md`.
+- [ ] Implement OctoClaw-only coarse prep benchmark replay event: `prePromptBuildMs`, `postPromptPreLlmMs`, `llmMs`, `visibleElapsedMs`.
+- [ ] Extend nightly classifier/report with p50/p95 for coarse prep timing by route bucket, channel, and agent lane.
+- [ ] Draft upstream OpenClaw PR 1: observability-only prep stages on embedded run metadata / `agent_end`, reusing existing `createEmbeddedRunStageTracker()` and `prepStages.mark("bundle-tools" | "system-prompt" | "stream-setup")`.
+- [ ] Validate PR 1 has no behavior changes, no prompt/tool output changes, no user text/secrets in trace output, and disabled/zero-overhead default behavior.
+- [ ] After PR 1 evidence, draft upstream OpenClaw PR 2: memory-only tool schema cache with conservative cache key, invalidation tests, and kill switch.
+- [ ] Only after tool schema evidence, draft upstream OpenClaw PR 3/4: system prompt fragment stability contract, stable prompt cache, and conservative lazy fragment selection behind flags.
+- [ ] Keep Slack warm pool / Scheme B default-off unless real evidence proves `sessions_send` latency benefit.
+
+## P4 Rollout Decision
 
 - [ ] Decide default-off, allowlist, or default-on using P2 evidence.
 - [ ] If enabled beyond local validation, document rollback: unset `OCTOCLAW_SPECULATIVE_PRELOAD` and restart gateway.
