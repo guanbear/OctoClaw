@@ -16,10 +16,11 @@ OctoClaw 0.5.0/0.5.1 live Slack evidence shows that warm child sessions are not 
 This design proposes an upstream-friendly sequence:
 
 1. perf trace benchmark;
-2. tool schema cache;
-3. system prompt lazy/cache.
+2. `sessions_spawn` worker tool allowlist propagation;
+3. tool schema / tool bundle cache;
+4. system prompt lazy/cache.
 
-The order matters. Trace comes first so cache work is driven by measured bottlenecks rather than guesswork. Tool schema cache comes second because it can reduce repeated preparation work without changing prompt semantics. System prompt lazy/cache comes last because it can produce large gains but has the highest behavior risk.
+The order matters. Trace comes first so cache work is driven by measured bottlenecks rather than guesswork. Worker tool allowlists come next because OpenClaw already has `toolsAllow` support in the embedded run layer and OctoClaw already has worker role tool profiles; the missing piece is propagation through `sessions_spawn`. Tool schema/cache work follows once data proves the remaining bundle cost. System prompt lazy/cache comes last because it can produce large gains but has the highest behavior risk.
 
 ## 2. Goals
 
@@ -221,9 +222,67 @@ Perf trace does not speed anything up directly. Its value is correctness: it tel
 - Upstream prep metrics split `bundleToolsMs`, `systemPromptMs`, and `streamSetupMs` without changing run behavior.
 - Benchmark produces comparable p50/p95 summaries before and after cache work.
 
-## 5. Phase 2: Tool Schema Cache
+## 5. Phase 2: Worker Tool Allowlist Propagation
 
-### 5.1 What To Cache
+### 5.1 Source Finding
+
+OpenClaw 2026.4.29 already supports explicit tool allowlists at the embedded attempt layer:
+
+- `src/agents/pi-embedded-runner/run/params.ts` has `toolsAllow?: string[]`.
+- `src/agents/pi-embedded-runner/run/attempt.ts` filters tool registrations with `applyEmbeddedAttemptToolsAllow()`.
+- `shouldCreateBundleMcpRuntimeForAttempt()` can skip bundle MCP creation when the allowlist does not include bundle tools.
+- When `toolsAllow` is present, `attempt.ts` uses minimal prompt mode and strips the skills catalog.
+
+The current gap is the subagent/native spawn boundary:
+
+- `SpawnSubagentParams` in `src/agents/subagent-spawn.ts` does not expose `toolsAllow`.
+- The `sessions_spawn` public tool shape therefore cannot pass a role-specific allowlist into the child `agent` run.
+- OctoClaw already has role profiles with `allowedTools` (`worker_research`, `worker_code`, `worker_review`), but current planner `sessionsSpawnArgs` do not include a corresponding OpenClaw-native allowlist.
+
+### 5.2 What To Build
+
+Upstream OpenClaw PR 2 should add `toolsAllow` to the native subagent spawn path and pass it through to the child `agent` gateway call.
+
+Likely upstream changes:
+
+- add `toolsAllow?: string[]` to `SpawnSubagentParams`;
+- add `toolsAllow` to the `sessions_spawn` tool schema;
+- normalize and validate tool names as strings;
+- pass `toolsAllow` into the `callSubagentGateway({ method: "agent", params })` payload;
+- add tests that `toolsAllow` reaches embedded run params and causes bundle MCP/runtime tools outside the allowlist to be skipped.
+
+Downstream OctoClaw changes after the upstream field exists:
+
+- map delegation profile `allowedTools` to `sessionsSpawnArgs.toolsAllow`;
+- keep `context: "isolated"` and `lightContext: true`;
+- include `toolsAllow` in canonical spawn arg hashing/gate tests;
+- record tool allowlist in smoke artifacts without exposing unnecessary internal prompt text.
+
+### 5.3 Expected Benefit
+
+This is likely the best immediate child-agent optimization. It reduces the amount of tool inventory work before cache work exists, and it triggers OpenClaw's existing minimal prompt behavior for allowlisted runs.
+
+Expected impact depends on how many tools are excluded. For worker roles that only need read/search/web or read/edit/bash/LSP, bundle work can plausibly drop from several seconds to near one or two seconds. It also reduces prompt size because the child no longer needs a broad tool catalog.
+
+### 5.4 Safety Rules
+
+- Treat `toolsAllow` as a maximum allowlist, not as an authorization grant.
+- Existing before-tool-call guards and provider/tool policy still run.
+- Unknown tool names should fail closed or be ignored with diagnostics, matching OpenClaw's existing allowlist semantics.
+- Do not remove core safety tools if OpenClaw requires them for runtime integrity.
+- Do not use user-text keyword matching to choose the allowlist. Use runtime role/profile state.
+
+### 5.5 Acceptance
+
+- Upstream tests prove `sessions_spawn(..., toolsAllow)` reaches the child embedded run.
+- Tests prove disallowed bundle/MCP tools are not materialized.
+- Tests prove `toolsAllow` triggers the existing minimal prompt/skills stripping path.
+- OctoClaw tests prove role profiles produce stable `toolsAllow` and the planner gate hash includes it.
+- Slack/native smoke proves final delivery and confirm semantics are unchanged.
+
+## 6. Phase 3: Tool Schema / Tool Bundle Cache
+
+### 6.1 What To Cache
 
 Cache the provider-ready tool schema bundle after effective tool selection, schema generation, provider normalization, and serialization.
 
@@ -242,7 +301,7 @@ The cache must not contain:
 - per-call permission decisions;
 - mutable runtime objects that can be changed by later code.
 
-### 5.2 Cache Key
+### 6.2 Cache Key
 
 The key must be conservative. A safe first version should include:
 
@@ -260,7 +319,7 @@ The key must be conservative. A safe first version should include:
 
 If any part of the key cannot be computed safely, bypass the cache and record `cacheStatus=bypass`.
 
-### 5.3 Invalidation
+### 6.3 Invalidation
 
 Invalidate on:
 
@@ -274,18 +333,18 @@ Invalidate on:
 
 A memory-only LRU is enough for the first upstream PR. Disk cache can be considered later only after the key is stable.
 
-### 5.4 Safety Rules
+### 6.4 Safety Rules
 
 - Cache only schema bundles, never authorization results.
 - Treat cached values as immutable. Return frozen objects or deep clones if downstream code mutates tool definitions.
 - Keep before-tool-call policy checks live. The cache must not bypass runtime guards.
 - If provider normalization fails for a cached bundle, evict and rebuild once; if rebuild fails, surface the original error.
 
-### 5.5 Expected Benefit
+### 6.5 Expected Benefit
 
 This should improve both main-agent replies and subagent/native delegate runs because both paths repeatedly prepare the same tool inventory and provider schema. The expected gain depends on tool count and provider schema conversion cost; trace should quantify it. In the current OctoClaw Slack setup, this is likely the highest-confidence optimization after trace.
 
-### 5.6 Acceptance
+### 6.6 Acceptance
 
 - Unit tests prove key changes on plugin config, provider dialect, MCP signatures, and tool policy changes.
 - Tests prove cached schema does not skip before-tool-call guard behavior.
@@ -296,9 +355,9 @@ This should improve both main-agent replies and subagent/native delegate runs be
 OPENCLAW_TOOL_SCHEMA_CACHE=0
 ```
 
-## 6. Phase 3: System Prompt Lazy/Cache
+## 7. Phase 4: System Prompt Lazy/Cache
 
-### 6.1 What To Cache
+### 7.1 What To Cache
 
 Split prompt construction into stable and dynamic fragments.
 
@@ -319,7 +378,7 @@ Dynamic fragments must remain per-turn:
 - current memory retrievals;
 - time-sensitive or session-specific context.
 
-### 6.2 Fragment Contract
+### 7.2 Fragment Contract
 
 Introduce a small internal contract for prompt fragments:
 
@@ -336,7 +395,7 @@ type PromptFragment = {
 
 `stable` fragments are globally cacheable for the same key. `session` fragments may be cached inside one session when their hash inputs are unchanged. `turn` fragments are never cached.
 
-### 6.3 Cache Key
+### 7.3 Cache Key
 
 Prompt cache keys should include:
 
@@ -352,7 +411,7 @@ Prompt cache keys should include:
 
 The key must not include raw user text for stable fragments. Turn fragments are outside this cache.
 
-### 6.4 Lazy Loading
+### 7.4 Lazy Loading
 
 Lazy loading should be implemented as fragment selection, not keyword matching.
 
@@ -368,11 +427,11 @@ Unsafe examples:
 - Deciding prompt fragments from bare words in the user text.
 - Omitting delegate instructions before the runtime has made a route decision that can need them.
 
-### 6.5 Expected Benefit
+### 7.5 Expected Benefit
 
 This can reduce `prompt.system.build` time and reduce prompt tokens, so it can speed main-agent replies and lower the risk that internal routing/provenance text leaks into visible answers. It has higher behavior risk than tool schema cache, so it should ship after trace and schema cache have established a reliable benchmark baseline.
 
-### 6.6 Acceptance
+### 7.6 Acceptance
 
 - Golden tests compare prompt output for representative reply, delegate, tool, Slack, and subagent cases.
 - Tests prove dynamic route/work-contract/Slack anchor data does not enter stable cache entries.
@@ -385,24 +444,25 @@ OPENCLAW_PROMPT_LAZY=0
 
 - Benchmark shows p50/p95 change for prompt build and first-token latency.
 
-## 7. Upstream PR Plan
+## 8. Upstream PR Plan
 
 Recommended split:
 
 | PR | Scope | Risk |
 | --- | --- | --- |
 | 1 | expose existing embedded prep stage summary in run metadata / `agent_end` | low |
-| 2 | tool schema cache with memory-only LRU and kill switch | medium-low |
-| 3 | prompt fragment stability contract and stable prompt cache | medium |
-| 4 | conservative lazy fragment selection behind flag | medium-high |
+| 2 | propagate `toolsAllow` through `sessions_spawn` and let worker roles use narrow tool sets | low-medium |
+| 3 | tool schema / bundle cache with memory-only LRU and kill switch | medium-low |
+| 4 | prompt fragment stability contract and stable prompt cache | medium |
+| 5 | conservative lazy fragment selection behind flag | medium-high |
 
-PR 1 should land before any cache PR. PR 2 can be proposed once stage evidence confirms tool schema / bundle work is a major prep span. PR 3/4 should wait until prompt build/token size is measured and golden prompt fixtures exist.
+PR 1 should land before any cache PR. PR 2 is useful even before cache because it narrows child worker work with existing OpenClaw primitives. PR 3 can be proposed once stage evidence confirms tool schema / bundle work remains a major prep span after allowlist propagation. PR 4/5 should wait until prompt build/token size is measured and golden prompt fixtures exist.
 
-## 8. Upstream Landing Plan
+## 9. Upstream Landing Plan
 
 This landing plan belongs in this design doc rather than a separate OctoClaw OpenSpec change. The upstream code changes are OpenClaw changes; OctoClaw OpenSpec should only track the downstream evidence, validation, and rollout decisions.
 
-### 8.1 Local Source Baseline
+### 9.1 Local Source Baseline
 
 Before opening an upstream PR, verify that the source tree matches the deployed OpenClaw baseline used for evidence:
 
@@ -424,7 +484,7 @@ node scripts/verify-openclaw-baseline.mjs \
 
 If source and deployed OpenClaw differ, stop and align the baseline before writing the PR.
 
-### 8.2 PR 1 Implementation Shape
+### 9.2 PR 1 Implementation Shape
 
 PR 1 should be a minimal observability-only change.
 
@@ -452,7 +512,7 @@ PR 1 must not:
 - emit raw user text, full prompts, secrets, or full tool schemas;
 - introduce OctoClaw-specific naming.
 
-### 8.3 PR 1 Verification
+### 9.3 PR 1 Verification
 
 Minimum upstream verification:
 
@@ -470,7 +530,7 @@ Add or update focused tests to prove:
 
 If upstream has a preferred command set, use their contributor docs over these local commands.
 
-### 8.4 PR 1 Description Template
+### 9.4 PR 1 Description Template
 
 Use a concise upstream-oriented PR description:
 
@@ -492,13 +552,24 @@ Validation:
 
 Avoid mentioning OctoClaw-specific Slack incidents as the main justification. They can be referenced as downstream motivation only if needed.
 
-### 8.5 PR 2 Gate: Tool Schema Cache
+### 9.5 PR 2: `sessions_spawn` Tool Allowlist
 
-Do not start PR 2 until PR 1 or OctoClaw coarse benchmark shows a meaningful repeated cost in `bundle-tools`, tool schema normalization, or related prep stages.
+PR 2 should be small and centered on subagent spawn propagation:
 
-Before coding PR 2, write the cache key tests first. The first cache PR should be memory-only and default-enabled only if the key is complete and the kill switch works; otherwise ship behind an explicit opt-in flag.
+- add `toolsAllow` to the public `sessions_spawn` schema and `SpawnSubagentParams`;
+- forward it to the child `agent` run;
+- rely on existing embedded attempt `toolsAllow` handling for filtering and minimal prompt mode;
+- add focused tests around schema, forwarding, and bundle skip behavior.
 
-### 8.6 PR 3/4 Gate: System Prompt Lazy/Cache
+OctoClaw should not send `toolsAllow` until the deployed OpenClaw build supports the field. Before that, keep role allowlists in the handoff packet only.
+
+### 9.6 PR 3 Gate: Tool Schema Cache
+
+Do not start cache work until PR 1 or OctoClaw coarse benchmark shows a meaningful repeated cost in `bundle-tools`, tool schema normalization, or related prep stages. If PR 2 removes most of the child worker bundle cost, PR 3 should target remaining parent/main-agent prep, not only subagents.
+
+Before coding PR 3, write the cache key tests first. The first cache PR should be memory-only and default-enabled only if the key is complete and the kill switch works; otherwise ship behind an explicit opt-in flag.
+
+### 9.7 PR 4/5 Gate: System Prompt Lazy/Cache
 
 Do not start prompt lazy/cache until prompt-stage evidence is stable and golden prompt tests exist. This work has the highest behavior risk, so it should be split:
 
@@ -507,7 +578,15 @@ Do not start prompt lazy/cache until prompt-stage evidence is stable and golden 
 
 The lazy selection rule must be derived from runtime state, provider capabilities, and already-computed route/tool visibility. It must not be based on user-text keyword matching.
 
-### 8.7 Downstream OctoClaw Tracking
+### 9.8 Deferred / Not First
+
+Do not prioritize these before PR 1-3:
+
+- `stream-setup` reuse: likely valuable, but it touches provider transport lifecycle, abort handling, fallback paths, and connection ownership.
+- `bundle-tools + system-prompt` parallelization: plausible 5-6s win, but only after prep stages prove a serial dependency and tests show no data dependency. It is riskier than allowlist propagation and cache.
+- a new `systemPromptMode` parameter: OpenClaw already switches to minimal prompt when `toolsAllow` is set. Reuse that first; add a separate mode only if benchmark evidence shows allowlisted minimal prompt is still too heavy.
+
+### 9.9 Downstream OctoClaw Tracking
 
 OctoClaw should track this upstream line in `openspec/changes/planner-preload-0.5.1/tasks.md` only as downstream evidence:
 
@@ -519,12 +598,12 @@ OctoClaw should track this upstream line in `openspec/changes/planner-preload-0.
 
 Do not mark 0.5.1 performance complete just because a PR is opened. Completion needs local deployment plus measured p50/p95 improvement or a documented no-go result.
 
-## 9. OctoClaw 0.5.1 Planning Impact
+## 10. OctoClaw 0.5.1 Planning Impact
 
 The warm pool line remains recorded as a failed/blocked latency experiment for Slack. The next 0.5.1 performance line should therefore prioritize upstream prep performance:
 
 ```text
-perf trace benchmark -> tool schema cache -> system prompt lazy/cache
+perf trace benchmark -> sessions_spawn toolsAllow -> tool schema/cache -> system prompt lazy/cache
 ```
 
 This line improves both direct main-agent replies and delegate/subagent paths, while preserving the 0.5.0 planner/native correctness boundary.

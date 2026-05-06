@@ -56,8 +56,10 @@ Attempt notes:
 - [ ] After PR 1 is merged or locally patched, deploy matching OpenClaw build to macmini and rerun baseline verifier.
 - [ ] Collect post-PR prep benchmark artifact from real Slack/simple reply and planner-native delegate paths.
 - [ ] Validate PR 1 has no behavior changes, no prompt/tool output changes, no user text/secrets in trace output, and disabled/zero-overhead default behavior.
-- [ ] After PR 1 evidence, draft upstream OpenClaw PR 2: memory-only tool schema cache with conservative cache key, invalidation tests, and kill switch.
-- [ ] Only after tool schema evidence, draft upstream OpenClaw PR 3/4: system prompt fragment stability contract, stable prompt cache, and conservative lazy fragment selection behind flags.
+- [ ] Draft upstream OpenClaw PR 2: add `toolsAllow` to `sessions_spawn` / `SpawnSubagentParams` and forward it to child embedded runs, reusing existing `toolsAllow` filtering and minimal prompt behavior.
+- [ ] After PR 2 is available in deployed OpenClaw, map OctoClaw delegation profile `allowedTools` to planner `sessionsSpawnArgs.toolsAllow`, include it in canonical hash/gate tests, and collect child prep evidence.
+- [ ] After PR 1/2 evidence, draft upstream OpenClaw PR 3: memory-only tool schema/cache with conservative cache key, invalidation tests, and kill switch.
+- [ ] Only after tool schema evidence, draft upstream OpenClaw PR 4/5: system prompt fragment stability contract, stable prompt cache, and conservative lazy fragment selection behind flags.
 - [ ] Keep Slack warm pool / Scheme B default-off unless real evidence proves `sessions_send` latency benefit.
 
 ## P4 Rollout Decision

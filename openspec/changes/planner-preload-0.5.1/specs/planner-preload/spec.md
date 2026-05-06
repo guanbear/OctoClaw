@@ -181,6 +181,14 @@ Speculative preload SHALL NOT be enabled by default or broadly allowlisted befor
 - AND cache keys SHALL include provider/schema dialect, effective tool policy, plugin/MCP tool signatures, model/tool-call mode, and OpenClaw/schema sanitizer version
 - AND cached schema SHALL NOT cache authorization decisions or bypass before-tool-call guards.
 
+#### Scenario: worker tool allowlist propagation
+
+- WHEN OpenClaw exposes `toolsAllow` on native `sessions_spawn`
+- THEN OctoClaw MAY map delegation profile `allowedTools` to `sessionsSpawnArgs.toolsAllow`
+- AND the canonical spawn hash and native gate SHALL include that allowlist
+- AND the allowlist SHALL be role/runtime-state derived, not user-text keyword derived
+- AND accepted ACK / confirm semantics SHALL remain unchanged.
+
 #### Scenario: system prompt lazy/cache
 
 - WHEN benchmark evidence shows system prompt construction or prompt size is a meaningful prep cost

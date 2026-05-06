@@ -728,8 +728,9 @@ Slack B' controlled probe 证明 warm continuation 功能可用但不能显著�
 
 1. **OctoClaw 粗 benchmark**：不改 OpenClaw，通过 ACK guard / `before_prompt_build` / `llm_input` / `llm_output` / `agent_end` 边界记录 `prePromptBuildMs`、`postPromptPreLlmMs`、`llmMs`、`visibleElapsedMs`，进 nightly p50/p95。
 2. **上游 PR 1：prep stages 暴露**：最小行为零变化 PR，复用 OpenClaw 2026.4.29 已有的 `createEmbeddedRunStageTracker()` / `prepStages.mark("bundle-tools" | "system-prompt" | "stream-setup")`，把 `prepStages.snapshot()` 暴露到 embedded run metadata / `agent_end`，为后续 cache PR 提供硬证据。
-3. **上游 PR 2：tool schema cache**：在 evidence 显示 schema/bundle 成本明显后，做 memory-only LRU、保守 cache key、失效测试和 kill switch；不缓存授权结果，不绕过 before-tool-call guard。
-4. **上游 PR 3/4：system prompt lazy/cache**：最后再做 prompt fragment 稳定性 contract、stable prompt cache、保守 lazy fragment selection。选择依据必须是 runtime state，不靠用户文本关键词。
+3. **上游 PR 2：`sessions_spawn` toolsAllow**：OpenClaw run 层已经支持 `toolsAllow` 并在 allowlist 存在时使用 minimal prompt / strip skills catalog；缺的是 native subagent spawn 边界。先把 `toolsAllow` 加到 `sessions_spawn` / `SpawnSubagentParams` 并透传到 child embedded run，再由 OctoClaw 把 delegation profile `allowedTools` 写入 planner `sessionsSpawnArgs.toolsAllow`。
+4. **上游 PR 3：tool schema/cache**：在 evidence 显示 schema/bundle 成本仍明显后，做 memory-only LRU、保守 cache key、失效测试和 kill switch；不缓存授权结果，不绕过 before-tool-call guard。
+5. **上游 PR 4/5：system prompt lazy/cache**：最后再做 prompt fragment 稳定性 contract、stable prompt cache、保守 lazy fragment selection。选择依据必须是 runtime state，不靠用户文本关键词。
 
 这条线同时改善主 agent 自己 reply 和 delegate/subagent 路径；区别只是主 reply 主要受 prompt/schema prep 影响，delegate 还叠加 child run prep。详细设计见：
 
