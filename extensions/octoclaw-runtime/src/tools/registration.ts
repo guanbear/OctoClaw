@@ -1287,6 +1287,26 @@ function plannedAttemptId(delegateTaskId: string, payload: UnknownRecord, contra
     || `${delegateTaskId}:attempt:1`;
 }
 
+const PLANNER_SPAWN_LABEL_MAX_LENGTH = 80;
+const PLANNER_SPAWN_LABEL_ID_MAX_LENGTH = 40;
+
+function buildPlannerSpawnLabel(params: {
+  text?: string;
+  workContractId: string;
+  delegateTaskId: string;
+  attemptId?: string;
+}): string {
+  const labelText = asString(params.text, "OctoClaw delegate");
+  const rawLabelId = asString(params.workContractId || params.delegateTaskId || params.attemptId);
+  const labelId = rawLabelId.length > PLANNER_SPAWN_LABEL_ID_MAX_LENGTH
+    ? stableId("ref", [rawLabelId])
+    : rawLabelId;
+  if (!labelId) return truncateText(labelText, PLANNER_SPAWN_LABEL_MAX_LENGTH);
+  const suffix = ` [${labelId}]`;
+  const prefixLimit = Math.max(1, PLANNER_SPAWN_LABEL_MAX_LENGTH - suffix.length);
+  return `${truncateText(labelText, prefixLimit)}${suffix}`;
+}
+
 function hasNonNewWorkFollowupEvidence(decision: UnknownRecord, metadata: UnknownRecord): boolean {
   const routeDecision = asRecord(decision.route_decision);
   const routerDecision = asRecord(decision.router_decision_v2);
@@ -1373,7 +1393,12 @@ function buildPlannerSessionsSpawnArgs(params: {
       metadata: params.metadata,
       workContract: params.workContract,
     }),
-    label: truncateText(params.label || params.expectedDeliverable || params.task, 80),
+    label: buildPlannerSpawnLabel({
+      text: params.label || params.expectedDeliverable || params.task,
+      workContractId: params.workContractId,
+      delegateTaskId: params.delegateTaskId,
+      attemptId: params.attemptId,
+    }),
     runtime: "subagent",
     ...(params.selectedModel ? { model: params.selectedModel } : {}),
     ...(cwd ? { cwd } : {}),

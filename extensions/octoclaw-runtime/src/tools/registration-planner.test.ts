@@ -212,6 +212,8 @@ describe("octoclaw_dispatch planner backend", () => {
       lightContext: true,
       runTimeoutSeconds: 900,
     });
+    expect(body.sessionsSpawnArgs.label).toContain(`[${contract.workContractId}]`);
+    expect(String(body.sessionsSpawnArgs.label).length).toBeLessThanOrEqual(80);
     expect(body.sessionsSpawnArgs.task).toContain(contract.workContractId);
     expect(body.sessionsSpawnArgs.task).toContain("octoclaw.planner_native_context.v1");
     expect(body.sessionsSpawnArgs.task).toContain("octoclaw.delegate_handoff.v1");
@@ -246,6 +248,48 @@ describe("octoclaw_dispatch planner backend", () => {
       spawn_intent_id: body.spawnIntentId,
       elapsedMs: expect.any(Number),
     }));
+  });
+
+  it("keeps native sessions_spawn labels unique when repeated task text is delegated", async () => {
+    process.env.OCTOCLAW_SPAWN_BACKEND = "planner";
+    const firstContract = seedWorkContract("session-planner-label-unique");
+    const secondContract = seedWorkContract("session-planner-label-unique");
+    expect(firstContract.userAsk).toBe(secondContract.userAsk);
+
+    const firstResponse = await dispatchTool().execute({
+      task: firstContract.userAsk,
+      workContractId: firstContract.workContractId,
+      policyJson: JSON.stringify(delegateDecision(firstContract)),
+      timeoutSeconds: 900,
+    }, {
+      sessionKey: firstContract.sessionKey,
+      sessionId: "session-planner-label-unique-first",
+      cwd: tempWorkspace,
+    });
+
+    const secondResponse = await dispatchTool().execute({
+      task: secondContract.userAsk,
+      workContractId: secondContract.workContractId,
+      policyJson: JSON.stringify(delegateDecision(secondContract)),
+      timeoutSeconds: 900,
+    }, {
+      sessionKey: secondContract.sessionKey,
+      sessionId: "session-planner-label-unique-second",
+      cwd: tempWorkspace,
+    });
+
+    const firstBody = JSON.parse(String(firstResponse.text));
+    const secondBody = JSON.parse(String(secondResponse.text));
+    const firstLabel = String(firstBody.sessionsSpawnArgs.label);
+    const secondLabel = String(secondBody.sessionsSpawnArgs.label);
+
+    expect(firstBody.ok).toBe(true);
+    expect(secondBody.ok).toBe(true);
+    expect(firstLabel).not.toBe(secondLabel);
+    expect(firstLabel).toContain(`[${firstContract.workContractId}]`);
+    expect(secondLabel).toContain(`[${secondContract.workContractId}]`);
+    expect(firstLabel.length).toBeLessThanOrEqual(80);
+    expect(secondLabel.length).toBeLessThanOrEqual(80);
   });
 
   it("fails closed with explicit planner_not_allowed instead of falling through to legacy taskFlow", async () => {
