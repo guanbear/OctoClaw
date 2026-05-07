@@ -31,8 +31,6 @@ import {
 } from "./ack/ack-guard.js";
 import { sendDelegateWithoutDispatchNotice } from "./ack/ack-delegate-without-dispatch.js";
 import { sendIMMessage, type SendIMResult } from "./im/send.js";
-import { flushDeliveryOutbox } from "./delivery/delivery-outbox.js";
-import { cancelChildCompletionFinalizer, recoverPendingChildCompletionFinalizers } from "./delegate/child-finalizer.js";
 import { sendRouteCommitAck } from "./ack/ack-route-commit.js";
 import { fetchLatestUserMessageTsForSessionKey } from "./im/slack-thread-anchor.js";
 import { renderIMProjectionFooter } from "./im/projection-footer.js";
@@ -54,8 +52,6 @@ import {
 } from "./state/task-state-retention.js";
 import { buildLiveJudgeContextPacket } from "./resolve/llm-judge.js";
 import { initNativeHelperBridge } from "./adapter/native-helper.js";
-import type { DetachedTaskLifecycleRuntime } from "./adapter/detached-task-runtime.js";
-import { createHostDetachedTaskLifecycleRuntime } from "./adapter/detached-task-runtime-host.js";
 import { buildTurnExecutionReceipt, type TurnExecutionReceipt } from "./receipt.js";
 import { resolveModelId } from "@octoclaw/policy/model";
 import {
@@ -82,7 +78,7 @@ import { recordAckReplay, recordPolicyReplay } from "./replay/replay.js";
 import { policyState, type PolicyStateEntry } from "./state/policy-state.js";
 import { getCommandRegistrations, getToolRegistrations } from "./tools/registration.js";
 import { evaluateNativeSessionsSendGate, evaluateNativeSpawnGate } from "./delegate/native-spawn-gate.js";
-import { isPlannerAllowedForSession, resolveSpawnBackend, resolveSpeculativePreloadEnabled, shouldRunChildFinalizerRecovery, shouldRunDeliveryOutboxFlush } from "./config/index.js";
+import { isPlannerAllowedForSession, resolveSpawnBackend, resolveSpeculativePreloadEnabled } from "./config/index.js";
 import { findWorkContractByNativeChildSessionKey, loadWorkContract, saveWorkContract, updateWorkContract } from "./work-contract/store.js";
 import { compactWorkContractView, type ContextCoverageSnapshot, type DelegateContract, type IntentClass, type WorkContract, type WorkDecisionSource } from "@octoclaw/contracts/work-contract";
 import { buildWorkContractFromPolicy, buildWorkDecisionSeal } from "./work-contract/builders.js";
@@ -135,10 +131,8 @@ export interface PluginInterface {
   registerHook?(event: string, handler: HookHandler, options?: Record<string, unknown>): void;
   registerTool?(definition: Record<string, unknown>): void;
   registerCommand?(definition: Record<string, unknown>): void;
-  registerDetachedTaskRuntime?(runtime: DetachedTaskLifecycleRuntime): void;
   runtime?: {
     config?: { current?: () => unknown };
-    subagent?: import("./tools/registration.js").OpenClawSubagentRuntime;
   };
 }
 
@@ -172,7 +166,6 @@ const pendingNeutralInboundAckTimers = new Map<string, ReturnType<typeof setTime
 const pendingNeutralInboundAckTextFallbackTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const pendingBudgetedMainTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const lastGroundedPromptByStateKey = new Map<string, string>();
-let warnedMissingDetachedRuntime = false;
 
 function configuredNeutralAckDelayMs(hookName: string, preferReaction: boolean): number {
   const raw = Number(process.env.OCTOCLAW_NEUTRAL_ACK_DELAY_MS);
@@ -260,19 +253,7 @@ const OCTOCLAW_PRE_DELEGATION_CONFIRM_CONTEXT = [
 
 let watchdogInterval: ReturnType<typeof setInterval> | null = null;
 let taskStateRetentionInterval: ReturnType<typeof setInterval> | null = null;
-let deliveryOutboxInterval: ReturnType<typeof setInterval> | null = null;
-let childFinalizerRecoveryInterval: ReturnType<typeof setInterval> | null = null;
 const recentCompactionNotices = new Map<string, number>();
-
-function runDeliveryOutboxFlush(logger?: LoggerLike): void {
-  void flushDeliveryOutbox({ logger }).then((result) => {
-    if (result.attempted > 0 || result.delivered > 0 || result.failed > 0) {
-      logger?.debug?.(`octoclaw delivery outbox flush attempted=${result.attempted} delivered=${result.delivered} failed=${result.failed} remaining=${result.remaining}`);
-    }
-  }).catch((error) => {
-    logger?.warn?.(`octoclaw delivery outbox flush failed: ${String(error)}`);
-  });
-}
 
 function runTaskStateRetention(logger?: LoggerLike): void {
   try {
@@ -282,21 +263,6 @@ function runTaskStateRetention(logger?: LoggerLike): void {
     }
   } catch (error) {
     logger?.warn?.(`octoclaw task-state retention failed: ${String(error)}`);
-  }
-}
-
-function runChildFinalizerRecovery(logger?: LoggerLike): void {
-  try {
-    const result = recoverPendingChildCompletionFinalizers({
-      taskStatePath: resolveTaskStatePath(),
-      cwd: resolveWorkspaceRoot(),
-      logger: logger ? { debug: (msg) => logger.debug?.(msg), warn: (msg) => logger.warn?.(msg) } : undefined,
-    });
-    if (result.scheduled > 0 || result.skipped > 0) {
-      logger?.debug?.(`octoclaw child finalizer recovery scanned=${result.scanned} scheduled=${result.scheduled} skipped=${result.skipped}`);
-    }
-  } catch (error) {
-    logger?.warn?.(`octoclaw child finalizer recovery failed: ${String(error)}`);
   }
 }
 
@@ -871,7 +837,6 @@ interface NativeAnnounceCompletion {
 
 const NATIVE_ANNOUNCE_BLOCKED_TOOLS = new Set([
   "octoclaw_dispatch",
-  "octoclaw_spawn",
   "octoclaw_dispatch_confirm",
   "sessions_spawn",
 ]);
@@ -1510,7 +1475,6 @@ async function handleNativeAnnounceCompletion(input: {
     delivered,
     nowIso,
   ) ?? matchedContract;
-  cancelChildCompletionFinalizer(updatedContract.workContractId);
   applyNativeAnnounceCompletionState({
     ctx: input.ctx,
     stateKey: preStateKey,
@@ -1649,7 +1613,6 @@ async function handleNativeSubagentEndedCompletion(input: {
     delivered,
     nowIso,
   ) ?? matchedContract;
-  cancelChildCompletionFinalizer(updatedContract.workContractId);
   applyNativeAnnounceCompletionState({
     ctx: stateCtx,
     stateKey,
@@ -2184,31 +2147,21 @@ function collectRecentExecutionReceipts(currentSessionKey: string | null = null,
 export function resolveDelegationCapability(options: {
   pluginConfig?: Record<string, unknown>;
   env?: Record<string, string | undefined>;
-  registerDetachedTaskRuntime?: PluginInterface["registerDetachedTaskRuntime"];
 }): {
   requested: boolean;
   hostSupported: boolean;
   enabled: boolean;
-  reason: "" | "host_missing_detached_runtime" | "disabled_by_config";
+  reason: "" | "disabled_by_config";
 } {
   const pluginConfig = options.pluginConfig ?? {};
   const env = options.env ?? {};
   const requested = pluginConfig.delegationEnabled !== false && env.OCTOCLAW_DELEGATION_ENABLED !== "false";
-  const hostSupported = typeof options.registerDetachedTaskRuntime === "function";
   if (!requested) {
     return {
       requested: false,
-      hostSupported,
+      hostSupported: true,
       enabled: false,
       reason: "disabled_by_config",
-    };
-  }
-  if (!hostSupported) {
-    return {
-      requested: true,
-      hostSupported: false,
-      enabled: false,
-      reason: "host_missing_detached_runtime",
     };
   }
   return {
@@ -3297,29 +3250,12 @@ export const plugin = {
     const delegationCapability = resolveDelegationCapability({
       pluginConfig: asRecord(pi.pluginConfig),
       env: process.env as Record<string, string | undefined>,
-      registerDetachedTaskRuntime: pi.registerDetachedTaskRuntime,
     });
     const delegationEnabled = delegationCapability.enabled;
-    if (delegationCapability.reason === "host_missing_detached_runtime" && !warnedMissingDetachedRuntime) {
-      warnedMissingDetachedRuntime = true;
-      pi.logger?.warn?.(
-        "octoclaw delegation disabled: host is missing registerDetachedTaskRuntime; delegate routes will fail closed to reply until detached runtime support is available",
-      );
-    }
 
     // Fire-and-forget bridge init — lazy-loads openclaw runtime binding
     // If runtime unavailable, getCachedBridge() returns unavailable bridge (fail-closed)
     initNativeHelperBridge().catch(() => { /* bridge will use unavailable fallback */ });
-    if (delegationCapability.hostSupported) {
-      void createHostDetachedTaskLifecycleRuntime()
-        .then((runtime) => {
-          pi.registerDetachedTaskRuntime?.(runtime);
-          pi.logger?.debug?.("octoclaw detached task runtime registered");
-        })
-        .catch((error) => {
-          pi.logger?.warn?.(`octoclaw detached task runtime unavailable: ${String(error)}`);
-        });
-    }
 
     const registerLifecycleHook = (hookName: string, handler: HookHandler, priority = 180): boolean => {
       if (typeof pi.on === "function") {
@@ -4229,7 +4165,7 @@ export const plugin = {
         const deferred = deferredCandidates[0];
         if (decisionRoute === "delegate" && deferred) {
           void recordPolicyReplay("speculative_preload_dispatch_deferred", {
-            sessionKey: deferred.key || stateKey || "",
+            sessionKey: stringValue(asRecord(decision.request).session_key) || deferred.key || stateKey || "",
             sessionId: stringValue(ctx.sessionId),
             route: decisionRoute,
             toolName,
@@ -5091,28 +5027,8 @@ export const plugin = {
       runTaskStateRetention(pi.logger);
     }, DEFAULT_TASK_STATE_RETENTION_MIN_RUN_INTERVAL_MS);
 
-    if (deliveryOutboxInterval) {
-      clearInterval(deliveryOutboxInterval);
-    }
-    if (shouldRunDeliveryOutboxFlush()) {
-      runDeliveryOutboxFlush(pi.logger);
-      deliveryOutboxInterval = setInterval(() => {
-        runDeliveryOutboxFlush(pi.logger);
-      }, 30_000);
-    }
-
-    if (childFinalizerRecoveryInterval) {
-      clearInterval(childFinalizerRecoveryInterval);
-    }
-    if (shouldRunChildFinalizerRecovery()) {
-      runChildFinalizerRecovery(pi.logger);
-      childFinalizerRecoveryInterval = setInterval(() => {
-        runChildFinalizerRecovery(pi.logger);
-      }, 45_000);
-    }
-
     if (typeof pi.registerTool === "function") {
-      for (const tool of getToolRegistrations({ subagentRuntime: pi.runtime?.subagent, judgeFastRaw, delegationEnabled, pluginConfigProvider: currentPluginConfig })) {
+      for (const tool of getToolRegistrations({ judgeFastRaw, delegationEnabled, pluginConfigProvider: currentPluginConfig })) {
         pi.registerTool(toOpenClawToolDefinition(tool as unknown as Record<string, unknown>));
       }
     }

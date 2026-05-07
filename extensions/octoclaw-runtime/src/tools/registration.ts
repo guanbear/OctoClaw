@@ -9,7 +9,6 @@ import {
   envOverrides,
   resolveReplayLogPath,
   resolveWorkspaceRoot,
-  resolveWorkerCompletionPath,
   stableId,
   truncateText,
 } from "../resolve/env.js";
@@ -20,6 +19,7 @@ import {
 } from "../state/task-state-retention.js";
 import {
   readTaskStateRecords,
+  readTaskStateDocumentDetailed,
   upsertTaskStateRecord,
   type TaskStateRecord,
 } from "../state/task-state-store.js";
@@ -60,10 +60,7 @@ import { loadWorkContract } from "../work-contract/store.js";
 import { materializeWorkContractSuccess, materializeWorkContractFailure } from "../work-contract/materializer.js";
 import { markChildSessionPreferred, selectPreferredChildSession } from "../work-contract/continuity.js";
 import { emitExecutionTransitionNotification } from "../ack/execution-transition-notifier.js";
-import { scheduleChildCompletionFinalizer } from "../delegate/child-finalizer.js";
 import { isOpenClawManagedOctoClawRepoPath, resolvePlannerNativeCwd } from "../delegate/planner-cwd.js";
-import { createCompletionBinding } from "../runtime-ledger/completion-binding.js";
-import { randomUUID } from "node:crypto";
 import { isPlannerAllowedForSession, resolvePlannerAllowlist, resolveSpawnBackend, resolveSpawnIntentTtlMs, resolveSpeculativePreloadEnabled } from "../config/index.js";
 import { confirmNativeSpawn } from "../delegate/native-spawn-confirm.js";
 import { nativeSpawnIntentStore } from "../delegate/native-spawn-intent-store.js";
@@ -78,11 +75,11 @@ import { detectIMType, buildSlackStatusOutput, type StatusTaskSummary } from "..
 import { buildDelegationTicketDryRun } from "../runtime-ledger/ticket-dry-run.js";
 import { admitDelegationTicketForDispatch } from "../runtime-ledger/ticket-enforcement.js";
 import { openRuntimeLedger } from "../runtime-ledger/index.js";
+import { rebuildTaskStateProjection, writeRebuiltTaskState } from "../runtime-ledger/projection-rebuild.js";
 import { isSchedulerEnabled } from "../runtime-ledger/feature-flags.js";
 import { resolveRuntimeLedgerMode } from "../runtime-ledger/shadow.js";
 import { performCrashRecovery } from "../runtime-ledger/crash-recovery.js";
 import {
-  materializeNativeIds,
   promoteToQueued,
   releaseOrComplete,
   resolveSchedulerConfig,
@@ -91,21 +88,7 @@ import {
 type UnknownRecord = Record<string, unknown>;
 type NullRecord = UnknownRecord | null;
 
-export interface OpenClawSubagentRuntime {
-  run(params: {
-    sessionKey: string;
-    message: string;
-    deliver?: boolean;
-    provider?: string;
-    model?: string;
-    extraSystemPrompt?: string;
-    lane?: string;
-    idempotencyKey?: string;
-  }): Promise<{ runId?: string }>;
-}
-
 export interface ToolRegistrationOptions {
-  subagentRuntime?: OpenClawSubagentRuntime | null;
   judgeFastRaw?: UnknownRecord;
   delegationEnabled?: boolean;
   pluginConfig?: UnknownRecord;
@@ -740,7 +723,33 @@ function dedupeTaskStateRecords(tasks: RuntimeTaskStateRecord[]): RuntimeTaskSta
 }
 
 async function readActiveRuntimeTaskState(options: { includeSynthetic?: boolean } = {}): Promise<RuntimeTaskStateRecord[]> {
-  const tasks = readTaskStateRecords().filter(isRecord) as RuntimeTaskStateRecord[];
+  let tasks: RuntimeTaskStateRecord[] = [];
+  if (resolveRuntimeLedgerMode() !== "off") {
+    const projection = rebuildTaskStateProjection();
+    if (!projection.degraded) {
+      tasks = projection.tasks.filter(isRecord) as RuntimeTaskStateRecord[];
+      const writeResult = writeRebuiltTaskState();
+      void recordPolicyReplay("task_state_projection_rebuilt", {
+        source: "ledger",
+        reason: "status_read_projection_refresh",
+        task_count: projection.tasks.length,
+        cache_written: writeResult.written,
+        cache_write_error: writeResult.error ?? "",
+      }).catch(() => undefined);
+    } else {
+      const readResult = readTaskStateDocumentDetailed();
+      tasks = readResult.document.tasks.filter(isRecord) as RuntimeTaskStateRecord[];
+      void recordPolicyReplay("task_state_projection_degraded", {
+        source: "task_state_cache",
+        reason: "ledger_unavailable",
+        ledger_error: projection.error ?? "ledger_unavailable",
+        cache_status: readResult.status,
+        task_count: tasks.length,
+      }).catch(() => undefined);
+    }
+  } else {
+    tasks = readTaskStateRecords().filter(isRecord) as RuntimeTaskStateRecord[];
+  }
   return tasks.filter((task) => options.includeSynthetic === true || !isSyntheticTestTaskState(task));
 }
 
@@ -900,59 +909,6 @@ function runtimeStatusEvidence(record: RuntimeTaskStateRecord): { hasDispatchEvi
     || asBoolean(delivery.result_materialized)
     || Boolean(asString(record.report_path || delivery.artifact_path || delivery.result_path));
   return { hasDispatchEvidence, hasSpawnEvidence, resultMaterialized, childSessionKey, runId };
-}
-
-function splitModelRefForSubagent(ref: string): { provider?: string; model?: string } {
-  const value = asString(ref);
-  if (!value) return {};
-  const slash = value.indexOf("/");
-  if (slash <= 0 || slash >= value.length - 1) return { model: value };
-  return { provider: value.slice(0, slash), model: value.slice(slash + 1) };
-}
-
-function childSessionAgentId(ctx: UnknownRecord, metadata: UnknownRecord): string {
-  return asString(ctx.agentId || metadata.agent_id, "main").replace(/[^A-Za-z0-9_.-]/gu, "_") || "main";
-}
-
-function buildChildSessionKey(ctx: UnknownRecord, metadata: UnknownRecord): string {
-  return `agent:${childSessionAgentId(ctx, metadata)}:subagent:${randomUUID()}`;
-}
-
-function buildSubagentSpawnMessage(params: { task: string; childSessionKey: string; delegateTaskId: string; workContractId: string }): string {
-  const completionPath = resolveWorkerCompletionPath(params.workContractId);
-  const completionTemplate = JSON.stringify({
-    schemaVersion: "octoclaw.worker_completion/v1",
-    workContractId: params.workContractId,
-    childSessionKey: params.childSessionKey,
-    delegateTaskId: params.delegateTaskId,
-    status: "success",
-    summary: "（在此填写任务结果摘要，最多 2000 字）",
-    artifacts: [],
-    completedAt: new Date().toISOString(),
-  }, null, 2);
-
-  return [
-    "[OctoClaw Delegated Task]",
-    `childSessionKey: ${params.childSessionKey}`,
-    `delegateTaskId: ${params.delegateTaskId}`,
-    `workContractId: ${params.workContractId}`,
-    "",
-    "## Completion Requirement",
-    "When the task is done, you MUST write the result to this file using the Write tool:",
-    `File path: ${completionPath}`,
-    "File content (fill in your actual results):",
-    "```json",
-    completionTemplate,
-    "```",
-    "Rules:",
-    '- status: use "success" if task completed, "failure" if it failed, "partial" if partially done',
-    "- summary: plain text description of what was done and the key results; do not include hidden reasoning or full conversation logs",
-    "- If failed, add errorCode and errorMessage fields",
-    "- Writing this file is your LAST action. Do not output anything after writing it.",
-    "",
-    "## Task",
-    params.task,
-  ].filter(Boolean).join("\n");
 }
 
 const PLANNER_NATIVE_RUN_TIMEOUT_FLOOR_SECONDS = 300;
@@ -1235,7 +1191,7 @@ function buildPlannerContextPacket(params: {
     "- If a fast file search tool is unavailable, use a scoped fallback under cwd/workspaceRoot only.",
     "- Treat maxToolCalls as a hard budget. If the budget or context is insufficient, stop and return partial findings or a missing_context_refs blocker.",
     "- Do not search package installs, shell history, or unrelated OpenClaw state to discover a repo. If cwd/workspaceRoot do not contain the needed source, report missing_context_refs.",
-    "- Native announce handles final delivery; do not write legacy completion files unless explicitly instructed by a rollback path.",
+    "- Native announce handles final delivery; do not create side-channel result files.",
   ].join("\n");
 }
 
@@ -1502,95 +1458,6 @@ function speculativePreloadStandbyRequiredResponse(params: {
     instruction: "Call sessions_spawn exactly with sessionsSpawnArgs first. After sessions_spawn returns accepted, call octoclaw_dispatch again with the original task so OctoClaw can create a send_to_speculative intent. Do not claim the task has started before octoclaw_dispatch_confirm succeeds.",
   };
   return toolResponse(JSON.stringify(body), body);
-}
-
-async function trySpawnSubagentRuntime(params: {
-  runtime?: OpenClawSubagentRuntime | null;
-  task: string;
-  ctx: UnknownRecord;
-  metadata: UnknownRecord;
-  delegateTaskId: string;
-  workContractId: string;
-  selectedModel: string;
-  idempotencyKey: string;
-  preferredChildSessionKey?: string;
-}): Promise<{ spawnExecuted: boolean; childSessionKey: string; runId: string; childRunId: string; error: string; sessionReused?: boolean; sessionReuseReason?: string }> {
-  const runtime = params.runtime;
-  if (!runtime || typeof runtime.run !== "function") {
-    return { spawnExecuted: false, childSessionKey: "", runId: "", childRunId: "", error: "subagent_runtime_unavailable" };
-  }
-
-  // Resolve child session key: preferred > metadata > new UUID
-  const metadataChildKey = asString(params.metadata.childSessionKey || params.metadata.child_session_key);
-  let childSessionKey: string;
-  let sessionReused = false;
-  let sessionReuseReason = "";
-  if (params.preferredChildSessionKey) {
-    childSessionKey = params.preferredChildSessionKey;
-    sessionReused = true;
-    sessionReuseReason = "preferred_child_session_reused";
-  } else if (metadataChildKey) {
-    childSessionKey = metadataChildKey;
-    sessionReused = true;
-    sessionReuseReason = "metadata_child_session_key_reused";
-  } else {
-    childSessionKey = buildChildSessionKey(params.ctx, params.metadata);
-  }
-  const modelRef = splitModelRefForSubagent(params.selectedModel);
-  const message = buildSubagentSpawnMessage({
-    task: params.task,
-    childSessionKey,
-    delegateTaskId: params.delegateTaskId,
-    workContractId: params.workContractId,
-  });
-  const extraSystemPrompt = [
-    "You are an OctoClaw child worker. Use only the supplied task packet and available tools.",
-    "Never expose raw transcript or hidden reasoning. Return a compact, user-safe result packet.",
-  ].join("\n");
-
-  try {
-    let result: { runId?: string };
-    try {
-      result = await runtime.run({
-        sessionKey: childSessionKey,
-        message,
-        deliver: false,
-        provider: modelRef.provider,
-        model: modelRef.model,
-        extraSystemPrompt,
-        lane: "octoclaw_delegate",
-        idempotencyKey: params.idempotencyKey,
-      });
-    } catch (error) {
-      const messageText = error instanceof Error ? error.message : String(error || "");
-      if (!params.selectedModel || !/provider\/model override|model override|not authorized/iu.test(messageText)) {
-        throw error;
-      }
-      result = await runtime.run({
-        sessionKey: childSessionKey,
-        message,
-        deliver: false,
-        extraSystemPrompt,
-        lane: "octoclaw_delegate",
-        idempotencyKey: `${params.idempotencyKey}:default-model`,
-      });
-    }
-    const runId = asString(result?.runId);
-    if (!runId) {
-      return { spawnExecuted: false, childSessionKey, runId: "", childRunId: "", error: "subagent_runtime_missing_run_id", sessionReused, sessionReuseReason };
-    }
-    return { spawnExecuted: true, childSessionKey, runId, childRunId: runId, error: "", sessionReused, sessionReuseReason };
-  } catch (error) {
-    return {
-      spawnExecuted: false,
-      childSessionKey,
-      runId: "",
-      childRunId: "",
-      error: error instanceof Error ? `${error.name}: ${error.message}` : String(error || "subagent_runtime_spawn_failed"),
-      sessionReused,
-      sessionReuseReason,
-    };
-  }
 }
 
 function dispatchSpawnEvidence(input: {
@@ -4050,69 +3917,6 @@ export function getToolRegistrations(options: ToolRegistrationOptions = {}): Too
         const dispatchExecuted = materialized;
         const delegateTaskId = asString(payload.delegateTaskId || materialization.delegateTaskId || materialization.task_id || payload.task_id);
         const workContractIdForDispatch = (dispatchWorkContract?.workContractId ?? asString(authoritativeDecision.workContractId)) || "";
-        const preferredChildSessionKeyForSpawn = asString(metadata.childSessionKey || metadata.child_session_key)
-          || dispatchWorkContract?.continuity.preferredChildSessionKey
-          || undefined;
-        if (finalRoute === "delegate" && materialized && !spawnEvidence.spawnExecuted) {
-          const runtimeSpawn = await trySpawnSubagentRuntime({
-            runtime: options.subagentRuntime ?? asRecord(ctx.runtime).subagent as OpenClawSubagentRuntime | undefined,
-            task: asString(params.task),
-            ctx,
-            metadata,
-            delegateTaskId,
-            workContractId: workContractIdForDispatch,
-            selectedModel,
-            idempotencyKey: stableId("octoclaw-child-run", [delegateTaskId, materializedNativeFlowId ?? "", asString(metadata.message_id), asString(params.task)]),
-            preferredChildSessionKey: preferredChildSessionKeyForSpawn,
-          });
-          if (runtimeSpawn.spawnExecuted) {
-            spawnEvidence = {
-              spawnExecuted: true,
-              runId: runtimeSpawn.runId,
-              childRunId: runtimeSpawn.childRunId,
-              childSessionKey: runtimeSpawn.childSessionKey,
-              childSessionId: runtimeSpawn.childSessionKey,
-            };
-            payloadRuntimeTruth.evidence = {
-              ...asRecord(payloadRuntimeTruth.evidence),
-              spawnExecuted: true,
-              spawn_executed: true,
-              runId: runtimeSpawn.runId,
-              run_id: runtimeSpawn.runId,
-              childRunId: runtimeSpawn.childRunId,
-              child_run_id: runtimeSpawn.childRunId,
-              childSessionKey: runtimeSpawn.childSessionKey,
-              child_session_key: runtimeSpawn.childSessionKey,
-              childSessionId: runtimeSpawn.childSessionKey,
-              child_session_id: runtimeSpawn.childSessionKey,
-              sessionReused: runtimeSpawn.sessionReused || false,
-              session_reused: runtimeSpawn.sessionReused || false,
-              sessionReuseReason: runtimeSpawn.sessionReuseReason || "",
-              session_reuse_reason: runtimeSpawn.sessionReuseReason || "",
-            };
-            payloadNativeTaskBinding.spawnExecuted = true;
-            payloadNativeTaskBinding.spawn_executed = true;
-            payloadNativeTaskBinding.runId = runtimeSpawn.runId;
-            payloadNativeTaskBinding.childRunId = runtimeSpawn.childRunId;
-            payloadNativeTaskBinding.childSessionKey = runtimeSpawn.childSessionKey;
-            payloadNativeTaskBinding.childSessionId = runtimeSpawn.childSessionKey;
-            if (schedulerQueueId && schedulerDispatchState === "leased") {
-              const materializeResult = materializeNativeIds({
-                queueId: schedulerQueueId,
-                nativeFlowId: materializedNativeFlowId,
-                nativeTaskId: materializedNativeTaskId,
-                childSessionKey: runtimeSpawn.childSessionKey,
-                childRunId: runtimeSpawn.childRunId,
-              });
-              if (!materializeResult.ok) {
-                warnToolLogger(ctx, `scheduler materialize failed: ${materializeResult.error || "unknown_error"}`);
-              }
-            }
-          } else if (runtimeSpawn.error) {
-            payloadRuntimeTruth.spawn_error = runtimeSpawn.error;
-            releaseSchedulerQueue("failed", runtimeSpawn.error);
-          }
-        }
         const executionState = finalRoute === "delegate"
           ? spawnEvidence.spawnExecuted
             ? "spawn_confirmed"
@@ -4273,40 +4077,6 @@ export function getToolRegistrations(options: ToolRegistrationOptions = {}): Too
               void emitExecutionTransitionNotification({
                 ...notifyParams,
                 transitionKind: "spawn_started",
-              });
-              try {
-                createCompletionBinding({
-                  workContractId: workContractId || "",
-                  attemptId,
-                  expectedDelegateTaskId: delegateTaskId,
-                  expectedPath: resolveWorkerCompletionPath(workContractId || ""),
-                  expectedNativeTaskId: materializedNativeTaskId || undefined,
-                  expectedChildSessionKey: childSessionKey || undefined,
-                });
-              } catch (_bindingError) {
-                void recordPolicyReplay("completion_binding_pre_create_failed", { workContractId, error: String(_bindingError) }, toolLogger(ctx));
-              }
-              scheduleChildCompletionFinalizer({
-                childSessionKey: childSessionKey || "",
-                delegateTaskId,
-                workContractId,
-                parentSessionKey: replaySessionKey || stateKey,
-                replyToMessageId: replyToMessageId || undefined,
-                deliveryTarget: asRecord(metadata.delivery_target || state?.deliveryTarget || state?.delivery_target),
-                nativeTaskId: materializedNativeTaskId,
-                nativeFlowId: materializedNativeFlowId,
-                runId: spawnEvidence.runId,
-                childRunId: spawnEvidence.childRunId,
-                modelId: selectedModel || asString(metadata.model),
-                cwd: ctxCwd(ctx),
-                timeoutMs: Math.max(600_000, (expectedSeconds > 0 ? expectedSeconds * 1000 + 120_000 : 0)),
-                logger: toolLogger(ctx),
-                onSuccess: schedulerQueueId && schedulerDispatchState === "leased"
-                  ? () => {
-                      const result = releaseOrComplete({ queueId: schedulerQueueId, outcome: "completed" });
-                      if (!result.ok) warnToolLogger(ctx, `scheduler completion release failed: ${result.error || "unknown_error"}`);
-                    }
-                  : undefined,
               });
             } else {
               releaseSchedulerQueue("failed", "spawn_not_confirmed");
@@ -4485,151 +4255,6 @@ export function getToolRegistrations(options: ToolRegistrationOptions = {}): Too
           ]);
         }
         return toolResponse(JSON.stringify(confirmed), confirmed as unknown as Record<string, unknown>);
-      },
-    },
-    {
-      name: "octoclaw_spawn",
-      label: "OctoClaw Spawn",
-      description: "Generate and register a validated OctoClaw spawn task. Use this instead of hand-writing sessions_spawn arguments.",
-      params: {
-        type: "object",
-        additionalProperties: false,
-        properties: {
-          task: { type: "string", description: "The task to run in a subagent." },
-          route: { type: "string", enum: ["delegate"] },
-          model: { type: "string", description: "Optional model override." },
-          complexityBand: { type: "string", enum: ["simple", "normal", "deep"], description: "Task complexity band. simple=light research/observer work, normal=GLM-5.1, deep=gpt-5.4" },
-          runtime: { type: "string", enum: ["subagent", "acp"] },
-          streamTo: { type: "string", description: "Only valid when runtime=acp." },
-          parentId: { type: "string", description: "Optional parent task id." },
-          sessionKey: { type: "string", description: "Optional parent session key." },
-          metadataJson: { type: "string", description: "Optional JSON object with extra session metadata." },
-          execute: { type: "boolean", description: "Whether to immediately execute spawn via ClawTeam when enabled." },
-        },
-        required: ["task"],
-      },
-      execute: async (params, _rawCtx) => {
-        const ctx = _rawCtx ?? {};
-        const { key: existingStateKey, state: existingState } = resolveToolPolicyContext(ctx, asString(params.task));
-        // Guard: provenance/status-only follow-up must not spawn (design §4b)
-        const existingDecisionForCoverage = asRecord(existingState?.decision);
-        const decisionForCoverage = asRecord(existingDecisionForCoverage);
-        const routeDecisionForCoverage = asRecord(decisionForCoverage.route_decision);
-        const executionCoverage = asRecord(
-          decisionForCoverage._execution_coverage ?? routeDecisionForCoverage._execution_coverage,
-        );
-        const parentRequest = asRecord(asRecord(existingDecisionForCoverage).request);
-        const parentMetadata = asRecord(parentRequest.metadata);
-        const parentConversationControl = asRecord(parentMetadata.conversation_control);
-        const parentIntentClass = asString(parentConversationControl.intent_class);
-        if (asBoolean(executionCoverage.supports_provenance_reply)) {
-          return toolResponse(JSON.stringify({
-            ok: false,
-            error: "Spawn blocked: provenance answerable from execution coverage (supports_provenance_reply=true)",
-            provenance_blocked: true,
-          }));
-        }
-        if (asBoolean(executionCoverage.supports_status_reply)) {
-          return toolResponse(JSON.stringify({
-            ok: false,
-            error: "Spawn blocked: status answerable from execution coverage (supports_status_reply=true)",
-            status_blocked: true,
-          }));
-        }
-        if (asBoolean(executionCoverage.requires_control_plane_refresh)) {
-          return toolResponse(JSON.stringify({
-            ok: false,
-            error: "Spawn blocked: control plane refresh needed (requires_control_plane_refresh=true), use octoclaw_status instead",
-            control_plane_refresh_blocked: true,
-          }));
-        }
-        const hasSupportedExecutionReply = Object.entries(executionCoverage)
-          .some(([key, value]) => key.startsWith("supports_") && asBoolean(value));
-        const coverageLevel = asString(executionCoverage.coverage ?? executionCoverage.coverage_level).toLowerCase();
-        const executionTruthMissing = Object.keys(executionCoverage).length === 0 || !coverageLevel || coverageLevel === "none";
-        const isExecutionFollowup = parentIntentClass === "execution_followup";
-        if (!hasSupportedExecutionReply && executionTruthMissing && isExecutionFollowup) {
-          return toolResponse(JSON.stringify({
-            ok: false,
-            error: "Spawn blocked: execution follow-up query with no execution truth — answer 'no verifiable record' directly",
-            missing_execution_truth_blocked: true,
-            intent_class: parentIntentClass,
-          }));
-        }
-        const parentDecision = asRecord(existingState?.decision);
-        const parentRoute = asString(asRecord(parentDecision.route_decision).route);
-        const parentSessionKey = asString(asRecord(parentDecision.request).session_key);
-        if (Object.keys(parentDecision).length > 0 && parentRoute === "delegate" && asString(asRecord(parentDecision.route_decision).judge_role) === "observer_probe" && asString(params.route) === "delegate") {
-          return toolResponse(
-            "sealed_route_violation: parent route is delegate with observer role, cannot reroute this observer workflow. This violates §4.6.1.",
-            { sealed_route_violation: true, parent_route: "delegate", parent_role: "observer_probe", attempted_route: "delegate", error: "freeform_reroute_blocked" },
-          );
-        }
-        if (sealedReplyBlocksDelegateHint(parentDecision, asString(params.route, "delegate"), false)) {
-          return toolResponse(JSON.stringify({
-            ok: false,
-            error: "Spawn blocked: sealed reply WorkContract prohibits delegation",
-            sealed_reply_blocked: true,
-            work_contract_route: "reply",
-            blocked_by_sealed_work_contract: true,
-          }));
-        }
-        const existingDecision = nestedRecord(existingState, "decision");
-        const existingRequest = nestedRecord(existingDecision, "request");
-        let metadata = { ...buildPolicyMetadata(ctx, { stateKey: existingStateKey || parentSessionKey || asString(existingRequest.session_key) }) };
-        if (asString(params.sessionKey)) metadata.session_key = asString(params.sessionKey);
-        if (!metadata.session_key && parentSessionKey) metadata.session_key = parentSessionKey;
-        metadata = applyUserMetadataOverrides(metadata, parseObjectJson(params.metadataJson));
-        metadata = finalizeDispatchMetadata(ctx, metadata, {
-          stateKey: existingStateKey,
-          state: existingState,
-          cachedDecision: existingState?.decision,
-        });
-        const complexityBand = asString(params.complexityBand || asRecord(existingState?.decision)._judge_complexity_band || asRecord(asRecord(existingState?.decision).route_decision)._judge_complexity_band);
-        const budgetBand = asString(asRecord(existingState?.decision)._judge_budget_band || asRecord(asRecord(existingState?.decision).route_decision)._judge_budget_band);
-        const complexityModelMap: Record<string, string> = {
-          simple: "minimax-portal/MiniMax-M2.7-highspeed",
-          normal: "zhipu/GLM-5.1",
-          deep: "omniroute/cx/gpt-5.4",
-        };
-        const budgetModelMap: Record<string, string> = {
-          high: "cliproxyapi/gpt-5.4",
-          medium: "zhipu/GLM-5.1",
-          low: "minimax-portal/MiniMax-M2.7-highspeed",
-        };
-        const resolvedModel = asString(params.model) || (complexityBand && complexityModelMap[complexityBand]) || (budgetBand && budgetModelMap[budgetBand]) || "";
-        if (complexityBand) {
-          metadata.complexity_band = complexityBand;
-        }
-        let payload: UnknownRecord;
-        try {
-          payload = buildTsRuntimeSpawnPayload({
-            task: asString(params.task),
-            route: asString(params.route, "delegate"),
-            decision: existingState?.decision as UnknownRecord | undefined,
-            metadata: {
-              ...metadata,
-              model: resolvedModel,
-              runtime: asString(params.runtime),
-              stream_to: asString(params.streamTo),
-              parent_id: asString(params.parentId),
-            },
-            helperInvoker: readHelperInvoker(asRecord(metadata).helperInvoker, ctx.helperInvoker),
-            execute: params.execute === true,
-          });
-        } catch (error) {
-          const candidate = asRecord(error);
-          payload = isRecord(candidate.payload) ? asRecord(candidate.payload) : {};
-          if (Object.keys(payload).length === 0) {
-            return { error: error instanceof Error ? error.message : String(error) };
-          }
-        }
-        const summary = await userFacingHandoff(
-          payload,
-          `OctoClaw spawn registered: ${asString(payload.worker_pool || payload.route)} / ${asString(payload.model)}`,
-          ctxCwd(ctx),
-        );
-        return toolResponse(summary, compactDispatchDetails(payload));
       },
     },
     {

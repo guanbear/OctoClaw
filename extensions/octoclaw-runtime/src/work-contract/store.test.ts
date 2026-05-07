@@ -45,8 +45,11 @@ vi.mock("node:fs", () => ({ default: mockFs }));
 describe("work contract task-state store", () => {
   let legacyLedgerPath: string;
   let taskStatePath: string;
+  let originalRuntimeLedger: string | undefined;
 
   beforeEach(() => {
+    originalRuntimeLedger = process.env.OCTOCLAW_RUNTIME_LEDGER;
+    process.env.OCTOCLAW_RUNTIME_LEDGER = "off";
     mockFs.files.clear();
     mockFs.directories.clear();
     mockFs.existsSync.mockClear();
@@ -60,6 +63,8 @@ describe("work contract task-state store", () => {
   });
 
   afterEach(() => {
+    if (originalRuntimeLedger !== undefined) process.env.OCTOCLAW_RUNTIME_LEDGER = originalRuntimeLedger;
+    else delete process.env.OCTOCLAW_RUNTIME_LEDGER;
     vi.restoreAllMocks();
   });
 
@@ -161,21 +166,13 @@ describe("work contract task-state store", () => {
     }
   });
 
-  it("with OCTOCLAW_RUNTIME_LEDGER unset, saveWorkContract does not create runtime DB and existing store behavior is unchanged", () => {
-    const original = process.env.OCTOCLAW_RUNTIME_LEDGER;
+  it("with OCTOCLAW_RUNTIME_LEDGER unset, saveWorkContract uses default enforce mode and fails when ledger is unavailable", () => {
     delete process.env.OCTOCLAW_RUNTIME_LEDGER;
-    try {
-      const contract = buildContract("session-shadow-off", "off mode test");
-      const result = saveWorkContract(contract, legacyLedgerPath);
+    const contract = buildContract("session-default-enforce", "default enforce mode test");
+    const result = saveWorkContract(contract, legacyLedgerPath);
 
-      expect(result).toBe(true);
-      expect(mockFs.files.has(taskStatePath)).toBe(true);
-
-      const sqliteFiles = [...mockFs.files.keys()].filter((p) => p.endsWith(".sqlite"));
-      expect(sqliteFiles).toHaveLength(0);
-    } finally {
-      if (original !== undefined) process.env.OCTOCLAW_RUNTIME_LEDGER = original;
-    }
+    expect(result).toBe(false);
+    expect(mockFs.files.has(taskStatePath)).toBe(false);
   });
 
   it("with OCTOCLAW_RUNTIME_LEDGER=off, saveWorkContract does not create runtime DB", () => {

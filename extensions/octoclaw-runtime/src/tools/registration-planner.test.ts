@@ -1049,3 +1049,67 @@ describe("octoclaw_dispatch planner backend", () => {
   });
 
 });
+
+describe("runtime convergence invariants (WP-A)", () => {
+  async function dispatchPlannerContract(sessionKey = "session-planner-runtime-convergence") {
+    process.env.OCTOCLAW_SPAWN_BACKEND = "planner";
+    process.env.OCTOCLAW_RUNTIME_LEDGER = "enforce";
+    const contract = seedWorkContract(sessionKey);
+    const response = await dispatchTool().execute({
+      task: contract.userAsk,
+      workContractId: contract.workContractId,
+      policyJson: JSON.stringify(delegateDecision(contract)),
+      timeoutSeconds: 900,
+    }, {
+      sessionKey: contract.sessionKey,
+      sessionId: `${sessionKey}-dispatch`,
+      cwd: tempWorkspace,
+    });
+    return { contract, body: JSON.parse(String(response.text)) as Record<string, unknown> };
+  }
+
+  it("planner prompt excludes completion file requirement and write-result instructions", async () => {
+    const { body } = await dispatchPlannerContract("session-planner-no-completion-file");
+    expect(body.ok).toBe(true);
+    const task = String((body.sessionsSpawnArgs as Record<string, unknown>)?.task ?? "");
+    const taskLower = task.toLowerCase();
+    // Planner uses buildPlannerSpawnTask, not buildSubagentSpawnMessage.
+    // It must NOT contain the old "Completion Requirement" section or write instructions.
+    expect(task).not.toContain("Completion Requirement");
+    expect(task).not.toContain(".completion.json");
+    expect(task).not.toContain("resolveWorkerCompletionPath");
+    expect(taskLower).not.toContain("you must write the result to this file");
+    expect(taskLower).not.toContain("must write the result");
+    expect(taskLower).not.toContain("writing this file is your last action");
+    // The planner task may mention "completion file" in a prohibition context
+    // (e.g., "do not write legacy completion files"), but never as a requirement.
+    const completionRequirementSection = task.match(/## Completion Requirement/i);
+    expect(completionRequirementSection).toBeNull();
+    const completionTemplateMatch = task.match(/File path:.*\.completion\.json/);
+    expect(completionTemplateMatch).toBeNull();
+  });
+
+  it("planner path does not schedule child finalizer after native sessions_spawn is accepted", async () => {
+    const { body } = await dispatchPlannerContract("session-planner-no-finalizer");
+    expect(body.ok).toBe(true);
+    // scheduleChildCompletionFinalizer is removed; no completion timeout should be scheduled
+    const events = readReplayEvents();
+    expect(events).not.toContainEqual(expect.objectContaining({ event: "child_finalizer_scheduled" }));
+  });
+
+  it("planner dispatch does not queue delivery outbox", async () => {
+    const { body } = await dispatchPlannerContract("session-planner-no-outbox");
+    const events = readReplayEvents();
+
+    expect(body.ok).toBe(true);
+    expect(events).not.toContainEqual(expect.objectContaining({ event: "legacy_outbox_queued" }));
+    expect(JSON.stringify(body).toLowerCase()).not.toContain("outbox");
+  });
+
+  it("octoclaw_spawn is not registered as a tool", () => {
+    const tools = getToolRegistrations();
+    const spawn = tools.find((t) => t.name === "octoclaw_spawn");
+
+    expect(spawn).toBeUndefined();
+  });
+});

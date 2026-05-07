@@ -29,9 +29,6 @@ const ENV_KEYS = [
   "OCTOCLAW_SPAWN_BACKEND",
   "OCTOCLAW_PLANNER_ALLOWLIST",
   "OCTOCLAW_SPECULATIVE_PRELOAD",
-  "OCTOCLAW_LEGACY_COMPLETION_FILE",
-  "OCTOCLAW_DISABLE_CHILD_FINALIZER",
-  "OCTOCLAW_DISABLE_DELIVERY_OUTBOX",
 ] as const;
 let originalEnv: Partial<Record<(typeof ENV_KEYS)[number], string | undefined>> = {};
 
@@ -165,26 +162,10 @@ afterEach(() => {
 });
 
 describe("resolveDelegationCapability", () => {
-  it("fails closed when delegation is requested but host detached runtime support is missing", () => {
+  it("enables delegation when config requests it", () => {
     const resolved = resolveDelegationCapability({
       pluginConfig: { delegationEnabled: true },
       env: {},
-      registerDetachedTaskRuntime: undefined,
-    });
-
-    expect(resolved).toEqual({
-      requested: true,
-      hostSupported: false,
-      enabled: false,
-      reason: "host_missing_detached_runtime",
-    });
-  });
-
-  it("enables delegation when config allows it and host support is present", () => {
-    const resolved = resolveDelegationCapability({
-      pluginConfig: { delegationEnabled: true },
-      env: {},
-      registerDetachedTaskRuntime: vi.fn(),
     });
 
     expect(resolved).toEqual({
@@ -199,7 +180,6 @@ describe("resolveDelegationCapability", () => {
     const resolved = resolveDelegationCapability({
       pluginConfig: { delegationEnabled: false },
       env: { OCTOCLAW_DELEGATION_ENABLED: "false" },
-      registerDetachedTaskRuntime: vi.fn(),
     });
 
     expect(resolved).toEqual({
@@ -3668,64 +3648,5 @@ describe("before_tool_call route hint guard", () => {
     policyState.clearState(key);
     nativeSpawnIntentStore.clearForTests();
     delete process.env.OCTOCLAW_SPAWN_BACKEND;
-  });
-});
-
-describe("PC7 planner path legacy runtime disable", () => {
-  afterEach(() => {
-    vi.restoreAllMocks();
-    delete process.env.OCTOCLAW_SPAWN_BACKEND;
-    delete process.env.OCTOCLAW_LEGACY_COMPLETION_FILE;
-    delete process.env.OCTOCLAW_DISABLE_CHILD_FINALIZER;
-    delete process.env.OCTOCLAW_DISABLE_DELIVERY_OUTBOX;
-  });
-
-  function registerWithIntervalSpy() {
-    let nextId = 1;
-    const intervalSpy = vi.spyOn(globalThis, "setInterval").mockImplementation(((_handler: TimerHandler, _ms?: number) => {
-      return nextId++ as unknown as ReturnType<typeof setInterval>;
-    }) as typeof setInterval);
-    plugin.register({
-      on: () => {},
-      registerTool: () => {},
-      registerCommand: () => {},
-      logger: {},
-    });
-    return intervalSpy;
-  }
-
-  it("starts native child finalizer recovery but not legacy delivery outbox in planner mode", () => {
-    process.env.OCTOCLAW_SPAWN_BACKEND = "planner";
-    delete process.env.OCTOCLAW_LEGACY_COMPLETION_FILE;
-    delete process.env.OCTOCLAW_DISABLE_CHILD_FINALIZER;
-    delete process.env.OCTOCLAW_DISABLE_DELIVERY_OUTBOX;
-    const intervalSpy = registerWithIntervalSpy();
-
-    expect(intervalSpy.mock.calls.filter((call) => call[1] === 45_000).length).toBeGreaterThan(0);
-    expect(intervalSpy.mock.calls.filter((call) => call[1] === 30_000)).toHaveLength(1);
-  });
-
-  it("starts child finalizer recovery and delivery outbox interval in legacy mode", () => {
-    process.env.OCTOCLAW_SPAWN_BACKEND = "legacy";
-    const intervalSpy = registerWithIntervalSpy();
-
-    expect(intervalSpy.mock.calls.filter((call) => call[1] === 45_000).length).toBeGreaterThan(0);
-    expect(intervalSpy.mock.calls.filter((call) => call[1] === 30_000).length).toBeGreaterThan(1);
-  });
-
-  it("starts child finalizer recovery in planner mode when legacy completion file is enabled", () => {
-    process.env.OCTOCLAW_SPAWN_BACKEND = "planner";
-    process.env.OCTOCLAW_LEGACY_COMPLETION_FILE = "1";
-    const intervalSpy = registerWithIntervalSpy();
-
-    expect(intervalSpy.mock.calls.filter((call) => call[1] === 45_000).length).toBeGreaterThan(0);
-  });
-
-  it("does not start delivery outbox in legacy mode when explicitly disabled", () => {
-    process.env.OCTOCLAW_SPAWN_BACKEND = "legacy";
-    process.env.OCTOCLAW_DISABLE_DELIVERY_OUTBOX = "1";
-    const intervalSpy = registerWithIntervalSpy();
-
-    expect(intervalSpy.mock.calls.filter((call) => call[1] === 30_000)).toHaveLength(1);
   });
 });

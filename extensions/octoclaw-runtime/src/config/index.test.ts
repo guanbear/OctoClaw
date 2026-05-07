@@ -3,26 +3,18 @@ import {
   DEFAULT_OCTOCLAW_RUNTIME_CONFIG,
   DEFAULT_SPAWN_INTENT_TTL_MS,
   isPlannerAllowedForSession,
-  resolveLegacyChildFinalizerDisabled,
-  resolveLegacyCompletionFileEnabled,
-  resolveLegacyDeliveryOutboxDisabled,
   resolveLegacyRuntimeLedgerMode,
   resolvePlannerAllowlist,
   resolvePlannerSpawnConfig,
   resolveRuntimeConfig,
   resolveSpawnBackend,
   resolveSpawnIntentTtlMs,
-  shouldRunChildFinalizerRecovery,
-  shouldRunDeliveryOutboxFlush,
 } from "./index.js";
 
 const ENV_KEYS = [
   "OCTOCLAW_SPAWN_BACKEND",
   "OCTOCLAW_PLANNER_ALLOWLIST",
   "OCTOCLAW_SPAWN_INTENT_TTL_MS",
-  "OCTOCLAW_LEGACY_COMPLETION_FILE",
-  "OCTOCLAW_DISABLE_CHILD_FINALIZER",
-  "OCTOCLAW_DISABLE_DELIVERY_OUTBOX",
   "OCTOCLAW_LEGACY_RUNTIME_LEDGER",
 ] as const;
 
@@ -164,64 +156,6 @@ describe("resolveSpawnIntentTtlMs", () => {
 });
 
 describe("legacy disable flags", () => {
-  describe("resolveLegacyCompletionFileEnabled", () => {
-    it("defaults to false", () => {
-      expect(resolveLegacyCompletionFileEnabled()).toBe(false);
-    });
-
-    it("returns true for 1", () => {
-      process.env.OCTOCLAW_LEGACY_COMPLETION_FILE = "1";
-      expect(resolveLegacyCompletionFileEnabled()).toBe(true);
-    });
-
-    it("returns false for other values", () => {
-      process.env.OCTOCLAW_LEGACY_COMPLETION_FILE = "true";
-      expect(resolveLegacyCompletionFileEnabled()).toBe(false);
-    });
-  });
-
-  describe("resolveLegacyChildFinalizerDisabled", () => {
-    it("defaults to false", () => {
-      expect(resolveLegacyChildFinalizerDisabled()).toBe(false);
-    });
-
-    it("returns true for 1", () => {
-      process.env.OCTOCLAW_DISABLE_CHILD_FINALIZER = "1";
-      expect(resolveLegacyChildFinalizerDisabled()).toBe(true);
-    });
-
-    it("returns true for true", () => {
-      process.env.OCTOCLAW_DISABLE_CHILD_FINALIZER = "true";
-      expect(resolveLegacyChildFinalizerDisabled()).toBe(true);
-    });
-
-    it("returns false for other values", () => {
-      process.env.OCTOCLAW_DISABLE_CHILD_FINALIZER = "yes";
-      expect(resolveLegacyChildFinalizerDisabled()).toBe(false);
-    });
-  });
-
-  describe("resolveLegacyDeliveryOutboxDisabled", () => {
-    it("defaults to false", () => {
-      expect(resolveLegacyDeliveryOutboxDisabled()).toBe(false);
-    });
-
-    it("returns true for 1", () => {
-      process.env.OCTOCLAW_DISABLE_DELIVERY_OUTBOX = "1";
-      expect(resolveLegacyDeliveryOutboxDisabled()).toBe(true);
-    });
-
-    it("returns true for true", () => {
-      process.env.OCTOCLAW_DISABLE_DELIVERY_OUTBOX = "true";
-      expect(resolveLegacyDeliveryOutboxDisabled()).toBe(true);
-    });
-
-    it("returns false for other values", () => {
-      process.env.OCTOCLAW_DISABLE_DELIVERY_OUTBOX = "yes";
-      expect(resolveLegacyDeliveryOutboxDisabled()).toBe(false);
-    });
-  });
-
   describe("resolveLegacyRuntimeLedgerMode", () => {
     it("defaults to on", () => {
       expect(resolveLegacyRuntimeLedgerMode()).toBe("on");
@@ -250,9 +184,6 @@ describe("resolvePlannerSpawnConfig", () => {
       spawnBackend: "planner",
       plannerAllowlist: [],
       intentTtlMs: DEFAULT_SPAWN_INTENT_TTL_MS,
-      legacyCompletionFileEnabled: false,
-      legacyChildFinalizerDisabled: false,
-      legacyDeliveryOutboxDisabled: false,
       legacyRuntimeLedgerMode: "on",
     });
   });
@@ -261,98 +192,22 @@ describe("resolvePlannerSpawnConfig", () => {
     process.env.OCTOCLAW_SPAWN_BACKEND = "planner";
     process.env.OCTOCLAW_PLANNER_ALLOWLIST = "ws1, ws_*";
     process.env.OCTOCLAW_SPAWN_INTENT_TTL_MS = "120000";
-    process.env.OCTOCLAW_LEGACY_COMPLETION_FILE = "1";
-    process.env.OCTOCLAW_DISABLE_CHILD_FINALIZER = "true";
-    process.env.OCTOCLAW_DISABLE_DELIVERY_OUTBOX = "1";
     process.env.OCTOCLAW_LEGACY_RUNTIME_LEDGER = "read_only";
 
     expect(resolvePlannerSpawnConfig()).toEqual({
       spawnBackend: "planner",
       plannerAllowlist: ["ws1", "ws_*"],
       intentTtlMs: 120000,
-      legacyCompletionFileEnabled: true,
-      legacyChildFinalizerDisabled: true,
-      legacyDeliveryOutboxDisabled: true,
       legacyRuntimeLedgerMode: "read_only",
     });
   });
 });
 
-describe("shouldRunChildFinalizerRecovery", () => {
-  it("runs child finalizer recovery by default as native announce backstop", () => {
-    expect(shouldRunChildFinalizerRecovery()).toBe(true);
-  });
+describe("runtime convergence target invariants (WP-A)", () => {
+  it.todo("WP-A gap: child finalizer recovery should not run in planner backend by default");
 
-  it("runs in explicit legacy backend by default", () => {
-    process.env.OCTOCLAW_SPAWN_BACKEND = "legacy";
-    expect(shouldRunChildFinalizerRecovery()).toBe(true);
-  });
-
-  it("runs in planner backend by default", () => {
-    process.env.OCTOCLAW_SPAWN_BACKEND = "planner";
-    expect(shouldRunChildFinalizerRecovery()).toBe(true);
-  });
-
-  it("runs in planner backend when legacy completion file is explicitly enabled", () => {
-    process.env.OCTOCLAW_SPAWN_BACKEND = "planner";
-    process.env.OCTOCLAW_LEGACY_COMPLETION_FILE = "1";
-    expect(shouldRunChildFinalizerRecovery()).toBe(true);
-  });
-
-  it("does not run in planner backend when child finalizer is explicitly disabled", () => {
-    process.env.OCTOCLAW_SPAWN_BACKEND = "planner";
-    process.env.OCTOCLAW_DISABLE_CHILD_FINALIZER = "1";
-    expect(shouldRunChildFinalizerRecovery()).toBe(false);
-  });
-
-  it("does not run in legacy backend when child finalizer is explicitly disabled", () => {
-    process.env.OCTOCLAW_SPAWN_BACKEND = "legacy";
-    process.env.OCTOCLAW_DISABLE_CHILD_FINALIZER = "1";
-    expect(shouldRunChildFinalizerRecovery()).toBe(false);
-  });
-
-  it("does not run in off backend by default", () => {
-    process.env.OCTOCLAW_SPAWN_BACKEND = "off";
-    expect(shouldRunChildFinalizerRecovery()).toBe(false);
-  });
-});
-
-describe("shouldRunDeliveryOutboxFlush", () => {
-  it("does not run delivery outbox by default", () => {
-    expect(shouldRunDeliveryOutboxFlush()).toBe(false);
-  });
-
-  it("runs in explicit legacy backend by default", () => {
-    process.env.OCTOCLAW_SPAWN_BACKEND = "legacy";
-    expect(shouldRunDeliveryOutboxFlush()).toBe(true);
-  });
-
-  it("does not run in planner backend by default", () => {
-    process.env.OCTOCLAW_SPAWN_BACKEND = "planner";
-    expect(shouldRunDeliveryOutboxFlush()).toBe(false);
-  });
-
-  it("runs in planner backend when both legacy completion file and outbox are enabled", () => {
-    process.env.OCTOCLAW_SPAWN_BACKEND = "planner";
-    process.env.OCTOCLAW_LEGACY_COMPLETION_FILE = "1";
-    expect(shouldRunDeliveryOutboxFlush()).toBe(true);
-  });
-
-  it("does not run in planner backend when delivery outbox is disabled even with completion file", () => {
-    process.env.OCTOCLAW_SPAWN_BACKEND = "planner";
-    process.env.OCTOCLAW_LEGACY_COMPLETION_FILE = "1";
-    process.env.OCTOCLAW_DISABLE_DELIVERY_OUTBOX = "1";
-    expect(shouldRunDeliveryOutboxFlush()).toBe(false);
-  });
-
-  it("does not run in legacy backend when delivery outbox is explicitly disabled", () => {
-    process.env.OCTOCLAW_SPAWN_BACKEND = "legacy";
-    process.env.OCTOCLAW_DISABLE_DELIVERY_OUTBOX = "true";
-    expect(shouldRunDeliveryOutboxFlush()).toBe(false);
-  });
-
-  it("does not run in off backend", () => {
-    process.env.OCTOCLAW_SPAWN_BACKEND = "off";
-    expect(shouldRunDeliveryOutboxFlush()).toBe(false);
+  it("documents legacy runtime ledger mode flag as a delete target (WP-B)", () => {
+    expect(resolveLegacyRuntimeLedgerMode()).toBe("on");
+    expect("OCTOCLAW_LEGACY_RUNTIME_LEDGER").toContain("LEGACY_RUNTIME_LEDGER");
   });
 });
