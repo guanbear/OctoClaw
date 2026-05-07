@@ -567,6 +567,8 @@ Scope:
 - Document `native_spawn_intents` auxiliary table.
 - Add tests that capture target defaults and current gaps.
 
+WP-A invariant coverage added in the focused runtime tests pins these delete boundaries before WP-B through WP-F: planner child prompts must not require completion files; planner dispatch must not queue legacy outbox side effects; child-finalizer recovery, legacy env flags, ledger-off defaults, and `octoclaw_spawn` remain explicit current gaps until their owning delete work packages remove them.
+
 Risk: low.
 
 ### PR B: SQLite metadata store default read path
