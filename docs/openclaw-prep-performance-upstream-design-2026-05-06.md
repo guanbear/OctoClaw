@@ -400,6 +400,76 @@ Expected impact depends on how many tools are excluded. For worker roles that on
 
 ## 6. Phase 3: Tool Schema / Tool Bundle Cache
 
+### 6.0 2026-05-07 PR1+PR2 Benchmark Evidence
+
+After PR 1 prep-stage telemetry and PR 2 `sessions_spawn.toolsAllow` propagation were available on the local PR 2 branch, a local mock-provider benchmark was run to decide whether PR 3 is justified.
+
+Benchmark setup:
+
+- OpenClaw source: `/Users/guanbear/workspace/openclaw-5.4-src`
+- branch: `sessions-spawn-tools-allow-pr2`
+- head at benchmark time: `1d2f44b71331149e1a23f5c829ea16afcf01ba47`
+- provider: local `scripts/e2e/mock-openai-server.mjs`
+- state isolation: temporary `HOME` and `OPENCLAW_STATE_DIR`
+- warmup: 3 runs, excluded from reported samples
+- samples:
+  - `main-default`: 10 runs
+  - `subagent-default`: 7 runs
+  - `subagent-allow-read-exec`: 7 runs with `toolsAllow: ["read", "exec"]`
+- raw summary artifact: `/tmp/openclaw-prep-bench.klReip/summary.json`
+
+Observed p50 values:
+
+| Fixture | prep total | core-plugin-tools | bundle-tools | system-prompt | session-resource-loader |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `main-default` | 498ms | 308ms | 77ms | 54ms | 53ms |
+| `subagent-default` | 498ms | 309ms | 76ms | 55ms | 53ms |
+| `subagent-allow-read-exec` | 248ms | 136ms | 0ms | 54ms | 53ms |
+
+Observed p95 values:
+
+| Fixture | prep total | core-plugin-tools | bundle-tools | system-prompt | session-resource-loader |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `main-default` | 559ms | 365ms | 106ms | 56ms | 55ms |
+| `subagent-default` | 505ms | 315ms | 77ms | 57ms | 54ms |
+| `subagent-allow-read-exec` | 251ms | 137ms | 1ms | 55ms | 54ms |
+
+Conclusions:
+
+- PR 2 is useful before caching: `toolsAllow: ["read", "exec"]` cuts child prep p50 from about 498ms to about 248ms and skips bundle tool materialization almost entirely.
+- PR 2 does not solve the main-agent hot path. `main-default` still spends about 385ms p50 in `core-plugin-tools + bundle-tools`, around 77% of measured prep.
+- PR 3 is justified even if its first version mostly benefits the main agent and default subagent path. The measured main-agent default tool path is a clear repeated prep bottleneck.
+- The remaining allowlisted child cost is mostly `core-plugin-tools.tool-policy` at about 136ms p50, so PR 3 should consider both provider-ready schema/bundle caching and avoiding repeated static tool-policy/tool-inventory work when the cache key is unchanged.
+
+### 6.0.1 2026-05-07 PR3 Schema Cache Microbenchmark
+
+PR3 was implemented as a clean upstream branch from `origin/main`, not on top of PR2. The first PR3 slice caches only provider-normalized tool schema parameters in memory; it does not cache tool objects, execute closures, approval state, before-tool-call guards, or runtime permission decisions. This keeps the cache useful for repeated main-agent/default-tool turns while avoiding the risk of reusing live mutable tool state.
+
+Microbenchmark setup:
+
+- OpenClaw source: `/Users/guanbear/workspace/openclaw-5.4-src`
+- branch: `tool-schema-cache-pr3`
+- base: `origin/main` at `9324af7d46`
+- command shape: `pnpm tsx --eval` importing `src/agents/pi-embedded-runner/tool-schema-runtime.ts`
+- provider/model: `openai`, `gpt-5.4`, `openai-responses`, `https://api.openai.com/v1`
+- fixture: 50 freshly-created representative tool objects per iteration, each with nested JSON schema and a fresh `execute` closure
+- samples: 100 repeated normalization iterations in one process
+- comparison: `OPENCLAW_TOOL_SCHEMA_CACHE=0` versus default cache enabled
+
+Observed results:
+
+| Mode | total | per iteration | RSS delta | cache stats |
+| --- | ---: | ---: | ---: | --- |
+| cache disabled | 34.959s | 349.590ms | +337.4 MiB | `bypass=100 hit=0 miss=0 store=0 size=0` |
+| cache enabled | 0.373s | 3.727ms | +3.6 MiB | `bypass=0 hit=99 miss=1 store=1 size=1` |
+
+Conclusions:
+
+- PR3 directly targets the repeated provider tool-schema normalization path that every main/default embedded attempt reaches after tool creation.
+- The cache is not only startup-only: in a long-lived Gateway/embedded process, each later turn with the same provider/model/tool schema signature can reuse the normalized schema parameters while keeping fresh execute closures.
+- This first PR3 slice does not remove all `core-plugin-tools` or `bundle-tools` cost. It should be treated as a conservative schema-normalization cache, not a full bundle-materialization cache.
+- The kill switch works for before/after comparison and rollback: `OPENCLAW_TOOL_SCHEMA_CACHE=0`.
+
 ### 6.1 What To Cache
 
 Cache the provider-ready tool schema bundle after effective tool selection, schema generation, provider normalization, and serialization.
