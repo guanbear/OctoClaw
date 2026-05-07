@@ -351,8 +351,6 @@ function classifyStartupCost(prompt: string, metadata: UnknownRecord = {}): Star
 
   const metadataToolNeed = coerceStartupToolNeedHint(metadata.tool_need_hint ?? metadata.toolNeedHint, "none");
   const metadataDuration = coerceStartupDurationHint(metadata.duration_hint ?? metadata.durationHint, "short");
-  const judgeToolNeed = coerceStartupToolNeedHint(metadata._judge_tool_need_hint, metadataToolNeed);
-  const judgeDuration = coerceStartupDurationHint(metadata._judge_duration_hint, metadataDuration);
   const judgeDecisionBucket = coerceStartupDecisionBucket(metadata._judge_decision_bucket);
   const rawJudgeRouteIntent = asString(metadata._judge_route_intent ?? metadata._judge_route);
   const judgeRouteIntent = rawJudgeRouteIntent ? normalizeLiveRoute(rawJudgeRouteIntent, "reply") : "";
@@ -375,8 +373,10 @@ function classifyStartupCost(prompt: string, metadata: UnknownRecord = {}): Star
   const budgetCostSignal = requiresFreshLookup
     || requiresStateGrounding
     || routeHint === "delegate"
-    || judgeToolNeed === "maybe"
-    || judgeDuration === "medium"
+    || metadataToolNeed === "maybe"
+    || metadataToolNeed === "required"
+    || metadataDuration === "medium"
+    || metadataDuration === "long"
     || remoteOrMixedScope
     || judgeEvidenceRequired
     || judgeLowConfidenceReply;
@@ -388,8 +388,8 @@ function classifyStartupCost(prompt: string, metadata: UnknownRecord = {}): Star
     requestSource === "force_route" && routeRequest === "delegate" ? "force_route_delegate" : "",
     judgeActionableDelegate ? "judge_actionable_delegate" : "",
     asBoolean(metadata._judge_hard_delegate_signal) && judgeActionableDelegate ? "judge_hard_delegate_signal" : "",
-    judgeToolNeed === "required" ? "tool_need_required" : "",
-    judgeDuration === "long" ? "duration_long" : "",
+    metadataToolNeed === "required" ? "tool_need_required" : "",
+    metadataDuration === "long" ? "duration_long" : "",
     workType === "code" ? "work_type_code" : "",
     workType === "review" ? "work_type_review" : "",
     explicitDelegatePrompt ? "prompt_explicit_delegate" : "",
@@ -410,12 +410,12 @@ function classifyStartupCost(prompt: string, metadata: UnknownRecord = {}): Star
     ? "required"
     : requiresFreshLookup || requiresStateGrounding || routeHint === "delegate" || remoteOrMixedScope || judgeEvidenceRequired || judgeLowConfidenceReply
       ? "maybe"
-      : judgeToolNeed;
-  const durationHint = judgeDuration === "long" || hardDelegateReasons.includes("duration_long")
+      : metadataToolNeed;
+  const durationHint = metadataDuration === "long" || hardDelegateReasons.includes("duration_long")
     ? "long"
     : hardDelegateSignal
       ? "medium"
-      : judgeDuration === "medium"
+      : metadataDuration === "medium"
         ? "medium"
         : "short";
 
@@ -505,8 +505,12 @@ function coerceJudgeRole(value: unknown): PolicyRole | undefined {
     : undefined;
 }
 
-function coerceRouteConfidence(value: unknown): number | undefined {
+function coerceUnitConfidence(value: unknown): number | undefined {
   return typeof value === "number" && value >= 0 && value <= 1 ? value : undefined;
+}
+
+function coerceRouteConfidence(value: unknown): number | undefined {
+  return coerceUnitConfidence(value);
 }
 
 function selectContinuationRoute(metadata: UnknownRecord): LiveRoute | null {
@@ -1909,9 +1913,7 @@ export async function resolveStatelessPolicyDecision(task: string, options: Unkn
   let judgeQualityBar: "standard" | "high" | "critical" | undefined;
   let judgeRiskFlags: string[] = [];
   let judgeRouteConfidence: number | undefined;
-  let judgeIsFollowupToRecentExecution: boolean | undefined;
-  let judgeIsNewWork: boolean | undefined;
-  let judgeExpectedDeliverable: string | null | undefined;
+  let judgeComplexityConfidence: number | undefined;
   let delegateReasonCodes: string[] = [];
   let deterministicFallbackApplied = false;
   let degradedFallbackApplied = false;
@@ -1997,13 +1999,9 @@ export async function resolveStatelessPolicyDecision(task: string, options: Unkn
       if (judgeResult && !judgeResult.abstainReason) {
         metadata._judge_min_confidence = judgeConfig.minConfidence;
         metadata._judge_confidence = judgeResult.confidence;
-        if (typeof judgeResult.routeConfidence === "number") metadata._judge_route_confidence = judgeResult.routeConfidence;
+        metadata._judge_route_confidence = coerceRouteConfidence(judgeResult.routeConfidence ?? judgeResult.confidence);
         const judgeDecisionBucket = coerceStartupDecisionBucket(judgeResult.decisionBucket ?? judgeResult.decision_bucket);
         if (judgeDecisionBucket) metadata._judge_decision_bucket = judgeDecisionBucket;
-        const judgeToolNeedHint = judgeResult.toolNeedHint ?? judgeResult.tool_need_hint;
-        const judgeDurationHint = judgeResult.durationHint ?? judgeResult.duration_hint;
-        if (judgeToolNeedHint) metadata._judge_tool_need_hint = judgeToolNeedHint;
-        if (judgeDurationHint) metadata._judge_duration_hint = judgeDurationHint;
         if (judgeResult.scope) metadata._judge_scope = judgeResult.scope;
         if (typeof judgeResult.evidenceRequired === "boolean") metadata._judge_evidence_required = judgeResult.evidenceRequired;
         if (judgeResult.route === "reply" || actionableJudgeResult) metadata._judge_route_intent = judgeResult.route;
@@ -2073,30 +2071,17 @@ export async function resolveStatelessPolicyDecision(task: string, options: Unkn
           }
         }
         judgeBudgetBand = judgeResult.budgetBand ?? null;
-        judgeRole = coerceJudgeRole(judgeResult.role);
-        judgeComplexityBand = coerceComplexityBand(judgeResult.complexityBand);
+        judgeRole = undefined;
+        judgeComplexityBand = coerceComplexityBand(judgeResult.complexity ?? judgeResult.complexityBand);
+        judgeComplexityConfidence = coerceUnitConfidence(judgeResult.complexityConfidence ?? judgeResult.complexity_confidence);
         judgeExpectedDurationBand = coerceExpectedDurationBand(judgeResult.expectedDurationBand);
         judgeQualityBar = coerceQualityBar(judgeResult.qualityBar);
         judgeRiskFlags = asStringArray(judgeResult.riskFlags);
-        judgeRouteConfidence = coerceRouteConfidence(judgeResult.routeConfidence);
-        judgeIsFollowupToRecentExecution = typeof (judgeResult.is_followup_to_recent_execution ?? judgeResult.isFollowupToRecentExecution) === "boolean"
-          ? (judgeResult.is_followup_to_recent_execution ?? judgeResult.isFollowupToRecentExecution) as boolean
-          : undefined;
-        judgeIsNewWork = typeof (judgeResult.is_new_work ?? judgeResult.isNewWork) === "boolean"
-          ? (judgeResult.is_new_work ?? judgeResult.isNewWork) as boolean
-          : undefined;
-        judgeExpectedDeliverable = typeof (judgeResult.expected_deliverable ?? judgeResult.expectedDeliverable) === "string"
-          ? String(judgeResult.expected_deliverable ?? judgeResult.expectedDeliverable).trim() || null
-          : null;
+        judgeRouteConfidence = coerceRouteConfidence(judgeResult.routeConfidence ?? judgeResult.confidence);
         delegateReasonCodes = coerceDelegateReasonCodes(judgeResult.delegateReasonCodes);
 
         // ── Validator default rules (spec §11) ──
-        // tool_need_hint / duration_hint must influence route, not just be telemetry.
-        const toolNeedHint = judgeResult.toolNeedHint ?? judgeResult.tool_need_hint;
-        const durationHint = judgeResult.durationHint ?? judgeResult.duration_hint;
-        if (toolNeedHint) metadata.tool_need_hint = toolNeedHint;
-        if (durationHint) metadata.duration_hint = durationHint;
-        const judgeScope = judgeResult.scope;
+        // Legacy judge metadata is telemetry only; route correction stays deterministic.
         const validatorOverrideReasons: string[] = [];
         const conversationControl = trustedConversationControl(metadata);
         const intentClass = structuredIntentClass(metadata);
@@ -2182,9 +2167,6 @@ export async function resolveStatelessPolicyDecision(task: string, options: Unkn
         if (validatorOverrideReasons.length > 0 && !judgeConfig.shadowMode) {
           judgeShadowLog.validator_override = true;
           judgeShadowLog.validator_override_reasons = validatorOverrideReasons;
-          judgeShadowLog.validator_tool_need_hint = toolNeedHint ?? null;
-          judgeShadowLog.validator_duration_hint = durationHint ?? null;
-          judgeShadowLog.validator_scope = judgeScope ?? null;
           judgeShadowLog.final_judge_route = judgeRouteOverride;
           if (process.env.OCTOCLAW_JUDGE_DEBUG) {
             console.log(`[octoclaw-judge] validator override: ${validatorOverrideReasons.join(", ")}`);
@@ -2220,13 +2202,8 @@ export async function resolveStatelessPolicyDecision(task: string, options: Unkn
       || asBoolean(finalConversationControl.require_state_grounding)
       || startupClassification.hardDelegateSignal
     );
-  const overrideInconsistentJudgeNewWork = deterministicNewWorkDelegate
-    && judgeIsNewWork === false
-    && judgeIsFollowupToRecentExecution !== true;
-  const seededIsNewWork = overrideInconsistentJudgeNewWork
-    ? true
-    : judgeIsNewWork ?? (deterministicNewWorkDelegate ? true : undefined);
-  const seededExpectedDeliverable = judgeExpectedDeliverable ?? (deterministicNewWorkDelegate ? prompt.slice(0, 200) : null);
+  const seededIsNewWork = deterministicNewWorkDelegate ? true : undefined;
+  const seededExpectedDeliverable = deterministicNewWorkDelegate ? prompt.slice(0, 200) : null;
 
   const seeded: UnknownRecord = {
     summary: `policy=${finalDecision.route} -> ${workerPoolForDecision(finalDecision.executionProfile, finalDecision.role)}`,
@@ -2254,6 +2231,7 @@ export async function resolveStatelessPolicyDecision(task: string, options: Unkn
       fallback_reason: judgeShadowLog?.fallback_reason ?? null,
       final_judge_source: deterministicRuleApplied ? "policy_rule" : (degradedFallbackApplied ? "judge_degraded_fallback" : (deterministicFallbackApplied ? "timeout_fallback" : (judgeSucceeded ? "local" : (judgeShadowLog?.judge_timeout ? "timeout" : "no_judge")))),
       complexity_band: judgeComplexityBand,
+      complexity_confidence: judgeComplexityConfidence,
       expected_duration_band: judgeExpectedDurationBand,
       quality_bar: judgeQualityBar,
       risk_flags: judgeRiskFlags,
@@ -2288,15 +2266,14 @@ export async function resolveStatelessPolicyDecision(task: string, options: Unkn
     _judge_role: judgeRole,
     _judge_budget_band: judgeBudgetBand,
     _judge_complexity_band: judgeComplexityBand,
+    _judge_complexity_confidence: judgeComplexityConfidence,
     _judge_expected_duration_band: judgeExpectedDurationBand,
     _judge_quality_bar: judgeQualityBar,
     _judge_risk_flags: judgeRiskFlags,
     _judge_route_confidence: judgeRouteConfidence,
-    is_followup_to_recent_execution: judgeIsFollowupToRecentExecution,
     is_new_work: seededIsNewWork,
     expected_deliverable: seededExpectedDeliverable,
     _delegate_reason_codes: delegateReasonCodes,
-    _judge_new_work_override: overrideInconsistentJudgeNewWork || undefined,
     _decision_bucket: startupClassification.decisionBucket,
     _startup_cost_policy: startupClassification.startupCostPolicy,
     _duration_hint: startupClassification.durationHint,

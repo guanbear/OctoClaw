@@ -507,6 +507,8 @@ describe("WP3 acceptance", () => {
             content: JSON.stringify({
               route: "delegate",
               confidence: 0.9,
+              complexity: "normal",
+              complexity_confidence: 0.74,
               abstain_reason: null,
               ack_text: "收到",
             }),
@@ -552,6 +554,8 @@ describe("WP3 acceptance", () => {
             content: JSON.stringify({
               route: "reply",
               confidence: 0.9,
+              complexity: "simple",
+              complexity_confidence: 0.74,
               abstain_reason: null,
               ack_text: "收到",
             }),

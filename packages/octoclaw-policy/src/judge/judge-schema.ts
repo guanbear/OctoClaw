@@ -196,6 +196,8 @@ export interface JudgeOutput {
   delegateRole?: DelegateRole | null;
   coordinationModeHint?: CoordinationModeHint | null;
   complexity?: SpawnComplexityBand | null;
+  complexityConfidence?: number;
+  complexity_confidence?: number;
   scope?: JudgeScope;
   toolNeedHint?: ToolNeedHint | null;
   durationHint?: DurationHint | null;
@@ -247,7 +249,7 @@ export interface JudgeValidationResult {
   degradedReasons: string[];
 }
 
-/** Validate parsed JudgeOutput and report whether delegate output is authoritative. */
+/** Validate parsed JudgeOutput and report whether the active hot-path schema is valid. */
 export function validateJudgeOutputDetailed(value: unknown): JudgeValidationResult {
   if (typeof value !== "object" || value === null) {
     return { valid: false, degraded: false, degradedReasons: [] };
@@ -257,38 +259,21 @@ export function validateJudgeOutputDetailed(value: unknown): JudgeValidationResu
   if (!["reply", "delegate"].includes(obj.route as string)) {
     return { valid: false, degraded: false, degradedReasons: [] };
   }
-  if (obj.confidence !== undefined && (typeof obj.confidence !== "number" || obj.confidence < 0 || obj.confidence > 1)) {
+  if (typeof obj.confidence !== "number" || obj.confidence < 0 || obj.confidence > 1) {
     return { valid: false, degraded: false, degradedReasons: [] };
   }
-
-  const degradedReasons: string[] = [];
-  if (obj.route === "delegate") {
-    if (obj.confidence === undefined || obj.confidence === null) {
-      degradedReasons.push("missing_confidence");
-    }
-    const isNewWork = obj.is_new_work ?? obj.isNewWork;
-    const expectedDeliverable = obj.expected_deliverable ?? obj.expectedDeliverable;
-    if (isNewWork !== true) {
-      degradedReasons.push("missing_is_new_work");
-    }
-    if (typeof expectedDeliverable !== "string" || expectedDeliverable.trim().length === 0) {
-      degradedReasons.push("missing_expected_deliverable");
-    }
-    if (obj.scope === undefined || obj.scope === null) {
-      degradedReasons.push("missing_scope");
-    }
-    if ((obj.tool_need_hint ?? obj.toolNeedHint) === undefined || (obj.tool_need_hint ?? obj.toolNeedHint) === null) {
-      degradedReasons.push("missing_tool_need_hint");
-    }
-    if ((obj.duration_hint ?? obj.durationHint) === undefined || (obj.duration_hint ?? obj.durationHint) === null) {
-      degradedReasons.push("missing_duration_hint");
-    }
+  if (!["simple", "normal", "deep"].includes(obj.complexity as string)) {
+    return { valid: false, degraded: false, degradedReasons: [] };
+  }
+  const complexityConfidence = obj.complexity_confidence ?? obj.complexityConfidence;
+  if (typeof complexityConfidence !== "number" || complexityConfidence < 0 || complexityConfidence > 1) {
+    return { valid: false, degraded: false, degradedReasons: [] };
   }
 
   return {
     valid: true,
-    degraded: degradedReasons.length > 0,
-    degradedReasons,
+    degraded: false,
+    degradedReasons: [],
   };
 }
 
@@ -309,13 +294,5 @@ export function isActionableJudgeResult(result: JudgeOutput | null, minConfidenc
   };
   if (raw.judge_schema_degraded === true) return false;
   if (Array.isArray(raw.degraded_reasons) && raw.degraded_reasons.length > 0) return false;
-  if (result.route === "delegate") {
-    const isFollowup = result.is_followup_to_recent_execution ?? result.isFollowupToRecentExecution;
-    const isNewWork = result.is_new_work ?? result.isNewWork;
-    const deliverable = result.expected_deliverable ?? result.expectedDeliverable;
-    if (isFollowup === true) return false;
-    if (isNewWork !== true) return false;
-    if (typeof deliverable !== "string" || deliverable.trim().length === 0) return false;
-  }
   return true;
 }

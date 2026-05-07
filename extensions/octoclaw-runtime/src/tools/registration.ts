@@ -3640,6 +3640,42 @@ export function getToolRegistrations(options: ToolRegistrationOptions = {}): Too
             modelProfile: selectedModel || asString(metadata.model),
           });
           if (!ticketAdmission.allowed) {
+            if (ticketAdmission.reason === "not_new_work") {
+              const fallbackBody = {
+                ok: true,
+                route: "reply",
+                dispatch_skipped: true,
+                fallback_to_main_reply: true,
+                reason: "not_new_work",
+                ticket_decision: ticketCandidate.ticket_decision,
+                ticket_denial_reason: ticketAdmission.reason,
+                is_new_work: ticketCandidate.is_new_work,
+                expected_deliverable: ticketCandidate.expected_deliverable,
+                work_contract_id: ticketAdmission.work_contract_id ?? ticketCandidate.work_contract_id ?? null,
+                ticket_id: ticketAdmission.ticket_id ?? ticketCandidate.ticket_id ?? null,
+                dispatch_executed: false,
+                spawn_executed: false,
+                materialized: false,
+                main_session_action: "answer_followup_or_refresh_status",
+              };
+              await recordPolicyReplay("dispatch_ticket_reused_main_reply", {
+                sessionKey: managedSessionKey,
+                sessionId: asString(ctx.sessionId),
+                route: resolvedRoute,
+                ticket_decision: ticketCandidate.ticket_decision,
+                ticket_denial_reason: ticketAdmission.reason,
+                is_new_work: ticketCandidate.is_new_work,
+                expected_deliverable: ticketCandidate.expected_deliverable,
+                work_contract_id: ticketAdmission.work_contract_id ?? ticketCandidate.work_contract_id ?? null,
+                ticket_id: ticketAdmission.ticket_id ?? ticketCandidate.ticket_id ?? null,
+                dispatch_executed: false,
+                spawn_executed: false,
+                materialized: false,
+                fallback_to_main_reply: true,
+                terminal: false,
+              }, toolLogger(ctx), cachedDecision);
+              return toolResponse(JSON.stringify(fallbackBody), fallbackBody);
+            }
             const errorMessage = `delegation_ticket_rejected:${ticketAdmission.reason}`;
             await recordPolicyReplay("dispatch_ticket_rejected", {
               sessionKey: managedSessionKey,

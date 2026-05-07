@@ -95,32 +95,16 @@ export const ANTI_REPLY_BIAS_RULES = [
 
 export const VALIDATOR_DEFAULT_RULES = [
   {
-    if: "tool_need_hint == required",
-    then: "prefer delegate",
-  },
-  {
-    if: "duration_hint == long",
-    then: "prefer delegate",
-  },
-  {
-    if: "tool_need_hint == required && scope == unknown",
-    then: "reply_mode = clarify before delegate",
-  },
-  {
-    if: "tool_need_hint == none && duration_hint == short",
-    then: "reply remains eligible",
-  },
-  {
     if: "fresh_live_lookup or route_hint=delegate without a hard delegate signal",
     then: "emit route=reply plus cost signals; runtime derives budgeted_main_then_delegate and does not force delegate alone",
   },
   {
     if: "execution.supports_provenance_reply == true",
-    then: "route=reply, reply_mode=answer, do NOT dispatch or spawn",
+    then: "route=reply, do NOT dispatch or spawn",
   },
   {
     if: "execution.supports_status_reply == true",
-    then: "route=reply, reply_mode=answer",
+    then: "route=reply",
   },
   {
     if: "execution.requires_control_plane_refresh == true",
@@ -131,26 +115,8 @@ export const VALIDATOR_DEFAULT_RULES = [
 export const JudgeOutputSchema = {
   route: "reply | delegate (REQUIRED)",
   confidence: "0.0-1.0 float (REQUIRED, your certainty about this routing decision)",
-  is_followup_to_recent_execution: "boolean (REQUIRED, true only when the turn is about existing/recent execution status, provenance, dispatch, spawn, delivery, or failure)",
-  is_new_work: "boolean (REQUIRED, true only when a new execution unit with a verifiable deliverable is needed)",
-  expected_deliverable: "string | null (REQUIRED, non-empty only when is_new_work=true and route=delegate)",
-  reply_mode: "answer | clarify | null",
-  delegate_role: "observer | default | code | research | review | null",
-  coordination_mode_hint: "solo_worker | advisor_assisted | multi_agent_controlled | null",
-  complexity: "simple | normal | deep | null",
-  scope: "local | remote | both | unknown (REQUIRED)",
-  tool_need_hint: "none | maybe | required (REQUIRED)",
-  duration_hint: "short | medium | long (REQUIRED)",
-  evidence_required: "boolean (REQUIRED; true when a fresh external/local evidence check is needed)",
-  decision_bucket: "must_reply | must_delegate | budgeted_main_then_delegate (OPTIONAL TELEMETRY; runtime does not trust it as SR-P1 authority)",
-  startup_cost_policy: {
-    main_fast_path_allowed: true,
-    max_wall_ms: "30000 for budgeted_main_then_delegate",
-    max_tool_calls: "1-2",
-    escalation_triggers: [] as string[],
-  },
-  hard_delegate_signal: "boolean (OPTIONAL TELEMETRY)",
-  reason_codes: [] as string[],
+  complexity: "simple | normal | deep (REQUIRED, model/cost complexity only; must not change route)",
+  complexity_confidence: "0.0-1.0 float (REQUIRED, your certainty about complexity)",
 } as const;
 
 export const AckWriterOutputSchema = {

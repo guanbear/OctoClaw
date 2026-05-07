@@ -832,6 +832,38 @@ describe("octoclaw_dispatch honesty", () => {
     expect(reloaded?.telemetry.deliveryStatus).toBe("none");
   });
 
+  it("falls back to main reply when a delegate dispatch is not new work", async () => {
+    const previousLedgerMode = process.env.OCTOCLAW_RUNTIME_LEDGER;
+    process.env.OCTOCLAW_RUNTIME_LEDGER = "enforce";
+    try {
+      useTempWorkContractLedger();
+      const contract = seedWorkContract({
+        intentClass: "execution_followup",
+        userAsk: "Explain the previous dispatch guard result",
+      });
+
+      const result = await executeDispatch({
+        task: contract.userAsk,
+        workContractId: contract.workContractId,
+      }, {
+        helperInvoker: successfulHelper(),
+        sessionId: "session-work-contract-not-new-work",
+      });
+
+      expect(result.ok).toBe(true);
+      expect(result.route).toBe("reply");
+      expect(result.fallback_to_main_reply).toBe(true);
+      expect(result.reason).toBe("not_new_work");
+      expect(result.dispatch_executed).toBe(false);
+      expect(result.spawn_executed).toBe(false);
+      expect(result.materialized).toBe(false);
+      expect(result.error).toBeUndefined();
+    } finally {
+      if (previousLedgerMode === undefined) delete process.env.OCTOCLAW_RUNTIME_LEDGER;
+      else process.env.OCTOCLAW_RUNTIME_LEDGER = previousLedgerMode;
+    }
+  });
+
   it("does not treat prior WorkContract continuity as current spawn evidence", async () => {
     useTempWorkContractLedger();
     const contract = seedWorkContract();

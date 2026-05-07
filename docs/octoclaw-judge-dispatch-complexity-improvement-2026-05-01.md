@@ -2,7 +2,7 @@
 
 日期：2026-05-01  
 分支：`refactor/0.4.0-stable`  
-状态：N1 设计补充，等待实现  
+状态：N1 设计补充；2026-05-07 已按 active judge 四字段方案部分实现
 关联：`docs/octoclaw-ts-rebuild-design-v2.md`、`docs/octoclaw-judge-ack-policy-spec-2026-04-21.md`、`docs/octoclaw-work-contract-centered-delegation-design-2026-04-25.md`
 
 ---
@@ -21,16 +21,39 @@
 
 > **judge 负责语义建议，runtime 负责副作用授权和投递一致性。**
 
+### 1.1 2026-05-07 实现更新
+
+当前实现已经刻意把 active judge schema 收窄为四个字段：
+
+```json
+{
+  "route": "reply | delegate",
+  "confidence": 0.84,
+  "complexity": "simple | normal | deep",
+  "complexity_confidence": 0.74
+}
+```
+
+这和本文 2026-05-01 版本里较胖的 judge proposal 不完全一致，是一次有意收口：
+
+- active prompt 不再要求 `role`、`workType`、`scope`、`tool_need_hint`、`duration_hint`、`reason_codes`、`expected_deliverable`、`is_new_work`。
+- parser 仍兼容老字段，用于旧回放、旧模型输出和过渡日志；但 active validator 只认四字段。
+- `role` 不再信任 judge 输出，resolver 使用自身的 deterministic policy / metadata 决定 worker role。
+- `tool_need_hint` / `duration_hint` 不再触发 validator 强制改 route；它们若来自旧输出，只能作为 telemetry。
+- `confidence` 写入 `route_decision.route_confidence`；`complexity_confidence` 写入 complexity telemetry，供后续模型/成本选择使用。
+
+收窄原因：胖字段里大量 hint 没有被稳定消费，却会影响 route validator，导致本应 reply 的执行追问被强行 delegate；同时字段越多，judge prompt 越长、延迟越高、模型输出越容易漂移。当前实现选择让 judge 只做 route + complexity proposal，把 `new_work`、并发、排队、资源冲突、交付物验收放回 runtime / WorkContract / scheduler 处理。
+
 ---
 
 ## 2. 设计目标
 
-1. 保留 judge 的主要价值：语义判断、复杂度估计、是否需要 fresh state / side effect / 长耗时执行、预期交付物说明。
+1. 保留 judge 的主要价值：语义判断、复杂度估计和 route confidence。fresh state / side effect / 长耗时执行 / 预期交付物由 runtime metadata、WorkContract 和 dispatch admission 处理。
 2. 不让 judge 直接拥有 dispatch 权限：`route=delegate` 只是候选决策，不能直接创建任务。
 3. 不靠关键词覆盖所有追问：状态/失败/来源类问题优先靠 thread anchor、WorkContract、execution receipt、dispatch ledger、TaskFlow binding 和 task-state projection 判定。
 4. 默认允许主 agent 干活：简单 reply、解释、轻量本地核验不应被一堆硬门禁锁住。
 5. 严格保证同一 turn 执行 owner 单一：要么 main reply，要么 delegated worker，不能同时投递用户可见 final。
-6. 把 complexity 收成 canonical 字段：judge 可初判，policy 可修正，WorkContract 固化，status 只展示最终值。
+6. 把 complexity 收成 canonical 字段：judge 可初判并给 confidence，policy 可修正，WorkContract 固化，status 只展示最终值。
 
 ---
 
@@ -75,7 +98,7 @@ P1-3 的修复不应继续扩大 `META_PROMPT_PATTERNS` / `TASK_PROGRESS_PROMPT_
 | `latest_anomaly` | 最近异常原因，例如 `no_dispatch_evidence`、`spawn_not_confirmed`、`parent_session_busy`、`ledger_unavailable` |
 | `allowed_control_tools` | 可用于刷新事实的只读/控制面工具，例如 `octoclaw_status`、`octoclaw_task_action` |
 
-然后给 judge / policy 一个轻量事实包，而不是要求 N1 实现完整 follow-up taxonomy。N1 只需要两个语义建议和一个硬门字段：
+然后给 judge / policy 一个轻量事实包，而不是要求 N1 实现完整 follow-up taxonomy。早期设计曾要求 judge 输出两个语义建议和一个硬门字段：
 
 ```text
 is_followup_to_recent_execution
@@ -83,7 +106,7 @@ is_new_work
 expected_deliverable
 ```
 
-实现边界：
+2026-05-07 收口后，这三个字段不再属于 active judge schema；它们属于 runtime / WorkContract / ticket admission 的事实归属。实现边界仍然成立：
 
 1. `is_followup_to_recent_execution=true` 表示这轮更像在讨论最近执行，不应签发 ordinary dispatch ticket。
 2. `is_new_work=true` 只是 judge/policy proposal，不是授权。
@@ -95,38 +118,37 @@ expected_deliverable
 
 ### 4.2 Judge 输出结构
 
-judge 仍然是主语义判断来源，但输出必须从“只给 route”升级为结构化建议：
+当前 active judge 输出只保留热路径真正需要的四字段：
 
 ```json
 {
   "route": "reply | delegate",
-  "is_followup_to_recent_execution": false,
-  "is_new_work": true,
-  "needs_side_effect": true,
-  "needs_fresh_state": false,
-  "expected_deliverable": "修复并验证 runtime dispatch 授权",
   "complexity": "simple | normal | deep",
-  "duration_hint": "instant | short | long",
-  "tool_need_hint": "none | read_only | write_or_exec | network_or_external",
   "confidence": 0.84,
-  "reason_codes": ["requires_code_change", "needs_tests"]
+  "complexity_confidence": 0.74
 }
 ```
 
 关键点：
 
 - `route=delegate` 不等于允许 dispatch。
-- `is_followup_to_recent_execution=true` 应阻止 ordinary dispatch；需要操作时走显式 task action。
-- `is_new_work` 必须表示“需要创建新的执行单元”，不是“这句话提到了派发/状态/失败”。
-- `expected_deliverable` 必须可验收；没有交付物的 delegate 倾向应降级为 reply。
+- `confidence` 只表示 route 置信度。
 - `complexity` 是 judge proposal，不是展示真相。
+- `complexity_confidence` 只表示 complexity 置信度，不得反向改变 route。
+- `is_new_work`、`expected_deliverable`、side effect、fresh state、duration、tool need 不再由 active judge 输出；这些由 runtime 事实包、WorkContract materializer、ticket admission 和 scheduler 决定。
+
+兼容说明：
+
+- `llm-judge` parser 可以继续读取旧字段，避免旧 replay / 旧模型输出直接失效。
+- active validator 不接受“只有旧字段、没有四字段”的输出。
+- 旧字段不得作为 route override 依据；若保留在 replay 中，只能用于 debug / telemetry。
 
 ### 4.3 Runtime 薄授权
 
 runtime 不做大词表语义分类，只做四个通用一致性校验：
 
-1. **新工作校验**：`route=delegate` 但 `is_new_work=false`，降级为 `reply`。
-2. **交付物校验**：`route=delegate` 但没有清晰 `expected_deliverable`，降级为 `reply`。
+1. **新工作校验**：`route=delegate` 但 runtime / WorkContract / ticket admission 判定不是新工作，降级为 `reply` 或返回 main reply fallback。
+2. **交付物校验**：`route=delegate` 但 WorkContract materializer 无法形成清晰 `expected_deliverable`，降级为 `reply`。
 3. **单 owner 校验**：本 turn 已经发生用户可见 reply 或 direct action，撤销 delegation eligibility；后续 dispatch 只能返回状态/拒绝包。
 4. **sealed delegate 校验**：dispatch 成功后，main agent 不能再 direct read/direct final 抢答；只能协调、查询状态或等待 completion relay。
 
@@ -256,8 +278,8 @@ N1 状态面应该优先展示这种 compact verdict，而不是把 native runni
 
 | 层 | 字段 | 职责 |
 |----|------|------|
-| judge | `complexity` | 语义初判：任务理解难度、执行步骤、风险 |
-| policy resolver | `complexity_final` | 合并 judge、tool need、duration、side effect、freshness、scope 后给最终值 |
+| judge | `complexity` / `complexity_confidence` | 语义初判：任务理解难度、执行步骤、风险；不决定 route，也不决定并发/排队 |
+| policy resolver | `complexity_final` | 合并 judge complexity、runtime facts、WorkContract scope、side effect、freshness、实际工具/文件/测试需求后给最终值 |
 | WorkContract | `complexity_final` / `complexity_reason_codes` | canonical truth，后续 dispatch、worker brief、status 都读这里 |
 | task-state / status | `complexity_final` | 只展示 WorkContract 投影，不从 replay/native task/judge metadata 混读 |
 | replay/nightly | `complexity_proposed` vs `complexity_final` | 评估 judge 漂移和 policy override 是否合理 |
@@ -274,14 +296,37 @@ N1 状态面应该优先展示这种 compact verdict，而不是把 native runni
 
 如果需要更细粒度成本控制，另设 `budget_class` 或 `duration_hint`，不要把复杂度标签膨胀成十几档。
 
+注意：`duration_hint` 不再是 active judge 输出字段。若后续确实需要预算/耗时控制，应由 runtime 根据任务类型、实际工具计划、历史耗时和 model profile 生成 `budget_class`，而不是让 judge 输出一个会影响 route 的 hint。
+
 ### 5.3 Policy override 原则
 
 policy 可以修正 judge complexity，但必须记录原因：
 
-- judge 说 `simple`，但 `needs_side_effect=true` 或 `tool_need_hint=write_or_exec`：升为 `normal/deep`。
-- judge 说 `deep`，但 `is_new_work=false` 且已有可回答 ledger：降为 `simple`，route 为 reply。
-- judge 缺失 `complexity`：标 `unknown_proposed`，policy 根据 schema 兜底为 `normal` 或 `simple`，并写 degraded reason。
+- judge 说 `simple`，但 runtime 事实证明需要写文件、执行命令、跑测试、跨网络查询或多步骤验收：升为 `normal/deep`。
+- judge 说 `deep`，但 runtime / WorkContract 判定不是新工作，且已有可回答 ledger：降为 `simple`，route 为 reply。
+- judge 缺失 `complexity` 或 `complexity_confidence`：active validator 拒绝该输出；旧 replay 兼容路径可标 `unknown_proposed`，policy 兜底并写 degraded reason。
 - status panel 只展示 `complexity_final`；debug/raw 才展示 proposed/final diff。
+
+### 5.4 Judge 字段收口后的文档冲突
+
+本文早期草案提到 `is_new_work`、`expected_deliverable`、`needs_side_effect`、`needs_fresh_state`、`duration_hint`、`tool_need_hint`、`reason_codes`。这些字段的目标职责仍然存在，但不再放在 active judge schema 里：
+
+| 旧字段/职责 | 新归属 |
+|-------------|--------|
+| `is_new_work` | relation classifier + WorkContract / ticket admission |
+| `expected_deliverable` | WorkContract materializer / dispatch admission |
+| `needs_side_effect` | runtime tool/action plan、WorkContract scope、actual tool usage |
+| `needs_fresh_state` | conversation control / execution coverage / state grounding precheck |
+| `duration_hint` | runtime budget class 或历史耗时统计，不由 judge 强制 route |
+| `tool_need_hint` | actual tool plan / runtime policy，不由 judge 强制 route |
+| `reason_codes` | validator/replay 自己记录 override reason，不要求模型输出 |
+
+这样做的收益是：
+
+- judge prompt 更短，热路径延迟更低；
+- 模型输出自由度降低，解析和 validator 更稳定；
+- hint 不再越权影响 route；
+- route authority 更清楚：judge 给建议，runtime facts 和 ticket admission 管副作用。
 
 ---
 
@@ -309,7 +354,7 @@ OctoClaw 当前还维护 `tmp/octopus/task-state.json`、`task-events.jsonl`、`
 1. **不直接改 OpenClaw 原生 DB schema**。`flows/registry.sqlite` 和 `tasks/runs.sqlite` 是 substrate owned store，OctoClaw 优先通过 OpenClaw runtime bridge/API 读取或同步 native lifecycle；直接 DB 读取只能作为有 schema guard 的只读诊断 fallback。
 2. **当前 `queryNativeState` 只是 staged / diagnostic hook**。它用于诊断、reconcile smoke test 和未来 bridge/API 缺口补位；当前生产路径不声明直接读取 OpenClaw native DB 作为唯一执行证据。正式 native integration 必须通过后续 bridge/API 或受保护 adapter promotion 单独验收。
 3. **OctoClaw 新增自己的 transactional runtime ledger**，建议 SQLite：`~/.openclaw/workspace/.octoclaw/runtime/octoclaw-runtime.sqlite`。N1-MVP 只拥有 WorkContract、delegation ticket、scheduler queue、attempt、completion binding 和 runtime event truth；实现上优先使用 Node 内置 `node:sqlite`，不要为 N1 引入新的 native SQLite 依赖。
-4. **`task-state.json` 降为 read-model snapshot / compatibility projection**。status 面、简单工具和人工排障可以继续读它，但它必须能从 OctoClaw ledger + OpenClaw native lifecycle snapshot / replay 重建；它不再承担并发调度的唯一写入真相。
+4. **`task-state.json` 降为 generated read-model snapshot / projection**。status 面、简单工具和人工排障可以继续读它，但它必须能从 OctoClaw ledger + OpenClaw native lifecycle snapshot / replay 重建；它不再承担并发调度的唯一写入真相。
 5. **JSONL 继续做 audit log，不做调度锁**。`task-events.jsonl` / `runtime-policy-replay.jsonl` 适合审计、回放、nightly eval；不适合承载 queue pop、lease acquire、attempt transition 这类需要原子性的操作。
 
 如果暂时不引入 SQLite 依赖，也必须至少做到：单 writer actor + append-only log + atomic snapshot + file lock + revision CAS。但这只是过渡方案；N1 正式目标应是 SQLite ledger。
@@ -340,7 +385,7 @@ Deferred tables are not part of the current production schema:
 ```text
 OpenClaw native DBs + OctoClaw runtime ledger + replay tail
   -> observer snapshot
-  -> task-state.json compatibility projection
+  -> task-state.json generated read-model projection
   -> status/details/queue/timeline
 ```
 
@@ -384,6 +429,28 @@ terminal failure:
 - WorkContract 写域不冲突，或都是 read-only。
 - backend capacity 未超过 `max_concurrent_spawns`。
 - 模型/账号/host 没有 cooldown 或全局限流。
+
+当前 judge 四字段实现不能、也不应该解决“是否并发 / 是否排队”。judge 看不到完整仓库写域、未提交 diff、resource lock、native runner capacity、credential cooldown，也不能可靠判断两个任务是否会修改同一文件。因此并发/排队的权威应放在 scheduler/resource admission，而不是 judge prompt。
+
+推荐判定来源：
+
+| 来源 | 用途 |
+|------|------|
+| WorkContract declared read/write scope | 预判资源冲突和依赖 |
+| Git worktree status / diff / branch / worktree id | 判断当前 checkout 是否有未提交修改、文件是否被其他 attempt 占用、是否需要单独 worktree |
+| Resource locks | 对 repo path、package、IM thread、native session、credential、model account 做 lease/CAS |
+| Native runner capacity | 判断 host 是否能并发 spawn |
+| Explicit dependency / user order | 处理 `等 A 完成后做 B`、artifact 依赖和 amendment |
+
+Git 更适合做 evidence 和隔离机制，而不是唯一 scheduler：
+
+- 对低风险 read-only 任务，不需要排队。
+- 对同一 repo 写操作，优先使用 WorkContract write scope + resource lock。
+- 对可并发但可能冲突的代码任务，可分配独立 git branch/worktree；最终通过 merge/rebase/test 暴露冲突。
+- 对同一文件/同一 package 的写操作，应排队或 blocked，不能只依赖最后 git merge 才发现。
+- 对已有 dirty worktree，scheduler 应 fail closed 或分配新 worktree，避免子 agent 覆盖主 agent/用户未提交改动。
+
+结论：git/worktree 是很好的冲突检测和隔离层，但还需要 OctoClaw 自己的 resource lock / scheduler row 来表达用户可见的 `queued_after`、`blocked_by`、`running`、`terminal`。只靠 judge 或只靠 git 都不够。
 
 #### 依赖任务排队
 
@@ -445,7 +512,7 @@ blocked 必须带 `blocked_by`、`retry_after` 或 `manual_action`。
 {
   "judge_route": "delegate",
   "final_route": "reply",
-  "judge_is_new_work": false,
+  "admission_is_new_work": false,
   "dispatch_ticket": "not_issued",
   "override_reason": "delegate_without_new_work",
   "complexity_proposed": "deep",
@@ -482,7 +549,8 @@ bad case replay
 
 ### S1：只记录，不改变 live 行为
 
-- 在 route decision 中记录 `is_new_work`、`expected_deliverable`、`complexity_proposed`。
+- 在 route decision 中记录 `route_confidence`、`complexity_proposed`、`complexity_confidence`。
+- `is_new_work`、`expected_deliverable` 若需要记录，应来自 relation classifier / WorkContract / ticket candidate，不来自 active judge。
 - 在 WorkContract 中新增或规范 `complexity_final`、`complexity_reason_codes`。
 - 在 replay 中记录 judge proposal 与 policy final 的 diff。
 
@@ -525,7 +593,7 @@ bad case replay
 
 1. “为什么刚才自己回复一次又派发一次”不创建新 WorkContract；主 agent 用 ledger 解释。
 2. “AGENTS/rule 是否更新”如果只是核验当前规则注入，不创建 delegate；需要文件修改时才可能生成 ticket。
-3. judge 误判 `delegate` 但 `is_new_work=false` 时，最终 route 为 reply，并记录 override。
+3. judge 误判 `delegate` 但 runtime / ticket admission 判定不是新工作时，最终 route 为 reply，并记录 override 或 `fallback_to_main_reply=true`。
 4. main agent 已经 direct action 后再调用 dispatch，dispatch 返回 `ticket_revoked` 或 `dispatch_not_authorized`，不 spawn。
 5. dispatch 成功后，main final 被静默或转为 coordinator/status，不与 delegate completion 双投递。
 6. completion 写到错误路径或 `workContractId` 为空时，状态进入 `completion_orphaned` / `binding_mismatch`，并能通过 orphan scanner 找回候选结果；不能继续普通显示 `running/result=none`。
@@ -539,7 +607,7 @@ bad case replay
 ## 10. 与现有文档的关系
 
 - 本文补充 `octoclaw-ts-rebuild-design-v2.md` 的 N1 委派稳定化设计。
-- `octoclaw-judge-ack-policy-spec-2026-04-21.md` 仍是 judge label 和 ACK/policy spec 的基础；后续应把 `is_new_work`、`expected_deliverable`、`complexity_final` 纳入 schema。
+- `octoclaw-judge-ack-policy-spec-2026-04-21.md` 仍是 judge label 和 ACK/policy spec 的基础；active judge schema 以 `route`、`confidence`、`complexity`、`complexity_confidence` 为准。`is_new_work`、`expected_deliverable`、`complexity_final` 属于 runtime / WorkContract schema，不属于 active judge 输出。
 - `octoclaw-work-contract-centered-delegation-design-2026-04-25.md` 仍是 WorkContract 委派合同基础；后续应把 delegation ticket 作为 WorkDecisionSeal 到 dispatch materialization 的桥。
 - `octoclaw-state-convergence-4-4-design.md` 仍是状态真相边界；本文要求状态追问只读其 canonical projection，不再通过新委派解释旧任务。
 - `octoclaw-n1-runtime-ledger-implementation-plan-2026-05-01.md` 是本文的实施包，包含 SQLite schema、分步 rollout、验收矩阵和 OpenSpec 模板。

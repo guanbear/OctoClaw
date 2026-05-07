@@ -69,7 +69,13 @@ function coerceJudgeOutput(parsed: Record<string, unknown>): JudgeOutput {
     replyMode: (parsed.replyMode ?? parsed.reply_mode ?? null) as JudgeOutput["replyMode"],
     delegateRole: (parsed.delegateRole ?? parsed.delegate_role ?? null) as JudgeOutput["delegateRole"],
     coordinationModeHint: (parsed.coordinationModeHint ?? parsed.coordination_mode_hint ?? null) as JudgeOutput["coordinationModeHint"],
-    complexity: (parsed.complexity ?? null) as JudgeOutput["complexity"],
+    complexity: (parsed.complexity ?? parsed.complexityBand ?? parsed.complexity_band ?? null) as JudgeOutput["complexity"],
+    complexityConfidence: typeof (parsed.complexityConfidence ?? parsed.complexity_confidence) === "number"
+      ? (parsed.complexityConfidence ?? parsed.complexity_confidence) as number
+      : undefined,
+    complexity_confidence: typeof (parsed.complexity_confidence ?? parsed.complexityConfidence) === "number"
+      ? (parsed.complexity_confidence ?? parsed.complexityConfidence) as number
+      : undefined,
     scope: (parsed.scope ?? null) as JudgeOutput["scope"],
     toolNeedHint: (parsed.toolNeedHint ?? parsed.tool_need_hint ?? null) as JudgeOutput["toolNeedHint"],
     durationHint: (parsed.durationHint ?? parsed.duration_hint ?? null) as JudgeOutput["durationHint"],

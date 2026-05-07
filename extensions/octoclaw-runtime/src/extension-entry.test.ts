@@ -1570,6 +1570,8 @@ describe("octoclaw_route_hint policy state aliases", () => {
         choices: [{ message: { content: JSON.stringify({
           route: "reply",
           confidence: 0.9,
+          complexity: "simple",
+          complexity_confidence: 0.74,
           abstain_reason: null,
           ack_text: "收到",
         }) } }],
@@ -1647,6 +1649,8 @@ describe("octoclaw_route_hint policy state aliases", () => {
         choices: [{ message: { content: JSON.stringify({
           route: "delegate",
           confidence: 0.9,
+          complexity: "normal",
+          complexity_confidence: 0.74,
           abstain_reason: null,
           is_new_work: true,
           expected_deliverable: "implemented nightly replay AI interpretation report",

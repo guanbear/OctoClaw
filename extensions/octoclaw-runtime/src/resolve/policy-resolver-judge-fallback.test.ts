@@ -31,6 +31,8 @@ function judgeResponse(route: "reply" | "delegate", confidence = 0.82): Response
         content: JSON.stringify({
           route,
           confidence,
+          complexity: route === "delegate" ? "normal" : "simple",
+          complexity_confidence: 0.74,
           abstain_reason: null,
           ack_text: "收到",
           decision_bucket: route === "delegate" ? "must_delegate" : "must_reply",
@@ -81,6 +83,8 @@ function judgeSignalResponse(payload: Record<string, unknown>): Response {
         content: JSON.stringify({
           route: "reply",
           confidence: 0.86,
+          complexity: "simple",
+          complexity_confidence: 0.74,
           abstain_reason: null,
           ack_text: "收到",
           is_followup_to_recent_execution: false,
@@ -89,7 +93,6 @@ function judgeSignalResponse(payload: Record<string, unknown>): Response {
           reply_mode: "answer",
           delegate_role: null,
           coordination_mode_hint: "solo_worker",
-          complexity: "simple",
           scope: "local",
           tool_need_hint: "none",
           duration_hint: "short",
@@ -185,7 +188,7 @@ describe("policy resolver judge timeout fallback", () => {
     });
   });
 
-  it("marks degraded minimal delegate judge output as degraded and falls back to hard prompt signals", async () => {
+  it("rejects minimal delegate judge output and falls back to hard prompt signals", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(minimalJudgeResponse("delegate", 0.7));
 
     const decision = await resolveStatelessPolicyDecision("delegate this to a sub-agent", {
@@ -196,20 +199,15 @@ describe("policy resolver judge timeout fallback", () => {
 
     expect(routeDecisionOf(decision)).toMatchObject({
       route: "delegate",
-      route_source: "rule",
-      final_judge_source: "no_judge",
+      route_source: "fallback",
+      final_judge_source: "timeout_fallback",
       hard_delegate_signal: true,
     });
-    expect(decision._judge_route).toBeNull();
+    expect(decision._judge_route).toBe("delegate");
     const shadowLog = decision._judge_shadow_log as Record<string, unknown>;
-    expect(shadowLog.judge_schema_degraded).toBe(true);
-    expect(shadowLog.degraded_reasons).toEqual([
-      "missing_is_new_work",
-      "missing_expected_deliverable",
-      "missing_scope",
-      "missing_tool_need_hint",
-      "missing_duration_hint",
-    ]);
+    expect(shadowLog.judge_parse_failure).toBe(false);
+    expect(shadowLog.judge_schema_degraded).toBe(false);
+    expect(decision._judge_failure_class).toBe("invalid_json");
   });
 
   it("routes compact Chinese subagent wording to delegate when judge times out", async () => {
@@ -827,7 +825,7 @@ describe("execution coverage override intent guard", () => {
     });
   });
 
-  it("upgrades active judge reply when tool need is required for new work", async () => {
+  it("does not let legacy judge tool_need_hint override an active reply route", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
       jsonResponse({
         choices: [{
@@ -835,6 +833,8 @@ describe("execution coverage override intent guard", () => {
             content: JSON.stringify({
               route: "reply",
               confidence: 0.85,
+              complexity: "simple",
+              complexity_confidence: 0.74,
               abstain_reason: null,
               ack_text: "收到",
               tool_need_hint: "required",
@@ -858,12 +858,12 @@ describe("execution coverage override intent guard", () => {
     );
 
     expect(routeDecisionOf(decision)).toMatchObject({
-      route: "delegate",
+      route: "reply",
       route_source: "judge",
-      hard_delegate_signal: true,
+      hard_delegate_signal: false,
     });
     expect((decision._judge_shadow_log as Record<string, unknown>).validator_override_reasons ?? [])
-      .toContain("validator:hard_delegate_signal→delegate(tool_need_required)");
+      .not.toContain("validator:hard_delegate_signal→delegate(tool_need_required)");
   });
 
   it("execution_followup + no coverage + judge=reply + tool_need_hint=required → forced reply", async () => {
@@ -874,6 +874,8 @@ describe("execution coverage override intent guard", () => {
             content: JSON.stringify({
               route: "reply",
               confidence: 0.85,
+              complexity: "simple",
+              complexity_confidence: 0.74,
               abstain_reason: null,
               ack_text: "收到",
               tool_need_hint: "required",
@@ -962,6 +964,8 @@ describe("execution coverage override intent guard", () => {
             content: JSON.stringify({
               route: "reply",
               confidence: 0.85,
+              complexity: "simple",
+              complexity_confidence: 0.74,
               abstain_reason: null,
               ack_text: "收到",
               duration_hint: "long",
