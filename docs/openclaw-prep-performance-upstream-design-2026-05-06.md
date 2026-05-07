@@ -449,9 +449,10 @@ Microbenchmark setup:
 
 - OpenClaw source: `/Users/guanbear/workspace/openclaw-5.4-src`
 - branch: `tool-schema-cache-pr3`
-- base: `origin/main` at `9324af7d46`
-- command shape: `pnpm tsx --eval` importing `src/agents/pi-embedded-runner/tool-schema-runtime.ts`
+- PR head: `a5874d8ac60cf2974b74cc66b50028db103b390e`
+- command shape: `pnpm exec tsx --input-type=module` importing `src/agents/pi-embedded-runner/tool-schema-runtime.ts`
 - provider/model: `openai`, `gpt-5.4`, `openai-responses`, `https://api.openai.com/v1`
+- provider path: real bundled OpenAI provider hook path, not a mocked provider normalizer
 - fixture: 50 freshly-created representative tool objects per iteration, each with nested JSON schema and a fresh `execute` closure
 - samples: 100 repeated normalization iterations in one process
 - comparison: `OPENCLAW_TOOL_SCHEMA_CACHE=0` versus default cache enabled
@@ -460,14 +461,27 @@ Observed results:
 
 | Mode | total | per iteration | RSS delta | cache stats |
 | --- | ---: | ---: | ---: | --- |
-| cache disabled | 34.959s | 349.590ms | +337.4 MiB | `bypass=100 hit=0 miss=0 store=0 size=0` |
-| cache enabled | 0.373s | 3.727ms | +3.6 MiB | `bypass=0 hit=99 miss=1 store=1 size=1` |
+| cache disabled | 63.625s | 636.250ms | +447.7 MiB | `bypass=100 hit=0 miss=0 store=0 size=0` |
+| cache enabled | 26.927s | 269.270ms | -3.1 MiB | `bypass=0 hit=99 miss=1 store=1 size=1` |
+
+Lightweight mock Gateway E2E:
+
+- PR head: `d35031322710757f96212feae00b45be8452b4be` before rebase; same PR code path, used as compatibility proof rather than final-head performance proof
+- setup: same Gateway process, mock OpenAI server, five main-agent RPC calls per mode
+- model request shape: 27 tools sent per request
+
+| Mode | durations | p50 | model requests | tools per request |
+| --- | --- | ---: | ---: | --- |
+| cache enabled | `[2105, 496, 471, 465, 470]` ms | 471ms | 5 | 27 |
+| cache disabled | `[2002, 482, 472, 474, 470]` ms | 474ms | 5 | 27 |
 
 Conclusions:
 
 - PR3 directly targets the repeated provider tool-schema normalization path that every main/default embedded attempt reaches after tool creation.
 - The cache is not only startup-only: in a long-lived Gateway/embedded process, each later turn with the same provider/model/tool schema signature can reuse the normalized schema parameters while keeping fresh execute closures.
-- This first PR3 slice does not remove all `core-plugin-tools` or `bundle-tools` cost. It should be treated as a conservative schema-normalization cache, not a full bundle-materialization cache.
+- The cache is active (`miss=1 store=1 hit=99`), but the current conservative hit path still pays cache key and original schema signature construction. The realistic current-head microbenchmark is therefore a partial win, not the earlier near-zero hit-path result.
+- The mock Gateway E2E confirms the real main-agent path works with the cache enabled, but it does not show a meaningful wall-latency delta in a five-run fixture. Treat the E2E as compatibility proof, not performance proof.
+- This first PR3 slice does not remove all `core-plugin-tools` or `bundle-tools` cost. It should be treated as a conservative schema-normalization cache, not a full bundle-materialization cache. A bigger follow-up should cache or reuse static tool inventory descriptors / policy inputs before provider schema normalization.
 - The kill switch works for before/after comparison and rollback: `OPENCLAW_TOOL_SCHEMA_CACHE=0`.
 
 ### 6.1 What To Cache
@@ -544,6 +558,49 @@ OPENCLAW_TOOL_SCHEMA_CACHE=0
 ```
 
 ## 7. Phase 4: System Prompt Lazy/Cache
+
+### 7.0 2026-05-07 Upstream Recheck
+
+This phase is no longer an immediate implementation PR as originally drafted. Current upstream `origin/main` already contains the stable system prompt prefix cache and internal cache boundary:
+
+- `0f16edf329 fix: cache stable system prompt prep` is contained in `origin/main`.
+- `src/agents/system-prompt.ts` has `stablePromptPrefixCache` with `SYSTEM_PROMPT_STABLE_PREFIX_CACHE_LIMIT = 64`.
+- `src/agents/system-prompt-cache-boundary.ts` exposes `SYSTEM_PROMPT_CACHE_BOUNDARY` plus stable/dynamic split helpers.
+- `docs/concepts/system-prompt.md` documents stable provider prompt contributions and dynamic suffix placement below the cache boundary.
+
+Lightweight local verification was run from `/Users/guanbear/workspace/openclaw-5.4-src` on branch `prep-metrics-pr1` at `f1f607b6e8e3fbf8414f1adc03ad104bf76784e8`; the upstream prompt-cache code under test is already present on `origin/main` at `5ff283cfbba84a630c8e683c6e263720645ac4c4`.
+
+Pure `buildAgentSystemPrompt()` microbenchmark with a main-agent-like 74k character prompt:
+
+| Case | iterations | per iteration | p50 | p95 | prompt chars | stable chars | dynamic chars |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| cold single | 1 | 1.437ms | 1.436ms | 1.436ms | 74008 | 69599 | 4373 |
+| cache hit, same input | 200 | 0.198ms | 0.185ms | 0.220ms | 74008 | 69599 | 4373 |
+| cache hit, changing dynamic turn data | 200 | 0.191ms | 0.182ms | 0.218ms | 73977 | 69599 | 4342 |
+| forced stable-key miss | 200 | 0.223ms | 0.216ms | 0.255ms | 74024 | 69615 | 4373 |
+
+`buildAttemptSystemPrompt()` plus `buildSystemPromptReport()` microbenchmark with 50 representative tools and about 45.8k schema characters:
+
+| Case | iterations | per iteration | p50 | p95 | prompt chars | stable chars | dynamic chars |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| cache hit, changing dynamic turn data | 200 | 0.159ms | 0.149ms | 0.203ms | 51257 | 47616 | 3605 |
+| forced stable-key miss | 200 | 0.182ms | 0.176ms | 0.205ms | 51299 | 47632 | 3631 |
+
+Focused regression coverage also passed:
+
+```sh
+OPENCLAW_VITEST_MAX_WORKERS=1 pnpm test src/agents/system-prompt-cache-boundary.test.ts src/agents/system-prompt.test.ts
+```
+
+Result: 2 files passed, 78 tests passed.
+
+Conclusion: do not submit a PR whose main claim is "add stable system prompt cache"; upstream already has that mechanism, and the isolated prompt build/report path is well below 1ms per repeated turn in this local fixture. The earlier PR1+PR2 benchmark still shows `system-prompt` around 54-57ms p50/p95 at the embedded prep stage boundary, so any remaining work should first identify which surrounding resolver inside the `system-prompt` stage accounts for that time. Candidate checks are OpenClaw reference path resolution, channel action/message hint lookup, provider contribution resolution, system prompt report inputs, and other stage-boundary work in `attempt.ts`, not a second stable-prefix cache.
+
+Revised Phase 4 gate:
+
+- no PR4 implementation unless new evidence shows stable prefix cache misses, unstable dynamic content above the boundary, or a specific resolver inside the `system-prompt` stage with material p50/p95 cost;
+- if evidence appears, PR4 should be a narrow fix to the measured miss/resolver, reusing the existing cache boundary and adding golden prompt tests;
+- lazy fragment selection remains a later, higher-risk PR only after token-size and first-token data show a real gain.
 
 ### 7.1 What To Cache
 
@@ -641,10 +698,10 @@ Recommended split:
 | 1 | expose existing embedded prep stage summary in run metadata / `agent_end` | low |
 | 2 | propagate `toolsAllow` through `sessions_spawn` and let worker roles use narrow tool sets | low-medium |
 | 3 | tool schema / bundle cache with memory-only LRU and kill switch | medium-low |
-| 4 | prompt fragment stability contract and stable prompt cache | medium |
+| 4 | prompt-stage gap fix only if measured; reuse existing stable-prefix cache/boundary | medium |
 | 5 | conservative lazy fragment selection behind flag | medium-high |
 
-PR 1 should land before any cache PR. PR 2 is useful even before cache because it narrows child worker work with existing OpenClaw primitives. PR 3 can be proposed once stage evidence confirms tool schema / bundle work remains a major prep span after allowlist propagation. PR 4/5 should wait until prompt build/token size is measured and golden prompt fixtures exist.
+PR 1 should land before any cache PR. PR 2 is useful even before cache because it narrows child worker work with existing OpenClaw primitives. PR 3 can be proposed once stage evidence confirms tool schema / bundle work remains a major prep span after allowlist propagation. PR 4 is not currently justified as a stable prompt cache PR because upstream already contains that mechanism. PR 4/5 should wait until prompt-stage resolver evidence, prompt token-size data, first-token latency data, and golden prompt fixtures exist.
 
 ## 9. Upstream Landing Plan
 
@@ -759,9 +816,9 @@ Before coding PR 3, write the cache key tests first. The first cache PR should b
 
 ### 9.7 PR 4/5 Gate: System Prompt Lazy/Cache
 
-Do not start prompt lazy/cache until prompt-stage evidence is stable and golden prompt tests exist. This work has the highest behavior risk, so it should be split:
+Do not start new prompt lazy/cache implementation until prompt-stage evidence is stable and golden prompt tests exist. Current upstream already has stable prefix caching and the cache boundary, so this work should be split only if new data proves a remaining gap:
 
-1. fragment stability contract and stable prompt cache;
+1. measured prompt-stage miss/resolver fix that reuses the existing stable prefix cache;
 2. lazy fragment selection behind a flag.
 
 The lazy selection rule must be derived from runtime state, provider capabilities, and already-computed route/tool visibility. It must not be based on user-text keyword matching.
