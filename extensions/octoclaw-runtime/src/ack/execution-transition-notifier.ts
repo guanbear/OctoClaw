@@ -1,6 +1,5 @@
 import type { TaskStatusProjection } from "@octoclaw/contracts/status-projection";
 import type { AnomalyNotice } from "@octoclaw/contracts/work-contract";
-import { appendToDeliveryOutbox } from "../delivery/delivery-outbox.js";
 import { sendIMMessage } from "../im/send.js";
 import { resolveWorkspaceRoot } from "../resolve/env.js";
 import { getReceipt, recordDelivery } from "./ack-dedupe.js";
@@ -402,16 +401,11 @@ export async function emitExecutionTransitionNotification(params: {
     releaseExecTransitionClaim(notificationKey, "execution_transition");
   }
   if (!sent && params.workContractId && ["dispatch_materialized", "spawn_started", "timed_out", "result_ready"].includes(params.transitionKind)) {
-    try {
-      appendToDeliveryOutbox({
-        workContractId: params.workContractId,
-        kind: "progress",
-        parentSessionKey: params.sessionKey,
-        replyToMessageId: params.replyToMessageId,
-        message: text,
-        cwd: params.cwd,
-      });
-    } catch {}
+    void recordPolicyReplay("delivery_outbox_removed_send_failed", {
+      workContractId: params.workContractId,
+      transitionKind: params.transitionKind,
+      sessionKey: params.sessionKey,
+    }, replayParams.logger);
   }
   const ackTargetResolutionState = sent ? "resolved" : (result.attempted ? "resolved_send_failed" : "no_valid_target");
   const ackDeliveryState = sent ? "sent" : (result.attempted ? "failed" : "queued_for_retry");

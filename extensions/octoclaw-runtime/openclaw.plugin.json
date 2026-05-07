@@ -14,7 +14,6 @@
       "octoclaw_route",
       "octoclaw_dispatch",
       "octoclaw_dispatch_confirm",
-      "octoclaw_spawn",
       "octoclaw_task_action",
       "octoclaw_status",
       "octoclaw_crash_recovery"

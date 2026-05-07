@@ -25,12 +25,6 @@ function dispatchTool() {
   return tool;
 }
 
-function dispatchToolWithRuntime(subagentRuntime: NonNullable<Parameters<typeof getToolRegistrations>[0]>["subagentRuntime"]) {
-  const tool = getToolRegistrations({ subagentRuntime }).find((registration) => registration.name === "octoclaw_dispatch");
-  if (!tool) throw new Error("octoclaw_dispatch tool not registered");
-  return tool;
-}
-
 function statusTool() {
   const tool = getToolRegistrations().find((registration) => registration.name === "octoclaw_status");
   if (!tool) throw new Error("octoclaw_status tool not registered");
@@ -58,6 +52,8 @@ function delegateDecision(route = "delegate") {
       task_class: "worker_research",
     },
     model_policy: { selected_model: "worker_research" },
+    is_new_work: true,
+    expected_deliverable: "Dispatch from test policy and report execution evidence.",
   };
 }
 
@@ -176,6 +172,7 @@ const ENV_KEYS = [
   "OCTOCLAW_PLANNER_ALLOWLIST",
   "OCTOCLAW_SPECULATIVE_PRELOAD",
   "OCTOCLAW_WORK_CONTRACT_LEDGER_PATH",
+  "OCTOCLAW_RUNTIME_LEDGER",
 ] as const;
 let previousEnv: Partial<Record<(typeof ENV_KEYS)[number], string | undefined>> = {};
 
@@ -236,12 +233,6 @@ async function executeDispatch(params: Record<string, unknown>, ctx: Record<stri
   return JSON.parse(response.text as string) as Record<string, unknown>;
 }
 
-async function executeDispatchWithRuntime(params: Record<string, unknown>, subagentRuntime: NonNullable<Parameters<typeof getToolRegistrations>[0]>["subagentRuntime"], ctx: Record<string, unknown> = {}) {
-  const response = await dispatchToolWithRuntime(subagentRuntime).execute(params, ctx);
-  expect(typeof response.text).toBe("string");
-  return JSON.parse(response.text as string) as Record<string, unknown>;
-}
-
 vi.setConfig({ testTimeout: 30_000 });
 
 describe("dispatchReplyToMessageId", () => {
@@ -264,6 +255,7 @@ describe("octoclaw_dispatch honesty", () => {
       previousEnv[key] = process.env[key];
     }
     process.env.OCTOCLAW_SPAWN_BACKEND = "legacy";
+    process.env.OCTOCLAW_RUNTIME_LEDGER = "off";
     delete process.env.OCTOCLAW_PLANNER_ALLOWLIST;
     delete process.env.OCTOCLAW_SPECULATIVE_PRELOAD;
     delete process.env.OCTOCLAW_WORK_CONTRACT_LEDGER_PATH;
@@ -293,6 +285,7 @@ describe("octoclaw_dispatch honesty", () => {
     const stateDir = path.join(dir, "tmp", "octopus");
     fsSync.mkdirSync(stateDir, { recursive: true });
     fsSync.writeFileSync(path.join(stateDir, "task-state.json"), JSON.stringify({
+      schemaVersion: "octoclaw.task_state.v1",
       tasks: [{
         id: "wc-alias-1",
         workContractId: "wc-alias-1",
@@ -332,6 +325,7 @@ describe("octoclaw_dispatch honesty", () => {
     const stateDir = path.join(dir, "tmp", "octopus");
     fsSync.mkdirSync(stateDir, { recursive: true });
     fsSync.writeFileSync(path.join(stateDir, "task-state.json"), JSON.stringify({
+      schemaVersion: "octoclaw.task_state.v1",
       tasks: [
         {
           id: "task-honesty",
@@ -483,6 +477,7 @@ describe("octoclaw_dispatch honesty", () => {
     const stateDir = path.join(dir, "tmp", "octopus");
     fsSync.mkdirSync(stateDir, { recursive: true });
     fsSync.writeFileSync(path.join(stateDir, "task-state.json"), JSON.stringify({
+      schemaVersion: "octoclaw.task_state.v1",
       tasks: [{
         id: "task-status-panel-1",
         status: "running",
@@ -525,6 +520,7 @@ describe("octoclaw_dispatch honesty", () => {
     const stateDir = path.join(dir, "tmp", "octopus");
     fsSync.mkdirSync(stateDir, { recursive: true });
     fsSync.writeFileSync(path.join(stateDir, "task-state.json"), JSON.stringify({
+      schemaVersion: "octoclaw.task_state.v1",
       tasks: [{
         id: "task-continuity-no-spawn",
         status: "running",
@@ -546,45 +542,42 @@ describe("octoclaw_dispatch honesty", () => {
     expect(tableOutput).not.toContain("task-continuity-no-spawn | running(running)");
   });
 
-  it("executes subagent runtime after native materialization to produce spawn evidence", async () => {
+  it("does not call runtime.subagent.run after native materialization", async () => {
     const dir = fs.mkdtempSync(path.join(osModule.tmpdir(), "octoclaw-runtime-spawn-"));
     tempLedgerPaths.push(dir);
     envOverrides.workspaceRoot = dir;
-    const calls: Array<Record<string, unknown>> = [];
     const subagentRuntime = {
       run: vi.fn(async (params: Record<string, unknown>) => {
-        calls.push(params);
+        void params;
         return { runId: "child-run-runtime" };
       }),
     };
 
-    const result = await executeDispatchWithRuntime({
+    const result = await executeDispatch({
       task: "Spawn via runtime after materialization",
       policyJson: JSON.stringify({
         ...delegateDecision(),
         request: { session_key: "session-runtime-subagent" },
       }),
-    }, subagentRuntime, {
+    }, {
       helperInvoker: materializedNoSpawnHelper(),
       sessionId: "session-runtime-subagent-test",
       agentId: "main",
+      runtime: { subagent: subagentRuntime },
     });
 
-    expect(result.ok).toBe(true);
-    expect(result.execution_state).toBe("spawn_confirmed");
+    expect(result.ok).toBe(false);
+    expect(result.error).toBe("spawn_not_confirmed");
+    expect(result.execution_state).toBe("materialized_no_spawn");
     expect(result.dispatch_executed).toBe(true);
-    expect(result.spawn_executed).toBe(true);
-    expect(result.child_session_key).toContain(":subagent:");
-    expect(result.child_run_id).toBe("child-run-runtime");
-    expect(subagentRuntime.run).toHaveBeenCalledTimes(1);
-    expect(String(calls[0]?.message)).toContain("[OctoClaw Delegated Task]");
-    expect(String(calls[0]?.message)).not.toContain("raw transcript");
+    expect(result.spawn_executed).toBe(false);
+    expect(subagentRuntime.run).not.toHaveBeenCalled();
 
     const taskStatePath = path.join(dir, "tmp", "octopus", "task-state.json");
     const taskState = JSON.parse(fsSync.readFileSync(taskStatePath, "utf-8")) as { tasks: Array<Record<string, unknown>> };
-    expect(taskState.tasks[0].status).toBe("running");
-    expect(taskState.tasks[0].spawnExecuted).toBe(true);
-    expect(taskState.tasks[0].runId).toBe("child-run-runtime");
+    expect(taskState.tasks[0].status).toBe("queued");
+    expect(taskState.tasks[0].spawnExecuted).toBe(false);
+    expect(taskState.tasks[0].runId).toBeUndefined();
   });
 
   it("returns structured ok:true only when spawn evidence exists", async () => {

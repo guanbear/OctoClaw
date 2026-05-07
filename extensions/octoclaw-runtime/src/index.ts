@@ -4,7 +4,6 @@ export * from "./adapter/webhook-surface.js";
 export * from "./adapter/state-surface.js";
 export * from "./runtime-payloads.js";
 export * from "./bridge.js";
-export * from "./adapter/detached-task-runtime.js";
 export * from "./conversation-grounding.js";
 export * from "./resolve/env.js";
 export * from "./resolve/judge-context-packet.js";

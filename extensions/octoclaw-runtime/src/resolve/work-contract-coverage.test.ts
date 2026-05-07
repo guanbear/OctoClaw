@@ -89,7 +89,7 @@ function routeForProvenanceFollowup(layer: JudgeExecutionLayer): "reply" | "dele
 }
 
 function forbiddenToolsForReply(layer: JudgeExecutionLayer): string[] {
-  return routeForProvenanceFollowup(layer) === "reply" ? ["octoclaw_dispatch", "octoclaw_spawn"] : [];
+  return routeForProvenanceFollowup(layer) === "reply" ? ["octoclaw_dispatch"] : [];
 }
 
 function preferredChildSessionKey(contract: WorkContract): string | undefined {
@@ -130,7 +130,7 @@ describe("WorkContract coverage acceptance", () => {
     expect(routeForProvenanceFollowup(layer)).toBe("reply");
     expect(routeForProvenanceFollowup(layer)).not.toBe("delegate");
     expect(forbiddenTools).toContain("octoclaw_dispatch");
-    expect(forbiddenTools).toContain("octoclaw_spawn");
+    expect(forbiddenTools).not.toContain("octoclaw_spawn");
   });
 
   it("provenance follow-up after delegate+dispatchExecuted+spawnExecuted+resultMaterialized should cite worker", () => {
