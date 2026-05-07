@@ -378,6 +378,42 @@ describe("regression round 4: scenario 2b — delegated state normalization", ()
     expect(text).toBe("本机 OpenClaw：2026.4.21。");
   });
 
+  it("keeps current reply-route blocked-tool evidence instead of projecting stale delegate failure", () => {
+    const reply = [
+      "再试结果：这轮 *没派出去*。",
+      "",
+      "证据：",
+      "• 直接 `sessions_spawn` 被拦：`no current pending native spawn intent exists. Call octoclaw_dispatch first`",
+      "• 随后 `octoclaw_dispatch` 也被拦：`WorkContract forbids octoclaw_dispatch for this turn`",
+      "",
+      "所以当前这条消息的 runtime policy 是 `reply`，禁止我在主线程里强行派子 agent。",
+    ].join("\n");
+    const guarded = guardAssistantMessageForPolicyState(
+      { role: "assistant", content: [{ type: "text", text: reply }] },
+      {
+        delegated: false,
+        dispatchExecuted: false,
+        spawnExecuted: false,
+        blockedTools: ["sessions_spawn", "octoclaw_dispatch"],
+        decision: {
+          route: "delegate",
+          work_contract: { forbiddenTools: ["octoclaw_dispatch"] },
+          route_decision: { route: "delegate", task_class: "delegated_single" },
+          tool_policy: { must_delegate_via: "octoclaw_dispatch" },
+        },
+        latestExecutionReceipt: {
+          route: "reply",
+          dispatchExecuted: false,
+          spawnExecuted: false,
+        },
+      },
+    );
+
+    expect(guarded.mode).toBe("pass");
+    expect(textOf(guarded)).toContain("WorkContract forbids octoclaw_dispatch");
+    expect(textOf(guarded)).not.toContain("等我拿到真实执行结果后回复");
+  });
+
   it("does not project delegate failure over a plain greeting reply", () => {
     const guarded = guardAssistantMessageForPolicyState(
       { role: "assistant", content: [{ type: "text", text: "你好，我在。" }] },

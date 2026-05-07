@@ -4552,6 +4552,10 @@ export const plugin = {
       const isDeterministicFallbackToDelegate = stringValue(routeDecision.route) === "delegate"
         && (stringValue(routeDecision.route_source) === "fallback" || stringValue(routeDecision.fallback_reason).includes("explicit_delegate"));
       if (forbiddenContractTools.has(toolName) && !isDeterministicFallbackToDelegate) {
+        updatePolicyState(stateKey, (current) => ({
+          ...current,
+          blockedTools: [...(Array.isArray(current.blockedTools) ? current.blockedTools.slice(-7) : []), toolName].filter(Boolean),
+        }));
         void recordPolicyReplay(
           "tool_blocked_work_contract_forbidden",
           {

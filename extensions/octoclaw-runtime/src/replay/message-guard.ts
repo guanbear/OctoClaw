@@ -178,6 +178,18 @@ function hasDirectToolEvidence(state: Record<string, unknown>): boolean {
   });
 }
 
+function blockedToolNames(state: Record<string, unknown>): Set<string> {
+  return new Set([
+    ...asStringArray(state.blockedTools),
+    ...asStringArray(state.blocked_tools),
+  ].map((item) => item.toLowerCase()));
+}
+
+function hasBlockedToolEvidence(state: Record<string, unknown>, toolName: string): boolean {
+  const blocked = blockedToolNames(state);
+  return blocked.has(toolName.toLowerCase());
+}
+
 function allowsBudgetedMainDirectFinal(state: Record<string, unknown>): boolean {
   if (decisionBucketForGuard(state) !== "budgeted_main_then_delegate") return false;
   const dispatchStatus = String(state.dispatchStatus ?? state.dispatch_status ?? "").trim();
@@ -377,9 +389,11 @@ export function guardAssistantMessageForPolicyState(
   const genericGreetingReply = looksLikeGenericGreeting(replyText);
   const correctedToReplyBeforeDispatch = hasPreDispatchReplyCorrection(state);
   const delegatedRoute = isDelegatedRoute(asRecord(state.decision));
+  const replyRouteTruth = hasReplyRouteTruth(state);
   const explicitReplyExecution = dispatchRoute === "reply" && dispatchExecuted;
   if (
     delegatedRoute
+    && !replyRouteTruth
     && dispatchExecuted
     && spawnExecuted
     && !resultMaterialized
@@ -391,6 +405,7 @@ export function guardAssistantMessageForPolicyState(
   }
   if (
     delegatedRoute
+    && !replyRouteTruth
     && !statusProjectionToolSeen
     && !hasExecutionEvidence
     && !explicitReplyExecution
@@ -445,7 +460,12 @@ export function guardAssistantMessageForPolicyState(
   // Do not infer delegation truth from natural-language prose here. Dispatch/spawn
   // honesty is projected from TurnExecutionReceipt / ExecutionCoveragePacket above.
   // Keep only an internal API leak guard for raw spawn implementation details.
-  if (!statusProjectionToolSeen && !hasExecutionEvidence && /sessions_spawn|session_spawn/iu.test(replyText)) {
+  if (
+    !statusProjectionToolSeen
+    && !hasExecutionEvidence
+    && !hasBlockedToolEvidence(state, "sessions_spawn")
+    && /sessions_spawn|session_spawn/iu.test(replyText)
+  ) {
     return { mode: "replace", message: replaceAssistantMessageText(message, "这次任务还没派发成功，等我拿到真实执行结果后回复。") };
   }
   return { mode: "pass", message };

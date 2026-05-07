@@ -3331,6 +3331,43 @@ describe("before_tool_call route hint guard", () => {
     policyState.clearState(delegateKey);
   });
 
+  it("records WorkContract-forbidden dispatch attempts as blocked tool evidence", async () => {
+    const handlers = new Map<string, Function>();
+    plugin.register({
+      on: (event, handler) => handlers.set(event, handler),
+      registerTool: () => {},
+      registerCommand: () => {},
+      logger: {},
+    });
+
+    const key = "agent:main:slack:default:direct:u0al9t5u89z:work-contract-reply";
+    policyState.setState(key, {
+      prompt: "再试下",
+      decision: {
+        route_decision: { route: "reply" },
+        work_contract: { route: "reply", forbiddenTools: ["octoclaw_dispatch"] },
+        hook_interface: { before_tool_call: { enabled: true, route_hint_required: false, route_hint_tool: "octoclaw_route_hint", delegation_enforcement: true } },
+        route_hint_policy: { required: false, submitted: false },
+        tool_policy: { allow_direct_tools: true },
+      },
+      blockedTools: ["sessions_spawn"],
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    });
+
+    const beforeToolCall = handlers.get("before_tool_call");
+    expect(beforeToolCall).toBeTruthy();
+    const result = await beforeToolCall!(
+      { toolName: "octoclaw_dispatch", params: { task: "测试子 agent 派发耗时" } },
+      { sessionKey: key, agentId: "main" },
+    ) as { block?: boolean; blockReason?: string } | undefined;
+
+    expect(result?.block).toBe(true);
+    expect(result?.blockReason).toContain("WorkContract forbids octoclaw_dispatch");
+    expect(policyState.getState(key)?.blockedTools).toEqual(["sessions_spawn", "octoclaw_dispatch"]);
+    policyState.clearState(key);
+  });
+
   it("binds octoclaw_route_hint task to the current Slack context before later tool calls", async () => {
     const handlers = new Map<string, Function>();
     plugin.register({
