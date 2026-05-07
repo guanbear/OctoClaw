@@ -484,6 +484,42 @@ Conclusions:
 - This first PR3 slice does not remove all `core-plugin-tools` or `bundle-tools` cost. It should be treated as a conservative schema-normalization cache, not a full bundle-materialization cache. A bigger follow-up should cache or reuse static tool inventory descriptors / policy inputs before provider schema normalization.
 - The kill switch works for before/after comparison and rollback: `OPENCLAW_TOOL_SCHEMA_CACHE=0`.
 
+### 6.0.2 2026-05-07 PR4a/PR4b Bundle MCP Descriptor Cache Slice
+
+PR4a and PR4b were started as a clean upstream branch from `origin/main`, separate from PR3, because they target an earlier hot path than provider schema normalization:
+
+- branch: `bundle-mcp-tool-cache-pr4`
+- scope A: add plugin descriptor cache diagnostics for hit/miss/partial/store visibility;
+- scope B: cache bundle MCP materialized tool descriptors per `SessionMcpRuntime` and reserved-name set, then create fresh proxy tool objects on every materialization;
+- non-goal: cache live execute closures, approval state, before-tool-call decisions, or mutable runtime objects.
+
+PR4b cache behavior:
+
+- cache key: `WeakMap<SessionMcpRuntime, Map<normalized reserved tool names, descriptors>>`;
+- hit path: skips `getCatalog()`, replays deterministic warning messages, and creates fresh `AnyAgentTool` proxy objects bound to the current runtime;
+- miss path: reads catalog, builds deterministic descriptors, stores cloned schema payloads, then creates fresh proxy objects;
+- lease/dispose behavior remains live per materialization;
+- rollback switch: `OPENCLAW_BUNDLE_MCP_TOOL_CACHE=0`.
+
+Lightweight materialization benchmark:
+
+- source: `openclaw-5.4-src`
+- fixture: one fake bundle MCP runtime, 200 catalog tools, nested JSON schemas, 1000 repeated materializations in one process
+- comparison: cache disabled versus one warm miss followed by hot cache hits
+- note: RSS is process RSS sampled before and after each scenario in the same process, so treat it as directional rather than isolated memory proof.
+
+| Mode | total | per materialization | RSS before | RSS after | `getCatalog()` calls | cache stats |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| cache disabled | 0.5579s | 0.5579ms | 251.9 MiB | 319.5 MiB | 1000 | `bypass=1000 hit=0 miss=0 store=0` |
+| cache hot | 0.2886s | 0.2886ms | 319.5 MiB | 331.7 MiB | 1 | `bypass=0 hit=1000 miss=1 store=1` |
+
+Conclusions:
+
+- PR4b is a narrower, lower-risk follow-up than a full tool-inventory cache because it only touches bundle MCP descriptor/proxy materialization.
+- The measurable synthetic gain is about 0.27ms per 200 bundle MCP tools in this materialization-only fixture, roughly 48% of this isolated loop. Real end-to-end gain will be smaller unless a user has many bundle MCP tools or expensive catalog/materialization work.
+- The main correctness value is that a hot materialization no longer calls `getCatalog()` at all, while still returning fresh executable proxies and keeping runtime leases live.
+- PR4a diagnostics are useful for proving whether the existing plugin descriptor cache is hitting, missing, or partially covering requested tools during later trace/E2E runs.
+
 ### 6.1 What To Cache
 
 Cache the provider-ready tool schema bundle after effective tool selection, schema generation, provider normalization, and serialization.
