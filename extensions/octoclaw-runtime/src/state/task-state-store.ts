@@ -75,6 +75,8 @@ export interface TaskStateRecord extends Record<string, unknown> {
 export interface TaskStateDocument {
   schemaVersion?: typeof TASK_STATE_SCHEMA_VERSION;
   updated_at?: string;
+  rebuiltAt?: string;
+  source?: string;
   tasks: TaskStateRecord[];
 }
 
@@ -243,6 +245,7 @@ export function writeTaskStateDocumentSafe(document: TaskStateDocument, taskStat
     try {
       fs.mkdirSync(path.dirname(targetPath), { recursive: true });
       const wrote = atomicWriteJsonSync(targetPath, {
+        ...document,
         schemaVersion: TASK_STATE_SCHEMA_VERSION,
         updated_at: new Date().toISOString(),
         tasks: document.tasks,
@@ -258,6 +261,7 @@ export function writeTaskStateDocumentSafe(document: TaskStateDocument, taskStat
   try {
     fs.mkdirSync(path.dirname(targetPath), { recursive: true });
     const ok = atomicWriteJsonSync(targetPath, {
+      ...document,
       schemaVersion: TASK_STATE_SCHEMA_VERSION,
       updated_at: new Date().toISOString(),
       tasks: document.tasks,

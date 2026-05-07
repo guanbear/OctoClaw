@@ -3,7 +3,7 @@ import path from "node:path";
 import { resolveTaskStatePath } from "../resolve/env.js";
 import type { WorkContract } from "@octoclaw/contracts/work-contract";
 import type { TaskStateRecord } from "../state/task-state-store.js";
-import { TASK_STATE_SCHEMA_VERSION, readTaskStateDocument } from "../state/task-state-store.js";
+import { TASK_STATE_SCHEMA_VERSION, readTaskStateDocumentDetailed, writeTaskStateDocumentSafe } from "../state/task-state-store.js";
 import { openRuntimeLedger } from "./index.js";
 import type { DatabaseSync, SqliteProvider } from "./types.js";
 
@@ -64,6 +64,8 @@ export interface RebuiltTaskStateProjection {
   tasks: TaskStateRecord[];
   rebuiltAt: string;
   source: "ledger";
+  degraded?: boolean;
+  error?: string;
 }
 
 export interface WriteRebuiltTaskStateInput extends RebuildTaskStateProjectionInput {
@@ -74,6 +76,8 @@ export interface WriteRebuiltTaskStateResult {
   written: boolean;
   path: string;
   taskCount: number;
+  degraded?: boolean;
+  quarantined?: boolean;
   error?: string;
 }
 
@@ -291,7 +295,7 @@ function buildRecord(contract: WorkContractRow, attempt: TaskAttemptRow | null, 
 export function rebuildTaskStateProjection(input: RebuildTaskStateProjectionInput = {}): RebuiltTaskStateProjection {
   const rebuiltAt = new Date().toISOString();
   const opened = openDb(input);
-  if (!opened.db) return { tasks: [], rebuiltAt, source: "ledger" };
+  if (!opened.db) return { tasks: [], rebuiltAt, source: "ledger", degraded: true, error: opened.error ?? "ledger_unavailable" };
 
   const db = opened.db;
   try {
@@ -328,12 +332,30 @@ export function writeRebuiltTaskState(input: WriteRebuiltTaskStateInput = {}): W
   const targetPath = taskStatePathFromInput(input.taskStatePath);
   try {
     const projection = rebuildTaskStateProjection(input);
-    const existing = readTaskStateDocument(targetPath).tasks;
+    const readResult = readTaskStateDocumentDetailed(targetPath);
+    const existing = readResult.status === "ok" || readResult.status === "missing" ? readResult.document.tasks : [];
     const ledgerIds = new Set(projection.tasks.map(recordIdentity).filter(Boolean));
     const merged = [
       ...projection.tasks,
       ...existing.filter((record) => !ledgerIds.has(recordIdentity(record))),
     ];
+    if (readResult.status === "parse_error" || readResult.status === "schema_mismatch" || readResult.status === "io_error") {
+      const result = writeTaskStateDocumentSafe({
+        schemaVersion: TASK_STATE_SCHEMA_VERSION,
+        updated_at: projection.rebuiltAt,
+        rebuiltAt: projection.rebuiltAt,
+        source: projection.source,
+        tasks: merged,
+      }, targetPath);
+      return {
+        written: result.ok,
+        path: targetPath,
+        taskCount: result.ok ? merged.length : 0,
+        degraded: true,
+        quarantined: result.quarantined,
+        error: result.ok ? projection.error : result.reason,
+      };
+    }
     const written = atomicWriteJson(targetPath, {
       schemaVersion: TASK_STATE_SCHEMA_VERSION,
       updated_at: projection.rebuiltAt,
@@ -341,7 +363,7 @@ export function writeRebuiltTaskState(input: WriteRebuiltTaskStateInput = {}): W
       source: projection.source,
       tasks: merged,
     });
-    return { written, path: targetPath, taskCount: merged.length, error: written ? undefined : "write_failed" };
+    return { written, path: targetPath, taskCount: merged.length, degraded: projection.degraded, error: written ? projection.error : "write_failed" };
   } catch (err) {
     return { written: false, path: targetPath, taskCount: 0, error: err instanceof Error ? err.message : String(err) };
   }

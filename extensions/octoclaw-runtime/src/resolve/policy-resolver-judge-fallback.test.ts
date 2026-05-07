@@ -229,6 +229,30 @@ describe("policy resolver judge timeout fallback", () => {
     });
   });
 
+  it("routes Chinese subagent latency probes to delegate when judge replies", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(minimalJudgeResponse("reply", 0.9));
+
+    const prompt = "你派一次子agent要多久呢 如果不知道就测一下";
+    const decision = await resolveStatelessPolicyDecision(prompt, {
+      metadata: {
+        _judgeFastConfig: localJudgeConfig,
+      },
+    });
+
+    expect(routeDecisionOf(decision)).toMatchObject({
+      route: "delegate",
+      route_source: "fallback",
+      final_judge_source: "timeout_fallback",
+      decision_bucket: "must_delegate",
+      hard_delegate_signal: true,
+      is_new_work: true,
+      expected_deliverable: prompt,
+    });
+    expect((routeDecisionOf(decision).reason_codes as string[])).toEqual(
+      expect.arrayContaining([expect.stringContaining("hard_delegate:prompt_explicit_delegate")]),
+    );
+  });
+
   it("keeps local judge timeout for simple chat on reply", async () => {
     vi.spyOn(globalThis, "fetch").mockRejectedValueOnce(new DOMException("timeout", "AbortError"));
 

@@ -241,6 +241,36 @@ describe("projection-rebuild", () => {
       expect(parsed.tasks[0].workContractId).toBe("wc-write");
     });
 
+    it("quarantines corrupt cache before writing rebuilt projection", () => {
+      const dir = tmpDir();
+      const dbPath = path.join(dir, "runtime.sqlite");
+      const taskStatePath = path.join(dir, "task-state.json");
+      fs.writeFileSync(taskStatePath, "{not json");
+      seedWorkContract(dbPath, { workContractId: "wc-corrupt-rebuild" });
+
+      const result = writeRebuiltTaskState({ dbPath, taskStatePath });
+      const parsed = JSON.parse(fs.readFileSync(taskStatePath, "utf-8")) as { tasks: Array<Record<string, unknown>>; source: string };
+
+      expect(result).toMatchObject({ written: true, taskCount: 1, quarantined: true });
+      expect(parsed.source).toBe("ledger");
+      expect(parsed.tasks[0].workContractId).toBe("wc-corrupt-rebuild");
+      expect(fs.readdirSync(dir).some((entry) => entry.startsWith("task-state.json.corrupt."))).toBe(true);
+    });
+
+    it("does not merge stale cache records when cache is corrupt", () => {
+      const dir = tmpDir();
+      const dbPath = path.join(dir, "runtime.sqlite");
+      const taskStatePath = path.join(dir, "task-state.json");
+      fs.writeFileSync(taskStatePath, "{bad json with stale cache");
+      seedWorkContract(dbPath, { workContractId: "wc-ledger-only" });
+
+      const result = writeRebuiltTaskState({ dbPath, taskStatePath });
+      const parsed = JSON.parse(fs.readFileSync(taskStatePath, "utf-8")) as { tasks: Array<Record<string, unknown>> };
+
+      expect(result.written).toBe(true);
+      expect(parsed.tasks.map((record) => record.workContractId)).toEqual(["wc-ledger-only"]);
+    });
+
     it("merges with existing task-state.json (keeps non-ledger records)", () => {
       const dir = tmpDir();
       const dbPath = path.join(dir, "runtime.sqlite");
