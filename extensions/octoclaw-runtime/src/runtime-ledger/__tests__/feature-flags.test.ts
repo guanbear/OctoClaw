@@ -13,9 +13,9 @@ describe("feature-flags", () => {
   });
 
   describe("resolveRuntimeLedgerFlag", () => {
-    it("returns off by default", () => {
+    it("returns enforce by default", () => {
       delete process.env.OCTOCLAW_RUNTIME_LEDGER;
-      expect(resolveRuntimeLedgerFlag()).toBe("off");
+      expect(resolveRuntimeLedgerFlag()).toBe("enforce");
     });
 
     it("returns shadow when set", () => {
@@ -28,6 +28,11 @@ describe("feature-flags", () => {
       expect(resolveRuntimeLedgerFlag()).toBe("enforce");
     });
 
+    it("returns off when explicitly set", () => {
+      process.env.OCTOCLAW_RUNTIME_LEDGER = "off";
+      expect(resolveRuntimeLedgerFlag()).toBe("off");
+    });
+
     it("is case insensitive", () => {
       process.env.OCTOCLAW_RUNTIME_LEDGER = "SHADOW";
       expect(resolveRuntimeLedgerFlag()).toBe("shadow");
@@ -38,9 +43,15 @@ describe("feature-flags", () => {
       expect(resolveRuntimeLedgerFlag()).toBe("enforce");
     });
 
-    it("returns off for unknown value", () => {
+    it("returns enforce for unknown value", () => {
       process.env.OCTOCLAW_RUNTIME_LEDGER = "debug";
-      expect(resolveRuntimeLedgerFlag()).toBe("off");
+      expect(resolveRuntimeLedgerFlag()).toBe("enforce");
+    });
+
+    it("defaults to runtime ledger enforce mode", () => {
+      delete process.env.OCTOCLAW_RUNTIME_LEDGER;
+      expect(resolveRuntimeLedgerFlag()).toBe("enforce");
+      expect(isLedgerActive()).toBe(true);
     });
   });
 
@@ -76,13 +87,26 @@ describe("feature-flags", () => {
   });
 
   describe("isTaskStateRebuildEnabled", () => {
-    it("returns false by default", () => {
+    it("returns true by default", () => {
       delete process.env.OCTOCLAW_TASK_STATE_REBUILD;
-      expect(isTaskStateRebuildEnabled()).toBe(false);
+      expect(isTaskStateRebuildEnabled()).toBe(true);
     });
 
     it("returns true when set to 1", () => {
       process.env.OCTOCLAW_TASK_STATE_REBUILD = "1";
+      expect(isTaskStateRebuildEnabled()).toBe(true);
+    });
+
+    it("returns false when explicitly disabled", () => {
+      process.env.OCTOCLAW_TASK_STATE_REBUILD = "0";
+      expect(isTaskStateRebuildEnabled()).toBe(false);
+
+      process.env.OCTOCLAW_TASK_STATE_REBUILD = "false";
+      expect(isTaskStateRebuildEnabled()).toBe(false);
+    });
+
+    it("defaults to enabled task-state rebuild", () => {
+      delete process.env.OCTOCLAW_TASK_STATE_REBUILD;
       expect(isTaskStateRebuildEnabled()).toBe(true);
     });
   });
@@ -95,10 +119,10 @@ describe("feature-flags", () => {
 
       const flags = resolveAllFeatureFlags();
       expect(flags).toEqual({
-        ledgerMode: "off",
-        ledgerActive: false,
+        ledgerMode: "enforce",
+        ledgerActive: true,
         schedulerEnabled: false,
-        taskStateRebuildEnabled: false,
+        taskStateRebuildEnabled: true,
       });
     });
 

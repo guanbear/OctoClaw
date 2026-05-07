@@ -6,7 +6,8 @@ export function resolveRuntimeLedgerFlag(): RuntimeLedgerFlag {
   const v = String(process.env.OCTOCLAW_RUNTIME_LEDGER ?? "").trim().toLowerCase();
   if (v === "shadow") return "shadow";
   if (v === "enforce") return "enforce";
-  return "off";
+  if (v === "off") return "off";
+  return "enforce";
 }
 
 export function isLedgerActive(flag?: RuntimeLedgerFlag): boolean {
@@ -24,7 +25,9 @@ export function isSchedulerEnabled(): boolean {
 // ── OCTOCLAW_TASK_STATE_REBUILD ──────────────────────────────────────
 
 export function isTaskStateRebuildEnabled(): boolean {
-  return String(process.env.OCTOCLAW_TASK_STATE_REBUILD ?? "").trim() === "1";
+  const v = String(process.env.OCTOCLAW_TASK_STATE_REBUILD ?? "").trim().toLowerCase();
+  if (v === "0" || v === "false") return false;
+  return true;
 }
 
 // ── aggregator ───────────────────────────────────────────────────────

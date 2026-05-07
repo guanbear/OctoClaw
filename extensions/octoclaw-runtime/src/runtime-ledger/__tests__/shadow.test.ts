@@ -82,21 +82,21 @@ function buildDelegateContract(
 }
 
 describe("resolveRuntimeLedgerMode", () => {
-  it('returns "off" when OCTOCLAW_RUNTIME_LEDGER is unset', () => {
+  it('returns "enforce" when OCTOCLAW_RUNTIME_LEDGER is unset', () => {
     const original = process.env.OCTOCLAW_RUNTIME_LEDGER;
     delete process.env.OCTOCLAW_RUNTIME_LEDGER;
     try {
-      expect(resolveRuntimeLedgerMode()).toBe("off");
+      expect(resolveRuntimeLedgerMode()).toBe("enforce");
     } finally {
       if (original !== undefined) process.env.OCTOCLAW_RUNTIME_LEDGER = original;
     }
   });
 
-  it('returns "off" for unrecognized values', () => {
+  it('returns "enforce" for unrecognized values', () => {
     const original = process.env.OCTOCLAW_RUNTIME_LEDGER;
     process.env.OCTOCLAW_RUNTIME_LEDGER = "garbage";
     try {
-      expect(resolveRuntimeLedgerMode()).toBe("off");
+      expect(resolveRuntimeLedgerMode()).toBe("enforce");
     } finally {
       if (original !== undefined) process.env.OCTOCLAW_RUNTIME_LEDGER = original;
       else delete process.env.OCTOCLAW_RUNTIME_LEDGER;
@@ -119,6 +119,17 @@ describe("resolveRuntimeLedgerMode", () => {
     process.env.OCTOCLAW_RUNTIME_LEDGER = "enforce";
     try {
       expect(resolveRuntimeLedgerMode()).toBe("enforce");
+    } finally {
+      if (original !== undefined) process.env.OCTOCLAW_RUNTIME_LEDGER = original;
+      else delete process.env.OCTOCLAW_RUNTIME_LEDGER;
+    }
+  });
+
+  it('returns "off" for OCTOCLAW_RUNTIME_LEDGER=off', () => {
+    const original = process.env.OCTOCLAW_RUNTIME_LEDGER;
+    process.env.OCTOCLAW_RUNTIME_LEDGER = "off";
+    try {
+      expect(resolveRuntimeLedgerMode()).toBe("off");
     } finally {
       if (original !== undefined) process.env.OCTOCLAW_RUNTIME_LEDGER = original;
       else delete process.env.OCTOCLAW_RUNTIME_LEDGER;

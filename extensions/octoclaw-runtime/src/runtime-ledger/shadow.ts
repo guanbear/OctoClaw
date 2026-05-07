@@ -11,7 +11,8 @@ export function resolveRuntimeLedgerMode(): RuntimeLedgerEnvMode {
   const value = String(process.env.OCTOCLAW_RUNTIME_LEDGER || "").trim().toLowerCase();
   if (value === "shadow") return "shadow";
   if (value === "enforce") return "enforce";
-  return "off";
+  if (value === "off") return "off";
+  return "enforce";
 }
 
 export function isShadowActive(mode?: RuntimeLedgerEnvMode): boolean {
