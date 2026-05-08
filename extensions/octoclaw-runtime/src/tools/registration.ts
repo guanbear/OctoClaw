@@ -86,7 +86,14 @@ import {
   resolveSchedulerConfig,
   tryAcquireLease,
 } from "../runtime-ledger/scheduler.js";
-type UnknownRecord = Record<string, unknown>;
+import {
+  type UnknownRecord,
+  isRecord,
+  asRecord,
+  asString,
+  asBoolean,
+  asNumberOptional as asNumber,
+} from "../util/type-coercion.js";
 type NullRecord = UnknownRecord | null;
 
 export interface ToolRegistrationOptions {
@@ -137,25 +144,8 @@ export interface CommandRegistration {
   handler: (ctx: Record<string, unknown>) => Promise<void>;
 }
 
-function isRecord(value: unknown): value is UnknownRecord {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
-function asRecord(value: unknown): UnknownRecord {
-  return isRecord(value) ? value : {};
-}
-
 function nestedRecord(value: unknown, key: string): UnknownRecord {
   return asRecord(asRecord(value)[key]);
-}
-
-function asString(value: unknown, fallback = ""): string {
-  const text = String(value ?? "").trim();
-  return text || fallback;
-}
-
-function asBoolean(value: unknown, fallback = false): boolean {
-  return typeof value === "boolean" ? value : fallback;
 }
 
 function explicitBoolean(value: unknown): boolean | undefined {
@@ -168,11 +158,6 @@ function hasExplicitTrue(values: unknown[]): boolean {
 
 function hasExplicitFalse(values: unknown[]): boolean {
   return values.some((value) => explicitBoolean(value) === false);
-}
-
-function asNumber(value: unknown): number | undefined {
-  const numeric = Number(value);
-  return Number.isFinite(numeric) ? numeric : undefined;
 }
 
 interface SpeculativeDispatchSelection {

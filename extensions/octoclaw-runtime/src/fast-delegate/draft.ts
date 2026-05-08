@@ -1,7 +1,12 @@
 import { stableHash, stableId } from "../resolve/env.js";
 import { buildPolicyMetadata, isManagedAgentContext, resolvePolicyStateKey } from "../resolve/session.js";
-
-type UnknownRecord = Record<string, unknown>;
+import {
+  asBooleanStrict as asBoolean,
+  asNumberOptional as asNumber,
+  asRecord,
+  asString,
+  type UnknownRecord,
+} from "../util/type-coercion.js";
 
 export const FAST_SPAWN_PLAN_TTL_MS = 60_000;
 
@@ -58,26 +63,6 @@ export interface FastSpawnPlanConsumeInput {
 export type FastSpawnPlanConsumeResult =
   | { ok: true; draft: FastSpawnPlanDraft }
   | { ok: false; reason: "missing" | "expired" | "state_key_mismatch" | "prompt_hash_mismatch" };
-
-function isRecord(value: unknown): value is UnknownRecord {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
-function asRecord(value: unknown): UnknownRecord {
-  return isRecord(value) ? value : {};
-}
-
-function asString(value: unknown): string {
-  return String(value ?? "").trim();
-}
-
-function asBoolean(value: unknown): boolean {
-  return value === true;
-}
-
-function asNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
 
 function firstString(...values: unknown[]): string {
   for (const value of values) {

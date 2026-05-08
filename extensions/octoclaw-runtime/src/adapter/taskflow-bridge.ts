@@ -1,8 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-
-type JsonRecord = Record<string, unknown>;
+import { type UnknownRecord as JsonRecord, asRecord, asString } from "../util/type-coercion.js";
 
 interface PluginRuntimeTaskFlowBoundSession {
   createManaged?: (input: JsonRecord) => JsonRecord;
@@ -108,16 +107,6 @@ function parseJson(value: string | undefined, fallback: unknown): unknown {
     return fallback;
   }
   return JSON.parse(value);
-}
-
-function asRecord(value: unknown): JsonRecord {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? value as JsonRecord
-    : {};
-}
-
-function asString(value: unknown): string {
-  return String(value ?? "").trim();
 }
 
 function resolveExecutable(name: string): string {

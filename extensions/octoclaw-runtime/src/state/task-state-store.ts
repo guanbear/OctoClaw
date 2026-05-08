@@ -4,6 +4,7 @@ import type { WorkerCompletionResult } from "@octoclaw/contracts/completion";
 import type { WorkContract } from "@octoclaw/contracts/work-contract";
 import { resolveTaskStatePath } from "../resolve/env.js";
 import { atomicWriteJsonSync } from "../util/atomic-write.js";
+import { asBoolean, asRecord, asString, isRecord } from "../util/type-coercion.js";
 
 export const TASK_STATE_SCHEMA_VERSION = "octoclaw.task_state.v1" as const;
 
@@ -103,23 +104,6 @@ function writeRecoverySignal(quarantinePath: string, readResult: TaskStateReadRe
   } catch {
     // Best-effort signal only; do not mask the primary quarantine/write result.
   }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
-function asRecord(value: unknown): Record<string, unknown> {
-  return isRecord(value) ? value : {};
-}
-
-function asString(value: unknown, fallback = ""): string {
-  const text = String(value ?? "").trim();
-  return text || fallback;
-}
-
-function asBoolean(value: unknown, fallback = false): boolean {
-  return typeof value === "boolean" ? value : fallback;
 }
 
 function optionalString(...values: unknown[]): string | undefined {

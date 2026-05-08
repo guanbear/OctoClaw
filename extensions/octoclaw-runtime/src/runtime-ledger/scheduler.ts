@@ -1,8 +1,7 @@
 import type { WorkContract } from "@octoclaw/contracts/work-contract";
+import { type UnknownRecord, asRecord, asString } from "../util/type-coercion.js";
 import { openRuntimeLedger } from "./index.js";
 import type { DatabaseSync, SqliteProvider } from "./types.js";
-
-type UnknownRecord = Record<string, unknown>;
 
 export interface SchedulerConfig {
   enabled: boolean;
@@ -105,18 +104,6 @@ export interface RequeueExpiredResult {
   queueIds: string[];
 }
 
-function isRecord(value: unknown): value is UnknownRecord {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
-function asRecord(value: unknown): UnknownRecord {
-  return isRecord(value) ? value : {};
-}
-
-function asString(value: unknown): string {
-  return String(value ?? "").trim();
-}
-
 function normalizePath(p: string): string {
   return p.replace(/\/+/g, "/").replace(/\/$/, "").toLowerCase();
 }
@@ -152,7 +139,7 @@ function appendRuntimeEvent(
   eventType: string,
   workContractId: string,
   attemptId: string | null,
-  payload: Record<string, unknown>,
+  payload: UnknownRecord,
   nowIso: string,
 ): void {
   db.prepare(

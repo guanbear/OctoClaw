@@ -1,19 +1,8 @@
 import type { LiveRoute } from "@octoclaw/policy/route";
+import { type UnknownRecord, asRecord, asString } from "../util/type-coercion.js";
 
 export const LIVE_ROUTE_NAMES = new Set<LiveRoute>(["reply", "delegate"]);
 export const DELEGATED_ROUTE_NAMES = new Set<string>(["delegate"]);
-
-type UnknownRecord = Record<string, unknown>;
-
-function asRecord(value: unknown): UnknownRecord {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? value as UnknownRecord
-    : {};
-}
-
-function asString(value: unknown): string {
-  return String(value ?? "").trim();
-}
 
 export function normalizeLiveRoute(route: unknown, fallback: LiveRoute): LiveRoute {
   const normalized = String(route ?? "").trim();

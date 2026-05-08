@@ -1,6 +1,12 @@
-export const BUDGETED_MAIN_MAX_WALL_MS = 30_000;
+import {
+  asBoolean,
+  asNumber,
+  asRecord,
+  asString,
+  type UnknownRecord,
+} from "./util/type-coercion.js";
 
-type UnknownRecord = Record<string, unknown>;
+export const BUDGETED_MAIN_MAX_WALL_MS = 30_000;
 
 export interface BudgetedMainState {
   active: boolean;
@@ -52,28 +58,6 @@ export interface BudgetedMainToolClassification {
   writeToolDetected: boolean;
   multiStepToolDetected: boolean;
   escalationReason: string;
-}
-
-function isRecord(value: unknown): value is UnknownRecord {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
-function asRecord(value: unknown): UnknownRecord {
-  return isRecord(value) ? value : {};
-}
-
-function asString(value: unknown, fallback = ""): string {
-  const text = String(value ?? "").trim();
-  return text || fallback;
-}
-
-function asNumber(value: unknown): number {
-  const number = Number(value);
-  return Number.isFinite(number) ? number : 0;
-}
-
-function asBoolean(value: unknown): boolean | undefined {
-  return typeof value === "boolean" ? value : undefined;
 }
 
 export function decisionBucketForBudgetedMain(decision: UnknownRecord): string {
@@ -192,7 +176,7 @@ function isSkillRead(toolName: string, params: UnknownRecord): boolean {
 }
 
 function explicitWriteSignal(params: UnknownRecord): boolean {
-  const readOnly = asBoolean(params.readOnly ?? params.read_only);
+  const readOnly = asBoolean(params.readOnly ?? params.read_only, undefined);
   if (readOnly === true) return false;
   if (readOnly === false) return true;
   const mode = asString(params.accessMode || params.access_mode || params.mode || params.operation || params.kind).toLowerCase();

@@ -14,6 +14,7 @@ import { detectSessionBoundary } from "./session.js";
 import { policyState, type PolicyStateEntry } from "../state/policy-state.js";
 import { buildExecutionCoverageLayer } from "./execution-coverage-precheck.js";
 import { buildMemoryCoverageLayer } from "./memory-coverage-precheck.js";
+import { isRecord } from "../util/type-coercion.js";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -66,10 +67,6 @@ export interface JudgeContextPacketOptions {
   sessionKeys?: string[];
   metadata?: Record<string, unknown>;
   local?: boolean;
-}
-
-function isRecord(value: unknown): value is JsonRecord {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 function stringValue(value: unknown): string {

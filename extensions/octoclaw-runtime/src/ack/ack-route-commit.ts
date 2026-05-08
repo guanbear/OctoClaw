@@ -5,6 +5,7 @@ import { resolveWorkspaceRoot } from "../resolve/env.js";
 import { recordDelivery } from "./ack-dedupe.js";
 import { resolveAckTargetFromSessionKey } from "./ack-guard.js";
 import { recordPolicyReplay } from "../replay/replay.js";
+import { isRecord, asString, asBooleanStrict } from "../util/type-coercion.js";
 
 export interface RouteCommitAckPacket {
   routeCommitId: string;
@@ -51,24 +52,12 @@ function routeCommitReactionEmoji(state: Record<string, unknown>): string {
 }
 
 function reactionAckConfigured(state: Record<string, unknown>): boolean {
-  return asBoolean(state.reactionAckEnabled)
-    || asBoolean(state.reaction_ack_enabled)
+  return asBooleanStrict(state.reactionAckEnabled)
+    || asBooleanStrict(state.reaction_ack_enabled)
     || Boolean(asString(state.reactionAckEmoji || state.reaction_ack_emoji));
 }
 
 const routeCommitAckOwners = new Map<string, string>();
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
-function asString(value: unknown): string {
-  return String(value ?? "").trim();
-}
-
-function asBoolean(value: unknown): boolean {
-  return value === true;
-}
 
 function readRecord(value: unknown): Record<string, unknown> {
   return isRecord(value) ? value : {};
@@ -444,7 +433,7 @@ export async function sendRouteCommitAck(params: {
     params.stateKey,
     asString(readRecord(params.decision.request).session_key),
     asString(params.state.sessionKey || params.state.session_key),
-  ].map(asString).filter(Boolean)));
+  ].map((value) => asString(value)).filter(Boolean)));
   const routeUsesPlannerConfirm = plannerAckSessionKeys.some((sessionKey) => isPlannerAllowedForSession(sessionKey));
 
   if (packet.route === "delegate" && resolveSpawnBackend() === "planner" && routeUsesPlannerConfirm) {

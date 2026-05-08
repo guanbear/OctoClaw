@@ -1,4 +1,6 @@
-export type JsonRecord = Record<string, unknown>;
+import { type UnknownRecord, isRecord, asString } from "../util/type-coercion.js";
+
+export type JsonRecord = UnknownRecord;
 
 export interface TaskFlowPort {
   healthCheck?(): Promise<unknown>;
@@ -99,15 +101,6 @@ export interface CancelFlowResult extends JsonRecord {
   flowId: string;
   found?: boolean;
   reason?: string;
-}
-
-function isRecord(value: unknown): value is JsonRecord {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
-function asString(value: unknown, fallback = ""): string {
-  const text = String(value ?? "").trim();
-  return text || fallback;
 }
 
 /**

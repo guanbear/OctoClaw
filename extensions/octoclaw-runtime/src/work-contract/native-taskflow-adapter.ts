@@ -10,6 +10,7 @@ import type {
   NativeFlowMutationError,
   NativeFlowStatus,
 } from "@octoclaw/contracts/work-contract";
+import { isRecord } from "../util/type-coercion.js";
 
 export interface NativeTaskflowAdapterResult {
   binding: NativeBindingRef;
@@ -282,8 +283,4 @@ function normalizeStatus(status: unknown): NativeFlowStatus {
 
 function isMutationError(value: unknown): value is NativeFlowMutationError {
   return value === "revision_conflict" || value === "not_found" || value === "not_managed";
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object";
 }

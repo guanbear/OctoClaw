@@ -107,8 +107,8 @@ import {
   speculativePreloadStateForHint,
 } from "./delegate/speculative-preload.js";
 import { resolvePlannerNativeCwd } from "./delegate/planner-cwd.js";
+import { type UnknownRecord, asRecord } from "./util/type-coercion.js";
 
-type UnknownRecord = Record<string, unknown>;
 type HookHandler = (event: UnknownRecord, ctx: UnknownRecord) => unknown;
 type NativeAnnounceSendMessage = (params: {
   sessionKey: string;
@@ -321,12 +321,6 @@ export function buildPromptContextProjection(input: {
   return {
     prependSystemContext: systemContext.join("\n\n"),
   };
-}
-
-function asRecord(value: unknown): UnknownRecord {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? value as UnknownRecord
-    : {};
 }
 
 function resolvePluginConfigObject(config: unknown, pluginId: string): UnknownRecord | undefined {

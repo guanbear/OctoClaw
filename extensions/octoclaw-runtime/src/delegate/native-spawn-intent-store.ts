@@ -1,5 +1,6 @@
 import { openRuntimeLedger } from "../runtime-ledger/index.js";
 import type { SqliteProvider } from "../runtime-ledger/types.js";
+import { asRecord, asString } from "../util/type-coercion.js";
 import {
   generateSpawnIntentId,
   hashSessionsSpawnArgs,
@@ -78,16 +79,6 @@ type OpenedIntentDb = ReturnType<typeof openDb>;
 type FindPendingOptions = { now?: Date | number; dbPath?: string; sqlite?: SqliteProvider; dispatchMode?: NativeSpawnIntent["dispatchMode"] };
 
 const SQLITE_BUSY_RETRY_DELAYS_MS = [0, 5, 25, 75] as const;
-
-function asRecord(value: unknown): Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : {};
-}
-
-function asString(value: unknown): string {
-  return String(value ?? "").trim();
-}
 
 function asErrorCode(error: unknown): string {
   const record = asRecord(error);

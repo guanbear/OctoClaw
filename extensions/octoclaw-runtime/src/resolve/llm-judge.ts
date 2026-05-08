@@ -13,6 +13,7 @@ import {
   buildJudgeSystemPrompt,
   buildJudgeUserPrompt,
 } from "@octoclaw/policy/judge-prompt";
+import { asStringArrayOptional } from "../util/type-coercion.js";
 import { buildJudgeContextPacket } from "./judge-context-packet.js";
 
 export { isValidJudgeOutput, isActionableJudgeResult };
@@ -38,12 +39,6 @@ function classifyJudgeError(error: unknown): JudgeFailureClass {
     return "http_error";
   }
   return "unknown";
-}
-
-function asStringArray(value: unknown): string[] | undefined {
-  if (!Array.isArray(value)) return undefined;
-  const normalized = value.map((item) => String(item ?? "").trim()).filter(Boolean);
-  return normalized.length > 0 ? normalized : undefined;
 }
 
 function coerceJudgeOutput(parsed: Record<string, unknown>): JudgeOutput {
@@ -88,8 +83,8 @@ function coerceJudgeOutput(parsed: Record<string, unknown>): JudgeOutput {
     complexityBand: (parsed.complexityBand ?? parsed.complexity_band) as JudgeOutput["complexityBand"],
     expectedDurationBand: (parsed.expectedDurationBand ?? parsed.expected_duration_band) as JudgeOutput["expectedDurationBand"],
     qualityBar: (parsed.qualityBar ?? parsed.quality_bar) as JudgeOutput["qualityBar"],
-    riskFlags: asStringArray(parsed.riskFlags ?? parsed.risk_flags),
-    delegateReasonCodes: asStringArray(parsed.delegateReasonCodes ?? parsed.delegate_reason_codes) as JudgeOutput["delegateReasonCodes"],
+    riskFlags: asStringArrayOptional(parsed.riskFlags ?? parsed.risk_flags),
+    delegateReasonCodes: asStringArrayOptional(parsed.delegateReasonCodes ?? parsed.delegate_reason_codes) as JudgeOutput["delegateReasonCodes"],
     routeConfidence: typeof (parsed.routeConfidence ?? parsed.route_confidence) === "number"
       ? (parsed.routeConfidence ?? parsed.route_confidence) as number
       : undefined,

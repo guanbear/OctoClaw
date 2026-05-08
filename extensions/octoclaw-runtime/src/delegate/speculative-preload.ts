@@ -1,6 +1,5 @@
 import { stableId } from "../resolve/env.js";
-
-type UnknownRecord = Record<string, unknown>;
+import { asRecord, asString, type UnknownRecord } from "../util/type-coercion.js";
 
 export const SPECULATIVE_PRELOAD_LABEL_PREFIX = "octoclaw-speculative-";
 export const SPECULATIVE_PRELOAD_STANDBY_TASK = "Standby worker. Do not execute any task. Await task assignment via sessions_send.";
@@ -23,16 +22,6 @@ export interface SpeculativePreloadState {
   childSessionKey?: string;
   error?: string;
   spawnArgs?: UnknownRecord;
-}
-
-function asRecord(value: unknown): UnknownRecord {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value)
-    ? value as UnknownRecord
-    : {};
-}
-
-function asString(value: unknown): string {
-  return String(value ?? "").trim();
 }
 
 export function readSpeculativePreloadState(state: unknown): SpeculativePreloadState | null {

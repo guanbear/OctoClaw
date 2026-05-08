@@ -4,23 +4,8 @@ import {
   DELEGATED_ROUTE_NAMES,
   isObserveMode,
 } from "../resolve/route-helpers.js";
+import { type UnknownRecord, isRecord, asRecord, asStringArray } from "../util/type-coercion.js";
 import { isDelegatedRoute } from "./policy-utils.js";
-
-type UnknownRecord = Record<string, unknown>;
-
-function isRecord(value: unknown): value is UnknownRecord {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
-function asRecord(value: unknown): UnknownRecord {
-  return isRecord(value) ? value : {};
-}
-
-function asStringArray(value: unknown): string[] {
-  return Array.isArray(value)
-    ? value.map((item) => String(item ?? "").trim()).filter(Boolean)
-    : [];
-}
 
 
 

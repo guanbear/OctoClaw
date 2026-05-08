@@ -10,6 +10,7 @@ import {
   buildConversationIntentPacket,
 } from "../conversation-grounding.js";
 import { normalizeSemanticPrompt } from "../semantic-prompt.js";
+import { isRecord, type UnknownRecord } from "../util/type-coercion.js";
 import fsSync from "node:fs";
 
 export const IM_SESSION_ORIGINS = new Set([
@@ -90,14 +91,9 @@ export interface SessionBoundaryInfo {
   reason: string;
 }
 
-type UnknownRecord = Record<string, unknown>;
 type FsSyncCompat = {
   readFileSync: (pathname: string, encoding: string) => string;
 };
-
-function isRecord(value: unknown): value is UnknownRecord {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
 
 function readJsonFileSync<T>(pathname: string, fallback: T): T {
   try {

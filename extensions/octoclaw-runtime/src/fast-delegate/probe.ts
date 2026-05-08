@@ -8,8 +8,7 @@ import {
   resolvePolicyStateKey,
   resolvePolicyStateKeys,
 } from "../resolve/session.js";
-
-type UnknownRecord = Record<string, unknown>;
+import { isRecord, type UnknownRecord } from "../util/type-coercion.js";
 
 export interface BeforeDispatchProbeInput {
   event: UnknownRecord;
@@ -32,10 +31,6 @@ export interface FastDelegateProbeResult {
   metadata: UnknownRecord;
   hasSlackAnchor: boolean;
   replay: UnknownRecord;
-}
-
-function isRecord(value: unknown): value is UnknownRecord {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 function recordValue(value: unknown): UnknownRecord {

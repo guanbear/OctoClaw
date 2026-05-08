@@ -1,5 +1,6 @@
 import type { RouteSeal } from "@octoclaw/contracts/route-seal";
 import { canonicalizeDecisionForPolicyState, isDelegatedRoute } from "../resolve/route-helpers.js";
+import { isRecord } from "../util/type-coercion.js";
 
 export const POLICY_STATE_TTL_MS = 5 * 60 * 1000;
 const RECENT_DELEGATED_MAX_AGE_MS = 2 * 60 * 1000;
@@ -106,10 +107,6 @@ export interface PolicyStateStoreOptions {
   isControlPrompt?: (prompt: string, ctx: Record<string, unknown>) => boolean;
   ttlMs?: number;
   persistDebounceMs?: number;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 function cloneEntry(entry: PolicyStateEntry): PolicyStateEntry {

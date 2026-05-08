@@ -5,6 +5,7 @@ import { resolveWorkspaceRoot } from "../resolve/env.js";
 import { getReceipt, recordDelivery } from "./ack-dedupe.js";
 import { resolveAckTargetFromSessionKey } from "./ack-guard.js";
 import { recordPolicyReplay } from "../replay/replay.js";
+import { isRecord, asString, asBooleanStrict } from "../util/type-coercion.js";
 
 export type ExecutionTransitionKind =
   | "dispatch_materialized"
@@ -78,18 +79,6 @@ interface AckSendResult {
 }
 
 const execTransitionOwners = new Map<string, string>();
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
-function asString(value: unknown): string {
-  return String(value ?? "").trim();
-}
-
-function asBoolean(value: unknown): boolean {
-  return value === true;
-}
 
 function readRecord(value: unknown): Record<string, unknown> {
   return isRecord(value) ? value : {};
@@ -190,9 +179,9 @@ async function recordExecutionTransitionReplay(
       stateKey: params.stateKey,
       projectionStatus: params.projection.status,
       projectionStatusReason: asString(params.projection.statusReason),
-      dispatchExecuted: asBoolean(params.projection.dispatchExecuted),
-      spawnExecuted: asBoolean(params.projection.spawnExecuted),
-      resultMaterialized: asBoolean(params.projection.resultMaterialized),
+      dispatchExecuted: asBooleanStrict(params.projection.dispatchExecuted),
+      spawnExecuted: asBooleanStrict(params.projection.spawnExecuted),
+      resultMaterialized: asBooleanStrict(params.projection.resultMaterialized),
       ack_target_resolution_state: outcome.ack_target_resolution_state,
       ack_delivery_state: outcome.ack_delivery_state,
       sent: outcome.sent,

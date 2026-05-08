@@ -3,8 +3,15 @@ import {
   detectExecutionTransition,
   emitExecutionTransitionNotification,
 } from "./ack/execution-transition-notifier.js";
-
-type UnknownRecord = Record<string, unknown>;
+import {
+  asBooleanStrict,
+  asNumberNullable,
+  asRecord,
+  asString,
+  asStringArray,
+  asStringOptional,
+  type UnknownRecord,
+} from "./util/type-coercion.js";
 
 type PolicyContextState = UnknownRecord & {
   canonicalSessionKey?: string;
@@ -84,24 +91,6 @@ export interface TurnExecutionReceipt {
   artifactReopenCount: number;
 }
 
-function isRecord(value: unknown): value is UnknownRecord {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
-function asRecord(value: unknown): UnknownRecord {
-  return isRecord(value) ? value : {};
-}
-
-function asStringArray(value: unknown): string[] {
-  return Array.isArray(value)
-    ? value.map((item) => String(item ?? "").trim()).filter(Boolean)
-    : [];
-}
-
-function asBoolean(value: unknown): boolean {
-  return value === true;
-}
-
 function explicitBoolean(value: unknown): boolean | undefined {
   return typeof value === "boolean" ? value : undefined;
 }
@@ -112,7 +101,7 @@ function hasExplicitTrue(values: unknown[]): boolean {
 
 
 function hasCurrentSpawnEvidence(...records: UnknownRecord[]): boolean {
-  return records.some((record) => Boolean(asString(
+  return records.some((record) => Boolean(asStringOptional(
     record.runId
       ?? record.run_id
       ?? record.childRunId
@@ -122,23 +111,6 @@ function hasCurrentSpawnEvidence(...records: UnknownRecord[]): boolean {
       ?? record.childSessionKey
       ?? record.child_session_key,
   )));
-}
-
-function asNumber(value: unknown): number | null {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return value;
-  }
-  const text = String(value ?? "").trim();
-  if (!text || !/^-?\d+(\.\d+)?$/.test(text)) {
-    return null;
-  }
-  const parsed = Number(text);
-  return Number.isFinite(parsed) ? parsed : null;
-}
-
-function asString(value: unknown, fallback: string | null = null): string | null {
-  const normalized = String(value ?? "").trim();
-  return normalized || fallback;
 }
 
 export function buildTurnExecutionReceipt(
@@ -161,16 +133,16 @@ export function buildTurnExecutionReceipt(
   const delegateAttempt = asRecord(runtimeTruth.delegateAttempt);
   const nativeAttemptBinding = asRecord(delegateAttempt.nativeBinding);
   const evidence = asRecord(runtimeTruth.evidence);
-  const status = asString(delegateCtx.taskStatus ?? delegateCtx.status);
+  const status = asStringOptional(delegateCtx.taskStatus ?? delegateCtx.status);
   const hasDelegateIdentity = Boolean(
-    asString(delegateCtx.delegateTaskId ?? delegateCtx.taskId ?? delegateTask.delegateTaskId ?? binding.taskId),
+    asStringOptional(delegateCtx.delegateTaskId ?? delegateCtx.taskId ?? delegateTask.delegateTaskId ?? binding.taskId),
   );
-  const routeWasDelegate = asString(routeDecision.route) === "delegate";
+  const routeWasDelegate = asStringOptional(routeDecision.route) === "delegate";
   const delegated = state.delegated === true || (routeWasDelegate && hasDelegateIdentity);
-  const nativeTaskId = asString(
+  const nativeTaskId = asStringOptional(
     nativeTaskBinding.nativeTaskId ?? nativeAttemptBinding.nativeTaskId ?? binding.taskId,
   );
-  const nativeFlowId = asString(
+  const nativeFlowId = asStringOptional(
     nativeTaskBinding.nativeFlowId ?? nativeAttemptBinding.nativeFlowId ?? binding.flowId,
   );
   const dispatchExecuted = state.dispatchExecuted === true || decision.dispatchExecuted === true;
@@ -194,11 +166,11 @@ export function buildTurnExecutionReceipt(
   const spawnExecuted = hasExplicitTrue(spawnSignals)
     || hasCurrentSpawnEvidence(nativeTaskBinding, nativeAttemptBinding, delegateAttempt, evidence, binding);
   const delivery = asRecord(decision.delivery);
-  const resultMaterialized = Boolean(asString(delivery.artifact_path) || asString(delivery.result_path));
-  const deliveryStatus = asString(
+  const resultMaterialized = Boolean(asStringOptional(delivery.artifact_path) || asStringOptional(delivery.result_path));
+  const deliveryStatus = asStringOptional(
     delivery.status ?? delivery.delivery_status ?? decision.delivery_status,
   );
-  const childSessionKey = asString(
+  const childSessionKey = asStringOptional(
     workContract.childSessionKey
       ?? binding.childSessionKey
       ?? nativeTaskBinding.childSessionKey
@@ -210,7 +182,7 @@ export function buildTurnExecutionReceipt(
       ?? evidence.childSessionKey
       ?? evidence.child_session_key,
   );
-  const childSessionId = asString(
+  const childSessionId = asStringOptional(
     workContract.childSessionId
       ?? binding.childSessionId
       ?? nativeTaskBinding.childSessionId
@@ -222,7 +194,7 @@ export function buildTurnExecutionReceipt(
       ?? evidence.childSessionId
       ?? evidence.child_session_id,
   );
-  const childRunId = asString(
+  const childRunId = asStringOptional(
     workContract.childRunId
       ?? binding.childRunId
       ?? binding.runId
@@ -244,31 +216,31 @@ export function buildTurnExecutionReceipt(
       ?? evidence.runId
       ?? evidence.run_id,
   );
-  const executionCoverage = asString(
+  const executionCoverage = asStringOptional(
     telemetry.executionCoverage
       ?? executionLayer.coverage
       ?? asRecord(coverageSnapshot.execution).coverage,
   );
-  const memoryCoverage = asString(
+  const memoryCoverage = asStringOptional(
     telemetry.memoryCoverage
       ?? memoryLayer.coverage
       ?? asRecord(coverageSnapshot.memory).coverage,
   );
   return {
-    turnId: asString(state.canonicalSessionKey) || `turn-${completedAt ?? Date.now()}`,
-    sessionKey: asString(state.canonicalSessionKey) ?? "",
-    route: asString(routeDecision.route, "reply") ?? "reply",
+    turnId: asStringOptional(state.canonicalSessionKey) || `turn-${completedAt ?? Date.now()}`,
+    sessionKey: asStringOptional(state.canonicalSessionKey) ?? "",
+    route: asString(routeDecision.route, "reply"),
     delegated,
     dispatchExecuted,
     spawnExecuted,
-    workContractId: asString(state.workContractId ?? decision.workContractId ?? workContract.workContractId),
-    delegateTaskId: asString(delegateCtx.delegateTaskId ?? delegateCtx.taskId ?? delegateCtx.task_id),
+    workContractId: asStringOptional(state.workContractId ?? decision.workContractId ?? workContract.workContractId),
+    delegateTaskId: asStringOptional(delegateCtx.delegateTaskId ?? delegateCtx.taskId ?? delegateCtx.task_id),
     nativeTaskId,
     nativeFlowId,
     childSessionKey,
     childSessionId,
     childRunId,
-    nativeFlowRevision: asNumber(
+    nativeFlowRevision: asNumberNullable(
       telemetry.nativeFlowRevision
         ?? nativeTaskBinding.nativeFlowRevision
         ?? nativeTaskBinding.revision
@@ -276,7 +248,7 @@ export function buildTurnExecutionReceipt(
         ?? nativeAttemptBinding.revision
         ?? binding.revision,
     ),
-    nativeFlowExpectedRevision: asNumber(
+    nativeFlowExpectedRevision: asNumberNullable(
       telemetry.nativeFlowExpectedRevision
         ?? nativeTaskBinding.nativeFlowExpectedRevision
         ?? nativeTaskBinding.expectedRevision
@@ -284,14 +256,14 @@ export function buildTurnExecutionReceipt(
         ?? nativeAttemptBinding.expectedRevision
         ?? binding.expectedRevision,
     ),
-    nativeFlowMutation: asString(telemetry.nativeFlowMutation ?? runtimeTruth.nativeFlowMutation),
+    nativeFlowMutation: asStringOptional(telemetry.nativeFlowMutation ?? runtimeTruth.nativeFlowMutation),
     nativeFlowMutationApplied: (
       telemetry.nativeFlowMutationApplied !== undefined || runtimeTruth.nativeFlowMutationApplied !== undefined
-        ? asBoolean(telemetry.nativeFlowMutationApplied ?? runtimeTruth.nativeFlowMutationApplied)
+        ? asBooleanStrict(telemetry.nativeFlowMutationApplied ?? runtimeTruth.nativeFlowMutationApplied)
         : null
     ),
-    nativeFlowMutationError: asString(telemetry.nativeFlowMutationError ?? runtimeTruth.nativeFlowMutationError),
-    workerPool: asString(routeDecision.worker_pool),
+    nativeFlowMutationError: asStringOptional(telemetry.nativeFlowMutationError ?? runtimeTruth.nativeFlowMutationError),
+    workerPool: asStringOptional(routeDecision.worker_pool),
     toolsUsed: asStringArray(state.toolsUsed ?? state.directToolsSeen ?? []),
     resultMaterialized,
     deliveryStatus,
@@ -301,14 +273,14 @@ export function buildTurnExecutionReceipt(
       : "completed",
     completedAt: completedAt ?? Date.now(),
     executionCoverage,
-    executionSupportsProvenanceReply: asBoolean(telemetry.executionSupportsProvenanceReply ?? executionLayer.supports_provenance_reply),
-    executionSupportsStatusReply: asBoolean(telemetry.executionSupportsStatusReply ?? executionLayer.supports_status_reply),
-    executionRequiresControlPlaneRefresh: asBoolean(telemetry.executionRequiresControlPlaneRefresh ?? executionLayer.requires_control_plane_refresh),
+    executionSupportsProvenanceReply: asBooleanStrict(telemetry.executionSupportsProvenanceReply ?? executionLayer.supports_provenance_reply),
+    executionSupportsStatusReply: asBooleanStrict(telemetry.executionSupportsStatusReply ?? executionLayer.supports_status_reply),
+    executionRequiresControlPlaneRefresh: asBooleanStrict(telemetry.executionRequiresControlPlaneRefresh ?? executionLayer.requires_control_plane_refresh),
     memoryCoverage,
-    authority: asString(telemetry.authority ?? coverageSnapshot.authority),
-    parentContextTokensAdded: asNumber(telemetry.parentContextTokensAdded ?? decision.parentContextTokensAdded) ?? 0,
-    resultPacketTokens: asNumber(telemetry.resultPacketTokens ?? delivery.resultPacketTokens ?? delivery.result_packet_tokens) ?? 0,
-    artifactReopenCount: asNumber(telemetry.artifactReopenCount ?? state.artifactReopenCount) ?? 0,
+    authority: asStringOptional(telemetry.authority ?? coverageSnapshot.authority),
+    parentContextTokensAdded: asNumberNullable(telemetry.parentContextTokensAdded ?? decision.parentContextTokensAdded) ?? 0,
+    resultPacketTokens: asNumberNullable(telemetry.resultPacketTokens ?? delivery.resultPacketTokens ?? delivery.result_packet_tokens) ?? 0,
+    artifactReopenCount: asNumberNullable(telemetry.artifactReopenCount ?? state.artifactReopenCount) ?? 0,
   };
 }
 

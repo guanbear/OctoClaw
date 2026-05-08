@@ -1,9 +1,8 @@
 import fsSync from "node:fs";
 import path from "node:path";
+import { type UnknownRecord, isRecord, asString } from "../util/type-coercion.js";
 import { openRuntimeLedger } from "./index.js";
 import type { DatabaseSync, SqliteProvider } from "./types.js";
-
-type UnknownRecord = Record<string, unknown>;
 
 export type CompletionBindingVerdict = "pending" | "matched" | "completion_orphaned" | "binding_mismatch" | "missing" | "invalid_json";
 
@@ -92,14 +91,6 @@ export interface ScanOrphanCompletionsResult {
   orphaned: number;
   reconciled: number;
   mismatches: number;
-}
-
-function asString(value: unknown): string {
-  return String(value ?? "").trim();
-}
-
-function isRecord(value: unknown): value is UnknownRecord {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 function completionIdFor(workContractId: string, attemptId: string): string {

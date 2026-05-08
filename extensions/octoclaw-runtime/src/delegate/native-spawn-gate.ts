@@ -1,7 +1,6 @@
+import { asBooleanStrict, asRecord, asString, type UnknownRecord } from "../util/type-coercion.js";
 import { hashSessionsSpawnArgs, type NativeSpawnIntent, type SessionsSpawnArgs } from "./native-spawn-intent.js";
 import { nativeSpawnIntentStore } from "./native-spawn-intent-store.js";
-
-type UnknownRecord = Record<string, unknown>;
 
 export interface NativeSpawnGateInput {
   sessionKeys: string[];
@@ -29,12 +28,6 @@ export type NativeSessionsSendGateDecision =
       expectedHash?: string;
       actualHash?: string;
     };
-
-function asRecord(value: unknown): UnknownRecord {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value)
-    ? value as UnknownRecord
-    : {};
-}
 
 export function evaluateNativeSessionsSendGate(input: NativeSpawnGateInput): NativeSessionsSendGateDecision {
   if (executionFollowupBlocked(input.decision)) {
@@ -83,10 +76,6 @@ export function evaluateNativeSessionsSendGate(input: NativeSpawnGateInput): Nat
   return firstTransitionFailure ?? firstMismatch ?? { allowed: false, reason: "missing_pending_intent" };
 }
 
-function asString(value: unknown): string {
-  return String(value ?? "").trim();
-}
-
 function storeErrorReason(error: unknown): string {
   const record = asRecord(error);
   const code = asString(record.code).toLowerCase();
@@ -96,10 +85,6 @@ function storeErrorReason(error: unknown): string {
   }
   if (code === "sqlite_unavailable" || message.includes("sqlite_unavailable")) return "sqlite_unavailable";
   return "intent_store_error";
-}
-
-function asBoolean(value: unknown): boolean {
-  return value === true;
 }
 
 function uniqueSessionKeys(values: unknown[]): string[] {
@@ -122,10 +107,10 @@ function executionFollowupBlocked(decision: unknown): boolean {
     || asString(routerDecision.request_kind) === "status_or_provenance"
     || relation === "existing_execution_followup"
     || relation === "existing_execution_provenance_query"
-    || asBoolean(conversationControl.status_followup)
-    || asBoolean(conversationControl.provenance_followup)
-    || asBoolean(coverageExecution.supports_status_reply)
-    || asBoolean(coverageExecution.supports_provenance_reply);
+    || asBooleanStrict(conversationControl.status_followup)
+    || asBooleanStrict(conversationControl.provenance_followup)
+    || asBooleanStrict(coverageExecution.supports_status_reply)
+    || asBooleanStrict(coverageExecution.supports_provenance_reply);
 }
 
 export function evaluateNativeSpawnGate(input: NativeSpawnGateInput): NativeSpawnGateDecision {

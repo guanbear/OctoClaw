@@ -1,19 +1,11 @@
 import type { JudgeExecutionLayer } from "@octoclaw/policy/judge";
 import { type TurnExecutionReceipt, buildTurnExecutionReceipt } from "../receipt.js";
 import { policyState } from "../state/policy-state.js";
+import { isRecord, asStringOptional } from "../util/type-coercion.js";
 import { parseSessionRoute } from "./session.js";
 
 type JsonRecord = Record<string, unknown>;
 type TurnExecutionReceiptWithSpawn = TurnExecutionReceipt & { spawnExecuted?: unknown };
-
-function isRecord(value: unknown): value is JsonRecord {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
-function asString(value: unknown): string | null {
-  const normalized = String(value ?? "").trim();
-  return normalized || null;
-}
 
 function explicitBoolean(value: unknown): boolean | undefined {
   return typeof value === "boolean" ? value : undefined;
@@ -23,7 +15,7 @@ function entryTurnId(state: JsonRecord): string | null {
   const decision = isRecord(state.decision) ? state.decision : {};
   const correlation = isRecord(decision.correlation) ? decision.correlation : {};
   const routeSeal = isRecord(state.routeSeal) ? state.routeSeal : {};
-  return asString(
+  return asStringOptional(
     state.turnId
       ?? state.turn_id
       ?? state.messageTurnId
@@ -160,8 +152,8 @@ function collectLatestReceipt(
     const hasDecision = isRecord(state?.decision);
     if (!hasDecision && !latestReceipt) continue;
 
-    const stateSession = asString(state.canonicalSessionKey ?? latestReceipt?.sessionKey);
-    const stateBinding = asString(state.session_binding_key);
+    const stateSession = asStringOptional(state.canonicalSessionKey ?? latestReceipt?.sessionKey);
+    const stateBinding = asStringOptional(state.session_binding_key);
     const matchScore = Math.max(
       aliasMatchScore(stateSession, aliases),
       aliasMatchScore(stateBinding, aliases),

@@ -4,6 +4,7 @@ import { resolveTaskStatePath } from "../resolve/env.js";
 import type { WorkContract } from "@octoclaw/contracts/work-contract";
 import type { TaskStateRecord } from "../state/task-state-store.js";
 import { TASK_STATE_SCHEMA_VERSION, readTaskStateDocumentDetailed, writeTaskStateDocumentSafe } from "../state/task-state-store.js";
+import { isRecord, asString } from "../util/type-coercion.js";
 import { openRuntimeLedger } from "./index.js";
 import type { DatabaseSync, SqliteProvider } from "./types.js";
 
@@ -99,14 +100,6 @@ interface ProjectionFsLike {
 
 const fs = fsSync as unknown as ProjectionFsLike;
 const DEFAULT_RECENT_TERMINAL_RETENTION_MS = 24 * 60 * 60 * 1000;
-
-function asString(value: unknown): string {
-  return String(value ?? "").trim();
-}
-
-function isRecord(value: unknown): value is UnknownRecord {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
 
 function parseJsonRecord(raw: unknown): UnknownRecord {
   try {

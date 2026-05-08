@@ -1,8 +1,5 @@
 import { envOverrides } from "../resolve/env.js";
-
-function asString(value: unknown): string {
-  return String(value ?? "").trim();
-}
+import { asString } from "../util/type-coercion.js";
 
 function normalizePath(value: string): string {
   return value.replace(/\\/gu, "/").replace(/\/+/gu, "/").replace(/\/$/u, "");

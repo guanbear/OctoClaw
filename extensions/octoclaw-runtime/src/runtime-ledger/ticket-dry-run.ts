@@ -1,6 +1,5 @@
 import type { WorkContract } from "@octoclaw/contracts/work-contract";
-
-type UnknownRecord = Record<string, unknown>;
+import { type UnknownRecord, asRecord, asString, asBooleanStrict } from "../util/type-coercion.js";
 
 export type DelegationTicketDryRunDecision = "ticket_would_issue" | "ticket_not_issued";
 export type DelegationTicketDenialReason = "" | "not_new_work" | "missing_expected_deliverable" | "recent_delegated_execution";
@@ -20,22 +19,6 @@ export interface DelegationTicketDryRunInput {
   decision?: UnknownRecord | null;
   payload?: UnknownRecord | null;
   metadata?: UnknownRecord | null;
-}
-
-function isRecord(value: unknown): value is UnknownRecord {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
-function asRecord(value: unknown): UnknownRecord {
-  return isRecord(value) ? value : {};
-}
-
-function asString(value: unknown): string {
-  return String(value ?? "").trim();
-}
-
-function asBoolean(value: unknown): boolean {
-  return value === true;
 }
 
 function hasBoolean(value: unknown): value is boolean {
@@ -95,8 +78,8 @@ function isSemanticFollowup(input: DelegationTicketDryRunInput): boolean {
 
   return intentClass === "execution_followup"
     || requestKind === "status_or_provenance"
-    || asBoolean(conversationControl.provenance_followup)
-    || asBoolean(conversationControl.status_followup);
+    || asBooleanStrict(conversationControl.provenance_followup)
+    || asBooleanStrict(conversationControl.status_followup);
 }
 
 function isFollowup(input: DelegationTicketDryRunInput): boolean {
@@ -105,8 +88,8 @@ function isFollowup(input: DelegationTicketDryRunInput): boolean {
   const coverageExecution = asRecord(asRecord(executionCoverage.coverage).execution);
 
   return isSemanticFollowup(input)
-    || asBoolean(coverageExecution.supports_provenance_reply)
-    || asBoolean(coverageExecution.supports_status_reply);
+    || asBooleanStrict(coverageExecution.supports_provenance_reply)
+    || asBooleanStrict(coverageExecution.supports_status_reply);
 }
 
 function expectedDeliverableFrom(input: DelegationTicketDryRunInput): string {

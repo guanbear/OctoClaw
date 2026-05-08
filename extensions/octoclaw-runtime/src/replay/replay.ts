@@ -3,9 +3,9 @@ import path from "node:path";
 import { resolveReplayLogPath, truncateText } from "../resolve/env.js";
 import { ackDeliveryState, ackTargetResolutionState } from "../resolve/session.js";
 import { policyState } from "../state/policy-state.js";
+import { type UnknownRecord, asRecord, asStringArray } from "../util/type-coercion.js";
 import { buildRolloutFlags, runtimeSwitches } from "./policy-utils.js";
 
-type UnknownRecord = Record<string, unknown>;
 type LoggerLike = { warn?: (message: string) => void } | null | undefined;
 
 interface PolicyStateApiLike {
@@ -13,20 +13,6 @@ interface PolicyStateApiLike {
 }
 
 const policyStateApi = policyState as unknown as PolicyStateApiLike;
-
-function isRecord(value: unknown): value is UnknownRecord {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
-function asRecord(value: unknown): UnknownRecord {
-  return isRecord(value) ? value : {};
-}
-
-function asStringArray(value: unknown): string[] {
-  return Array.isArray(value)
-    ? value.map((item) => String(item ?? "").trim()).filter(Boolean)
-    : [];
-}
 
 
 

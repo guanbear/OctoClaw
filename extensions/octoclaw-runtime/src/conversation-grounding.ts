@@ -13,6 +13,7 @@ import type { DelegateStatusPacket } from "@octoclaw/contracts/delegate-context"
 import { normalizeSemanticPrompt } from "./semantic-prompt.js";
 import { openRuntimeLedger } from "./runtime-ledger/index.js";
 import type { DatabaseSync } from "./runtime-ledger/types.js";
+import { isRecord } from "./util/type-coercion.js";
 
 interface FsSyncLike {
   readFileSync(pathname: string, encoding: string): string;
@@ -193,10 +194,6 @@ const OPERATOR_SURFACE_REGISTRY = [
     ],
   },
 ];
-
-function isRecord(value: unknown): value is JsonRecord {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
 
 function stringValue(value: unknown): string {
   return String(value ?? "").trim();

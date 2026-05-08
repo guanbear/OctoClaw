@@ -1,3 +1,11 @@
+import {
+  asNumberOptional as asNumber,
+  asRecord,
+  asString,
+  isRecord,
+  type UnknownRecord,
+} from "../util/type-coercion.js";
+
 export type NativeProjectedStatus =
   | "queued"
   | "running"
@@ -45,24 +53,6 @@ export interface NativeStatusProjection {
   summary?: string;
   revision?: number;
   error?: string;
-}
-
-type UnknownRecord = Record<string, unknown>;
-
-function isRecord(value: unknown): value is UnknownRecord {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
-function asRecord(value: unknown): UnknownRecord {
-  return isRecord(value) ? value : {};
-}
-
-function asString(value: unknown): string {
-  return String(value ?? "").trim();
-}
-
-function asNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
 function firstString(...values: unknown[]): string {

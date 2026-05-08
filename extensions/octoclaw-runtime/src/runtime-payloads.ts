@@ -26,8 +26,7 @@ import { buildCompoundDelegationPlaceholder, materializeDelegatedWork } from "./
 import { buildFastReplyAck, buildDirectReply, buildDirectReplyContext } from "./payloads/fast-reply/index.js";
 import { isObserveMode } from "./resolve/route-helpers.js";
 import { buildDelegateHandoffPacket } from "./context/delegate-packets.js";
-
-type UnknownRecord = Record<string, unknown>;
+import { asRecord, type UnknownRecord } from "./util/type-coercion.js";
 
 interface RuntimePayloadHelpers {
   runtimeRouteDecision: (decision?: UnknownRecord) => UnknownRecord;
@@ -85,12 +84,6 @@ function buildPluginOptions(helperInvoker?: NativeHelperInvoker | null) {
 
 function readHelperInvoker(value: unknown): NativeHelperInvoker | null {
   return typeof value === "function" ? (value as NativeHelperInvoker) : null;
-}
-
-function asRecord(value: unknown): UnknownRecord {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as UnknownRecord)
-    : {};
 }
 
 function readString(value: unknown, fallback = ""): string {

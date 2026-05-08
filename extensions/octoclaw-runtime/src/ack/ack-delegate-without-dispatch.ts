@@ -2,6 +2,7 @@ import { sendIMMessage } from "../im/send.js";
 import { resolveWorkspaceRoot } from "../resolve/env.js";
 import { delegationFailureReply } from "../replay/message-guard.js";
 import { recordPolicyReplay } from "../replay/replay.js";
+import { isRecord, asString } from "../util/type-coercion.js";
 import { resolveAckTargetFromSessionKey } from "./ack-guard.js";
 
 export interface DelegateWithoutDispatchPacket {
@@ -35,16 +36,8 @@ interface AckSendResult {
 
 const delegateWithoutDispatchOwners = new Map<string, string>();
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
 function readRecord(value: unknown): Record<string, unknown> {
   return isRecord(value) ? value : {};
-}
-
-function asString(value: unknown): string {
-  return String(value ?? "").trim();
 }
 
 function detectLanguage(decision: Record<string, unknown>, state: Record<string, unknown>): "zh" | "en" {

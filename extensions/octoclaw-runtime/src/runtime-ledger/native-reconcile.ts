@@ -1,5 +1,6 @@
 import { openRuntimeLedger } from "./index.js";
 import type { DatabaseSync, SqliteProvider } from "./types.js";
+import { asString } from "../util/type-coercion.js";
 
 export interface NativeLifecycleState {
   flowExists: boolean;
@@ -57,10 +58,6 @@ interface AttemptRow {
 }
 
 const TERMINAL_STATUSES = new Set(["completed", "canceled", "cancelled", "failed", "timeout_no_result"]);
-
-function asString(value: unknown): string {
-  return String(value ?? "").trim();
-}
 
 function nullableString(value: unknown): string | null {
   const text = asString(value);

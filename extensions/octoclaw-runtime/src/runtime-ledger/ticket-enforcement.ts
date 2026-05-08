@@ -3,8 +3,7 @@ import { openRuntimeLedger } from "./index.js";
 import { resolveRuntimeLedgerMode } from "./shadow.js";
 import type { DatabaseSync, RuntimeLedgerEnvMode, SqliteProvider } from "./types.js";
 import type { DelegationTicketDryRunResult } from "./ticket-dry-run.js";
-
-type UnknownRecord = Record<string, unknown>;
+import { type UnknownRecord, asRecord, asString } from "../util/type-coercion.js";
 
 export type DelegationTicketRejectionReason =
   | "not_enforced"
@@ -62,18 +61,6 @@ export interface IssueDelegationTicketCandidateResult {
   ticket_id?: string;
   work_contract_id?: string;
   dbPath?: string;
-}
-
-function isRecord(value: unknown): value is UnknownRecord {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
-function asRecord(value: unknown): UnknownRecord {
-  return isRecord(value) ? value : {};
-}
-
-function asString(value: unknown): string {
-  return String(value ?? "").trim();
 }
 
 function ticketIdFor(workContractId: string): string {

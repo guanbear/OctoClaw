@@ -4,6 +4,7 @@ import {
   type RouteSeal,
   type RouteSealSource,
 } from "@octoclaw/contracts/route-seal";
+import { isRecord, asString, asNumberOptional } from "../util/type-coercion.js";
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -17,18 +18,6 @@ export interface ResolveCurrentRouteSealInput {
   inputHash?: string;
   stateGeneration?: number;
   now?: Date;
-}
-
-function isRecord(value: unknown): value is UnknownRecord {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
-function asString(value: unknown): string {
-  return typeof value === "string" ? value.trim() : "";
-}
-
-function asNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
 function canonicalLiveRoute(raw: unknown): LiveRoute | null {
@@ -62,7 +51,7 @@ function reasonCodesFrom(value: unknown, fallback: string): string[] {
 
 function createRouteSeal(input: ResolveCurrentRouteSealInput, route: LiveRoute, source: RouteSealSource, sourceRecord: UnknownRecord): RouteSeal {
   const routeDecision = isRecord(sourceRecord.route_decision) ? sourceRecord.route_decision : {};
-  const confidence = asNumber(sourceRecord.confidence) ?? asNumber(routeDecision.confidence);
+  const confidence = asNumberOptional(sourceRecord.confidence) ?? asNumberOptional(routeDecision.confidence);
   const reasonCodes = reasonCodesFrom(sourceRecord.reasonCodes ?? sourceRecord.reason_codes ?? routeDecision.reasonCodes ?? routeDecision.reason_codes, source);
 
   return {
@@ -114,11 +103,11 @@ export function resolveCurrentRouteSeal(input: ResolveCurrentRouteSealInput): Ro
         reasonCodes: reasonCodesFrom(policyRouteSeal.reasonCodes, "explicit_current_policy"),
         createdAt: asString(policyRouteSeal.createdAt),
         inputHash: asString(policyRouteSeal.inputHash),
-        stateGeneration: asNumber(policyRouteSeal.stateGeneration) ?? 0,
+        stateGeneration: asNumberOptional(policyRouteSeal.stateGeneration) ?? 0,
         ...(candidateRoute === "reply" && (policyRouteSeal.replyMode === "answer" || policyRouteSeal.replyMode === "clarify")
           ? { replyMode: policyRouteSeal.replyMode }
           : {}),
-        ...(asNumber(policyRouteSeal.confidence) === undefined ? {} : { confidence: asNumber(policyRouteSeal.confidence) }),
+        ...(asNumberOptional(policyRouteSeal.confidence) === undefined ? {} : { confidence: asNumberOptional(policyRouteSeal.confidence) }),
       };
       if (validateRouteSeal(candidate, input.turnId, input.threadBindingKey)) {
         return candidate;

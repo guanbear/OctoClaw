@@ -5,7 +5,6 @@ import type {
   CreateManagedFlowInput,
   FlowMutationInput,
   FlowMutationResult,
-  JsonRecord,
   ManagedFlowRecord,
   NativeFlowRecord,
   NativeTaskRunResult,
@@ -13,6 +12,7 @@ import type {
   RunNativeTaskInput,
   TaskFlowPort,
 } from "./taskflow-port.js";
+import { isRecord, asRecord } from "../util/type-coercion.js";
 
 interface OpenClawRuntimeTaskFlowApi {
   bindSession(input: { sessionKey: string; requesterOrigin?: unknown }): OpenClawRuntimeTaskFlowBoundApi;
@@ -35,14 +35,6 @@ export interface OpenClawRuntimeTaskFlowApiContainer {
   runtime: {
     taskFlow: OpenClawRuntimeTaskFlowApi;
   };
-}
-
-function isRecord(value: unknown): value is JsonRecord {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
-function asRecord(value: unknown): JsonRecord {
-  return isRecord(value) ? value : {};
 }
 
 function stringField(value: unknown): string {

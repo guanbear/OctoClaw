@@ -2,15 +2,7 @@ import type { DatabaseSync, ShadowDiffReport, ShadowDiffMissingWorkContract, Sha
 import { readTaskStateRecords } from "../state/task-state-store.js";
 import { resolveTaskStateStorePath } from "../state/task-state-store.js";
 import { openRuntimeLedger } from "./index.js";
-
-function asString(value: unknown, fallback = ""): string {
-  const text = String(value ?? "").trim();
-  return text || fallback;
-}
-
-function asRecord(value: unknown): Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
-}
+import { asString, asRecord } from "../util/type-coercion.js";
 
 function collectAttemptIds(record: Record<string, unknown>): Array<{ attemptId: string; delegateTaskId: string; workContractId: string }> {
   const results: Array<{ attemptId: string; delegateTaskId: string; workContractId: string }> = [];

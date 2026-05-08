@@ -79,8 +79,15 @@ import { buildMemoryCoverageLayer } from "./memory-coverage-precheck.js";
 import { buildConversationIntentPacket } from "../conversation-grounding.js";
 import { buildDelegationTicketDryRun } from "../runtime-ledger/ticket-dry-run.js";
 import { issueDelegationTicketCandidate } from "../runtime-ledger/ticket-enforcement.js";
+import {
+  type UnknownRecord,
+  isRecord,
+  asRecord,
+  asString,
+  asBoolean,
+  asStringArray,
+} from "../util/type-coercion.js";
 
-type UnknownRecord = Record<string, unknown>;
 type LoggerLike = { warn?: (message: string) => void } | null | undefined;
 type ManagedContext = Record<string, unknown>;
 type PolicyContextState = UnknownRecord & {
@@ -123,14 +130,6 @@ interface ExtractPromptEvent {
   messages?: unknown;
 }
 
-function isRecord(value: unknown): value is UnknownRecord {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
-function asRecord(value: unknown): UnknownRecord {
-  return isRecord(value) ? value : {};
-}
-
 function isDelegateTask(value: unknown): value is DelegateTask {
   return isRecord(value)
     && typeof value.delegateTaskId === "string"
@@ -145,24 +144,9 @@ function isDelegateAttempt(value: unknown): value is DelegateAttempt {
     && typeof value.status === "string";
 }
 
-function asString(value: unknown, fallback = ""): string {
-  const text = String(value ?? "").trim();
-  return text || fallback;
-}
-
-function asBoolean(value: unknown, fallback = false): boolean {
-  return typeof value === "boolean" ? value : fallback;
-}
-
 function isDegradedDelegateJudgeResult(value: unknown): boolean {
   const result = asRecord(value);
   return result.route === "delegate" && result.judge_schema_degraded === true;
-}
-
-function asStringArray(value: unknown): string[] {
-  return Array.isArray(value)
-    ? value.map((item) => asString(item)).filter(Boolean)
-    : [];
 }
 
 function inferObserveMode(metadata: UnknownRecord = {}): boolean {

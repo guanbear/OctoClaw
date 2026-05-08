@@ -6,6 +6,7 @@ import {
   resolveTaskStatePath,
   resolveTaskStateRetentionPath,
 } from "../resolve/env.js";
+import { asRecord, asString } from "../util/type-coercion.js";
 import type { TaskStateRecord } from "./task-state-store.js";
 
 const TASK_STATE_ARCHIVE_SCHEMA_VERSION = "octoclaw.task_state_archive/v1";
@@ -48,15 +49,6 @@ export interface TaskStateRetentionResult {
   checkpointPath: string;
   archivedTaskIds: string[];
   deletedArchiveEntries?: number;
-}
-
-function asRecord(value: unknown): Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
-}
-
-function asString(value: unknown, fallback = ""): string {
-  const text = String(value ?? "").trim();
-  return text || fallback;
 }
 
 function timestampMs(value: unknown): number | null {

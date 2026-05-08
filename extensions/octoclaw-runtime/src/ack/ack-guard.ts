@@ -54,6 +54,7 @@ import {
   parseSessionRoute as canonicalParseSessionRoute,
   resolveAckDeliverySessionKey as canonicalResolveAckDeliverySessionKey,
 } from "../resolve/session.js";
+import { type UnknownRecord, isRecord, asString, asBooleanStrict, asNumber } from "../util/type-coercion.js";
 import { emitExecutionTransitionNotification } from "./execution-transition-notifier.js";
 
 const ACK_DEBUG = Boolean(process.env.OCTOCLAW_ACK_DEBUG);
@@ -75,7 +76,6 @@ const MAIN_MODEL_LEASE_MS = DEFAULT_ACK_TIMING_CONFIG.tierDelaysMs[2] + 10_000;
 export const NEUTRAL_INBOUND_ACK_TEXT = "收到，正在判断并准备处理。";
 export const NEUTRAL_REACTION_ACK_FALLBACK_MS = 2200;
 
-type UnknownRecord = Record<string, unknown>;
 type AckOwner = "" | "latency_ack" | "timer_ack";
 
 export interface AckContext extends UnknownRecord {
@@ -170,22 +170,6 @@ interface AckAttemptParams {
 const ackStateByStateKey = new Map<string, AckTrackingState>();
 const neutralInboundAckKeys = new Set<string>();
 let watchdogLastTick = 0;
-
-function isRecord(value: unknown): value is UnknownRecord {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
-function asString(value: unknown): string {
-  return String(value ?? "").trim();
-}
-
-function asBoolean(value: unknown): boolean {
-  return value === true;
-}
-
-function asNumber(value: unknown): number {
-  return typeof value === "number" && Number.isFinite(value) ? value : 0;
-}
 
 function unknownErrorMessage(error: unknown): string {
   if (error instanceof Error && error.message) return error.message;
@@ -495,25 +479,25 @@ export function buildDecisionPacket(
     route: normalizeDecisionRoute(routePhase),
     nowMs,
     inboundAtMs,
-    firstTokenSeen: asBoolean(merged.firstTokenSeen) || asBoolean(merged.mainModelFirstTokenSeen) || asBoolean(merged.mainModelStartedOutput),
-    formalReplyVisible: asBoolean(merged.formalReplyVisible) || asBoolean(merged.formal_reply_visible),
-    deliveryPending: asBoolean(merged.deliveryPending) || asBoolean(merged.delivery_pending),
-    delivered: asBoolean(merged.delivered),
-    finalResponseStreaming: asBoolean(merged.finalResponseStreaming || merged.final_response_streaming),
-    userInputActive: asBoolean(merged.userInputActive) || asBoolean(merged.user_input_active),
-    mainModelActive: asBoolean(merged.mainModelActive) || asBoolean(merged.main_model_active) || asBoolean(merged.final_response_streaming),
-    toolActive: asBoolean(merged.toolActive) || asBoolean(merged.tool_active),
-    delegatedRunning: asBoolean(merged.delegatedRunning) || asBoolean(merged.delegated_running),
-    blocked: asBoolean(merged.blocked) || asString(merged.native_state) === "blocked",
+    firstTokenSeen: asBooleanStrict(merged.firstTokenSeen) || asBooleanStrict(merged.mainModelFirstTokenSeen) || asBooleanStrict(merged.mainModelStartedOutput),
+    formalReplyVisible: asBooleanStrict(merged.formalReplyVisible) || asBooleanStrict(merged.formal_reply_visible),
+    deliveryPending: asBooleanStrict(merged.deliveryPending) || asBooleanStrict(merged.delivery_pending),
+    delivered: asBooleanStrict(merged.delivered),
+    finalResponseStreaming: asBooleanStrict(merged.finalResponseStreaming || merged.final_response_streaming),
+    userInputActive: asBooleanStrict(merged.userInputActive) || asBooleanStrict(merged.user_input_active),
+    mainModelActive: asBooleanStrict(merged.mainModelActive) || asBooleanStrict(merged.main_model_active) || asBooleanStrict(merged.final_response_streaming),
+    toolActive: asBooleanStrict(merged.toolActive) || asBooleanStrict(merged.tool_active),
+    delegatedRunning: asBooleanStrict(merged.delegatedRunning) || asBooleanStrict(merged.delegated_running),
+    blocked: asBooleanStrict(merged.blocked) || asString(merged.native_state) === "blocked",
     hasValidThreadTarget: hasMessageTarget,
-    reactionAckSupported: asBoolean(merged.reactionAckSupported),
-    reactionAckEnabled: asBoolean(merged.reactionAckEnabled),
-    reactionAckAttempted: asBoolean(merged.reactionAckAttempted) || asBoolean(merged.reaction_ack_attempted),
-    reactionAckSent: asBoolean(merged.reactionAckSent),
-    textAck0Sent: asBoolean(merged.textAck0Sent) || asBoolean(merged.latencyAckSent),
-    tier1Sent: asBoolean(merged.tier1Sent) || Boolean(timerState?.tier1Fired),
-    tier2Sent: asBoolean(merged.tier2Sent) || Boolean(timerState?.tier2Fired),
-    ackWriterQueued: asBoolean(merged.ackWriterQueued) || asBoolean(merged.ack_writer_queued),
+    reactionAckSupported: asBooleanStrict(merged.reactionAckSupported),
+    reactionAckEnabled: asBooleanStrict(merged.reactionAckEnabled),
+    reactionAckAttempted: asBooleanStrict(merged.reactionAckAttempted) || asBooleanStrict(merged.reaction_ack_attempted),
+    reactionAckSent: asBooleanStrict(merged.reactionAckSent),
+    textAck0Sent: asBooleanStrict(merged.textAck0Sent) || asBooleanStrict(merged.latencyAckSent),
+    tier1Sent: asBooleanStrict(merged.tier1Sent) || Boolean(timerState?.tier1Fired),
+    tier2Sent: asBooleanStrict(merged.tier2Sent) || Boolean(timerState?.tier2Fired),
+    ackWriterQueued: asBooleanStrict(merged.ackWriterQueued) || asBooleanStrict(merged.ack_writer_queued),
     channelTone: normalizeChannelTone(merged.channelTone || merged.channel_tone),
   };
 }
@@ -535,7 +519,7 @@ function buildTemplateInputs(
     channelCapability: channelSupportsUpdate ? "update" : "text_only",
     burstState: getBurstState(threadKey),
     anchorExists: Boolean(asString(state.anchorId || state.anchor_id || state.pendingDeliveryId)),
-    userInputActive: asBoolean(state.userInputActive) || asBoolean(ctx.userInputActive),
+    userInputActive: asBooleanStrict(state.userInputActive) || asBooleanStrict(ctx.userInputActive),
     stageHint: stageHint || asString(state.stageHint || state.stage_hint),
   };
 }
@@ -710,9 +694,9 @@ function buildMinimalProjectionFromTaskState(
     status: status as import("@octoclaw/contracts/status-projection").TaskProjectionStatus,
     success: false,
     createdAt: asString(t.created_at) || asString(t.spawned_at) || generatedAt,
-    dispatchExecuted: asBoolean(t.dispatchExecuted) || asBoolean(t.dispatch_executed),
-    spawnExecuted: asBoolean(t.spawnExecuted) || asBoolean(t.spawn_executed),
-    resultMaterialized: asBoolean(t.resultMaterialized) || asBoolean(t.result_materialized),
+    dispatchExecuted: asBooleanStrict(t.dispatchExecuted) || asBooleanStrict(t.dispatch_executed),
+    spawnExecuted: asBooleanStrict(t.spawnExecuted) || asBooleanStrict(t.spawn_executed),
+    resultMaterialized: asBooleanStrict(t.resultMaterialized) || asBooleanStrict(t.result_materialized),
     latestAnomalyNotice: (isRecord(t.latestAnomalyNotice) ? t.latestAnomalyNotice : isRecord(t.latest_anomaly_notice) ? t.latest_anomaly_notice : undefined) as import("@octoclaw/contracts/work-contract").AnomalyNotice | undefined,
     elapsedMs: 0,
     artifactRefs: [],
@@ -830,7 +814,7 @@ async function attemptAckSend(params: AckAttemptParams): Promise<{ sent: boolean
 
   const packet = buildDecisionPacket(normalizedStateKey, effectiveState, routePhase);
   // Suppress reply ACK0 if route-commit ACK already sent for this turn.
-  if (asBoolean(effectiveState.routeCommitAckSent || effectiveState.route_commit_ack_sent) && routePhase === "reply") {
+  if (asBooleanStrict(effectiveState.routeCommitAckSent || effectiveState.route_commit_ack_sent) && routePhase === "reply") {
     const reason = "suppressed_by_route_commit_ack";
     ackDebug(`attemptAckSend: route-commit ACK satisfied ACK0 for reply route stateKey=${normalizedStateKey}`);
     recordAckOutcome({
@@ -1187,10 +1171,10 @@ export function shouldSendLatencyAck(
   toolName = "",
 ): boolean {
   const latencyAck = isRecord(decision.latency_ack) ? decision.latency_ack : {};
-  if (!asBoolean(latencyAck.required)) {
+  if (!asBooleanStrict(latencyAck.required)) {
     return false;
   }
-  if (asBoolean(state.latencyAckSent)) {
+  if (asBooleanStrict(state.latencyAckSent)) {
     return false;
   }
   const trigger = asString(ctx.trigger).toLowerCase();
@@ -1232,7 +1216,7 @@ export async function sendAckDirect(
       ctx: { cwd, ...(isRecord(options.ctx) ? options.ctx : {}) },
       timeoutMs: Math.max(500, Number(options.timeoutMs || 5000)),
       ownerTag: asString(options.ownerTag || options.owner_tag) || "direct_ack",
-      skipOwnerClaim: asBoolean(options.skipOwnerClaim),
+      skipOwnerClaim: asBooleanStrict(options.skipOwnerClaim),
       replyToMessageId: asString(options.replyToMessageId),
     });
     return Boolean(result?.sent);
@@ -1262,13 +1246,13 @@ export function startAckGuard(sessionKey: string, cwd: string, options: UnknownR
     ackOwner: "",
     ack_owner: "",
     _ackTurnTs: turnTs,
-    reactionAckSent: asBoolean(baseState.reactionAckSent) || asBoolean(existingTrackingState.reactionAckSent),
-    reactionAckAttempted: asBoolean(baseState.reactionAckAttempted)
-      || asBoolean(baseState.reaction_ack_attempted)
-      || asBoolean(existingTrackingState.reactionAckAttempted)
-      || asBoolean(existingTrackingState.reaction_ack_attempted),
-    reactionAckSupported: asBoolean(baseState.reactionAckSupported),
-    reactionAckEnabled: asBoolean(baseState.reactionAckEnabled),
+    reactionAckSent: asBooleanStrict(baseState.reactionAckSent) || asBooleanStrict(existingTrackingState.reactionAckSent),
+    reactionAckAttempted: asBooleanStrict(baseState.reactionAckAttempted)
+      || asBooleanStrict(baseState.reaction_ack_attempted)
+      || asBooleanStrict(existingTrackingState.reactionAckAttempted)
+      || asBooleanStrict(existingTrackingState.reaction_ack_attempted),
+    reactionAckSupported: asBooleanStrict(baseState.reactionAckSupported),
+    reactionAckEnabled: asBooleanStrict(baseState.reactionAckEnabled),
     channelTone: normalizeChannelTone(baseState.channelTone || baseState.channel_tone),
   });
 
@@ -1416,8 +1400,8 @@ export async function maybeSendLatencyAck(
   const preDecisionState = {
     ...state,
     ...(metadataMessageId ? { message_id: metadataMessageId } : {}),
-    userInputActive: asBoolean(state.userInputActive) || asBoolean(ctx.userInputActive),
-    toolActive: asBoolean(state.toolActive) || asBoolean(state.tool_active) || Boolean(asString(toolName)),
+    userInputActive: asBooleanStrict(state.userInputActive) || asBooleanStrict(ctx.userInputActive),
+    toolActive: asBooleanStrict(state.toolActive) || asBooleanStrict(state.tool_active) || Boolean(asString(toolName)),
   };
   const sessionKey = resolveAckDeliverySessionKey(metadata, stateKey, state, ctx);
   const messageTurnId = resolveAckMessageTurnId(sessionKey, stateKey, preDecisionState, ctx, metadata);
@@ -1581,9 +1565,9 @@ export async function sendNeutralInboundAck(params: {
     neutralInboundAckKeys.add(neutralAckKey);
   }
 
-  const reactionAckEnabled = asBoolean(baseState.reactionAckEnabled);
-  const reactionAckSupported = asBoolean(baseState.reactionAckSupported);
-  const preferText = asBoolean(baseState.neutralAckPreferText) || asBoolean(baseState.neutral_ack_prefer_text);
+  const reactionAckEnabled = asBooleanStrict(baseState.reactionAckEnabled);
+  const reactionAckSupported = asBooleanStrict(baseState.reactionAckSupported);
+  const preferText = asBooleanStrict(baseState.neutralAckPreferText) || asBooleanStrict(baseState.neutral_ack_prefer_text);
   const useReactionAck = Boolean(replyToMessageId && reactionAckEnabled && reactionAckSupported && !preferText);
   const decision: AckDecision = useReactionAck
     ? {

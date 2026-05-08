@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { asRecord } from "../util/type-coercion.js";
 
 export type NativeSpawnIntentStatus =
   | "planned"
@@ -64,12 +65,6 @@ export interface NativeSpawnIntent {
   confirmedAt?: string | null;
   failedAt?: string | null;
   ackSentAt?: string | null;
-}
-
-function asRecord(value: unknown): Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : {};
 }
 
 function asNonEmptyString(value: unknown): string {

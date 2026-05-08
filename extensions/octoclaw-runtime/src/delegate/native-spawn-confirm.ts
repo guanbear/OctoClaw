@@ -3,6 +3,7 @@ import { updateWorkContract } from "../work-contract/store.js";
 import type { NativeBindingRef, WorkContract } from "@octoclaw/contracts/work-contract";
 import { nativeSpawnIntentStore } from "./native-spawn-intent-store.js";
 import type { NativeSpawnIntent } from "./native-spawn-intent.js";
+import { asString } from "../util/type-coercion.js";
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -36,10 +37,6 @@ export interface ConfirmNativeSpawnOutput {
   childSessionKey?: string | null;
   ackSent?: boolean;
   ackSkipped?: boolean;
-}
-
-function asString(value: unknown): string {
-  return String(value ?? "").trim();
 }
 
 function parseTime(value: unknown): number {
