@@ -6,16 +6,6 @@ import {
   buildDirectLookupGuard,
 } from "./conversation-grounding.js";
 import {
-  buildStatusQueryPacket,
-} from "./core/delegate/index.js";
-import type {
-  DelegateAttempt,
-  DelegateProgressEvent,
-  DelegateTask,
-  NativeTaskBinding,
-  StatusQueryPacket,
-} from "@octoclaw/contracts/delegate";
-import {
   cancelAckGuard,
   cancelAckGuardForState,
   getAckTrackingState,
@@ -39,7 +29,6 @@ import {
   buildPolicyMetadata,
   detectSessionBoundary,
   isManagedAgentContext,
-  normalizeInboundPrompt,
   resolveAckDeliverySessionKey,
   resolvePolicyStateKey,
   resolvePolicyStateKeys,
@@ -108,8 +97,15 @@ import {
 } from "./delegate/speculative-preload.js";
 import { resolvePlannerNativeCwd } from "./delegate/planner-cwd.js";
 import { type UnknownRecord, asRecord } from "./util/type-coercion.js";
+import type { HookHandler, LoggerLike, PluginInterface } from "./extension-entry-shared.js";
+import { firstNonEmptyString, firstStringValue, stringArray, stringValue, toolResultRecord } from "./extension-entry-shared.js";
+export type { HookHandler, LoggerLike, PluginInterface } from "./extension-entry-shared.js";
+export { buildPromptContextProjection, extractMessageText, extractPromptText, queryDelegateStatus, resolveDelegationCapability, resolveReactionAckConfig } from "./extension-entry-helpers.js";
+import { buildPromptContextProjection, extractMessageText, extractPromptText, resolveDelegationCapability, resolveReactionAckConfig } from "./extension-entry-helpers.js";
+export { extractInboundMessageTimestamp, extractInboundMessageTimestampWithSource, resolveSlackMessageReceivedSessionKey } from "./inbound-timestamps.js";
+export type { InboundMessageTimestampSource } from "./inbound-timestamps.js";
+import { extractInboundMessageTimestamp, extractInboundMessageTimestampWithSource, findInboundMessageTimestamp, resolveSlackMessageReceivedSessionKey, SLACK_MESSAGE_TS_PATTERN, type InboundMessageTimestampSource } from "./inbound-timestamps.js";
 
-type HookHandler = (event: UnknownRecord, ctx: UnknownRecord) => unknown;
 type NativeAnnounceSendMessage = (params: {
   sessionKey: string;
   message: string;
@@ -117,36 +113,6 @@ type NativeAnnounceSendMessage = (params: {
   cwd?: string;
 }) => Promise<SendIMResult>;
 
-interface LoggerLike {
-  debug?: (...args: unknown[]) => void;
-  warn?: (...args: unknown[]) => void;
-  info?: (...args: unknown[]) => void;
-}
-
-export interface PluginInterface {
-  config?: Record<string, unknown>;
-  pluginConfig?: Record<string, unknown>;
-  logger?: LoggerLike;
-  on?(event: string, handler: HookHandler, options?: Record<string, unknown>): void;
-  registerHook?(event: string, handler: HookHandler, options?: Record<string, unknown>): void;
-  registerTool?(definition: Record<string, unknown>): void;
-  registerCommand?(definition: Record<string, unknown>): void;
-  runtime?: {
-    config?: { current?: () => unknown };
-  };
-}
-
-export function resolveReactionAckConfig(pluginConfig: UnknownRecord | undefined, judgeFastRaw: UnknownRecord): {
-  reactionEmoji: string;
-  reactionAckEnabled: boolean;
-} {
-  const reactionEmoji = stringValue(pluginConfig?.ackReactionEmoji)
-    || stringValue(judgeFastRaw.ackReactionEmoji);
-  return {
-    reactionEmoji,
-    reactionAckEnabled: reactionEmoji.length > 0,
-  };
-}
 
 const OCTOCLAW_DELEGATION_SYSTEM_CONTEXT = [
   "OctoClaw runtime policy is authoritative for this run.",
@@ -304,24 +270,6 @@ async function sendCompactionNotice(event: UnknownRecord, ctx: UnknownRecord, lo
 }
 
 
-export function buildPromptContextProjection(input: {
-  prependSystem: string[];
-  contextPayload: string;
-  shouldInjectPolicyProjection: boolean;
-}): { prependSystemContext?: string; prependContext?: string } | undefined {
-  const systemContext = [...input.prependSystem];
-  if (input.shouldInjectPolicyProjection && input.contextPayload) {
-    systemContext.push([
-      "[OctoClaw policy projection]",
-      input.contextPayload,
-      "[/OctoClaw policy projection]",
-    ].join("\n"));
-  }
-  if (systemContext.length === 0) return undefined;
-  return {
-    prependSystemContext: systemContext.join("\n\n"),
-  };
-}
 
 function resolvePluginConfigObject(config: unknown, pluginId: string): UnknownRecord | undefined {
   const entry = asRecord(asRecord(asRecord(config).plugins).entries)[pluginId];
@@ -342,47 +290,6 @@ function resolveCurrentPluginConfig(pi: PluginInterface, pluginId = "octoclaw-ru
   return { ...startupPluginConfig, ...apiPluginConfig };
 }
 
-function stringValue(value: unknown): string {
-  return String(value ?? "").trim();
-}
-
-function stringArray(value: unknown): string[] {
-  return Array.isArray(value)
-    ? value.map((item) => stringValue(item)).filter(Boolean)
-    : [];
-}
-
-function firstNonEmptyString(...values: unknown[]): string {
-  for (const value of values) {
-    const text = stringValue(value);
-    if (text) return text;
-  }
-  return "";
-}
-
-function parseJsonRecord(value: string): UnknownRecord {
-  try {
-    return asRecord(JSON.parse(value));
-  } catch {
-    return {};
-  }
-}
-
-function toolResultRecord(result: unknown): UnknownRecord {
-  const record = asRecord(result);
-  const details = asRecord(record.details);
-  if (Object.keys(details).length > 0) return { ...record, ...details };
-  const text = stringValue(record.text);
-  if (text) return { ...record, ...parseJsonRecord(text) };
-  const content = Array.isArray(record.content) ? record.content : [];
-  for (const item of content) {
-    const itemText = stringValue(asRecord(item).text);
-    if (!itemText) continue;
-    const parsed = parseJsonRecord(itemText);
-    if (Object.keys(parsed).length > 0) return { ...record, ...parsed };
-  }
-  return record;
-}
 
 function isAcceptedSpeculativeSpawnResult(result: unknown): boolean {
   const record = toolResultRecord(result);
@@ -1691,13 +1598,6 @@ function footerDebugEnabled(): boolean {
   ));
 }
 
-function firstStringValue(...values: unknown[]): string {
-  for (const value of values) {
-    const text = stringValue(value);
-    if (text) return text;
-  }
-  return "";
-}
 
 function outboundProjectionSnapshot(state: UnknownRecord): UnknownRecord {
   return asRecord(state.outboundProjection || state.outbound_projection);
@@ -1948,155 +1848,6 @@ export function guardOutboundMessageForPolicyState(event: UnknownRecord, ctx: Un
   return outboundGuardReplacement(event, replacement);
 }
 
-const SLACK_MESSAGE_TS_PATTERN = /^\d{10}\.\d{6}$/u;
-const INBOUND_MESSAGE_TS_KEYS = new Set([
-  "ts",
-  "messageTs",
-  "message_ts",
-  "messageId",
-  "message_id",
-  "eventTs",
-  "event_ts",
-  "replyToId",
-  "reply_to_id",
-  "threadTs",
-  "thread_ts",
-]);
-
-function findInboundMessageTimestamp(value: unknown, depth = 0, seen = new Set<object>()): string {
-  if (depth > 5 || value === null || value === undefined) return "";
-  if (typeof value === "string") {
-    const text = value.trim();
-    return SLACK_MESSAGE_TS_PATTERN.test(text) ? text : "";
-  }
-  if (typeof value !== "object" || Array.isArray(value)) return "";
-  if (seen.has(value)) return "";
-  seen.add(value);
-  const record = value as UnknownRecord;
-  for (const key of INBOUND_MESSAGE_TS_KEYS) {
-    const direct = findInboundMessageTimestamp(record[key], depth + 1, seen);
-    if (direct) return direct;
-  }
-  for (const [key, entry] of Object.entries(record)) {
-    if (INBOUND_MESSAGE_TS_KEYS.has(key)) continue;
-    const nested = findInboundMessageTimestamp(entry, depth + 1, seen);
-    if (nested) return nested;
-  }
-  return "";
-}
-
-export function extractInboundMessageTimestamp(ctx: UnknownRecord, event: UnknownRecord, prompt = ""): string {
-  // 1. Known key names in ctx/event (fast path)
-  const fromContext = findInboundMessageTimestamp(ctx);
-  if (fromContext) return fromContext;
-  const fromEvent = findInboundMessageTimestamp(event);
-  if (fromEvent) return fromEvent;
-  // 2. JSON key-value in prompt: "ts": "1234567890.123456"
-  const msgIdMatch = prompt.match(/"(?:reply_to_id|message_id|message_ts|event_ts|thread_ts|ts)"\s*:\s*"(\d{10}\.\d{6})"/u);
-  if (msgIdMatch) return stringValue(msgIdMatch[1]);
-  // 3. Broad scan: any Slack ts-shaped string in ALL ctx/event field values
-  // Covers cases where OpenClaw uses non-standard key names (slackTs, inboundTs, etc.)
-  const fromCtxBroad = findAnySlackTs(ctx);
-  if (fromCtxBroad) return fromCtxBroad;
-  const fromEventBroad = findAnySlackTs(event);
-  if (fromEventBroad) return fromEventBroad;
-  // 4. Raw text in prompt — Slack ts can appear as bare number, e.g. ts=1777500517.132259
-  const rawMatch = prompt.match(/(?:^|[\s"'=,:{[])(\d{10}\.\d{6})(?:$|[\s"',}\]:])/mu);
-  if (rawMatch) return stringValue(rawMatch[1]);
-  return "";
-}
-
-type InboundMessageTimestampSource = "ctx" | "event" | "prompt" | "fallback_history" | "none";
-
-function extractInboundMessageTimestampWithSource(ctx: UnknownRecord, event: UnknownRecord, prompt = ""): { ts: string; source: InboundMessageTimestampSource } {
-  const fromContext = findInboundMessageTimestamp(ctx);
-  if (fromContext) return { ts: fromContext, source: "ctx" };
-  const fromEvent = findInboundMessageTimestamp(event);
-  if (fromEvent) return { ts: fromEvent, source: "event" };
-  const msgIdMatch = prompt.match(/"(?:reply_to_id|message_id|message_ts|event_ts|thread_ts|ts)"\s*:\s*"(\d{10}\.\d{6})"/u);
-  if (msgIdMatch) return { ts: stringValue(msgIdMatch[1]), source: "prompt" };
-  const fromCtxBroad = findAnySlackTs(ctx);
-  if (fromCtxBroad) return { ts: fromCtxBroad, source: "ctx" };
-  const fromEventBroad = findAnySlackTs(event);
-  if (fromEventBroad) return { ts: fromEventBroad, source: "event" };
-  const rawMatch = prompt.match(/(?:^|[\s"'=,:{[])(\d{10}\.\d{6})(?:$|[\s"',}\]:])/mu);
-  if (rawMatch) return { ts: stringValue(rawMatch[1]), source: "prompt" };
-  return { ts: "", source: "none" };
-}
-
-function stripKnownTargetPrefix(value: string): string {
-  const text = stringValue(value);
-  if (!text) return "";
-  const withoutSlackPrefix = text.replace(/^slack:/iu, "");
-  return withoutSlackPrefix.replace(/^(?:channel|chat|conversation|group|room|space|user|direct|dm):/iu, "");
-}
-
-function resolveSlackMessageReceivedSessionKey(event: UnknownRecord, ctx: UnknownRecord): string {
-  const metadata = asRecord(event.metadata);
-  const explicitSessionKey = stringValue(
-    ctx.sessionKey
-    || event.sessionKey
-    || metadata.sessionKey
-    || metadata.session_key,
-  );
-  if (/(?:^|:)slack:/u.test(explicitSessionKey.toLowerCase())) return explicitSessionKey;
-
-  const channel = stringValue(
-    ctx.channelId
-    || event.channelId
-    || metadata.channelId
-    || metadata.channel_id
-    || metadata.originatingChannel
-    || metadata.provider
-    || metadata.surface,
-  ).toLowerCase();
-  const rawTarget = stringValue(
-    ctx.conversationId
-    || event.conversationId
-    || metadata.conversationId
-    || metadata.conversation_id
-    || metadata.originatingTo
-    || metadata.to,
-  );
-  const target = stripKnownTargetPrefix(rawTarget);
-  if (!target) return "";
-  const targetUpper = target.toUpperCase();
-  const targetKind = (() => {
-    if (/^(?:user|direct|dm):/iu.test(rawTarget) || /^U[A-Z0-9]{8,}$/u.test(targetUpper)) return "direct";
-    if (/^(?:group|room|space):/iu.test(rawTarget)) return "group";
-    if (/^(?:channel|chat|conversation):/iu.test(rawTarget)) return "channel";
-    if (/^[CDG][A-Z0-9]{8,}$/u.test(targetUpper)) return "channel";
-    return "";
-  })();
-  if (!targetKind || (channel && channel !== "slack")) return "";
-  const threadId = stringValue(metadata.threadId || metadata.thread_id || event.threadId || event.thread_id);
-  const base = targetKind === "direct"
-    ? `agent:main:slack:default:direct:${target.toLowerCase()}`
-    : `agent:main:slack:${targetKind}:${target.toLowerCase()}`;
-  return threadId ? `${base}:thread:${threadId}` : base;
-}
-
-/** Scan ALL string values in an object tree for a Slack ts pattern.
- * Used as a fallback when the key name is non-standard. */
-function findAnySlackTs(value: unknown, depth = 0, seen = new Set<object>()): string {
-  if (depth > 4 || value === null || value === undefined) return "";
-  if (typeof value === "string") {
-    // Only match strings that look like a standalone Slack ts (not embedded in a larger number)
-    if (SLACK_MESSAGE_TS_PATTERN.test(value.trim())) return value.trim();
-    // Also match embedded session-key / thread-key forms such as "...:thread:1777737951.706329".
-    const m = value.match(/(?:^|[:\s"'=,{[])(\d{10}\.\d{6})(?:$|[:\s"',}\]])/u);
-    if (m) return m[1];
-    return "";
-  }
-  if (typeof value !== "object" || Array.isArray(value)) return "";
-  if (seen.has(value as object)) return "";
-  seen.add(value as object);
-  for (const v of Object.values(value as Record<string, unknown>)) {
-    const found = findAnySlackTs(v, depth + 1, seen);
-    if (found) return found;
-  }
-  return "";
-}
 
 function buildRecentExecutionFacts(receipts: TurnExecutionReceipt[]): string {
   if (receipts.length === 0) return "";
@@ -2138,142 +1889,6 @@ function collectRecentExecutionReceipts(currentSessionKey: string | null = null,
     ));
 }
 
-export function resolveDelegationCapability(options: {
-  pluginConfig?: Record<string, unknown>;
-  env?: Record<string, string | undefined>;
-}): {
-  requested: boolean;
-  hostSupported: boolean;
-  enabled: boolean;
-  reason: "" | "disabled_by_config";
-} {
-  const pluginConfig = options.pluginConfig ?? {};
-  const env = options.env ?? {};
-  const requested = pluginConfig.delegationEnabled !== false && env.OCTOCLAW_DELEGATION_ENABLED !== "false";
-  if (!requested) {
-    return {
-      requested: false,
-      hostSupported: true,
-      enabled: false,
-      reason: "disabled_by_config",
-    };
-  }
-  return {
-    requested: true,
-    hostSupported: true,
-    enabled: true,
-    reason: "",
-  };
-}
-
-function extractMessageText(content: unknown): string {
-  if (typeof content === "string") {
-    return content.trim();
-  }
-  if (Array.isArray(content)) {
-    return content
-      .map((part) => {
-        if (typeof part === "string") return part;
-        if (part && typeof part === "object" && typeof (part as { text?: unknown }).text === "string") {
-          return String((part as { text: string }).text);
-        }
-        return "";
-      })
-      .filter(Boolean)
-      .join("\n")
-      .trim();
-  }
-  if (content && typeof content === "object" && typeof (content as { text?: unknown }).text === "string") {
-    return String((content as { text: string }).text).trim();
-  }
-  return "";
-}
-
-function extractPromptText(event: UnknownRecord): string {
-  const prompt = stringValue(event.prompt);
-  if (prompt) {
-    return normalizeInboundPrompt(prompt) || prompt;
-  }
-  const messages = Array.isArray(event.messages) ? event.messages : [];
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index];
-    if (!message || typeof message !== "object") {
-      continue;
-    }
-    if (stringValue((message as UnknownRecord).role).toLowerCase() !== "user") {
-      continue;
-    }
-    const text = extractMessageText((message as UnknownRecord).content);
-    if (text) {
-      return normalizeInboundPrompt(text) || text;
-    }
-  }
-  return "";
-}
-
-function isDelegateTask(value: unknown): value is DelegateTask {
-  return Boolean(value)
-    && typeof value === "object"
-    && typeof (value as { delegateTaskId?: unknown }).delegateTaskId === "string"
-    && typeof (value as { status?: unknown }).status === "string";
-}
-
-function isDelegateAttempt(value: unknown): value is DelegateAttempt {
-  return Boolean(value)
-    && typeof value === "object"
-    && typeof (value as { attemptId?: unknown }).attemptId === "string"
-    && typeof (value as { delegateTaskId?: unknown }).delegateTaskId === "string";
-}
-
-function isNativeTaskBinding(value: unknown): value is NativeTaskBinding {
-  return Boolean(value)
-    && typeof value === "object"
-    && typeof (value as { delegateTaskId?: unknown }).delegateTaskId === "string"
-    && typeof (value as { attemptId?: unknown }).attemptId === "string"
-    && typeof (value as { nativeTaskId?: unknown }).nativeTaskId === "string";
-}
-
-function isDelegateProgressEvent(value: unknown): value is DelegateProgressEvent {
-  return Boolean(value)
-    && typeof value === "object"
-    && typeof (value as { delegateTaskId?: unknown }).delegateTaskId === "string"
-    && typeof (value as { attemptId?: unknown }).attemptId === "string"
-    && typeof (value as { eventAt?: unknown }).eventAt === "string"
-    && typeof (value as { summary?: unknown }).summary === "string";
-}
-
-function collectDelegateProgressEvents(state: PolicyStateEntry): DelegateProgressEvent[] {
-  const events = Array.isArray(state.delegateProgressEvents) ? state.delegateProgressEvents : [];
-  return events.filter(isDelegateProgressEvent);
-}
-
-export function queryDelegateStatus(delegateTaskId: string): StatusQueryPacket | null {
-  const targetId = stringValue(delegateTaskId);
-  if (!targetId) {
-    return null;
-  }
-
-  for (const { state } of policyState.entries()) {
-    const decision = asRecord(state.decision);
-    const runtimeTruth = asRecord(decision.runtime_truth);
-    const delegateTaskCandidate = runtimeTruth.delegateTask;
-    if (!isDelegateTask(delegateTaskCandidate) || delegateTaskCandidate.delegateTaskId !== targetId) {
-      continue;
-    }
-
-    const currentAttemptCandidate = runtimeTruth.delegateAttempt;
-    const nativeBindingCandidate = runtimeTruth.nativeTaskBinding;
-    return buildStatusQueryPacket({
-      delegateTask: delegateTaskCandidate,
-      currentAttempt: isDelegateAttempt(currentAttemptCandidate) ? currentAttemptCandidate : null,
-      nativeBinding: isNativeTaskBinding(nativeBindingCandidate) ? nativeBindingCandidate : null,
-      progressEvents: collectDelegateProgressEvents(state).filter((event) => event.delegateTaskId === targetId),
-      recoveryInfo: isDelegateAttempt(currentAttemptCandidate) ? currentAttemptCandidate.recoveryInfo ?? null : null,
-    });
-  }
-
-  return null;
-}
 
 function getPolicyStateForContext(ctx: UnknownRecord): { key: string; state: PolicyStateEntry | null } {
   const keys = resolvePolicyStateKeys(ctx);
