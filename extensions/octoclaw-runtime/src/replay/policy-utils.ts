@@ -206,6 +206,46 @@ export function compactPolicyPrompt(decision: Record<string, unknown>): string {
   return parts.join(" | ");
 }
 
+function compactPromptValue(value: unknown, maxLength = 240): string {
+  const text = String(value ?? "").trim();
+  if (text.length <= maxLength) return text;
+  return `${text.slice(0, Math.max(0, maxLength - 1))}…`;
+}
+
+export function compactDelegatePolicyPrompt(decision: Record<string, unknown>): string {
+  const canonicalDecision = canonicalizeDecisionForPolicyState(decision);
+  const routeDecision = asRecord(canonicalDecision.route_decision);
+  const toolPolicy = asRecord(canonicalDecision.tool_policy);
+  const workContract = asRecord(canonicalDecision.work_contract);
+  const reviewPolicy = asRecord(canonicalDecision.review_policy);
+  const executionPacket = asRecord(canonicalDecision._execution_coverage_packet);
+  const executionLayer = asRecord(canonicalDecision.execution_layer ?? canonicalDecision._execution_coverage);
+  const allowedControls = asStringArray(toolPolicy.allowed_control_tools).slice(0, 6);
+  const expectedDeliverable = compactPromptValue(
+    workContract.expectedDeliverable
+      ?? workContract.expected_deliverable
+      ?? routeDecision.expected_deliverable
+      ?? "",
+  );
+  const parts = [
+    `route=${String(routeDecision.route ?? "delegate")}`,
+    `decision_bucket=${String(routeDecision.decision_bucket ?? "")}`,
+    `route_confidence=${String(routeDecision.route_confidence ?? canonicalDecision.route_confidence ?? "")}`,
+    `complexity=${String(routeDecision.complexity ?? canonicalDecision.complexity ?? "")}`,
+    `complexity_confidence=${String(routeDecision.complexity_confidence ?? canonicalDecision.complexity_confidence ?? "")}`,
+    `worker_pool=${String(routeDecision.worker_pool ?? "")}`,
+    `task_class=${String(routeDecision.task_class ?? "")}`,
+    `must_delegate_via=${String(toolPolicy.must_delegate_via ?? "")}`,
+    `WorkContract=${String(workContract.workContractId ?? canonicalDecision.workContractId ?? "")}`,
+    `review_required=${String(Boolean(reviewPolicy.required))}`,
+    `dispatch_executed=${String(executionPacket.dispatchExecuted ?? executionLayer.dispatch_executed ?? "")}`,
+    `spawn_executed=${String(executionPacket.spawnExecuted ?? executionLayer.spawn_executed ?? "")}`,
+    expectedDeliverable ? `expected_deliverable=${expectedDeliverable}` : "",
+  ].filter((item) => item && !item.endsWith("=") && !item.endsWith("=undefined"));
+  if (allowedControls.length > 0) parts.push(`allowed_control_tools=${allowedControls.join(",")}`);
+  return parts.join(" | ");
+}
+
 export function policySummaryText(payload: Record<string, unknown>): string {
   if (payload.summary) {
     return String(payload.summary);

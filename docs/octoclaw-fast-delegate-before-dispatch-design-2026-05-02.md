@@ -701,3 +701,94 @@ Make this the 0.5.x performance recovery direction:
 - Use fast delegate only for high-confidence delegated work.
 - Keep planner/confirm as the native/gray path.
 - Prefer native planner acceleration over direct backend. Keep direct backend/finalizer bridge out of the default path until OpenClaw exposes a fully equivalent direct native spawn API or a separate smoke-proven rollback-protected experiment justifies it.
+
+## 13. 2026-05-08 Safe Main-Context Slimming Slice
+
+The earlier `must_delegate` fast tool-chain prompt is intentionally not part of this slice. It can reduce parent hesitation, but it also reduces the main agent's chance to correct a bad route before any spawn is created. The safe slice optimizes only the context that OctoClaw injects into the parent prompt. It does not change judge output, route derivation, `WorkContract` admission, native `sessions_spawn`, or `octoclaw_dispatch_confirm`.
+
+### 13.1 Goal
+
+Reduce the time between parent prompt build and the first useful tool decision by removing repeated or low-value OctoClaw runtime text from delegated-route parent prompts, while preserving the facts needed for correction and honest execution.
+
+This is deliberately a context slimming change, not an execution shortcut:
+
+```text
+before_prompt_build
+  -> delegated route detected
+  -> inject slim delegation system context
+  -> inject slim policy projection
+  -> parent may still reply directly before spawn if the turn can be fully resolved now
+  -> if parent chooses delegation, normal octoclaw_dispatch -> sessions_spawn -> confirm still applies
+```
+
+### 13.2 Preserved Correction Boundary
+
+The slim context must keep the pre-spawn correction boundary explicit:
+
+- If the main agent can fully resolve the turn before any spawn, it may reply directly.
+- If background work is still needed, it must call `octoclaw_dispatch`.
+- It must not hand-write `sessions_spawn` args or bypass the planner intent.
+- It must not send user-visible "started" / ACK text before accepted native run evidence and OctoClaw confirm exist.
+
+This avoids the unstable behavior of forcing a `must_delegate` route into immediate spawn when a short direct answer would have been correct.
+
+### 13.3 What Gets Slimmed
+
+For `route=delegate`, the full delegation rule block is replaced with a shorter system block that keeps only:
+
+- pre-spawn direct-reply correction allowance;
+- `octoclaw_dispatch` as the planner entrypoint;
+- no handwritten native spawn args;
+- context refs only when already known;
+- no visible ACK before accepted run evidence and confirm.
+
+The policy projection is also reduced to fields the parent actually needs in the first turn:
+
+- `route`;
+- `decision_bucket`;
+- `route_confidence`;
+- `complexity`;
+- `complexity_confidence`;
+- `worker_pool`;
+- `task_class`;
+- `must_delegate_via`;
+- `WorkContract`;
+- `review_required`;
+- `dispatch_executed`;
+- `spawn_executed`;
+- compact `expected_deliverable`;
+- compact `allowed_control_tools`.
+
+The normal, fuller projection remains available for non-delegate routes and as rollback.
+
+### 13.4 Explicit Non-Goals
+
+- Do not auto-spawn from `before_prompt_build`.
+- Do not auto-confirm `sessions_spawn` in this slice.
+- Do not add keyword-based delegation or guard logic.
+- Do not change `judge` schema, resolver buckets, route confidence thresholds, or ticket admission.
+- Do not remove `octoclaw_dispatch_confirm`; truthful ACK remains tied to accepted native run evidence plus confirm.
+
+### 13.5 Rollback and Observability
+
+Rollback is intentionally small:
+
+- Set `OCTOCLAW_SLIM_MAIN_CONTEXT=0`, `false`, or `off`.
+- Or set plugin config `slimMainContext: false` / `slim_main_context: false`.
+
+Replay fields added to `prompt_projection_built`:
+
+- `slim_main_context_enabled`;
+- `slim_delegate_context_applied`;
+- `prependSystemChars`;
+- `contextPayloadChars`.
+
+These fields let the Slack acceptance harness compare prompt size and stage timing before/after the slice without relying on subjective "feels faster" reports.
+
+### 13.6 Acceptance Criteria
+
+- Existing planner/confirm tests still pass.
+- Delegate prompt projection still contains `route=delegate`, `decision_bucket`, `route_confidence`, `WorkContract`, `must_delegate_via`, and dispatch/spawn evidence.
+- Delegate system context still says direct reply is allowed before spawn only when the turn can be fully resolved now.
+- No test or live run shows user-visible "任务已启动" before accepted native run evidence and confirm.
+- Live Slack replay should show lower `contextPayloadChars` / `prependSystemChars` for delegate turns, and no increase in false delegation or degraded dispatch.

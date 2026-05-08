@@ -31,6 +31,7 @@ const ENV_KEYS = [
   "OCTOCLAW_TASK_STATE_REBUILD",
   "OCTOCLAW_DELEGATION",
   "OCTOCLAW_ROUTE_HINT",
+  "OCTOCLAW_SLIM_MAIN_CONTEXT",
 ] as const;
 let originalEnv: Partial<Record<(typeof ENV_KEYS)[number], string | undefined>> = {};
 
@@ -376,6 +377,86 @@ describe("plugin enabled config", () => {
 });
 
 describe("budgeted_main_then_delegate runtime budget", () => {
+  it("uses slim main context for delegated routes without removing pre-spawn correction boundaries", async () => {
+    const handlers = new Map<string, Function>();
+    plugin.register({
+      on: (event, handler) => handlers.set(event, handler),
+      registerTool: () => {},
+      registerCommand: () => {},
+      logger: {},
+    });
+
+    const key = "agent:main:slack:channel:c0as4dappu3:thread:t-slim-delegate";
+    const prompt = "让子 agent 检查这个 runtime 派发问题";
+    policyState.setState(key, {
+      prompt,
+      decision: {
+        runtime_switches: { replay_logging_enabled: true },
+        route_decision: {
+          route: "delegate",
+          route_source: "rule",
+          decision_bucket: "must_delegate",
+          route_confidence: 0.92,
+          complexity: "medium",
+          complexity_confidence: 0.84,
+          worker_pool: "octoclaw-code",
+          task_class: "code",
+        },
+        hook_interface: {
+          before_prompt_build: { enabled: true },
+          before_tool_call: {
+            enabled: true,
+            route_hint_required: false,
+            route_hint_tool: "octoclaw_route_hint",
+            delegation_enforcement: true,
+          },
+        },
+        route_hint_policy: { required: false, submitted: false },
+        tool_policy: {
+          allow_direct_tools: false,
+          must_delegate_via: "octoclaw_dispatch",
+          allowed_control_tools: ["octoclaw_dispatch", "octoclaw_dispatch_confirm", "octoclaw_status"],
+        },
+        review_policy: { required: false },
+        work_contract: {
+          workContractId: "wc-slim-delegate",
+          route: "delegate",
+          expectedDeliverable: "Check dispatch telemetry and return a compact diagnosis.",
+        },
+        _execution_coverage_packet: {
+          dispatchExecuted: false,
+          spawnExecuted: false,
+        },
+      },
+      createdAt: Date.now() - 2_000,
+      updatedAt: Date.now(),
+    });
+
+    const projection = await handlers.get("before_prompt_build")!(
+      { prompt },
+      { sessionKey: key, sessionId: "session-slim-delegate", agentId: "main", channelId: "slack" },
+    ) as { prependSystemContext?: string } | undefined;
+
+    const context = projection?.prependSystemContext || "";
+    expect(context).toContain("OctoClaw delegated-route context");
+    expect(context).toContain("answer directly only if this turn can be fully resolved now");
+    expect(context).toContain("route=delegate");
+    expect(context).toContain("decision_bucket=must_delegate");
+    expect(context).toContain("route_confidence=0.92");
+    expect(context).toContain("WorkContract=wc-");
+    expect(context).toContain("must_delegate_via=octoclaw_dispatch");
+    expect(context).not.toContain("Do not explain delegation strategy");
+
+    await waitForFireAndForget();
+    expect(readReplayEvents()).toContainEqual(expect.objectContaining({
+      event: "prompt_projection_built",
+      slim_main_context_enabled: true,
+      slim_delegate_context_applied: true,
+      contextPayloadChars: expect.any(Number),
+      prependSystemChars: expect.any(Number),
+    }));
+  });
+
   it("starts the 30s soft budget after before_prompt_build and records replay metrics", async () => {
     const handlers = new Map<string, Function>();
     plugin.register({

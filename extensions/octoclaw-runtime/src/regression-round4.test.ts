@@ -1,6 +1,6 @@
 
 import { describe, expect, it, beforeEach, vi, afterEach } from "vitest";
-import { compactPolicyPrompt } from "./replay/policy-utils.js";
+import { compactDelegatePolicyPrompt, compactPolicyPrompt } from "./replay/policy-utils.js";
 import { guardOutboundMessageForPolicyState } from "./extension-entry.js";
 import {
   guardAssistantMessageForPolicyState,
@@ -1038,5 +1038,47 @@ describe("regression round 4: execution coverage projections", () => {
     expect(text).toContain("coverage=recent_turn");
     expect(text).toContain("dispatch_executed=true");
     expect(text).toContain("spawn_executed=false");
+  });
+
+  it("builds a slim delegate policy projection without dropping correction and evidence facts", () => {
+    const decision = {
+      route_decision: {
+        route: "delegate",
+        route_source: "rule",
+        decision_bucket: "must_delegate",
+        route_confidence: 0.91,
+        complexity: "medium",
+        complexity_confidence: 0.82,
+        worker_pool: "octoclaw-code",
+        task_class: "code",
+      },
+      tool_policy: {
+        must_delegate_via: "octoclaw_dispatch",
+        allowed_control_tools: ["octoclaw_dispatch", "octoclaw_dispatch_confirm", "octoclaw_status", "sessions_yield"],
+      },
+      review_policy: { required: false },
+      work_contract: {
+        workContractId: "wc-slim-delegate",
+        route: "delegate",
+        expectedDeliverable: "Patch the focused runtime context injection and return tests run.",
+      },
+      _execution_coverage_packet: {
+        dispatchExecuted: false,
+        spawnExecuted: false,
+      },
+    };
+
+    const slim = compactDelegatePolicyPrompt(decision);
+    const regular = compactPolicyPrompt(decision);
+
+    expect(slim).toContain("route=delegate");
+    expect(slim).toContain("decision_bucket=must_delegate");
+    expect(slim).toContain("route_confidence=0.91");
+    expect(slim).toContain("must_delegate_via=octoclaw_dispatch");
+    expect(slim).toContain("WorkContract=wc-slim-delegate");
+    expect(slim).toContain("dispatch_executed=false");
+    expect(slim).toContain("spawn_executed=false");
+    expect(slim).toContain("expected_deliverable=Patch the focused runtime context injection");
+    expect(slim.length).toBeLessThan(regular.length + 160);
   });
 });

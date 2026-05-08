@@ -49,6 +49,7 @@ import {
   replaceAssistantMessageText,
 } from "./replay/message-guard.js";
 import {
+  compactDelegatePolicyPrompt,
   compactPolicyPrompt,
   isControlObserverDecision,
   isDelegatedRoute,
@@ -125,6 +126,22 @@ const OCTOCLAW_DELEGATION_SYSTEM_CONTEXT = [
   "Do not emit user-visible coordinator chatter or ACK text such as '我来写'、'收到，我看一下'、'我先确认一下派发边界'. Runtime ACK handles acknowledgments as tracked deliverables.",
   "Before tool calls or route_hint, emit no user-visible text. User-visible output should only contain authoritative status receipt, final result, or clear failure.",
 ].join("\n");
+
+const OCTOCLAW_DELEGATION_SLIM_SYSTEM_CONTEXT = [
+  "OctoClaw delegated-route context: before native spawn, answer directly only if this turn can be fully resolved now without background work.",
+  "If delegation is still needed, use octoclaw_dispatch; do not hand-write sessions_spawn args or bypass the returned planner intent.",
+  "Pass only already-known local anchors as metadataJson.context_refs; if anchors are unknown, dispatch without fabricated refs and let the child report missing_context_refs.",
+  "Emit no user-visible ACK/coordinator text before accepted native run evidence and OctoClaw confirm exist.",
+].join("\n");
+
+function resolveSlimMainContextEnabled(pluginConfig?: UnknownRecord): boolean {
+  const env = stringValue(process.env.OCTOCLAW_SLIM_MAIN_CONTEXT).toLowerCase();
+  if (env === "0" || env === "false" || env === "off") return false;
+  const configured = pluginConfig?.slimMainContext ?? pluginConfig?.slim_main_context;
+  if (configured === false) return false;
+  if (stringValue(configured).toLowerCase() === "false") return false;
+  return true;
+}
 
 const LATENCY_ACK_DELAY_MS = 3500;
 const pendingLatencyAckTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -3491,10 +3508,12 @@ export const plugin = {
         ].join("\n"));
       }
 
-      if (isDelegatedRoute(effectiveDecision)) {
-        prependSystem.push(OCTOCLAW_DELEGATION_SYSTEM_CONTEXT);
-      }
       const route = stringValue(asRecord(effectiveDecision.route_decision).route);
+      const slimMainContextEnabled = resolveSlimMainContextEnabled(currentPluginConfig());
+      const useSlimDelegateContext = slimMainContextEnabled && route === "delegate";
+      if (isDelegatedRoute(effectiveDecision)) {
+        prependSystem.push(useSlimDelegateContext ? OCTOCLAW_DELEGATION_SLIM_SYSTEM_CONTEXT : OCTOCLAW_DELEGATION_SYSTEM_CONTEXT);
+      }
       const isSpawnRoute = route === "delegate";
       const reviewRequired = Boolean(asRecord(effectiveDecision.review_policy).required);
       if (isSpawnRoute && reviewRequired) {
@@ -3557,7 +3576,9 @@ export const plugin = {
         ].filter(Boolean).join("\n"));
       }
       prependSystem.push(OCTOCLAW_TASK_ACTION_SYSTEM_CONTEXT);
-      const contextPayload = compactPolicyPrompt(effectiveDecision);
+      const contextPayload = useSlimDelegateContext
+        ? compactDelegatePolicyPrompt(effectiveDecision)
+        : compactPolicyPrompt(effectiveDecision);
       const promptKey = prompt || "";
       const hasDedupKey = Boolean(stateKey);
       const shouldInjectPrependContext = !hasDedupKey || lastGroundedPromptByStateKey.get(stateKey) !== promptKey;
@@ -3597,7 +3618,11 @@ export const plugin = {
           decision_bucket: stringValue(asRecord(effectiveDecision.route_decision).decision_bucket),
           elapsedMs: Date.now() - hookStartedAt,
           prependSystemCount: prependSystem.length,
+          prependSystemChars: prependSystem.join("\n\n").length,
+          contextPayloadChars: contextPayload.length,
           injectedPolicyProjection: shouldInjectPrependContext,
+          slim_main_context_enabled: slimMainContextEnabled,
+          slim_delegate_context_applied: useSlimDelegateContext,
           projectionReturned: Boolean(projection),
           speculative_preload_enabled: resolveSpeculativePreloadEnabled(currentPluginConfig()),
           speculative_preload_state: stringValue(readSpeculativePreloadState(effectiveState)?.status),
