@@ -121,6 +121,123 @@ interface ModelIntelEntry {
 
 ---
 
+## 4.1 OpenRouter / 榜单 / OmniRoute 怎么借鉴
+
+结论：要借鉴，但只做“先验”和“候选发现”，不能直接做 live hard decision。
+
+### OpenRouter
+
+可用信息：
+
+- `/api/v1/models`：模型列表、`context_length`、`pricing`、`top_provider`、`supported_parameters`。
+- rankings / programming collection：基于 OpenRouter 使用数据的热度/使用排名。
+
+怎么用：
+
+| OpenRouter 信息 | 写入字段 | 用法 |
+|-----------------|----------|------|
+| `context_length` | `capability.contextWindow` | 作为能力先验，后续用本地运行修正 |
+| `supported_parameters` | `toolUse / structuredOutput / reasoning` 的候选证据 | 只做正向线索，不做唯一证据 |
+| `pricing` | `price.marketPrice` | 可直接参与成本估算，但要记录 source |
+| `top_provider` | `runtime/provider hint` | 作为 provider 可用性线索 |
+| rankings / collection | `codingTier` 初始值、候选排序 | 只用于 cold-start，不能直接 live |
+
+限制：
+
+- OpenRouter ranking 更像“使用热度 + 生态反馈”，不是 OctoClaw 自己任务的成功率。
+- 同一个模型在不同 provider endpoint 上可能价格、上下文、参数支持、稳定性不同。
+- OpenRouter 的 `supported_parameters` 可能是聚合信息，不能替代真实 smoke/eval。
+
+因此 OpenRouter 可以帮我们“发现候选”和“填初始 metadata”，但最终 live 选模仍要看本地 replay/eval、速度、失败率和 quota pressure。
+
+### 外部榜单
+
+可以借鉴：
+
+- coding leaderboard
+- long context benchmark
+- tool-use / function-call benchmark
+- reasoning benchmark
+
+使用方式：
+
+```text
+external leaderboard
+  -> cold-start quality prior
+  -> codingTier 初始值
+  -> proposal 排序
+  -> shadow allowlist
+```
+
+不能这样用：
+
+```text
+leaderboard rank high
+  -> 直接 live
+```
+
+原因：榜单任务和 OctoClaw 的真实任务分布不同；榜单不反映你的 provider 额度、延迟、失败率、工具调用稳定性。
+
+### OmniRoute
+
+OmniRoute 值得借鉴的是工程做法，不是整套搬过来。
+
+可借鉴：
+
+- pricing sync：外部价格同步是 opt-in，不覆盖用户 override。
+- models.dev sync：把价格、能力、context、modalities、tool/structured output 统一成 metadata。
+- quota cache / preflight：unknown 不阻塞；429、rate limit、usage API 更新 quota pressure。
+- cost strategy：先过滤能力和健康，再选便宜模型。
+- budget / cost accounting：把 token 成本和预算窗口分开记录。
+
+不建议借鉴：
+
+- 完整 gateway/combo router。
+- 大量 provider-specific dashboard/control plane。
+- 复杂 taskFitness 表。
+- 自动把发现的模型写进 live routing。
+
+OctoClaw 的最小吸收方式：
+
+```text
+OpenRouter / models.dev / OpenClaw catalog
+  -> model intel snapshot
+  -> same-provider proposal
+  -> shadow recommendation
+  -> local replay/eval 校准
+  -> gated live
+```
+
+---
+
+## 4.2 旧设计里只保留这些原则
+
+旧的 Auto Router / model-intel 文档里有不少大方案，Lite 版只吸收下面几条，不恢复复杂 router。
+
+| 旧设计原则 | Lite 版怎么落地 | 不做什么 |
+|------------|-----------------|----------|
+| 编排感知，不做纯 proxy router | 只服务 OctoClaw 的委派/子 agent 选模 | 不接管所有 OpenClaw 请求 |
+| `model-intel` 是事实快照 | 生成带 source/freshness 的 snapshot | 不在热路径即时拼 provider 事实 |
+| 先 hard gates，再评分 | 先过滤未配置、冷却、不可用、能力不够、额度高压 | 不让便宜模型绕过能力门槛 |
+| 本地 truth 高于外部榜单 | replay/eval、失败率、延迟、quota pressure 优先 | 不因榜单高就直接 live |
+| 同供应商先降本 | 同 provider/family 找 mini/standard 候选，生成 proposal | 不自动写 OpenClaw 配置 |
+| 选 `(model, output_budget)` | 复杂度决定模型和输出预算一起收紧 | 不只换模型、不控输出 |
+| 主线程快路径优先 | 状态查询、解释、简单 fresh lookup 仍主 agent 直接答 | 不为了省模型钱强行委派 |
+
+执行顺序保持简单：
+
+```text
+configured + available + capability gates
+  -> quota / health / latency gates
+  -> mode scoring(cost_first | balanced | reliable_fast)
+  -> shadow evidence
+  -> gated live
+```
+
+这几个点足够支撑第一版。旧文档里的 recommendation API、独立 gateway、dashboard、完整 facts plane、复杂 taskFitness、combo router 都不进入 Lite 范围。
+
+---
+
 ## 5. 模型价格来源
 
 按优先级合并：
@@ -461,4 +578,3 @@ cost 10%
   - 成本预计省多少？
   - 为什么没有启用推荐？
   - 是能力不够、未配置、额度压力高，还是稳定性差？
-
