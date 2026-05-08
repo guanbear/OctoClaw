@@ -253,6 +253,10 @@ function buildRecord(contract: WorkContractRow, attempt: TaskAttemptRow | null, 
     || asString(valueFrom(visibleIds, "childSessionKey", "child_session_key"))
     || undefined;
   const updatedAt = attempt?.updated_at || contract.updated_at;
+  const terminalContractStatuses = new Set(["completed", "failed", "canceled", "cancelled"]);
+  const projectedStatus = terminalContractStatuses.has(contract.status)
+    ? contract.status
+    : attempt?.status || contract.status;
   const record: TaskStateRecord = {
     id: contract.work_contract_id,
     taskId: contract.work_contract_id,
@@ -268,7 +272,7 @@ function buildRecord(contract: WorkContractRow, attempt: TaskAttemptRow | null, 
     session_key: sessionKey || undefined,
     turnId: turnId || undefined,
     turn_id: turnId || undefined,
-    status: attempt?.status || contract.status,
+    status: projectedStatus,
     workContractStatus: contract.status,
     work_contract_status: contract.status,
     intentClass: contract.intent_class ?? valueFrom(workContractRecord, "intentClass", "intent_class"),

@@ -204,6 +204,44 @@ describe("projection-rebuild", () => {
       expect(record.status).toBe("running");
     });
 
+    it("keeps terminal work contract status authoritative over stale attempt status", () => {
+      const dbPath = tmpDbPath();
+      seedWorkContract(dbPath, {
+        workContractId: "wc-terminal-attempt-stale",
+        status: "completed",
+        updatedAt: "2026-01-01T00:10:00.000Z",
+        workContract: {
+          workContractId: "wc-terminal-attempt-stale",
+          route: "delegate",
+          sessionKey: "session-wc-terminal-attempt-stale",
+          turnId: "turn-wc-terminal-attempt-stale",
+          telemetry: {
+            dispatchExecuted: true,
+            spawnExecuted: true,
+            resultMaterialized: true,
+            deliveryStatus: "delivered",
+          },
+        },
+      });
+      seedAttempt(dbPath, {
+        workContractId: "wc-terminal-attempt-stale",
+        attemptId: "attempt-terminal-stale",
+        status: "running",
+        nativeFlowId: "flow-terminal-stale",
+        childSessionKey: "child-terminal-stale",
+      });
+
+      const [record] = rebuildTaskStateProjection({
+        dbPath,
+        now: new Date("2026-01-01T00:15:00.000Z"),
+      }).tasks;
+
+      expect(record.status).toBe("completed");
+      expect(record.workContractStatus).toBe("completed");
+      expect(record.attempt_id).toBe("attempt-terminal-stale");
+      expect(record.native_flow_id).toBe("flow-terminal-stale");
+    });
+
     it("includes completion verdict when available", () => {
       const dbPath = tmpDbPath();
       seedWorkContract(dbPath, { workContractId: "wc-verdict" });
