@@ -256,6 +256,36 @@ function runtimeStatusEvidence(record: RuntimeTaskStateRecord): { hasDispatchEvi
   return { hasDispatchEvidence, hasSpawnEvidence, resultMaterialized, childSessionKey, runId };
 }
 
+function hasDelegatedExecutionIdentity(record: RuntimeTaskStateRecord): boolean {
+  return Boolean(optionalString(
+    record.attemptId,
+    record.attempt_id,
+    record.delegateTaskId,
+    record.delegate_task_id,
+    record.nativeTaskId,
+    record.native_task_id,
+    record.nativeFlowId,
+    record.native_flow_id,
+    record.flowId,
+    record.flow_id,
+    record.runId,
+    record.run_id,
+    record.childRunId,
+    record.child_run_id,
+    record.childSessionKey,
+    record.child_session_key,
+  ));
+}
+
+function shouldDisplayRuntimeStatusRecord(record: RuntimeTaskStateRecord): boolean {
+  if (runtimeTaskRoute(record) !== "delegate") return false;
+  const rawStatus = asString(record.status).toLowerCase();
+  const workContractStatus = asString(record.workContractStatus || record.work_contract_status).toLowerCase();
+  if (rawStatus !== "sealed" && workContractStatus !== "sealed") return true;
+  const evidence = runtimeStatusEvidence(record);
+  return evidence.hasDispatchEvidence || hasDelegatedExecutionIdentity(record);
+}
+
 
 export function hasNonNewWorkFollowupEvidence(decision: UnknownRecord, metadata: UnknownRecord): boolean {
   const routeDecision = asRecord(decision.route_decision);
@@ -884,7 +914,7 @@ export async function buildNativeStatusOutput(format: string, imType: string = "
   const nativeProjections = await Promise.all(tasks.map((task) => projectNativeStatus(nativeStatusInputForTask(task, ctx))));
   const allTasks = tasks
     .map((task, index) => buildRuntimeStatusTaskView(task, nowMs, nativeProjections[index]))
-    .filter((task) => task.route === "delegate");
+    .filter((task, index) => shouldDisplayRuntimeStatusRecord(tasks[index]) && task.route === "delegate");
   const visibleTasks = includeExpired ? allTasks : allTasks.filter((task) => !isStatusPanelExpired(task, nowMs));
   const hiddenExpiredCount = allTasks.length - visibleTasks.length;
 

@@ -456,6 +456,18 @@ describe("octoclaw_dispatch honesty", () => {
             decision: { _judge_complexity_band: "normal" },
           },
         },
+        {
+          id: "wc-sealed-policy-only-hidden",
+          status: "sealed",
+          route: "delegate",
+          summary: "Sealed delegate policy without dispatch evidence",
+          updated_at: new Date().toISOString(),
+          workContractStatus: "sealed",
+          workContract: {
+            route: "delegate",
+            userAsk: "This is only a route seal, not a started task",
+          },
+        },
       ],
     }), "utf-8");
 
@@ -468,6 +480,8 @@ describe("octoclaw_dispatch honesty", () => {
     expect(output).toContain("complexity=normal");
     expect(output).not.toContain("task-reply-hidden");
     expect(output).not.toContain("Reply projection should stay out of status panel");
+    expect(output).not.toContain("wc-sealed-policy-only-hidden");
+    expect(output).not.toContain("Sealed delegate policy without dispatch evidence");
   });
 
   it("status panel projects stale running tasks with elapsed/model/backend fields", async () => {
