@@ -4,6 +4,8 @@
 状态：implementation planning / cleanup roadmap
 策略：delete-first convergence，不建立旧 runtime 长期兼容层
 
+> 2026-05-08 handoff note: `v0.5.0` 当前代码已经完成 WP-A 到 WP-G 的大部分收口实现和测试记录；live Slack acceptance smoke 因缺少真实环境仍未执行。给 OpenCode 继续处理时，不要让它重新实现已经删除的旧模块，而是先拉最新 `v0.5.0`，按第 12 节做 verify/audit/smoke，只有发现回归或未完成项时才补代码。
+
 相关文档：
 
 - [`octoclaw-openclaw-native-slimming-review-2026-05-01.md`](./octoclaw-openclaw-native-slimming-review-2026-05-01.md)
@@ -699,11 +701,19 @@ extensions/octoclaw-runtime/src/state/task-state-store.ts
 extensions/octoclaw-runtime/src/state/native-status-projector.ts
 extensions/octoclaw-runtime/src/tools/registration.ts
 extensions/octoclaw-runtime/src/extension-entry.ts
-extensions/octoclaw-runtime/src/delegate/child-finalizer.ts
-extensions/octoclaw-runtime/src/delivery/delivery-outbox.ts
 extensions/octoclaw-runtime/src/resolve/env.ts
+extensions/octoclaw-runtime/src/core/delivery/outbox.ts
 packages/octoclaw-contracts/src/work-contract.ts
 tools/octoclawctl/src/**
+```
+
+已删除的历史模块不要重建：
+
+```text
+extensions/octoclaw-runtime/src/delegate/child-finalizer.ts
+extensions/octoclaw-runtime/src/delivery/delivery-outbox.ts
+extensions/octoclaw-runtime/src/adapter/detached-task-runtime.ts
+extensions/octoclaw-runtime/src/adapter/detached-task-runtime-host.ts
 ```
 
 相关测试集中在：
@@ -718,8 +728,7 @@ extensions/octoclaw-runtime/src/state/native-status-projector.test.ts
 extensions/octoclaw-runtime/src/tools/registration-planner.test.ts
 extensions/octoclaw-runtime/src/tools/registration-dispatch-honesty.test.ts
 extensions/octoclaw-runtime/src/extension-entry.test.ts
-extensions/octoclaw-runtime/src/delegate/child-finalizer.test.ts
-extensions/octoclaw-runtime/src/delivery/delivery-outbox.test.ts
+extensions/octoclaw-runtime/src/core/delivery/outbox.test.ts
 tools/octoclawctl/src/slack-acceptance/slack-acceptance.test.ts
 ```
 
@@ -745,6 +754,16 @@ Constraints:
 - Do not touch files outside the WP write scope without reporting why first.
 - Do not commit. Report changed files, tests run, failures, and remaining risks.
 ```
+
+如果一次性派给 OpenCode，请把任务限定成“verify and finish remaining gaps”，而不是“从零实现 WP-A-G”。当前分支上 WP-A-G 的 OpenSpec checklist 已基本打勾；OpenCode 应先确认这些删除边界仍成立：
+
+```bash
+rg "flushDeliveryOutbox|appendToDeliveryOutbox|resolveDeliveryOutboxPath|trySpawnSubagentRuntime|detached-task-runtime" extensions/octoclaw-runtime/src
+rg "child-finalizer|scheduleChildCompletionFinalizer|resolveWorkerCompletionPath" extensions/octoclaw-runtime/src
+rg '"octoclaw_spawn"' extensions/octoclaw-runtime/openclaw.plugin.json extensions/octoclaw-runtime/src
+```
+
+预期：第一条 0 命中；第二条只允许测试注释/断言；第三条不允许出现在 tool manifest 或 live registration。
 
 OpenCode 完成后，Codex/人工 review 必须检查：
 
@@ -885,11 +904,9 @@ Write scope:
 
 ```text
 extensions/octoclaw-runtime/src/tools/registration.ts
-extensions/octoclaw-runtime/src/delegate/child-finalizer.ts
 extensions/octoclaw-runtime/src/resolve/env.ts
 extensions/octoclaw-runtime/src/config/index.ts
 extensions/octoclaw-runtime/src/config/index.test.ts
-extensions/octoclaw-runtime/src/delegate/child-finalizer.test.ts
 extensions/octoclaw-runtime/src/tools/registration-planner.test.ts
 extensions/octoclaw-runtime/src/extension-entry.test.ts
 ```
@@ -912,7 +929,7 @@ extensions/octoclaw-runtime/src/extension-entry.test.ts
 推荐命令：
 
 ```bash
-pnpm vitest run extensions/octoclaw-runtime/src/tools/registration-planner.test.ts extensions/octoclaw-runtime/src/delegate/child-finalizer.test.ts extensions/octoclaw-runtime/src/config/index.test.ts extensions/octoclaw-runtime/src/extension-entry.test.ts
+pnpm vitest run extensions/octoclaw-runtime/src/tools/registration-planner.test.ts extensions/octoclaw-runtime/src/config/index.test.ts extensions/octoclaw-runtime/src/extension-entry.test.ts
 pnpm --filter @octoclaw/runtime run check
 ```
 
@@ -929,15 +946,13 @@ pnpm --filter @octoclaw/runtime run check
 Write scope:
 
 ```text
-extensions/octoclaw-runtime/src/delivery/delivery-outbox.ts
 extensions/octoclaw-runtime/src/core/delivery/outbox.ts
-extensions/octoclaw-runtime/src/delegate/child-finalizer.ts
 extensions/octoclaw-runtime/src/extension-entry.ts
 extensions/octoclaw-runtime/src/config/index.ts
-extensions/octoclaw-runtime/src/delivery/delivery-outbox.test.ts
 extensions/octoclaw-runtime/src/core/delivery/outbox.test.ts
 extensions/octoclaw-runtime/src/extension-entry.test.ts
 extensions/octoclaw-runtime/src/im/slack/slack-adapter.test.ts
+extensions/octoclaw-runtime/src/ack/__tests__/execution-transition-notifier.test.ts
 ```
 
 实现要求：
@@ -951,7 +966,7 @@ extensions/octoclaw-runtime/src/im/slack/slack-adapter.test.ts
 推荐命令：
 
 ```bash
-pnpm vitest run extensions/octoclaw-runtime/src/delivery/delivery-outbox.test.ts extensions/octoclaw-runtime/src/core/delivery/outbox.test.ts extensions/octoclaw-runtime/src/extension-entry.test.ts extensions/octoclaw-runtime/src/im/slack/slack-adapter.test.ts
+pnpm vitest run extensions/octoclaw-runtime/src/core/delivery/outbox.test.ts extensions/octoclaw-runtime/src/extension-entry.test.ts extensions/octoclaw-runtime/src/im/slack/slack-adapter.test.ts extensions/octoclaw-runtime/src/ack/__tests__/execution-transition-notifier.test.ts
 pnpm --filter @octoclaw/runtime run check
 ```
 
@@ -970,11 +985,10 @@ Write scope:
 ```text
 extensions/octoclaw-runtime/src/tools/registration.ts
 extensions/octoclaw-runtime/src/extension-entry.ts
-extensions/octoclaw-runtime/src/adapter/detached-task-runtime.ts
-extensions/octoclaw-runtime/src/adapter/detached-task-runtime-host.ts
-extensions/octoclaw-runtime/src/adapter/detached-task-runtime.test.ts
 extensions/octoclaw-runtime/src/tools/manifest-contracts.test.ts
 extensions/octoclaw-runtime/src/tools/registration-dispatch-honesty.test.ts
+extensions/octoclaw-runtime/src/tools/registration-planner.test.ts
+extensions/octoclaw-runtime/src/extension-entry.test.ts
 extensions/octoclaw-runtime/src/resolve/work-contract-coverage.test.ts
 README.zh-CN.md
 ```
@@ -991,7 +1005,7 @@ README.zh-CN.md
 推荐命令：
 
 ```bash
-pnpm vitest run extensions/octoclaw-runtime/src/tools/manifest-contracts.test.ts extensions/octoclaw-runtime/src/tools/registration-dispatch-honesty.test.ts extensions/octoclaw-runtime/src/adapter/detached-task-runtime.test.ts extensions/octoclaw-runtime/src/resolve/work-contract-coverage.test.ts
+pnpm vitest run extensions/octoclaw-runtime/src/tools/manifest-contracts.test.ts extensions/octoclaw-runtime/src/tools/registration-dispatch-honesty.test.ts extensions/octoclaw-runtime/src/tools/registration-planner.test.ts extensions/octoclaw-runtime/src/extension-entry.test.ts extensions/octoclaw-runtime/src/resolve/work-contract-coverage.test.ts
 pnpm --filter @octoclaw/runtime run check
 ```
 
@@ -1010,7 +1024,7 @@ Write scope:
 
 ```text
 tools/octoclawctl/src/slack-acceptance/**
-reports/**
+docs/archive/engineering-log/reports/**
 docs/octoclaw-runtime-convergence-cleanup-plan-2026-05-07.md
 openspec/changes/runtime-convergence-cleanup-0.5.x/tasks.md
 ```

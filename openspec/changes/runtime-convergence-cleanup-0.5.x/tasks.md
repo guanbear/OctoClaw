@@ -138,13 +138,16 @@ Owner: GLM-5 worker, Codex review.
 Write scope:
 
 - `extensions/octoclaw-runtime/src/tools/registration.ts`
-- `extensions/octoclaw-runtime/src/delegate/child-finalizer.ts`
 - `extensions/octoclaw-runtime/src/resolve/env.ts`
 - `extensions/octoclaw-runtime/src/config/index.ts`
 - `extensions/octoclaw-runtime/src/config/index.test.ts`
-- `extensions/octoclaw-runtime/src/delegate/child-finalizer.test.ts`
 - `extensions/octoclaw-runtime/src/tools/registration-planner.test.ts`
 - `extensions/octoclaw-runtime/src/extension-entry.test.ts`
+
+Deleted in this WP:
+
+- `extensions/octoclaw-runtime/src/delegate/child-finalizer.ts`
+- `extensions/octoclaw-runtime/src/delegate/child-finalizer.test.ts`
 
 Forbidden scope:
 
@@ -186,15 +189,18 @@ Owner: GLM-5 worker, Codex review.
 
 Write scope:
 
-- `extensions/octoclaw-runtime/src/delivery/delivery-outbox.ts`
 - `extensions/octoclaw-runtime/src/core/delivery/outbox.ts`
-- `extensions/octoclaw-runtime/src/delegate/child-finalizer.ts`
 - `extensions/octoclaw-runtime/src/extension-entry.ts`
 - `extensions/octoclaw-runtime/src/config/index.ts`
-- `extensions/octoclaw-runtime/src/delivery/delivery-outbox.test.ts`
 - `extensions/octoclaw-runtime/src/core/delivery/outbox.test.ts`
 - `extensions/octoclaw-runtime/src/extension-entry.test.ts`
 - `extensions/octoclaw-runtime/src/im/slack/slack-adapter.test.ts`
+
+Deleted before or in this WP:
+
+- `extensions/octoclaw-runtime/src/delegate/child-finalizer.ts`
+- `extensions/octoclaw-runtime/src/delivery/delivery-outbox.ts`
+- `extensions/octoclaw-runtime/src/delivery/delivery-outbox.test.ts`
 
 Forbidden scope:
 
@@ -237,13 +243,16 @@ Write scope:
 
 - `extensions/octoclaw-runtime/src/tools/registration.ts`
 - `extensions/octoclaw-runtime/src/extension-entry.ts`
-- `extensions/octoclaw-runtime/src/adapter/detached-task-runtime.ts`
-- `extensions/octoclaw-runtime/src/adapter/detached-task-runtime-host.ts`
-- `extensions/octoclaw-runtime/src/adapter/detached-task-runtime.test.ts`
 - `extensions/octoclaw-runtime/src/tools/manifest-contracts.test.ts`
 - `extensions/octoclaw-runtime/src/tools/registration-dispatch-honesty.test.ts`
 - `extensions/octoclaw-runtime/src/resolve/work-contract-coverage.test.ts`
 - `README.zh-CN.md`
+
+Deleted in this WP:
+
+- `extensions/octoclaw-runtime/src/adapter/detached-task-runtime.ts`
+- `extensions/octoclaw-runtime/src/adapter/detached-task-runtime-host.ts`
+- `extensions/octoclaw-runtime/src/adapter/detached-task-runtime.test.ts`
 
 Forbidden scope:
 
@@ -286,7 +295,7 @@ Owner: Codex or human operator; OpenCode may update reports only.
 Write scope:
 
 - `tools/octoclawctl/src/slack-acceptance/**`
-- `reports/**`
+- `docs/archive/engineering-log/reports/**`
 - `docs/octoclaw-runtime-convergence-cleanup-plan-2026-05-07.md`
 - `openspec/changes/runtime-convergence-cleanup-0.5.x/tasks.md`
 

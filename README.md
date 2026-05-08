@@ -18,7 +18,7 @@ OctoClaw is no longer the old Python-script runtime. The current line keeps the 
 - [Feedback loop contracts](./docs/octoclaw-feedback-loop-contracts.md): observe -> summarize -> review -> curate -> validate -> promote -> learn.
 - [Auto Router Phase 5 design](./docs/octoclaw-phase5-auto-router-design-2026-04-30.md): shadow-first execution-contract recommender design.
 
-Historical roadmaps and the original v1 design live under [docs/archive](./docs/archive/).
+Historical roadmaps, old planning workspaces, and validation evidence live under [docs/archive](./docs/archive/).
 
 ## Core Capabilities
 
