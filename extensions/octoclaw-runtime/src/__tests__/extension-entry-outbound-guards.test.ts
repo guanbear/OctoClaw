@@ -82,7 +82,6 @@ beforeEach(() => {
   process.env.WORKSPACE = tempWorkspace;
   process.env.OCTOCLAW_RUNTIME_DB_PATH = path.join(tempWorkspace, ".octoclaw", "runtime", "octoclaw-runtime.sqlite");
 });
-
 afterEach(() => {
   nativeSpawnIntentStore.clearForTests();
   resetNeutralInboundAckDedupeForTests();
@@ -1339,4 +1338,3 @@ describe("guardOutboundMessageForPolicyState", () => {
     }
   });
 });
-

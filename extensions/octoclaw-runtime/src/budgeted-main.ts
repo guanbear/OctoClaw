@@ -1,5 +1,4 @@
 import {
-  asBoolean,
   asNumber,
   asRecord,
   asString,
@@ -176,7 +175,8 @@ function isSkillRead(toolName: string, params: UnknownRecord): boolean {
 }
 
 function explicitWriteSignal(params: UnknownRecord): boolean {
-  const readOnly = asBoolean(params.readOnly ?? params.read_only, undefined);
+  const readOnlySignal = params.readOnly ?? params.read_only;
+  const readOnly = typeof readOnlySignal === "boolean" ? readOnlySignal : undefined;
   if (readOnly === true) return false;
   if (readOnly === false) return true;
   const mode = asString(params.accessMode || params.access_mode || params.mode || params.operation || params.kind).toLowerCase();

@@ -20,6 +20,7 @@ import {
   routeHintRequired,
   shouldRetainPolicyStateOnAgentEnd,
 } from "../../replay/policy-utils.js";
+import { registerIMAdapter, type IMAdapter } from "../../im/index.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -55,6 +56,14 @@ function delegateDecisionWithHintPolicy(required: boolean) {
     route_hint_policy: { required },
   });
 }
+
+const routeCommitAckTestAdapter: IMAdapter = {
+  channel: "slack",
+  canHandle: (sessionKey) => sessionKey === "slack:channel:C1:thread:1700000000.000100",
+  resolveTarget: () => ({ channel: "slack", target: "C1", threadTs: "1700000000.000100" }),
+  send: async () => ({ sent: true, delivered: true, threadTs: "1700000000.000100" }),
+  react: async () => ({ ok: true }),
+};
 
 // ---------------------------------------------------------------------------
 // Regression 1: routeSeal.requestId fallback for routeSealId
@@ -284,6 +293,9 @@ describe("WP2 regression: shouldRetainPolicyStateOnAgentEnd", () => {
 describe("WP2 regression: delegate ack text honesty", () => {
   beforeEach(() => {
     resetRouteCommitAckState();
+    registerIMAdapter(routeCommitAckTestAdapter);
+    process.env.OCTOCLAW_SPAWN_BACKEND = "legacy";
+    delete process.env.OCTOCLAW_PLANNER_ALLOWLIST;
   });
 
   it("route commit ack replay payload never contains running/started language for delegate", async () => {
@@ -346,14 +358,14 @@ describe("WP2 regression: false dispatch claim guard", () => {
     expect(guarded.mode).toBe("pass");
   });
 
-  it("replaces direct answer on delegated route without execution evidence", () => {
+  it("does not keyword-rewrite direct answer on delegated route without execution evidence", () => {
     const guarded = guardAssistantMessageForPolicyState(
       { role: "assistant", content: [{ type: "text", text: "刚才的调研已经完成了，直接给你结果：状态面板需要展示 taskId、status、model。" }] },
       { decision: { route_decision: { route: "delegate" } }, delegated: true, dispatchExecuted: false, spawnExecuted: false },
     );
 
-    expect(guarded.mode).toBe("replace");
-    expect(textOf(guarded)).toBe("这次任务还没派发成功，等我拿到真实执行结果后回复。");
+    expect(guarded.mode).toBe("pass");
+    expect(textOf(guarded)).toContain("刚才的调研已经完成了");
   });
 
   it("allows short processing ack before delegated dispatch evidence", () => {
@@ -365,14 +377,14 @@ describe("WP2 regression: false dispatch claim guard", () => {
     expect(guarded.mode).toBe("pass");
   });
 
-  it("replaces false sessions_spawn claim on reply route", () => {
+  it("does not keyword-rewrite sessions_spawn claim on reply route", () => {
     const guarded = guardAssistantMessageForPolicyState(
       { role: "assistant", content: [{ type: "text", text: "我已经调用 sessions_spawn 派发任务。" }] },
       { decision: { route_decision: { route: "reply" } }, dispatchExecuted: false },
     );
 
-    expect(guarded.mode).toBe("replace");
-    expect(textOf(guarded)).toBe("这次任务还没派发成功，等我拿到真实执行结果后回复。");
+    expect(guarded.mode).toBe("pass");
+    expect(textOf(guarded)).toContain("sessions_spawn");
   });
 
   it("does not rewrite natural-language completed-subagent prose on reply route", () => {

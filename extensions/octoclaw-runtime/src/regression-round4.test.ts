@@ -3,7 +3,6 @@ import { describe, expect, it, beforeEach, vi, afterEach } from "vitest";
 import { compactPolicyPrompt } from "./replay/policy-utils.js";
 import { guardOutboundMessageForPolicyState } from "./extension-entry.js";
 import {
-  delegationFailureReply,
   guardAssistantMessageForPolicyState,
   sanitizeDelegationReasoning,
 } from "./replay/message-guard.js";
@@ -68,62 +67,60 @@ describe("regression round 4: contaminated session guard is narrow", () => {
     expect(guarded.mode).toBe("pass");
   });
 
-  it("still replaces raw subagent context leaks", () => {
+  it("does not keyword-rewrite raw subagent context text", () => {
     const guarded = guardAssistantMessageForPolicyState(
       { role: "assistant", content: [{ type: "text", text: "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>> source: subagent session_key: agent:main:subagent:abc rawTranscript: ..." }] },
       contaminatedState,
     );
 
-    expect(guarded.mode).toBe("replace");
-    expect(textOf(guarded)).toContain("当前任务最新状态");
+    expect(guarded.mode).toBe("pass");
+    expect(textOf(guarded)).toContain("BEGIN_OPENCLAW_INTERNAL_CONTEXT");
   });
 });
 
-describe("regression round 4: scenario 1 — sanitizer empty fallback", () => {
-  it("returns fallback for empty string input", () => {
+describe("regression round 4: scenario 1 — sanitizer is no-op without keyword rewrites", () => {
+  it("preserves empty string input", () => {
     const result = sanitizeDelegationReasoning("");
-    expect(result).toBe("收到，正在处理。");
+    expect(result).toBe("");
   });
 
-  it("returns fallback for whitespace-only input after trim", () => {
-    const result = sanitizeDelegationReasoning("   \n\n   ");
-    expect(result).toBe("收到，正在处理。");
+  it("preserves whitespace-only input", () => {
+    const input = "   \n\n   ";
+    const result = sanitizeDelegationReasoning(input);
+    expect(result).toBe(input);
   });
 
-  it("strips contamination marker but preserves non-matching text", () => {
+  it("preserves contamination marker text", () => {
     const input = "这条追问命中了被子任务污染，后续内容";
     const result = sanitizeDelegationReasoning(input);
-    expect(result).not.toContain("被子任务污染");
+    expect(result).toBe(input);
   });
 
-  it("strips policy authority marker", () => {
+  it("preserves policy authority marker text", () => {
     const input = "OctoClaw runtime policy is authoritative for this session.";
     const result = sanitizeDelegationReasoning(input);
-    expect(result).not.toContain("runtime policy is authoritative");
+    expect(result).toBe(input);
   });
 });
 
 
-describe("regression round 4: scenario 2 — sanitizer strips reasoning patterns", () => {
-  it("strips 适合独立委派 delegation reasoning", () => {
+describe("regression round 4: scenario 2 — sanitizer preserves visible text", () => {
+  it("preserves 适合独立委派 wording", () => {
     const input = "这个任务适合独立委派处理。用户需要帮助。";
     const result = sanitizeDelegationReasoning(input);
-    expect(result).not.toContain("适合独立委派");
-    expect(result).toContain("用户需要帮助");
+    expect(result).toBe(input);
   });
 
-  it("strips contamination guard text", () => {
+  it("preserves contamination guard text", () => {
     const input = "这条追问命中了被子任务污染。实际答案是：重启服务。";
     const result = sanitizeDelegationReasoning(input);
-    expect(result).not.toContain("被子任务污染");
-    expect(result).toContain("重启服务");
+    expect(result).toBe(input);
   });
 
-  it("strips task boundary clarity reasoning", () => {
+  it("preserves task boundary clarity wording", () => {
     const input = "任务边界非常清楚，可以独立执行。实际结果是成功。";
     const result = sanitizeDelegationReasoning(input);
-    expect(result).not.toContain("任务边界");
-    expect(result).toContain("实际结果是成功");
+    expect(result).toBe(input);
   });
 
   it("preserves normal user-facing text", () => {
@@ -132,10 +129,10 @@ describe("regression round 4: scenario 2 — sanitizer strips reasoning patterns
     expect(result).toBe(input);
   });
 
-  it("collapses multiple newlines to double newline", () => {
+  it("preserves multiple newlines", () => {
     const input = "第一行\n\n\n\n\n第二行";
     const result = sanitizeDelegationReasoning(input);
-    expect(result).toBe("第一行\n\n第二行");
+    expect(result).toBe(input);
   });
 });
 
@@ -183,7 +180,7 @@ describe("regression round 4: scenario 2b — delegated state normalization", ()
     expect(guarded.mode).toBe("pass");
   });
 
-  it("strips internal tool provenance guard text instead of surfacing it", () => {
+  it("does not keyword-strip internal tool provenance guard text", () => {
     const guarded = guardAssistantMessageForPolicyState(
       {
         role: "assistant",
@@ -198,13 +195,12 @@ describe("regression round 4: scenario 2b — delegated state normalization", ()
       },
     );
 
-    expect(guarded.mode).toBe("replace");
-    expect(textOf(guarded)).toBe("这篇文章核心是围绕上下文边界设计。");
-    expect(textOf(guarded)).not.toContain("未被执行事实记录覆盖");
-    expect(textOf(guarded)).not.toContain("direct tools");
+    expect(guarded.mode).toBe("pass");
+    expect(textOf(guarded)).toContain("未被执行事实记录覆盖");
+    expect(textOf(guarded)).toContain("direct tools");
   });
 
-  it("removes ungrounded tool-source sentence and keeps the user answer", () => {
+  it("does not keyword-remove ungrounded tool-source sentence", () => {
     const guarded = guardAssistantMessageForPolicyState(
       {
         role: "assistant",
@@ -219,13 +215,12 @@ describe("regression round 4: scenario 2b — delegated state normalization", ()
       },
     );
 
-    expect(guarded.mode).toBe("replace");
-    expect(textOf(guarded)).toBe("结论是：上下文边界决定是否适合拆成 sub-agent。");
-    expect(textOf(guarded)).not.toContain("exec");
-    expect(textOf(guarded)).not.toContain("未被执行事实");
+    expect(guarded.mode).toBe("pass");
+    expect(textOf(guarded)).toContain("exec");
+    expect(textOf(guarded)).toContain("结论是");
   });
 
-  it("falls back without exposing tool provenance audit wording", () => {
+  it("does not fallback-rewrite tool provenance wording", () => {
     const guarded = guardAssistantMessageForPolicyState(
       {
         role: "assistant",
@@ -240,14 +235,11 @@ describe("regression round 4: scenario 2b — delegated state normalization", ()
       },
     );
 
-    expect(guarded.mode).toBe("replace");
-    expect(textOf(guarded)).toBe("我不能确认刚才那句来源声明。");
-    expect(textOf(guarded)).not.toContain("工具来源");
-    expect(textOf(guarded)).not.toContain("exec");
-    expect(textOf(guarded)).not.toContain("direct tools");
+    expect(guarded.mode).toBe("pass");
+    expect(textOf(guarded)).toContain("exec");
   });
 
-  it("keeps lookup answer content when stripping an ungrounded tool-source prefix", () => {
+  it("keeps lookup answer content without stripping an ungrounded tool-source prefix", () => {
     const guarded = guardAssistantMessageForPolicyState(
       {
         role: "assistant",
@@ -262,10 +254,9 @@ describe("regression round 4: scenario 2b — delegated state normalization", ()
       },
     );
 
-    expect(guarded.mode).toBe("replace");
-    expect(textOf(guarded)).toBe("OpenClaw 最新版本是 v2026.5.4-beta.1，主要新增插件安装恢复、Gateway 性能和 Slack/Matrix 修复。");
-    expect(textOf(guarded)).not.toContain("web_search");
-    expect(textOf(guarded)).not.toContain("我用");
+    expect(guarded.mode).toBe("pass");
+    expect(textOf(guarded)).toContain("web_search");
+    expect(textOf(guarded)).toContain("OpenClaw 最新版本");
   });
 
   it("does not treat OpenClaw product release answers as tool provenance claims", () => {
@@ -285,7 +276,7 @@ describe("regression round 4: scenario 2b — delegated state normalization", ()
     expect(textOf(guarded)).toBe(answer);
   });
 
-  it("still guards command-shaped OpenClaw tool provenance claims without execution evidence", () => {
+  it("does not guard command-shaped OpenClaw tool provenance claims by keyword", () => {
     const guarded = guardAssistantMessageForPolicyState(
       {
         role: "assistant",
@@ -300,13 +291,11 @@ describe("regression round 4: scenario 2b — delegated state normalization", ()
       },
     );
 
-    expect(guarded.mode).toBe("replace");
-    expect(textOf(guarded)).toBe("我不能确认刚才那句来源声明。");
-    expect(textOf(guarded)).not.toContain("openclaw status");
-    expect(textOf(guarded)).not.toContain("我用");
+    expect(guarded.mode).toBe("pass");
+    expect(textOf(guarded)).toContain("openclaw status");
   });
 
-  it("replaces false sessions_spawn dispatch claim without execution evidence", () => {
+  it("does not replace sessions_spawn dispatch claim by keyword", () => {
     const guarded = guardAssistantMessageForPolicyState(
       {
         role: "assistant",
@@ -323,11 +312,10 @@ describe("regression round 4: scenario 2b — delegated state normalization", ()
       },
     );
 
-    expect(guarded.mode).toBe("replace");
+    expect(guarded.mode).toBe("pass");
     const text = (guarded.message as { content: Array<{ text: string }> }).content[0]?.text || "";
-    expect(text).toContain("还没派发成功");
-    expect(text).not.toContain("sessions_spawn");
-    expect(text).not.toContain("已派发子 agent");
+    expect(text).toContain("sessions_spawn");
+    expect(text).toContain("已派发子 agent");
   });
 
   it("allows status surface projection after octoclaw_status even when delegate spawn is absent", () => {
@@ -354,7 +342,7 @@ describe("regression round 4: scenario 2b — delegated state normalization", ()
     expect(guarded.mode).toBe("pass");
   });
 
-  it("strips stale delegate failure projection from reply-route answers", () => {
+  it("does not strip stale delegate failure projection by keyword", () => {
     const guarded = guardAssistantMessageForPolicyState(
       { role: "assistant", content: [{ type: "text", text: "这次任务还没派发成功，等我拿到真实执行结果后回复。\n本机 OpenClaw：2026.4.21。" }] },
       {
@@ -374,8 +362,9 @@ describe("regression round 4: scenario 2b — delegated state normalization", ()
 
     const text = (guarded.message as { content?: Array<{ text: string }> } | undefined)?.content?.[0]?.text
       || ((guarded.message as { content?: string } | undefined)?.content ?? "");
-    expect(guarded.mode).toBe("replace");
-    expect(text).toBe("本机 OpenClaw：2026.4.21。");
+    expect(guarded.mode).toBe("pass");
+    expect(text).toContain("这次任务还没派发成功");
+    expect(text).toContain("本机 OpenClaw");
   });
 
   it("keeps current reply-route blocked-tool evidence instead of projecting stale delegate failure", () => {
@@ -441,7 +430,7 @@ describe("regression round 4: scenario 2b — delegated state normalization", ()
     expect(text).not.toContain("真实执行结果");
   });
 
-  it("replaces leaked direct reply when delegated task was not dispatched", () => {
+  it("does not rewrite leaked direct reply when delegated task was not dispatched", () => {
     const guarded = guardAssistantMessageForPolicyState(
       { role: "assistant", content: [{ type: "text", text: "我来写。收到，我看一下。可以，给你一个通用版：" }] },
       {
@@ -460,20 +449,9 @@ describe("regression round 4: scenario 2b — delegated state normalization", ()
       },
     );
 
-    expect(guarded.mode).toBe("replace");
+    expect(guarded.mode).toBe("pass");
     const text = (guarded.message as { content: Array<{ text: string }> }).content[0]?.text || "";
-    expect(text).toContain("还没派发成功");
-    expect(text).not.toContain("通用版");
-    expect(text).toBe(
-      (delegationFailureReply({
-        delegated: false,
-        decision: {
-          route: "delegate",
-          route_decision: { route: "reply" },
-          must_delegate_via: "octoclaw_dispatch",
-        },
-      }).message as { content: Array<{ text: string }> }).content[0]?.text || "",
-    );
+    expect(text).toContain("通用版");
   });
 
   it("does not mark delegated=true before dispatch actually happens", () => {

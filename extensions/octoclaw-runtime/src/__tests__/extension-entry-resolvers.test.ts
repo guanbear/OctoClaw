@@ -42,7 +42,6 @@ beforeEach(() => {
   process.env.WORKSPACE = tempWorkspace;
   process.env.OCTOCLAW_RUNTIME_DB_PATH = path.join(tempWorkspace, ".octoclaw", "runtime", "octoclaw-runtime.sqlite");
 });
-
 afterEach(() => {
   nativeSpawnIntentStore.clearForTests();
   resetNeutralInboundAckDedupeForTests();
@@ -160,4 +159,3 @@ describe("extractInboundMessageTimestamp", () => {
     )).toBe("1777737951.706329");
   });
 });
-
