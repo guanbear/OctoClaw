@@ -89,7 +89,7 @@ function archiveReasonForTask(task: TaskStateRecord, nowMs: number, staleRetenti
   // "registered" = sealed WorkContract but dispatch never executed.
   // "deliverable_ready" = result exists but delivery pending.
   // Both should age out under the stale window like other active statuses.
-  const activeOrStaleStatuses = new Set(["running", "queued", "planned", "materializing", "blocked", "timed_out", "registered", "deliverable_ready", "sealed"]);
+  const activeOrStaleStatuses = new Set(["running", "queued", "planned", "materializing", "blocked", "timed_out", "registered", "deliverable_ready", "degraded", "lost", "sealed"]);
 
   if (terminalStatuses.has(status)) {
     const relevantMs = firstTimestampMs(task.completed_at, task.failed_at, task.updated_at, task.started_at, task.spawned_at, task.created_at);

@@ -39,6 +39,7 @@ describe("task state retention", () => {
     fsSync.writeFileSync(paths.taskStatePath, JSON.stringify({
       tasks: [
         { id: "task-stale", status: "running", updated_at: "2026-04-25T00:30:00.000Z" },
+        { id: "task-stale-degraded", status: "degraded", updated_at: "2026-04-25T00:20:00.000Z" },
         { id: "task-fresh", status: "running", updated_at: "2026-04-25T01:30:00.000Z" },
       ],
     }), "utf-8");
@@ -50,10 +51,10 @@ describe("task state retention", () => {
       force: true,
     });
 
-    expect(result.archivedTaskIds).toEqual(["task-stale"]);
-    expect(result.archived).toBe(1);
+    expect(result.archivedTaskIds).toEqual(["task-stale", "task-stale-degraded"]);
+    expect(result.archived).toBe(2);
     expect(readTaskIds(paths.taskStatePath)).toEqual(["task-fresh"]);
-    expect(readArchivedTaskState({ archivePath: paths.archivePath }).map((task) => task.id)).toEqual(["task-stale"]);
+    expect(readArchivedTaskState({ archivePath: paths.archivePath }).map((task) => task.id).sort()).toEqual(["task-stale", "task-stale-degraded"]);
   });
 
   it("archives stale sealed WorkContract records", () => {

@@ -620,7 +620,7 @@ function statusPanelRelevantMs(task: RuntimeStatusTaskView): number | null {
 
 function statusPanelRetentionMs(task: RuntimeStatusTaskView): number | null {
   if (["failed", "completed", "canceled"].includes(task.status)) return STATUS_PANEL_TERMINAL_VISIBLE_MS;
-  if (["timed_out", "blocked", "registered", "deliverable_ready"].includes(task.status)) return STATUS_PANEL_STALE_VISIBLE_MS;
+  if (["timed_out", "blocked", "registered", "deliverable_ready", "degraded", "lost"].includes(task.status)) return STATUS_PANEL_STALE_VISIBLE_MS;
   return null;
 }
 
