@@ -6,6 +6,7 @@
 > 日期：2026-04-30
 > N0 更新：`packages/octoclaw-runtime-core` 已并入 runtime extension；长期 router core 的建议落点曾为 `packages/octoclaw-policy/src/router/*`。2026-05-08 后 Phase 5 Lite 的建议落点改为 `packages/octoclaw-policy/src/router-lite/*`，本文中的 `direct / runner / spawn_single / spawn_multi` 仅保留为长期 execution contract / lane 术语，不是 live route authority；live route 仍为 `reply | delegate`。
 > 2026-05-08 更新：性能线不再是近期主阻塞；warm pool / resident runner 不进入 Phase 5 前置条件。Auto Router 下一步只做 shadow-first 推荐和评估，不直接改 live route。
+> 简化执行稿：[`octoclaw-auto-router-lite-cost-model-design-2026-05-08.md`](./octoclaw-auto-router-lite-cost-model-design-2026-05-08.md)
 
 ---
 
