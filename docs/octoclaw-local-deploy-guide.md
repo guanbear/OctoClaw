@@ -82,7 +82,7 @@ npx vitest run extensions/octoclaw-runtime/src/runtime-ledger/__tests__/
 
 ## 当前分支
 
-`refactor/0.4.0-stable`
+`v0.5.0`
 
 ## 关键文件
 
@@ -91,7 +91,8 @@ npx vitest run extensions/octoclaw-runtime/src/runtime-ledger/__tests__/
 | `extensions/octoclaw-runtime/src/tools/registration.ts` | 工具注册入口 (dispatch/status/task_action/crash_recovery) |
 | `extensions/octoclaw-runtime/src/conversation-grounding.ts` | 意图分类 + 执行上下文 |
 | `extensions/octoclaw-runtime/src/state/task-state-store.ts` | task-state.json 读写 + 损坏隔离 |
-| `extensions/octoclaw-runtime/src/work-contract/store.ts` | WorkContract 存储 (task-state + ledger fallback) |
-| `extensions/octoclaw-runtime/src/runtime-ledger/` | SQLite ledger (scheduler, tickets, completion binding, crash recovery) |
-| `extensions/octoclaw-runtime/src/delegate/child-finalizer.ts` | 子任务完成处理 |
+| `extensions/octoclaw-runtime/src/work-contract/store.ts` | WorkContract 存储 (SQLite metadata ledger + projection write) |
+| `extensions/octoclaw-runtime/src/runtime-ledger/` | SQLite metadata ledger (WorkContract, native spawn intents, scheduler, tickets, runtime events) |
+| `extensions/octoclaw-runtime/src/delegate/native-spawn-confirm.ts` | native spawn accepted evidence 绑定 |
+| `extensions/octoclaw-runtime/src/state/native-status-projector.ts` | native lifecycle 到状态投影 |
 | `docs/octoclaw-n1-runtime-ledger-repair-packet-2026-05-01.md` | N1 修复包 (P1/P2 清单) |

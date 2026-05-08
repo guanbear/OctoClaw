@@ -1,4 +1,4 @@
-# OctoClaw / 八爪鱼 v1.5.0
+# OctoClaw / 八爪鱼 v0.5.0
 
 [English](./README.md) | 简体中文
 
@@ -12,6 +12,8 @@ OctoClaw 现在的主线已经不是旧的 Python 脚本集合，也不依赖常
 
 - [TS 重构设计 v2](./docs/octoclaw-ts-rebuild-design-v2.md)：当前总设计入口、已完成状态和下一步 N0-N4。
 - [角色术语规范](./docs/octoclaw-role-terminology.md)：Observer / Patrol / Runner / Ctl 的边界。
+- [架构图谱](./docs/octoclaw-architecture-map-2026-05-09.md)：更细的模块图、数据流和控制流。
+- [仓库债务清理计划](./docs/octoclaw-repo-debt-cleanup-plan-2026-05-09.md)：归档边界、当前入口和版本/术语口径。
 - [状态收敛设计](./docs/octoclaw-state-convergence-4-4-design.md)：TaskFlow、WorkContract、`task-state.json`、`policyState` 的真相层级。
 - [WorkContract 委派设计](./docs/octoclaw-work-contract-centered-delegation-design-2026-04-25.md)：委派、handoff、continuity 合同。
 - [Judge / ACK 策略规范](./docs/octoclaw-judge-ack-policy-spec-2026-04-21.md)：judge、ACK、policy labels。
@@ -26,7 +28,7 @@ OctoClaw 现在的主线已经不是旧的 Python 脚本集合，也不依赖常
 - **WorkContract-centered delegation**：每次委派都有 route seal、scope、role、allowed tools、model profile 和 continuity 记录。
 - **Managed TaskFlow substrate**：OpenClaw native TaskFlow 是生命周期事实源，OctoClaw 负责 durable projection 和 operator surface。
 - **ACK / progress / final 分离**：ACK 只确认收到，progress 来自 execution transition，final 来自 completion/result fact。
-- **Delivery outbox**：最终结果发送失败会进入有界 retry，不把 anchor update 误当成 delivered。
+- **Native final delivery**：OpenClaw native announce/channel delivery 负责 final relay；OctoClaw 记录 delivery metadata 和状态投影。
 - **IM adapter registry**：Slack L2、Feishu L1、WeChat L0 已有 baseline；不支持 thread/action 的渠道会降级到文本。
 - **Feedback loop**：`octoclawctl nightly/review/curate/nightly-eval/promote` 支持回放、复盘、fixture 和 baseline promotion。
 - **统一操作入口**：安装、部署、开关、状态、评估和巡检都通过 `octoclawctl`。
@@ -41,9 +43,9 @@ extensions/octoclaw-status-surface
                                  status/details/queue/timeline 的 read model 和 renderer
 tools/octoclawctl                安装、配置、状态、nightly、review、curate、calibration gate
 schemas                          runtime / route / budget / outcome JSON schema
-eval                             最小 eval fixtures 和报告
+eval                             最小 eval fixtures
 docs                             当前设计文档
-docs/archive                     历史规划和归档文档
+docs/archive                     历史规划、工程日志和验收证据
 ```
 
 ## 快速开始
@@ -101,7 +103,7 @@ N0 已收口：当前入口是 `octoclaw-ts-rebuild-design-v2.md`，旧 v1、Pha
 
 接下来按 v2 的 N1-N4 推进：
 
-1. 状态真相和 completion relay 加固。
+1. 状态真相和 native completion relay 加固。
 2. IM capability matrix 产品化。
 3. Auto Router shadow-first：先推荐 execution contract，不改 live path。
 4. 发布和开源产品面收口。

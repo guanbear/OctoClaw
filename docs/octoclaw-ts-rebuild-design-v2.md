@@ -6,6 +6,8 @@
 状态：current architecture baseline + next work plan
 替代：2026-04-15 的 `OctoClaw TS 重构设计 v1`
 
+> 2026-05-09 更新：`v0.5.0` 已执行 runtime convergence cleanup。planner/native path 不再使用 completion file、child-finalizer、JSON delivery outbox、`octoclaw_spawn`、`runtime.subagent.run()` fallback 或 fake detached runtime。详细模块图见 [`octoclaw-architecture-map-2026-05-09.md`](./octoclaw-architecture-map-2026-05-09.md)，仓库债务边界见 [`octoclaw-repo-debt-cleanup-plan-2026-05-09.md`](./octoclaw-repo-debt-cleanup-plan-2026-05-09.md)。
+
 ---
 
 ## 0. 这份重写版回答什么
@@ -42,7 +44,7 @@ OctoClaw 现在不是“准备重写的旧系统”，而是：
 
 - OpenClaw 继续负责 substrate：native task、TaskFlow、session、runtime extension 接入。
 - OctoClaw 负责 policy：意图分类、route seal、WorkContract、模型/角色/worker pool 映射。
-- OctoClaw 负责 delegation harness：dispatch、managed TaskFlow binding、worker handoff、completion file、child finalizer、delivery outbox。
+- OctoClaw 负责 delegation harness：dispatch、managed TaskFlow binding、worker handoff、native spawn intent/confirm、runtime metadata ledger 和状态投影。
 - OctoClaw 负责 feedback loop：replay、nightly、review、curate、validate、promote。
 - OctoClaw 负责 IM/operator surface：Slack/Feishu/WeChat adapter、status/details/queue/timeline、`octoclawctl`。
 
@@ -127,13 +129,13 @@ reply.answer / reply.clarify / status_summary
 
 ```text
 octoclaw_dispatch
-  -> WorkContract-backed task-state record
-  -> OpenClaw managed TaskFlow binding
+  -> WorkContract + NativeSpawnIntent persisted in SQLite metadata ledger
+  -> sessions_spawn args
+  -> octoclaw_dispatch_confirm binds accepted run evidence
   -> worker handoff packet
-  -> worker completion file
-  -> child-finalizer
-  -> delivery outbox / IM final relay
-  -> task-state status projection
+  -> OpenClaw native TaskFlow lifecycle
+  -> native announce / channel delivery
+  -> generated task-state status projection
 ```
 
 ### 3.3 当前状态真相
@@ -142,7 +144,8 @@ octoclaw_dispatch
 |------|----------|------|
 | OpenClaw native TaskFlow | execution lifecycle truth | `running / waiting / completed / failed / cancel` 等生命周期事实优先相信 substrate |
 | WorkContract | semantic / handoff / continuity truth | route、role、scope、allowed tools、model profile、child session continuity 都必须可恢复 |
-| `task-state.json` | OctoClaw durable business-state projection | status/details/restart recovery/dispatch validation 从这里恢复 |
+| SQLite runtime ledger | OctoClaw metadata / audit truth | WorkContract、route seal、native refs、spawn intent、runtime events 从这里恢复 |
+| `task-state.json` | generated read-model cache / status projection | 可删除、可重建；不能当 WorkContract 正常 read path |
 | `policyState` | per-turn cache | 只能做 ACK guard、route-hint/dispatch guard、prompt correlation；不能当跨 turn 状态真相 |
 | replay log | observability / evaluation event log | 不能反向成为 runtime 行为真相 |
 
@@ -161,10 +164,10 @@ octoclaw_dispatch
 | TS/Node 成为 live path 主语言 | 已落地：contracts/policy/runtime/status/ctl 均为 TS |
 | Python 退出 live authority | 基本完成：Python 不再是 route/status 真相；后续只应做 compat/offline |
 | `reply | delegate` 顶层 route | 已落地于 `@octoclaw/policy` 和 runtime helper |
-| WorkContract-centered delegation | 已落地：WorkContract、route seal、coverage、continuity、task-state store |
-| OpenClaw native TaskFlow integration | 已落地：managed binding、adapter、bridge、native helper、detached runtime |
+| WorkContract-centered delegation | 已落地：WorkContract、route seal、coverage、continuity、SQLite metadata store + status projection |
+| OpenClaw native TaskFlow integration | 已落地：managed binding、adapter、bridge、native helper、planner/confirm |
 | ACK 独立和状态门控 | 已落地：ACK guard、ACK timing、route commit ACK、delegate tier suppression |
-| progress / final 分离 | 已落地：execution-transition-notifier、completion file、child-finalizer、delivery outbox |
+| progress / final 分离 | 已落地：execution-transition-notifier、native announce/channel delivery、status projection |
 | artifact / packet first | 已落地一部分：delegate packets、worker brief/result/completion，不再默认 raw transcript |
 | replay / nightly / calibration gate | 已落地：`octoclawctl nightly/review/curate/nightly-eval/promote` |
 | IM adapter registry | 已落地：Slack、Feishu L1、WeChat L0，含 L1/L0 降级 |
@@ -179,7 +182,7 @@ octoclaw_dispatch
 | roadmap 阶段/主题 | 当前状态 | 合并后的判断 |
 |-------------------|----------|--------------|
 | 五阶段 TS 重构 | ✅ 已完成 | contracts/policy/runtime/status/ctl 已经 TS-first；旧 Python/大 JS live authority 不再是主线 |
-| Phase 0 高危修复 | ✅ 已完成 | thread anchor、delivery retry、delegate tier suppression、protected lane、judge timeout、child-finalizer replay 事件均已落地 |
+| Phase 0 高危修复 | ✅ 已完成 | thread anchor、native delivery relay、delegate tier suppression、protected lane、judge timeout、runtime replay 事件均已落地 |
 | Phase 1 真相收敛 + 术语统一 | ✅ 已完成 | status 读 durable state；replay 是 observability 旁路；Observer/Patrol/Runner/Ctl 已有角色文档和工具拦截 |
 | Phase 2 反馈链路统一 | ✅ 已完成 | `nightly/review/curate/nightly-eval/promote` 已接成 observe -> summarize -> review -> curate -> validate -> promote -> learn |
 | Phase 2 lightweight install / runtime core merge | ✅ 已完成 | `tools/install`、`tools/manage` 降级；`octoclawctl` 是统一入口；runtime core 并入 extension |
@@ -193,8 +196,8 @@ octoclaw_dispatch
 
 | roadmap 项 | 当前状态 |
 |------------|----------|
-| Completion file protocol | ✅ `child-finalizer.ts` 使用 `{workContractId}.completion.json` |
-| Delivery outbox retry（final relay） | ✅ outbox 有指数退避和最大尝试次数；这不是 delegate task retry |
+| Completion file protocol | ✅ 已从 planner/native path 删除；历史 completion 只可作为 migration/import 证据 |
+| Native final delivery | ✅ JSON outbox 已从新 runtime path 删除；final relay 交给 native announce/channel delivery |
 | ACK guard + execution notifications | ✅ ACK0、route commit ACK、execution transition notifier 已落地 |
 | IM adapter registry | ✅ Slack、Feishu、WeChat 内置；自定义 adapter 可注册 |
 | Slack status mrkdwn + 重要性排序 | ✅ status renderer 已有 Slack 输出 |
@@ -206,7 +209,7 @@ octoclaw_dispatch
 | `ackNoTarget` 进入 fail bucket | ✅ nightly classifier 已将 no-target 从 unknown 改为 fail |
 | DM 频道 footer 支持 | ✅ session key channel 匹配支持 D/C/U 前缀 |
 | reply route ACK 顺序修复 | ✅ route commit ACK 不再依赖 `liveState` 非空 |
-| delivery lane replay 新事件 | ✅ runtime 会发 `completion_file_delivered` / `completion_file_timeout` / `delivery_outbox_queued`，classifier 已识别 |
+| delivery lane replay 新事件 | ✅ 历史 classifier 保留旧事件识别；新 runtime 不再产生 completion/outbox 正常路径事件 |
 
 这里也修正 roadmap 的一个措辞：`direct / runner / spawn_single / spawn_multi` 不是“正确顶层 route”，而是下一阶段 Auto Router 可推荐的 execution contract / lane；live route authority 仍固定为 `reply | delegate`。
 
@@ -216,10 +219,10 @@ octoclaw_dispatch
 
 | 审查点 | 当前判断 | 后续动作 |
 |--------|----------|----------|
-| 委派链路 | dispatch/materialize/finalizer/outbox 主链路已基本稳；completion file、finalizer recovery、delivery outbox 均有测试 | `resume_preferred` 目前只写 metadata，live spawn 仍生成新 `childSessionKey`；N1 必须打通 preferred child session 复用 |
+| 委派链路 | dispatch/materialize/planner-confirm/native announce 主链路已收口；completion file、finalizer recovery、delivery outbox 已从 planner/native path 删除 | 继续补 live Slack acceptance smoke 和 preferred child session 复用审计 |
 | follow-up 路由 | `execution_followup` 已有强制 reply / control-observer 设计和部分测试 | P1-3 不再通过补关键词修 “为啥没派发成功 / 为什么没有 spawn / no_dispatch_evidence” 这类 case；N1 采用轻量 judge signal + runtime hard gate：judge 可建议 `is_followup_to_recent_execution` / `is_new_work` / `expected_deliverable`，但只有非空 `expected_deliverable` + 有效 ticket 才能 ordinary dispatch |
-| retry | delivery outbox retry 已完成；delegate core 有 `retryDelegateAttempt` 数据模型 | `/octotask retry` / `octoclaw_task_action retry` 仍是只读 payload；N1 必须实现同一 delegate task 的新 attempt，并明确 stop/approve/reject 的语义 |
-| 真相层 | WorkContract 已内嵌 task-state，status/finalizer/continuity 可从 durable projection 恢复 | `readTaskStateDocument` 不能把 parse/IO 异常静默当空状态；N1 必须区分文件不存在、损坏和临时失败，避免覆盖 durable truth |
+| retry | delegate core 有 `retryDelegateAttempt` 数据模型；final delivery retry 不再由 OctoClaw JSON outbox 承担 | `/octotask retry` / `octoclaw_task_action retry` 仍需实现同一 delegate task 的新 attempt，并明确 stop/approve/reject 的语义 |
+| 真相层 | WorkContract/native refs 默认走 SQLite metadata ledger；task-state 是可重建 projection | 继续审计 status/grounding/watchdog 是否只通过 projection 读状态 |
 | 并发 / 排队 / 修订 | TaskFlow、delegate attempt、continuity 已有底层元素 | 还缺明确 scheduler / amendment protocol：独立任务应可并发，有依赖时排队，补充/修改已有任务时应 steer / queue-after / cancel-respawn 三选一 |
 | main-agent rule 注入 | 当前不是仓库文件式 `AGENTS.md`，而是 runtime 通过 `prependSystemContext` 注入 rule/policy projection | 这个方向正确；后续要给 rule 注入做 contract/snapshot test，确保它只承载协作宪法和 objection 协议，不复制 judge 规则 |
 | policy spec / judge | judge prompt 已从 canonical spec 渲染，route 仍收口为 `reply | delegate` | runtime validator 弱于 spec：缺失 `scope/tool_need_hint/duration_hint` 仍可能通过；N1/N2 要收紧 schema 或显式记录 fallback/degraded |
@@ -337,35 +340,35 @@ observe -> summarize -> review -> curate -> validate -> promote -> learn
 
 ### N1：恢复、重试和状态真相加固（立即，1-2 周）
 
-目标：先把“发生了什么、谁做的、是否可恢复/可重试/已交付”收成可证明事实，再继续产品化 IM 和 Auto Router。N1 不再用关键词补洞，而是把 judge 语义建议、runtime 派发授权、scheduler、completion binding、状态 verdict 和 amendment protocol 收成一个闭环。
+目标：先把“发生了什么、谁做的、是否可恢复/可重试/已交付”收成可证明事实，再继续产品化 IM 和 Auto Router。2026-05-09 后，N1 中关于 completion file、child-finalizer、delivery outbox、`octoclaw_spawn`、direct subagent fallback 的旧表述已被 runtime convergence cleanup 覆盖；当前执行以 SQLite metadata ledger + native planner/confirm + native announce + projection builder 为准。
 
-N1 采用最小可恢复 ledger 路径，不做大爆炸：第一步只实现 `work_contracts`、`delegation_tickets`、`task_attempts`、`scheduler_queue`、`completion_bindings`、`runtime_events` 六张核心表；`delivery_outbox`、`amendments`、`resource_locks` 保留现有 JSON/adapter/inline 实现或延后 opt-in。Rollout 分六个可独立回滚的 stage：shadow ledger -> ticket dry-run -> ticket enforcement -> simple scheduler lease/queue -> completion binding/orphan scan -> projection rebuild。每个 stage 不在通过 gate 前改变 live 行为。Scheduler 限定为单进程 SQLite 事务队列/lease，无常驻 daemon，无分布式调度。设计见 `octoclaw-judge-dispatch-complexity-improvement-2026-05-01.md`，实施包见 `octoclaw-n1-runtime-ledger-implementation-plan-2026-05-01.md`，当前修复 work packet 见 `octoclaw-n1-runtime-ledger-repair-packet-2026-05-01.md`。
+N1 采用最小可恢复 ledger 路径，不做大爆炸：第一步实现 `work_contracts`、`delegation_tickets`、`task_attempts`、`scheduler_queue`、`completion_bindings`、`runtime_events` 六张核心表，并补充 `native_spawn_intents` 作为 planner/confirm 辅助表。`delivery_outbox`、`amendments`、`resource_locks` 不进入当前生产 schema。Scheduler 限定为单进程 SQLite 事务队列/lease，无常驻 daemon，无分布式调度。设计见 `octoclaw-judge-dispatch-complexity-improvement-2026-05-01.md`，实施包见 `octoclaw-n1-runtime-ledger-implementation-plan-2026-05-01.md`，当前修复 work packet 见 `octoclaw-n1-runtime-ledger-repair-packet-2026-05-01.md`。
 
 #### N1-A：judge / dispatch 授权边界
 
 1. judge 输出从单一 route 扩展为结构化 proposal：`route`、`is_followup_to_recent_execution`、`is_new_work`、`needs_side_effect`、`needs_fresh_state`、`expected_deliverable`、`complexity`、`duration_hint`、`tool_need_hint`、`confidence`。
 2. runtime 只做薄授权：`route=delegate` 但没有新工作或可验收交付物时降级 reply；本 turn 已 direct action/visible reply 后撤销 dispatch eligibility；sealed delegate 后禁止 main final 抢答。
-3. `octoclaw_dispatch` / `octoclaw_spawn` 强制一次性 delegation ticket；无 ticket、过期、已用、撤销、scope 不匹配都不得创建新 WorkContract/native task，只返回可回复状态包或 no-verifiable-record。
-4. ticket 必须绑定非空 `workContractId`、`delegateTaskId`、`deliveryTarget`、`expectedDeliverable`、canonical complexity、completion path 和 native binding candidate。
+3. `octoclaw_dispatch` 强制一次性 delegation ticket；无 ticket、过期、已用、撤销、scope 不匹配都不得创建新 WorkContract/native task，只返回可回复状态包或 no-verifiable-record。
+4. ticket 必须绑定非空 `workContractId`、`delegateTaskId`、`deliveryTarget`、`expectedDeliverable`、canonical complexity 和 native binding candidate。
 
 #### N1-B：completion binding 与结果物化
 
-1. 每个 delegated WorkContract 必须生成 deterministic task-specific completion path；禁止 `.completion.json` 这类无 owner 路径进入正常 finalizer。
-2. child prompt 中的 `workContractId`、`delegateTaskId`、`nativeTaskId`、`childSessionKey`、`completionPath` 必须互相一致；finalizer 必须校验，不一致时写 `completion_orphaned` / `binding_mismatch`。
-3. stale/timeout 判定前必须 probe completion path、orphan completion candidates、child session terminal state、native task state；不能只因 task-state 长时间 running 就断言 result=none。
-4. 建立 orphan completion scanner：按 `childSessionKey`、`delegateTaskId`、session log、mtime 找回 completion，生成 recovery candidate；确认后补写 result materialization、replay event、delivery outbox。
-5. 加强 completion relay：final result ready 后必须走 persist projection -> replay event -> delivery attempt -> outbox retry；只有 fresh final message/reply 成功后才标 `delivered`。
+1. planner/native path 不生成 completion path，不要求 worker 写 completion file。
+2. `workContractId`、`delegateTaskId`、`nativeTaskId`、`childSessionKey` 必须通过 native spawn intent / confirm 绑定 accepted run evidence。
+3. stale/timeout 判定前必须 probe child session terminal state、native task state 和 projection metadata；不能只因 task-state 长时间 running 就断言 result=none。
+4. 历史 orphan completion 只可作为 migration/import 输入，不能驱动新 runtime。
+5. final result ready 后由 native announce/channel delivery 负责 relay；OctoClaw 记录 replay/projection/delivery metadata，不能用 JSON outbox 伪装 delivered。
 
 #### N1-C：scheduler、并发、依赖和锁
 
 1. dispatch materialization 与 main turn lock 解耦；main lock 只保护 transcript/delivery 一致性，不阻塞独立 worker spawn。
-2. 引入 OctoClaw runtime ledger（建议 SQLite）作为 scheduler/attempt/ticket/completion binding 的事务真相；OpenClaw `flows/registry.sqlite` 和 `tasks/runs.sqlite` 作为 native lifecycle authority，但生产同步应优先通过 bridge/API，`queryNativeState` 只是 staged/diagnostic hook，不声明生产直接读取 OpenClaw native DB。N1-MVP 只实现 `work_contracts`、`delegation_tickets`、`task_attempts`、`scheduler_queue`、`completion_bindings`、`runtime_events`；`delivery_outbox`、`amendments`、`resource_locks` 保留现有 JSON/adapter/inline 路径，不在第一个实现 slice 强制迁移。Scheduler 限定单进程 SQLite 事务队列/lease，无常驻 daemon。
+2. 引入 OctoClaw runtime ledger（SQLite）作为 scheduler/attempt/ticket/metadata 的事务真相；OpenClaw `flows/registry.sqlite` 和 `tasks/runs.sqlite` 作为 native lifecycle authority，但生产同步应优先通过 bridge/API，`queryNativeState` 只是 staged/diagnostic hook，不声明生产直接读取 OpenClaw native DB。N1-MVP 表为 `work_contracts`、`delegation_tickets`、`task_attempts`、`scheduler_queue`、`completion_bindings`、`runtime_events`，另有 `native_spawn_intents` 辅助表；`delivery_outbox`、`amendments`、`resource_locks` 不在当前生产 schema。Scheduler 限定单进程 SQLite 事务队列/lease，无常驻 daemon。
 3. `task-state.json` 降为可重建 read-model snapshot / compatibility projection，不再承担并发 queue pop、lease、resource lock、attempt transition 的唯一 durable truth。
 4. 独立任务可并发 spawn；同一资源/写域/显式依赖的任务必须排队，状态写成 `queued_after=<taskId>` 或 `blocked_by=<resource>`。
 5. scheduler queue 必须有 `queue_status`、`dependency_ids`、`resource_keys`、`lease_owner`、`lease_expires_at`、`revision`、`wakeup_at`，并用 CAS/transaction 防止双 pop。
 6. `spawn_confirmed=true` 必须有 current native task/session/process evidence；仅注册 WorkContract、进入 queue 或遇到锁等待不得返回 spawn confirmed。
 7. 如果 host/backend 暂不支持并发，必须显式返回 `blocked/queued` 和原因，不能 silent no-op 或伪装成已派发。
-8. `resume_preferred` 必须真复用：dispatch 选出的 preferred `childSessionKey` 必须传入 `trySpawnSubagentRuntime` / detached runtime；新 spawn 只在无 preferred、preferred retired 或 scope 不兼容时发生。
+8. `resume_preferred` 必须真复用：dispatch 选出的 preferred `childSessionKey` 必须通过 native planner/confirm 能力复用；新 spawn 只在无 preferred、preferred retired 或 scope 不兼容时发生。
 
 #### N1-D：task amendment protocol
 

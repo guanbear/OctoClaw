@@ -1,7 +1,7 @@
 # OctoClaw 四类角色术语规范
 
-> 适用分支：`refactor/0.4.0-stable`  
-> 最后更新：2026-04-30
+> 适用分支：`v0.5.0`
+> 最后更新：2026-05-09
 
 Phase 1 交付物：Observer/Patrol/Runner/Ctl 四个核心术语的定义、边界和执行合同。
 
@@ -13,7 +13,7 @@ Phase 1 交付物：Observer/Patrol/Runner/Ctl 四个核心术语的定义、边
 |------|------|---------|
 | **Observer** | 只读监控会话（control_observer 任务类） | `policy-utils.ts:108`, `extension-entry.ts:1351` |
 | **Patrol** | 后台健康检查进程（watchdog） | `ack-guard.ts:watchdogTick`, `octoclawctl patrol` |
-| **Runner** | 执行委派任务的子 agent/worker | `policy-resolver.ts:972`, `child-finalizer.ts` |
+| **Runner** | 执行委派任务的子 agent/worker | `policy-resolver.ts`, `tools/registration.ts`, OpenClaw native TaskFlow |
 | **Ctl** | 控制面操作（octoclawctl CLI + session_control 任务类） | `tools/octoclawctl/`, `policy-utils.ts:112` |
 
 ---
@@ -61,7 +61,7 @@ Phase 1 交付物：Observer/Patrol/Runner/Ctl 四个核心术语的定义、边
 
 ## Runner
 
-**定义**：执行委派任务的子 agent。接收 WorkContract、执行具体工作、写入 completion file。
+**定义**：执行委派任务的子 agent。接收 WorkContract/handoff packet，执行具体工作，并通过 OpenClaw native announce / channel delivery 回传最终结果。
 
 **两种子类型**：
 
@@ -75,8 +75,8 @@ Phase 1 交付物：Observer/Patrol/Runner/Ctl 四个核心术语的定义、边
 - route = `"delegate"`
 - execution_profile = `"worker"`（区别于 observer 的 `"observer"` profile）
 - 必须通过 `octoclaw_dispatch` 派发
-- 完成后写入 `{workContractId}.completion.json`
-- `child-finalizer.ts` 监听 completion file 并推送结果
+- native spawn 必须通过 `octoclaw_dispatch_confirm` 绑定 accepted run evidence
+- completion file / child-finalizer 不再是当前 planner/native path 的完成协议
 
 **允许工具**（`runnerWorkflowTools()`，`policy-utils.ts:93`）：
 - `octoclaw_status`、`octoclaw_task_action`
@@ -85,7 +85,7 @@ Phase 1 交付物：Observer/Patrol/Runner/Ctl 四个核心术语的定义、边
 
 **与 Observer 的区别**：Observer 的 `executionProfile = "observer"`（`observer_probe` role），Runner 的 `executionProfile = "worker"`。Runner 可以执行实质性工作；Observer 只能读状态。
 
-**生命周期**：dispatch → running → (completion file 写入) → child-finalizer 推送 → completed/delivered
+**生命周期**：dispatch → native spawn intent → sessions_spawn accepted → dispatch confirm → native running/completed facts → native announce/channel delivery → status projection
 
 ---
 

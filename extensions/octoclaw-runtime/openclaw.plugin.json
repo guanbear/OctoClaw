@@ -2,7 +2,7 @@
   "id": "octoclaw-runtime",
   "name": "OctoClaw Runtime",
   "description": "Runtime policy hooks, dispatch tools, and replay logging for OctoClaw",
-  "version": "0.3.0",
+  "version": "0.5.0",
   "main": "./dist/extension-entry.js",
   "extensions": [
     "./dist/extension-entry.js"
