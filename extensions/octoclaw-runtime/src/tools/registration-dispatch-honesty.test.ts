@@ -726,6 +726,72 @@ describe("octoclaw_dispatch honesty", () => {
     expect(result.execution_state).toBe("spawn_confirmed");
   });
 
+  it("promotes budgeted-main dispatch when the delegated WorkContract is stored on state", async () => {
+    const stateKey = "session-budgeted-main-state-contract";
+    const routeSeal = seal({ route: "reply" });
+    const contract = seedWorkContract({
+      sessionKey: stateKey,
+      userAsk: "查看 OpenClaw 新版本和新特性",
+      intentClass: "fresh_live_lookup",
+    });
+    const staleReplyDecision = {
+      request: { session_key: stateKey },
+      routeSeal,
+      route_decision: {
+        route: "reply",
+        system_preferred_route: "reply",
+        worker_pool: "octoclaw-worker",
+        task_class: "main_direct",
+        decision_bucket: "budgeted_main_then_delegate",
+      },
+      tool_policy: {
+        must_delegate_via: "",
+        allowed_control_tools: ["octoclaw_dispatch", "octoclaw_status"],
+      },
+      _decision_bucket: "budgeted_main_then_delegate",
+    };
+    policyState.set(stateKey, {
+      prompt: "查看 OpenClaw 新版本和新特性",
+      decision: staleReplyDecision,
+      routeSeal,
+      dispatchStatus: "budgeted_main_escalated",
+      dispatchExecuted: false,
+      spawnExecuted: false,
+      workContractId: contract.workContractId,
+      work_contract_id: contract.workContractId,
+      budgetedMain: {
+        active: false,
+        escalatedAt: Date.now(),
+        reason: "write_tool_detected",
+        workContractId: contract.workContractId,
+      },
+    });
+
+    const result = await executeDispatch({
+      task: "查看 OpenClaw 新版本和新特性",
+      forceRoute: "auto",
+      metadataJson: JSON.stringify({
+        turnId: "turn-1",
+        threadBindingKey: "thread-1",
+        session_key: stateKey,
+      }),
+    }, {
+      sessionKey: stateKey,
+      canonicalSessionKey: stateKey,
+      sessionId: "session-budgeted-main-state-contract",
+      turnId: "turn-1",
+      threadBindingKey: "thread-1",
+      helperInvoker: spawnedHelper(),
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.route).toBe("delegate");
+    expect(result.work_contract_id).toBe(contract.workContractId);
+    expect(result.execution_state).toBe("spawn_confirmed");
+    expect(result.spawn_executed).toBe(true);
+    expect(result.run_id).toBe("run-spawned");
+  });
+
   it("includes terminal:true for terminal dispatch honesty failures", async () => {
     const stateKey = "session-dispatch-honesty-terminal";
     const routeSeal = seal({ route: "delegate" });

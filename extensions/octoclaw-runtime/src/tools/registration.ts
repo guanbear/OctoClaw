@@ -70,6 +70,7 @@ import {
   serializeSpeculativePreloadState,
   type SpeculativePreloadState,
 } from "../delegate/speculative-preload.js";
+import { escalateBudgetedMainDecision } from "../budgeted-main.js";
 import { getModelMap } from "../model-map.js";
 import { detectIMType, buildSlackStatusOutput, type StatusTaskSummary } from "../im-status-renderer.js";
 import { buildDelegationTicketDryRun } from "../runtime-ledger/ticket-dry-run.js";
@@ -405,6 +406,33 @@ function isBudgetedMainDispatchEscalationAllowed(input: {
   return input.cachedDecision._budgeted_main_escalated === true
     || routeDecision.route_source === "budgeted_main_escalation"
     || routeDecision.dispatch_required === true;
+}
+
+function shouldPromoteBudgetedMainDispatch(input: {
+  decision: UnknownRecord;
+  state: UnknownRecord | null;
+  workContract: WorkContract | null;
+}): boolean {
+  const routeDecision = asRecord(input.decision.route_decision);
+  const startupCostPolicy = asRecord(routeDecision.startup_cost_policy || input.decision._startup_cost_policy);
+  const decisionBucket = asString(
+    routeDecision.decision_bucket
+    || input.decision._decision_bucket
+    || startupCostPolicy.decision_bucket,
+  );
+  if (decisionBucket !== "budgeted_main_then_delegate") return false;
+
+  const state = asRecord(input.state);
+  const budgetedMain = asRecord(state.budgetedMain || state.budgeted_main);
+  const workContractView = asRecord(input.decision.work_contract);
+  const alreadyEscalated = input.decision._budgeted_main_escalated === true
+    || routeDecision.route_source === "budgeted_main_escalation"
+    || routeDecision.dispatch_required === true
+    || asString(state.dispatchStatus || state.dispatch_status) === "budgeted_main_escalated"
+    || Boolean(budgetedMain.escalatedAt || budgetedMain.escalated_at);
+  const hasDelegateContract = input.workContract?.route === "delegate"
+    || asString(workContractView.route) === "delegate";
+  return alreadyEscalated || hasDelegateContract;
 }
 
 function dispatchPlannerSessionCandidates(...values: unknown[]): string[] {
@@ -2896,7 +2924,8 @@ export function getToolRegistrations(options: ToolRegistrationOptions = {}): Too
         let cachedDecision = selectDispatchPolicyDecision(state?.decision, params.policyJson);
         let dispatchWorkContract: WorkContract | null = null;
         let workContractDispatchError: { route: string; error: string } | null = null;
-        const requestedWorkContractId = selectDispatchWorkContractId(asRecord(params), cachedDecision);
+        const requestedWorkContractId = selectDispatchWorkContractId(asRecord(params), cachedDecision)
+          || asString(state?.workContractId || state?.work_contract_id);
         if (requestedWorkContractId) {
           const validation = validateDispatchWorkContract(loadWorkContract(requestedWorkContractId), requestedWorkContractId);
           if (validation.ok) {
@@ -2921,6 +2950,22 @@ export function getToolRegistrations(options: ToolRegistrationOptions = {}): Too
           });
           freshDecisionSource = "fresh_context_resolve";
         }
+        const promoteBudgetedMainDispatch = shouldPromoteBudgetedMainDispatch({
+          decision: cachedDecision,
+          state,
+          workContract: dispatchWorkContract,
+        });
+        if (promoteBudgetedMainDispatch) {
+          const routeDecision = asRecord(cachedDecision.route_decision);
+          const reason = asString(
+            cachedDecision._budgeted_main_escalation_reason
+            || routeDecision.reason
+            || asRecord(state?.budgetedMain || state?.budgeted_main).reason,
+            "main_agent_called_dispatch",
+          );
+          cachedDecision = escalateBudgetedMainDecision(cachedDecision, reason);
+          hadCachedDecision = true;
+        }
         const initialMetadata = applyUserMetadataOverrides(
           {
             ...buildPolicyMetadata(ctx, { stateKey: stateKey || asString(asRecord(cachedDecision.request).session_key) }),
@@ -2929,7 +2974,11 @@ export function getToolRegistrations(options: ToolRegistrationOptions = {}): Too
           parseObjectJson(params.metadataJson),
         );
         const managedSessionKey = asString(asRecord(cachedDecision.request).session_key || initialMetadata.session_key);
-        const resolvedRoute = normalizeLiveRoute(params.forceRoute === "auto" ? "" : params.forceRoute || asRecord(cachedDecision.route_decision).route, "reply");
+        const requestedForceRoute = asString(params.forceRoute === "auto" ? "" : params.forceRoute);
+        const resolvedRoute = normalizeLiveRoute(
+          requestedForceRoute || (promoteBudgetedMainDispatch ? "delegate" : asRecord(cachedDecision.route_decision).route),
+          "reply",
+        );
         const isDelegatedRoute = resolvedRoute === "delegate";
         const runtimeLedgerMode = resolveRuntimeLedgerMode();
         const recordDispatchTerminalFailure = async (errorMessage: string, options: { sealMismatch?: boolean; route?: string | null } = {}) => {
