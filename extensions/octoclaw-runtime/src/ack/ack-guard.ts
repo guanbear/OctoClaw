@@ -1,17 +1,5 @@
-import fsSync from "node:fs";
-import {
-  resolveTaskStatePath,
-  resolveWorkspaceRoot,
-} from "../resolve/env.js";
-
-interface FsSyncLike {
-  readFileSync(pathname: string, encoding: string): string;
-  writeFileSync(pathname: string, data: string, encoding: string): void;
-}
-
-const fsSyncLike = fsSync as unknown as FsSyncLike;
+import { resolveWorkspaceRoot } from "../resolve/env.js";
 import { getAdapterForSession } from "../im/index.js";
-import { resolveIMMessageTurnAnchor } from "../im/message-turn.js";
 import { sendIMMessage } from "../im/send.js";
 import {
   AckStage,
@@ -48,14 +36,32 @@ import {
   ackTimerStateForKey,
 } from "./ack-timing.js";
 import {
-  DELEGATED_ROUTE_NAMES,
-} from "../resolve/route-helpers.js";
+  resolveAckTargetFromSessionKey,
+  resolveRoutePhase,
+  threadKeyFromSessionKey,
+} from "./ack-route.js";
+import {
+  ackLeaseKey,
+  ackState,
+  ensureAckTurnTimestamp,
+  prepareAckTrackingForMessageTurn,
+  resolveAckMessageTurnId,
+  tryClaimAckOwner,
+  updateTrackingState,
+  type AckOwner,
+} from "./ack-state.js";
 import {
   parseSessionRoute as canonicalParseSessionRoute,
   resolveAckDeliverySessionKey as canonicalResolveAckDeliverySessionKey,
 } from "../resolve/session.js";
 import { type UnknownRecord, isRecord, asString, asBooleanStrict, asNumber } from "../util/type-coercion.js";
-import { emitExecutionTransitionNotification } from "./execution-transition-notifier.js";
+export {
+  STALE_QUEUED_THRESHOLD_MIN,
+  STUCK_THRESHOLD_MIN,
+  WATCHDOG_DEBOUNCE_MS,
+  WATCHDOG_INTERVAL_MS,
+  watchdogTick,
+} from "./ack-watchdog.js";
 
 const ACK_DEBUG = Boolean(process.env.OCTOCLAW_ACK_DEBUG);
 
@@ -65,18 +71,20 @@ function ackDebug(message: string): void {
   }
 }
 
-export const WATCHDOG_INTERVAL_MS = 30_000;
-export const WATCHDOG_DEBOUNCE_MS = 25_000;
-export const STALE_QUEUED_THRESHOLD_MIN = 90;
-export const STUCK_THRESHOLD_MIN = 15;
-
-const OBSERVE_ROUTE_NAMES = new Set(["observe", "observer", "status", "inspect", "probe", "scan"]);
 const ACK_CONTROLLER_LEASE_MS = DEFAULT_ACK_TIMING_CONFIG.tierDelaysMs[2] + 10_000;
 const MAIN_MODEL_LEASE_MS = DEFAULT_ACK_TIMING_CONFIG.tierDelaysMs[2] + 10_000;
 export const NEUTRAL_INBOUND_ACK_TEXT = "收到，正在判断并准备处理。";
 export const NEUTRAL_REACTION_ACK_FALLBACK_MS = 2200;
 
-type AckOwner = "" | "latency_ack" | "timer_ack";
+export { resolveAckTargetFromSessionKey, resolveRoutePhase, threadKeyFromSessionKey } from "./ack-route.js";
+export type { AckTarget } from "./ack-route.js";
+export {
+  currentAckOwner,
+  getAckTrackingState,
+  updateAckTrackingState,
+  claimAckOwner,
+} from "./ack-state.js";
+export type { AckTrackingState } from "./ack-state.js";
 
 export interface AckContext extends UnknownRecord {
   trigger?: unknown;
@@ -90,30 +98,11 @@ export interface AckLogger {
   warn?: (message: string) => void;
 }
 
-export interface AckTrackingState extends UnknownRecord {
-  ackOwner?: unknown;
-  ack_owner?: unknown;
-  ackGuardKey?: unknown;
-  ackMessageTurnId?: unknown;
-  ack_message_turn_id?: unknown;
-  latencyAckSent?: unknown;
-  reactionAckSent?: boolean;
-  reactionAckAttempted?: boolean;
-  reactionAckSupported?: boolean;
-  reactionAckEnabled?: boolean;
-  channelTone?: "chat" | "work" | "cli" | "unknown";
-}
-
 export interface NeutralInboundAckResult {
   sent: boolean;
   reason: string;
   mode: "reaction" | "text" | "not_sent";
   error?: string;
-}
-
-export interface AckTarget {
-  target: string;
-  threadId: string;
 }
 
 interface AckSendResult {
@@ -126,22 +115,6 @@ interface AckSendResult {
   ack_delivery_state: string;
   target: string;
   threadId: string;
-}
-
-interface AckClaimResult {
-  claimed: boolean;
-  currentOwner: string;
-}
-
-interface TaskStateTask extends UnknownRecord {
-  id?: unknown;
-  status?: unknown;
-  updated_at?: unknown;
-  spawned_at?: unknown;
-}
-
-interface TaskStateFile extends UnknownRecord {
-  tasks?: unknown;
 }
 
 interface AckAttemptParams {
@@ -167,18 +140,11 @@ interface AckAttemptParams {
   allowReactionTextFallback?: boolean;
 }
 
-const ackStateByStateKey = new Map<string, AckTrackingState>();
 const neutralInboundAckKeys = new Set<string>();
-let watchdogLastTick = 0;
 
 function unknownErrorMessage(error: unknown): string {
   if (error instanceof Error && error.message) return error.message;
   return asString(error) || "unknown_error";
-}
-
-function ackState(stateKey: string): AckTrackingState {
-  const key = asString(stateKey);
-  return key ? (ackStateByStateKey.get(key) ?? {}) : {};
 }
 
 function resolveAckDeliverySessionKey(
@@ -228,99 +194,6 @@ function recordAckOutcome(params: {
   });
 }
 
-function updateTrackingState(stateKey: string, patch: UnknownRecord): void {
-  const key = asString(stateKey);
-  if (!key) {
-    return;
-  }
-  const current = ackStateByStateKey.get(key) ?? {};
-  ackStateByStateKey.set(key, { ...current, ...patch });
-}
-
-function tryClaimAckOwner(stateKey: string, owner: AckOwner): AckClaimResult {
-  const key = asString(stateKey);
-  const normalizedOwner = asString(owner) as AckOwner;
-  if (!key || !normalizedOwner) {
-    return { claimed: false, currentOwner: currentAckOwner(key) };
-  }
-  const currentOwner = currentAckOwner(key);
-  if (!currentOwner || currentOwner === normalizedOwner) {
-    updateTrackingState(key, {
-      ackOwner: normalizedOwner,
-      ack_owner: normalizedOwner,
-    });
-    return { claimed: true, currentOwner: normalizedOwner };
-  }
-  return { claimed: false, currentOwner };
-}
-
-function ackLeaseKey(stateKey: string): string {
-  const normalized = asString(stateKey);
-  return normalized ? `ack-lease:${normalized}` : "";
-}
-
-function ensureAckTurnTimestamp(stateKey: string): number {
-  const normalizedStateKey = asString(stateKey);
-  if (!normalizedStateKey) {
-    return Date.now();
-  }
-  const existing = asNumber(ackState(normalizedStateKey)._ackTurnTs);
-  if (existing > 0) {
-    return existing;
-  }
-  const created = Date.now();
-  updateTrackingState(normalizedStateKey, { _ackTurnTs: created });
-  return created;
-}
-
-
-function resolveAckMessageTurnId(
-  sessionKey: string,
-  stateKey: string,
-  state: UnknownRecord = {},
-  ctx: AckContext = {},
-  metadata: UnknownRecord = {},
-  replyToMessageId = "",
-): string {
-  const anchor = resolveIMMessageTurnAnchor({
-    sessionKey,
-    stateKey,
-    state,
-    ctx,
-    metadata,
-    replyToMessageId,
-    fallbackTurnId: "",
-  });
-  if (anchor) return `${stateKey}:${anchor}`;
-  return `${stateKey}:${ensureAckTurnTimestamp(stateKey)}`;
-}
-
-function prepareAckTrackingForMessageTurn(stateKey: string, messageTurnId: string): void {
-  const normalizedStateKey = asString(stateKey);
-  const normalizedMessageTurnId = asString(messageTurnId);
-  if (!normalizedStateKey || !normalizedMessageTurnId) return;
-  const current = ackState(normalizedStateKey);
-  const previous = asString(current.ackMessageTurnId || current.ack_message_turn_id);
-  if (previous === normalizedMessageTurnId) return;
-  updateTrackingState(normalizedStateKey, {
-    ackMessageTurnId: normalizedMessageTurnId,
-    ack_message_turn_id: normalizedMessageTurnId,
-    ...(previous ? {
-      ackOwner: "",
-      ack_owner: "",
-      ackKey: "",
-      latencyAckSent: false,
-      latencyAckText: "",
-      latencyAckMode: "",
-      reactionAckAttempted: false,
-      reaction_ack_attempted: false,
-      reactionAckSent: false,
-      textAck0Sent: false,
-      tier1Sent: false,
-      tier2Sent: false,
-    } : {}),
-  });
-}
 
 function normalizeAckStage(value: string): AckStage {
   switch (asString(value)) {
@@ -350,39 +223,6 @@ function normalizeAckStage(value: string): AckStage {
     default:
       return AckStage.ProgressNudge;
   }
-}
-
-export function resolveRoutePhase(decision: UnknownRecord, options: UnknownRecord = {}): AckRoutePhase {
-  const explicit = asString(options.routePhase || options.route_phase).toLowerCase();
-  if (explicit === "delegate" || explicit === "observe" || explicit === "reply" || explicit === "pre_route") {
-    return explicit;
-  }
-
-  const routeDecision = isRecord(decision.route_decision) ? decision.route_decision : {};
-  const workContract = isRecord(decision.work_contract) ? decision.work_contract : {};
-  const explicitRoute = asString(options.route || workContract.route || routeDecision.route);
-  if (!explicitRoute && Object.keys(decision).length === 0) {
-    return "pre_route";
-  }
-
-  const route = explicitRoute.toLowerCase();
-  if (DELEGATED_ROUTE_NAMES.has(route)) {
-    return "delegate";
-  }
-  if (OBSERVE_ROUTE_NAMES.has(route)) {
-    return "observe";
-  }
-  if (route === "reply" || route === "direct") {
-    return "reply";
-  }
-  return "pre_route";
-}
-
-export function threadKeyFromSessionKey(sessionKey: string, stateKey = ""): string {
-  const parsed = canonicalParseSessionRoute(sessionKey);
-  if (parsed.threadKey) return parsed.threadKey;
-  if (parsed.bindingKey) return `${parsed.bindingKey}:${parsed.threadId || "root"}`;
-  return asString(parsed.threadId || parsed.target || stateKey);
 }
 
 function applyTemplateVars(text: string, vars: Record<string, string>): string {
@@ -644,144 +484,6 @@ async function withAckSendTimeout(
       clearTimeout(timer);
     }
   }
-}
-
-async function readTaskStateFile(): Promise<TaskStateFile> {
-  try {
-    const fs = await import("node:fs");
-    const content = fs.default.readFileSync(resolveTaskStatePath(), "utf-8");
-    return JSON.parse(content) as TaskStateFile;
-  } catch {
-    return {};
-  }
-}
-
-function parseUpdatedSortValue(value: unknown): number {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return value;
-  }
-  const text = asString(value);
-  if (!text) {
-    return 0;
-  }
-  if (/^\d+(\.\d+)?$/.test(text)) {
-    return Number(text);
-  }
-  const parsed = new Date(text);
-  return Number.isNaN(parsed.getTime()) ? 0 : parsed.getTime();
-}
-
-function buildMinimalProjectionFromTaskState(
-  task: TaskStateTask,
-  status: string,
-): import("@octoclaw/contracts/status-projection").TaskStatusProjection {
-  const t = task as UnknownRecord;
-  const generatedAt = new Date().toISOString();
-  return {
-    schemaVersion: "octoclaw.task_status_projection/v1" as const,
-    projectionId: `exec_transition_${asString(t.id)}_${Date.now()}`,
-    generatedAt,
-    requestId: "",
-    flowId: asString(t.flow_id),
-    taskId: asString(t.id),
-    title: "",
-    summary: "",
-    taskSummary: "",
-    route: "delegate" as const,
-    role: "",
-    backend: "octoclaw.delegate",
-    modelProfile: "",
-    status: status as import("@octoclaw/contracts/status-projection").TaskProjectionStatus,
-    success: false,
-    createdAt: asString(t.created_at) || asString(t.spawned_at) || generatedAt,
-    dispatchExecuted: asBooleanStrict(t.dispatchExecuted) || asBooleanStrict(t.dispatch_executed),
-    spawnExecuted: asBooleanStrict(t.spawnExecuted) || asBooleanStrict(t.spawn_executed),
-    resultMaterialized: asBooleanStrict(t.resultMaterialized) || asBooleanStrict(t.result_materialized),
-    latestAnomalyNotice: (isRecord(t.latestAnomalyNotice) ? t.latestAnomalyNotice : isRecord(t.latest_anomaly_notice) ? t.latest_anomaly_notice : undefined) as import("@octoclaw/contracts/work-contract").AnomalyNotice | undefined,
-    elapsedMs: 0,
-    artifactRefs: [],
-    artifactRefIds: [],
-    actions: [],
-  };
-}
-
-async function watchdogTransitionStaleTask(taskId: string, task: TaskStateTask, newStatus: string, sink: AckLogger): Promise<boolean> {
-  const sessionKey = asString((task as UnknownRecord).session_key);
-  const flowId = asString((task as UnknownRecord).flow_id);
-  if (!sessionKey || !flowId) {
-    sink.debug?.(`octoclaw watchdog: skip transition task=${taskId} missing session_key or flow_id`);
-    return false;
-  }
-  try {
-    const { invokeNativeHelper } = await import("../adapter/native-helper.js");
-    const result = invokeNativeHelper({ action: "read-task", args: { session_key: sessionKey, flow_id: flowId, task_id: taskId } });
-    if (!result?.found) {
-      sink.debug?.(`octoclaw watchdog: skip transition task=${taskId} not found in runtime`);
-      return false;
-    }
-    const taskRead = result as unknown as { task?: { state?: string; status?: string } };
-    const currentState = asString(taskRead.task?.state || taskRead.task?.status);
-    if (currentState === "completed" || currentState === "failed" || currentState === "timed_out") {
-      return false;
-    }
-    const failResult = invokeNativeHelper({
-      action: "fail-flow" as const,
-      args: {
-        session_key: sessionKey,
-        flow_id: flowId,
-        blocked_task_id: taskId,
-        blocked_summary: `watchdog timeout: task ${taskId} stuck in ${currentState} after threshold`,
-      },
-    }) as unknown as { ok?: boolean; status?: string };
-    if (failResult.ok) {
-      sink.debug?.(`octoclaw watchdog: transitioned task=${taskId} to ${newStatus}`);
-      updateTaskStateCache(taskId, {
-        status: newStatus,
-        updated_at: new Date().toISOString(),
-        latestAnomalyNotice: {
-          kind: "watchdog_timeout",
-          severity: "error",
-          taskId,
-          message: `Watchdog transitioned task to ${newStatus}`,
-          createdAt: new Date().toISOString(),
-          nativeTaskId: asString((task as UnknownRecord).native_task_id),
-          nativeFlowId: asString((task as UnknownRecord).flow_id),
-        },
-      });
-      try {
-        void emitExecutionTransitionNotification({
-          transitionKind: "timed_out",
-          projection: buildMinimalProjectionFromTaskState(task, newStatus),
-          attemptId: taskId,
-          workContractId: "",
-          sessionKey,
-          stateKey: sessionKey,
-        });
-      } catch (_) {}
-      return true;
-    }
-    sink.debug?.(`octoclaw watchdog: failed to transition task=${taskId}: ${asString(failResult.status)}`);
-    return false;
-  } catch (err) {
-    sink.debug?.(`octoclaw watchdog: error transitioning task=${taskId}: ${String(err)}`);
-    return false;
-  }
-}
-
-function updateTaskStateCache(taskId: string, patch: Record<string, unknown>): void {
-  try {
-    const taskPath = resolveTaskStatePath();
-    let existing: { tasks?: unknown[] } = { tasks: [] };
-    try {
-      existing = JSON.parse(fsSyncLike.readFileSync(taskPath, "utf-8")) as { tasks?: unknown[] };
-    } catch { /* no file */ }
-    const tasks = Array.isArray(existing.tasks) ? existing.tasks as TaskStateTask[] : [];
-    const idx = tasks.findIndex((t) => asString(t.id) === taskId);
-    if (idx >= 0) {
-      tasks[idx] = { ...tasks[idx], ...patch };
-      fsSyncLike.writeFileSync(taskPath, JSON.stringify({ tasks }, null, 2), "utf-8");
-    }
-  } catch { /* best effort */ }
 }
 
 async function attemptAckSend(params: AckAttemptParams): Promise<{ sent: boolean; reason: string; mode?: "reaction" | "text"; error?: string } | null> {
@@ -1188,14 +890,6 @@ export function shouldSendLatencyAck(
   return Boolean(latencyAckText(decision));
 }
 
-export function resolveAckTargetFromSessionKey(sessionKey: string): AckTarget {
-  const parsed = canonicalParseSessionRoute(sessionKey);
-  return {
-    target: parsed.target,
-    threadId: parsed.threadId,
-  };
-}
-
 export async function sendAckDirect(
   sessionKey: string,
   message: string,
@@ -1322,7 +1016,7 @@ export function updateAckGuardDecision(
 ): void {
   const key = asString(stateKey);
   if (!key) return;
-  updateAckTrackingState(key, {
+  updateTrackingState(key, {
     decision,
     decision_updated_at: Date.now(),
   });
@@ -1355,23 +1049,6 @@ export function cancelAckGuardForState(stateKey: string): void {
     ackOwner: "",
     ack_owner: "",
   });
-}
-
-export function currentAckOwner(stateKey: string): string {
-  const state = ackState(stateKey);
-  return asString(state.ackOwner || state.ack_owner);
-}
-
-export function claimAckOwner(stateKey: string, owner: string): string {
-  return tryClaimAckOwner(stateKey, asString(owner) as AckOwner).currentOwner;
-}
-
-export function updateAckTrackingState(stateKey: string, patch: UnknownRecord): void {
-  updateTrackingState(stateKey, patch);
-}
-
-export function getAckTrackingState(stateKey: string): AckTrackingState {
-  return ackState(stateKey);
 }
 
 export function resetNeutralInboundAckDedupeForTests(): void {
@@ -1638,93 +1315,4 @@ export function notifyUserMessage(sessionKey: string, stateKey: string): void {
     return;
   }
   recordMessage(threadKey);
-}
-
-export async function watchdogTick(logger: unknown): Promise<void> {
-  const sink = isRecord(logger) ? logger as AckLogger : {};
-  const now = Date.now();
-  if (now - watchdogLastTick < WATCHDOG_DEBOUNCE_MS) {
-    return;
-  }
-  watchdogLastTick = now;
-
-  try {
-    const taskState = await readTaskStateFile();
-    const tasks = Array.isArray(taskState.tasks) ? taskState.tasks as TaskStateTask[] : [];
-    if (tasks.length === 0) {
-      return;
-    }
-
-    let staleCount = 0;
-    let stuckCount = 0;
-    let transitionedCount = 0;
-    for (const task of tasks) {
-      const taskId = asString(task.id);
-      const status = asString(task.status).toLowerCase();
-      const updatedAt = parseUpdatedSortValue(task.updated_at ?? task.spawned_at ?? 0);
-      if (!taskId || !updatedAt) {
-        continue;
-      }
-      const ageMin = (now - updatedAt) / 60_000;
-      if (status === "queued" && ageMin > STALE_QUEUED_THRESHOLD_MIN) {
-        staleCount += 1;
-        sink.debug?.(`octoclaw watchdog: task_timeout task=${taskId} status=${status} age_min=${ageMin.toFixed(1)}`);
-        try {
-          const sessionKey = asString((task as UnknownRecord).session_key);
-          updateTaskStateCache(taskId, {
-            latestAnomalyNotice: {
-              kind: "queued_stale",
-              severity: "warning",
-              taskId,
-              message: `Task queued for ${ageMin.toFixed(0)} minutes exceeds ${STALE_QUEUED_THRESHOLD_MIN} minute threshold`,
-              createdAt: new Date().toISOString(),
-            },
-          });
-          void emitExecutionTransitionNotification({
-            transitionKind: "queued_stale",
-            projection: buildMinimalProjectionFromTaskState(task, "queued"),
-            attemptId: taskId,
-            workContractId: "",
-            sessionKey,
-            stateKey: sessionKey,
-          });
-        } catch (_) {}
-        const transitioned = await watchdogTransitionStaleTask(taskId, task, "timed_out", sink);
-        if (transitioned) transitionedCount += 1;
-        continue;
-      }
-      if ((status === "running" || status === "dispatched") && ageMin > STUCK_THRESHOLD_MIN) {
-        stuckCount += 1;
-        sink.debug?.(`octoclaw watchdog: runner_stuck task=${taskId} status=${status} age_min=${ageMin.toFixed(1)}`);
-        try {
-          const sessionKey = asString((task as UnknownRecord).session_key);
-          updateTaskStateCache(taskId, {
-            latestAnomalyNotice: {
-              kind: "heartbeat_stale",
-              severity: "warning",
-              taskId,
-              message: `Task stuck in ${status} for ${ageMin.toFixed(0)} minutes exceeds ${STUCK_THRESHOLD_MIN} minute threshold`,
-              createdAt: new Date().toISOString(),
-            },
-          });
-          void emitExecutionTransitionNotification({
-            transitionKind: "heartbeat_stale",
-            projection: buildMinimalProjectionFromTaskState(task, status),
-            attemptId: taskId,
-            workContractId: "",
-            sessionKey,
-            stateKey: sessionKey,
-          });
-        } catch (_) {}
-        const transitioned = await watchdogTransitionStaleTask(taskId, task, "timed_out", sink);
-        if (transitioned) transitionedCount += 1;
-      }
-    }
-
-    if (staleCount > 0 || stuckCount > 0 || transitionedCount > 0) {
-      sink.debug?.(`octoclaw watchdog: stale_queued=${staleCount} stuck=${stuckCount} transitioned=${transitionedCount}`);
-    }
-  } catch (error) {
-    sink.warn?.(`octoclaw watchdog tick failed: ${String(error)}`);
-  }
 }
