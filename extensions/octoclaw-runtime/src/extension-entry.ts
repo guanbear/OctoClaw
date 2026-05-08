@@ -998,8 +998,9 @@ function buildNativeAnnounceFinalMessage(input: {
   });
 }
 
-function nativeAnnounceDeliveryProvenance(contract: WorkContract, completion: NativeAnnounceCompletion): {
+function nativeAnnounceDeliveryProvenance(contract: WorkContract, completion: NativeAnnounceCompletion, model?: string): {
   route: "delegate";
+  model?: string;
   via: "native_announce";
   workContractId: string;
   runId?: string;
@@ -1009,6 +1010,7 @@ function nativeAnnounceDeliveryProvenance(contract: WorkContract, completion: Na
   const childSessionKey = ids.childSessionKey || completion.sourceSessionKey;
   return {
     route: "delegate",
+    ...(model ? { model } : {}),
     via: "native_announce",
     workContractId: contract.workContractId,
     ...(ids.runId ? { runId: ids.runId } : {}),
@@ -1052,7 +1054,11 @@ export async function deliverNativeAnnounceCompletion(input: {
     suppressProjectionFooter: false,
     deliveryKind: "native_child_final",
     deliveryTargetSource: params.replyToMessageId ? "inbound_anchor" : "session_fallback",
-    deliveryProvenance: nativeAnnounceDeliveryProvenance(input.contract, input.completion),
+    deliveryProvenance: nativeAnnounceDeliveryProvenance(
+      input.contract,
+      input.completion,
+      resolveDisplayModel(state, event, ctx),
+    ),
     footerMode: footerDebugEnabled() ? "debug" : "off",
   }));
   const result = await sendMessage({

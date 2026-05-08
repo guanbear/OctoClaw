@@ -2,6 +2,7 @@ import fs from "node:fs";
 import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
+import { resolveModelId } from "@octoclaw/policy/model";
 import { runCommand, resolveWorkspaceRoot } from "../../resolve/env.js";
 import type { IMAdapter, IMMessageTurnAnchorParams, IMProjectionFooter, IMSendParams } from "../adapter.js";
 import type { MessageDeliveryEnvelope, MessageDeliveryResult } from "../delivery-port.js";
@@ -221,9 +222,13 @@ function slackTargetSource(params: { replyToMessageId?: string; threadTs?: strin
 
 function envelopeProjectionFooter(envelope: MessageDeliveryEnvelope): IMProjectionFooter | null {
   if (envelope.footerMode !== "debug" || !envelope.provenance) return null;
+  const rawModel = stringValue(envelope.provenance.model || envelope.provenance.modelId) || "direct_main";
+  const model = (() => {
+    try { return resolveModelId(rawModel as Parameters<typeof resolveModelId>[0]); } catch { return rawModel; }
+  })();
   return {
     route: envelope.provenance.route === "delegate" ? "delegate" : "reply",
-    model: "direct_main",
+    model,
     via: envelope.provenance.via,
     workContractId: envelope.provenance.workContractId,
     thread: Boolean(normalizeSlackMessageTs(envelope.target.replyToMessageId || envelope.target.threadTs)),

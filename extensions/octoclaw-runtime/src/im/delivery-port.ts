@@ -21,6 +21,8 @@ export interface MessageDeliveryTarget {
 
 export interface MessageDeliveryProvenance {
   route?: "reply" | "delegate";
+  model?: string;
+  modelId?: string;
   via?: string;
   workContractId?: string;
   runId?: string;

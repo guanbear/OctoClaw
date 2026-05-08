@@ -4,7 +4,8 @@
 > 代码基线：`refactor/0.4.0-stable`（Phase 0-4 全部完成）  
 > 前置参考：[`octoclaw-auto-router-design.md`](octoclaw-auto-router-design.md)（战略底稿，保留不删）  
 > 日期：2026-04-30
-> N0 更新：`packages/octoclaw-runtime-core` 已并入 runtime extension；Phase 5 router core 的建议落点改为 `packages/octoclaw-policy/src/router/*`。本文中的 `direct / runner / spawn_single / spawn_multi` 均表示 execution contract / lane，不是 live route authority；live route 仍为 `reply | delegate`。
+> N0 更新：`packages/octoclaw-runtime-core` 已并入 runtime extension；长期 router core 的建议落点曾为 `packages/octoclaw-policy/src/router/*`。2026-05-08 后 Phase 5 Lite 的建议落点改为 `packages/octoclaw-policy/src/router-lite/*`，本文中的 `direct / runner / spawn_single / spawn_multi` 仅保留为长期 execution contract / lane 术语，不是 live route authority；live route 仍为 `reply | delegate`。
+> 2026-05-08 更新：性能线不再是近期主阻塞；warm pool / resident runner 不进入 Phase 5 前置条件。Auto Router 下一步只做 shadow-first 推荐和评估，不直接改 live route。
 
 ---
 
@@ -30,7 +31,14 @@
 > **OctoClaw Auto Router 是一个放在 runtime policy 面之前的推荐与约束子系统，联合决定**
 > `execution contract → agent scope → route class → model candidate → output budget → fallback policy`。
 
-Auto Router 的**第一职责**是决定 execution contract，不是选模型。选模型在 execution contract 确定后，由 lane-local policy 负责。
+长期形态里，Auto Router 的第一职责曾被定义为决定 execution contract，不是只选模型。2026-05-08 收窄后，Phase 5 Lite **不再接管 execution contract**：live route authority 仍是 `reply | delegate`，Lite 只在现有 route 之后推荐模型、预算和配置缺口。
+
+2026-05-08 后的近期定位更窄：
+
+- **要做**：把当前 runtime/judge/rule 已经做出的决策，转成可解释、可 replay、可对比的 shadow recommendation。
+- **先不做**：直接覆盖 live route、引入 resident runner、做 learned router hot path、扩大 judge 输出字段。
+- **第一收益**：减少路由策略继续散落在 runtime 分支里的复杂度，让 false delegate / false reply / cost / latency 能被 nightly 稳定度量。
+- **不是第一收益**：继续追求子 agent 启动减少几十秒；这条性能线现在降级为观测和上游跟踪。
 
 ---
 
@@ -40,7 +48,7 @@ Auto Router 的**第一职责**是决定 execution contract，不是选模型。
 
 1. **可解释性优先**：每个 route 决策必须有 `reasonCodes`，人工 review 可追踪
 2. **shadow 先行**：上线前先 shadow 模式记录 `old vs recommended`，不直接接管 live path
-3. **只优化 delegated lanes**：`runner / spawn_single / spawn_multi` 是主优化对象；`direct` 主 agent 默认稳定
+3. **只优化 delegated 模型选择**：近期不接管 `runner / spawn_single / spawn_multi` execution contract，只在 `liveRoute=delegate` 后推荐模型和预算；`direct` 主 agent 默认稳定
 4. **与 Phase 2 反馈链路共生**：Auto Router 的 outcome 通过 replay → nightly-eval → calibration gate 验证，不自己建一套评估系统
 5. **contract 独立可抽离**：`router-core` 是纯 TypeScript 库，不绑定 OpenClaw runtime 细节
 
@@ -102,482 +110,470 @@ Auto Router 的**第一职责**是决定 execution contract，不是选模型。
 └─────────────────────────────────────────────────────┘
 ```
 
+这张五层图保留为长期方向。Phase 5 Lite 只实现其中的 Model-Intel、Budget Planner 和 shadow feedback 子集，不实现新的 execution contract router。
+
 ---
 
-## 四、TypeScript 合同规范
+## 三点五、Auto Router Lite：模型智能与按需选模（2026-05-08）
+
+这一节替代早期“完整 router / warm pool / learned policy”设想，专门回答近期要不要做 Auto Router、怎么做才不重的问题。
+
+结论：
+
+> **保留现有 judge 做 `route + confidence + complexity + complexity_confidence`，Auto Router Lite 只在 judge 之后做模型/预算推荐。它不重判任务、不扩张 judge schema、不自动改 OpenClaw 配置，先 shadow 记录，等 replay 证明省钱且不降质后再局部启用。**
+
+### 3.5.1 Judge 与 Auto Router 的分工
+
+当前 judge 已经足够承担语义判断，不能再退回旧设计里让它输出 `role / workType / scope / tool_need_hint / duration_hint / reason_codes` 这类胖字段。
+
+分工如下：
+
+| 层 | 输入 | 输出 | 不做 |
+|----|------|------|------|
+| judge | 用户请求 + compact runtime context | `route`、`confidence`、`complexity`、`complexity_confidence` | 不猜模型价格，不决定 provider，不输出 role/hint 胖字段 |
+| Auto Router Lite | judge 四字段 + runtime signals + model-intel snapshot | `recommendedModel`、`outputBudget`、`fallbackChain`、`reasonCodes` | 不覆盖 live route，不启动 worker，不改配置 |
+| OpenClaw runtime | 最终配置、provider 状态、原生 fallback | 实际调用模型和执行结果 | 不承担 OctoClaw 的业务 replay 解释 |
+
+所以 Auto Router 不是 judge 的替代品，而是 judge 后面的**模型选择器和成本约束器**。
+
+### 3.5.2 先回答几个边界问题
+
+1. **OpenClaw 有没有价格能力？**
+   有。OpenClaw 5.4 已有 `models.providers.*.models[].cost`、Gateway pricing cache、OpenRouter/LiteLLM 价格抓取、`resolveModelCostConfig()` 和 `estimateUsageCost()`。OctoClaw 不需要再造市场价格抓取。
+
+2. **OpenClaw 有没有完整套餐/剩余额度能力？**
+   没有统一事实面。OpenClaw 有 provider usage、auth profile usage/cooldown、部分 provider usage probe，但跨 provider 的套餐剩余额度并不稳定。OctoClaw 只能把它当 `quotaPressure` 信号，不能假设“套餐内一定免费”。
+
+3. **模型能力怎么知道？靠榜单吗？**
+   不靠榜单。能力来源优先级是：OpenClaw/provider catalog metadata、本地 replay/eval 成功率、operator override、models.dev/OpenRouter 等外部 registry。榜单最多只做 cold-start 参考。
+
+4. **能不能启动后自动把 mini/便宜模型加进 OpenClaw 配置？**
+   不建议静默修改。可以生成 config proposal，让用户显式确认；默认只进入 shadow allowlist。原因是 auth、baseUrl、地域、隐私和计费方式都可能不同。
+
+5. **OmniRoute 能借什么？**
+   OmniRoute 最新 `main@08e1886` 是完整网关，不能照搬。可借三点：外部 pricing/capability sync 是 opt-in 且不覆盖用户配置；quota unknown 不阻塞但会降权；先 capability filter，再按 cost/health 排序。
+
+### 3.5.3 最小数据模型
+
+不要先建大 facts plane。第一版只需要一个可落盘、可 replay 的 `model-intel-snapshot`：
+
+| 字段 | 说明 |
+|------|------|
+| `provider` / `model` | 标识候选模型 |
+| `configured` | 是否已经在 OpenClaw live config 中可用 |
+| `marketPrice` | 输入/输出/cache 价格，来源优先用 OpenClaw pricing cache/config |
+| `capability` | `contextWindow`、`toolUse`、`structuredOutput`、`reasoning`、`vision`、`codingTier` |
+| `health` | cooldown、近期失败、p50/p95 延迟 |
+| `quotaPressure` | `low / medium / high / unknown`，只表达压力，不假装精确额度 |
+| `source` | `openclaw_config / pricing_cache / provider_catalog / models_dev / operator_override / runtime_observation` |
+
+这不是 live state authority，只是推荐时的事实快照。每条 shadow recommendation 记录 `snapshotId`，后面才能解释“当时为什么推荐这个模型”。
+
+### 3.5.4 决策算法
+
+第一版算法保持可解释，不做 learned router：
+
+```text
+judge result + runtime signals
+  -> derive task requirement
+     - qualityFloor: mini | standard | strong | frontier
+     - needsTools / needsReasoning / minContext / latencyClass
+  -> candidate set
+     - default: only configured models
+     - optional: shadow-only proposed models
+  -> hard filter
+     - capability below floor
+     - context too small
+     - known unavailable / cooldown / quota high
+  -> ranking
+     - prefer plan/quota-low models if capability passes
+     - otherwise choose cheapest healthy model above quality floor
+     - tie-break by local replay success and latency
+  -> output
+     - recommendation only, with reasonCodes
+```
+
+保守规则：
+
+- `confidence` 低或 `complexity_confidence` 低时，默认维持当前模型，只记录 shadow diff。
+- `quotaPressure=unknown` 不能当作免费，只能轻微加权。
+- `configured=false` 的模型不能进入 live，只能出现在 proposal 或 shadow。
+- 主 agent 模型默认不自动切。近期收益主要来自 delegated lane 和预算控制。
+
+### 3.5.5 配置分析，而不是静默补配置
+
+如果用户只配置了强模型，例如 `gpt-5.5`，OctoClaw 可以给出 proposal：
+
+```text
+configured:
+  openai/gpt-5.5
+
+missing low-cost lanes:
+  - same-provider mini/standard coding model
+  - subscription-backed coding model
+  - cheap long-context summarizer
+
+proposal:
+  add candidates to shadow allowlist
+  run smoke/eval
+  only then enable live for selected delegated lanes
+```
+
+落地命令可以很少：
+
+- `octoclawctl router model-intel refresh`：生成事实快照。
+- `octoclawctl router model-config analyze`：生成候选模型与配置提案。
+- `octoclawctl router shadow-report`：展示推荐模型、实际模型、估算成本差、质量 gate。
+
+不需要第一版就做 `apply`。配置写入可以等 proposal 和 shadow 都稳定后再做。
+
+### 3.5.6 套餐/额度处理
+
+套餐和市场价格必须分开：
+
+- `marketPrice`：公开 token 价格，OpenClaw 已能提供大部分。
+- `effectiveCostBand`：本地真实边际成本，只能在有 plan 配置、usage probe 或可靠 runtime observation 时给出。
+- `quotaPressure`：额度压力，未知就是 `unknown`。
+
+最小策略：
+
+- 有可靠套餐/usage 信号且 `quotaPressure=low|medium`：同等能力下优先套餐模型。
+- 只有手动 plan 标记但没有余额数据：轻微优先，不强制。
+- 只有 429/rate limit/cooldown：标记 `high` 或 unavailable，短期避开。
+- 没有任何额度信息：按 market price 和健康度排序。
+
+OmniRoute 的 quota fetcher 可以作为 provider adapter 写法参考，但 OctoClaw 不应把 provider-specific quota API 变成 Phase 5 前置条件。
+
+### 3.5.7 实施顺序
+
+1. **P5-Lite-A：model-intel snapshot**
+   - 读 OpenClaw config、pricing cache、provider catalog、auth profile usage/cooldown。
+   - 产出 snapshot，不接 live router。
+2. **P5-Lite-B：config analyze proposal**
+   - 找出“只配强模型、缺低成本候选”的配置缺口。
+   - 输出 proposal，不自动修改配置。
+3. **P5-Lite-C：shadow recommendation**
+   - 在 replay/Slack turn 中记录 `actualModel` vs `recommendedModel`。
+   - 记录成本差、能力 gate、忽略原因。
+4. **P5-Lite-D：小范围 live**
+   - 只在连续 nightly 证明质量不降、成本下降后启用。
+   - 首批只覆盖低风险 delegated lane，不碰主 agent 自动切模。
+
+这条路线的目标不是做一个新的 OmniRoute，而是让 OctoClaw 用现有 judge 和 OpenClaw 原生 pricing/fallback 能力，补上“按能力、成本、额度选模型”的最小闭环。
+
+---
+
+## 四、TypeScript 合同规范（Lite 版）
+
+早期草案里的 `executionContract / agentScope / workerPool / skillBundle / handoffContract` 等字段过重，容易把 Auto Router 重新做成完整调度器。Phase 5 Lite 只保留模型推荐所需合同。
 
 ### 4.1 核心类型定义
 
-文件路径：`packages/octoclaw-policy/src/router/contracts.ts`
+文件路径：`packages/octoclaw-policy/src/router-lite/contracts.ts`
 
 ```typescript
-/** 路由器输入信号 */
-export interface RouterRequest {
+export interface RouterLiteRequest {
   sessionKey: string;
-  turnId: string;                          // 与 replay 中 turnId 对应
-  message: string;
-  contextTokens: number;                   // 当前上下文 token 估算
-  channel: "slack" | "feishu" | "wechat" | "cli" | "unknown";
-  surface: "dm" | "channel" | "group" | "cli" | "unknown";
-  executionHints?: {
-    isFollowUp?: boolean;                  // 是否是上一个 delegated task 的跟进
-    stickyLane?: string;                   // 上一轮确定的 sticky lane
-    language?: string;                     // 会话语言（影响 budget 和 handoff）
-    hasAttachment?: boolean;               // 是否带附件/文件
-    hasCodeBlock?: boolean;                // message 里是否含代码块
-  };
-}
-
-/** 路由器推荐输出 */
-export interface RouteRecommendation {
-  // ── 执行合同（第一优先级）──
-  executionContract: "direct" | "runner" | "spawn_single" | "spawn_multi";
-  agentScope: "main_stable" | "delegated" | "explicit_override";
-
-  // ── 语义分类 ──
-  routeClass:
-    | "fast_chat"        // 简单聊天/问答
-    | "coding"           // 代码修改/生成/调试
-    | "research"         // 研究型任务
-    | "reasoning"        // 复杂推理/分析
-    | "long_context"     // 长上下文摘要/处理
-    | "control_observer" // status/details/timeline 类 observer query
-    | "session_control"; // 修改主会话模型/配置
-
-  // ── Lane-local 决策 ──
-  workerPool?: string;          // 如 "octoclaw-code", "octoclaw-research"
-  phase?: string;               // 如 "implement", "review", "research"
-  protocol?: string;            // 如 "normal", "careful", "fast"
-  profile?: string;             // 如 "code", "researcher", "analyst"
-  skillBundle?: string[];       // 如 ["repo", "test"], ["web", "analyze"]
-
-  // ── 模型与预算 ──
-  candidateModels?: string[];   // 候选模型（按优先级排列）
-  recommendedModel?: string;    // 推荐落点（可覆盖）
-  outputBudget: "short" | "medium" | "long" | "deep";
-  reasoningMode: "normal" | "extended" | "minimal";
-
-  // ── 交付合同 ──
-  reviewRequired: boolean;
-  artifactFirst: boolean;
-  handoffContract:
-    | "direct_answer"
-    | "runner_report"
-    | "deliverable_handoff"
-    | "team_evidence_handoff";
-
-  // ── 可解释性 ──
-  reasonCodes: string[];        // 如 ["task_type:coding", "tool_need:high"]
-  judge: {
-    kind: "rules" | "rules+tiny-judge" | "learned";
-    confidence: number;          // 0-1，低于 0.6 时走 fallback
-    ruleMatched?: string;        // 规则命中时记录规则名
-  };
-}
-
-/** 路由结果（用于 replay / nightly-eval） */
-export interface RouterOutcome {
   turnId: string;
-  decisionId: string;
-  at: string;                              // ISO 8601
-  recommendation: RouteRecommendation;
-  actualExecutionContract: string;         // live path 实际执行的 contract
-  actualModel: string;
-  costUsd?: number;
-  latencyMs?: number;
-  retries?: number;
-  validationScore?: number;
-  userCorrected?: boolean;
-  shadowMode: boolean;                     // true 时表示 recommendation 未生效
-}
-
-/** 路由器公共接口 */
-export interface RouterCore {
-  /**
-   * 提取信号并输出推荐。
-   * 在 shadow mode 下只记录，不改变 live path。
-   */
-  recommend(request: RouterRequest): RouteRecommendation;
-
-  /**
-   * 记录 recommendation 的最终执行结果，用于 replay。
-   * 必须在每次执行后调用，支持 feedback loop。
-   */
-  recordOutcome(outcome: RouterOutcome): void;
-}
-```
-
-### 4.2 Signal 提取接口
-
-文件路径：`packages/octoclaw-policy/src/router/signal.ts`
-
-```typescript
-import type { RouterRequest } from "./contracts.js";
-
-/**
- * 从原始 message 和会话上下文中提取 RouterRequest 信号。
- * 只做信号提取，不做路由决策。
- */
-export interface SignalExtractor {
-  extract(raw: {
-    sessionKey: string;
-    turnId: string;
-    message: string;
+  liveRoute: "reply" | "delegate";
+  liveModel?: string;
+  judge: {
+    route: "reply" | "delegate";
+    confidence: number;
+    complexity: "simple" | "normal" | "complex" | "deep";
+    complexityConfidence: number;
+  };
+  runtime: {
+    channel?: "slack" | "feishu" | "wechat" | "cli" | "unknown";
     contextTokens?: number;
-    channel?: string;
-    surface?: string;
-    previousRoute?: string;
-  }): RouterRequest;
+    needsTools?: boolean;
+    needsReasoning?: boolean;
+    minContextTokens?: number;
+    statusOrProvenanceRequest?: boolean;
+    sessionControlRequest?: boolean;
+  };
+  snapshotId: string;
 }
 
-/** 内置启发式提取器（V1 可解释规则版本） */
-export function extractSignals(raw: Parameters<SignalExtractor["extract"]>[0]): RouterRequest;
+export interface ModelIntelLite {
+  provider: string;
+  model: string;
+  configured: boolean;
+  marketPrice?: {
+    inputUsdPerMTok?: number;
+    outputUsdPerMTok?: number;
+    cacheReadUsdPerMTok?: number;
+    cacheWriteUsdPerMTok?: number;
+  };
+  capability: {
+    contextWindow?: number;
+    toolUse?: boolean;
+    structuredOutput?: boolean;
+    reasoning?: boolean;
+    vision?: boolean;
+    codingTier?: "mini" | "standard" | "strong" | "frontier" | "unknown";
+  };
+  health: {
+    available: "yes" | "no" | "unknown";
+    cooldown: boolean;
+    quotaPressure: "low" | "medium" | "high" | "unknown";
+    p95LatencyMs?: number;
+  };
+  source: string[];
+}
 
-/**
- * 估算 context token 数（简化版，不需要真实 tokenizer）。
- * 用于 budget 决策，允许误差 ±20%。
- */
-export function estimateContextTokens(text: string): number;
+export interface RouterLiteRecommendation {
+  recommendedModel?: string;
+  outputBudget: "short" | "medium" | "long" | "deep";
+  qualityFloor: "mini" | "standard" | "strong" | "frontier";
+  eligibleModels: string[];
+  rejectedModels: Array<{ model: string; reason: string }>;
+  reasonCodes: string[];
+  mode: "shadow" | "live";
+  ignoredReason?: "low_confidence" | "no_eligible_model" | "live_route_not_supported" | "not_configured";
+}
+
+export interface RouterLiteShadowEvent {
+  turnId: string;
+  snapshotId: string;
+  liveRoute: "reply" | "delegate";
+  actualModel?: string;
+  recommendation: RouterLiteRecommendation;
+  estimatedCostDeltaUsd?: number;
+  qualityGate: "unknown" | "pass" | "fail";
+}
 ```
 
-### 4.3 执行合同路由器接口
+### 4.2 公共接口
 
-文件路径：`packages/octoclaw-policy/src/router/contract-router.ts`
+文件路径：`packages/octoclaw-policy/src/router-lite/index.ts`
 
 ```typescript
-import type { RouterRequest, RouteRecommendation } from "./contracts.js";
-
-/**
- * Protected lane 硬规则。命中时直接返回，不走 judge。
- *
- * Protected lanes：
- *   control_observer  — status/details/timeline/provenance 查询
- *   session_control   — 修改当前主会话模型/配置
- *
- * 这两类样本不进 delegated optimization，也不混入业务训练集。
- */
-export function matchProtectedLane(
-  request: RouterRequest,
-): Pick<RouteRecommendation, "executionContract" | "agentScope" | "routeClass"> | null;
-
-/**
- * 执行合同路由（规则 first）。
- *
- * 决策顺序：
- *   1. Protected lanes（硬 bypass）
- *   2. 规则命中（短问答 → direct, 代码 → spawn_single, ...）
- *   3. 默认 → spawn_single
- */
-export function routeExecutionContract(
-  request: RouterRequest,
-): Pick<RouteRecommendation, "executionContract" | "agentScope" | "routeClass" | "reasonCodes">;
+export interface RouterLite {
+  recommend(
+    request: RouterLiteRequest,
+    models: ModelIntelLite[],
+  ): RouterLiteRecommendation;
+}
 ```
 
----
+实现要求：
 
-## 五、实现切片（P5-A → P5-D）
+- `RouterLiteRequest` 不读取完整 transcript，只消费 judge 四字段和 runtime compact signals。
+- `recommend()` 是纯函数，不调用 OpenClaw runtime、不写 state、不发消息。
+- `configured=false` 模型默认只能产生 shadow/proposal，不能进入 live recommendation。
+- protected lane 只读结构化信号，例如 `statusOrProvenanceRequest` 和 `sessionControlRequest`；不要新增关键词墙。
 
-### P5-A：recommendation contract 抽离（约 2 周）
+### 4.3 Snapshot 与 Shadow Event
 
-**目标**：把现有 decision 逻辑收进独立 contract，建立可测试边界。还不改 live path。
+文件路径建议：
 
-**文件变更**：
+| artifact | 说明 |
+|----------|------|
+| `router-lite/model-intel-snapshot.json` | 当前可选模型、价格、能力、健康、quota pressure |
+| `router-lite/config-proposal.json` | 未配置低成本候选的建议，不自动 apply |
+| `router-lite/shadow-events.jsonl` | 每次推荐和实际模型的差异 |
 
-| 动作 | 文件 | 说明 |
-|------|------|------|
-| NEW | `packages/octoclaw-policy/src/router/contracts.ts` | 上方 §4.1 合同定义 |
-| NEW | `packages/octoclaw-policy/src/router/signal.ts` | 信号提取 §4.2 |
-| NEW | `packages/octoclaw-policy/src/router/contract-router.ts` | 执行合同路由 §4.3 |
-| NEW | `packages/octoclaw-policy/src/router/budget.ts` | Budget planner |
-| NEW | `packages/octoclaw-policy/src/router/index.ts` | 公共 API re-export |
-| NEW | `packages/octoclaw-policy/src/router/__tests__/` | 合同测试 + goldens |
-| MODIFY | `packages/octoclaw-policy/package.json` | 添加 router 目录到 exports |
-
-**完成标准**：
-- `recommend(request)` 在已有 replay fixture 上与当前 decision 结果一致（≥ 90%）
-- 所有 protected lanes 有 golden fixture，测试中 bypass 可验证
-- TypeScript 编译 0 错误
+`shadow-events.jsonl` 是 Phase 5 Lite 的核心交付物。没有连续 replay/nightly 证明，不允许把推荐接进 live。
 
 ---
 
-### P5-B：Shadow mode 接线（约 2 周）
+## 五、实现切片（Lite）
 
-**目标**：在 `before_model_resolve` hook 接入 router，但默认只 log，不改 live path。
+### P5-Lite-A：Model-Intel Snapshot
 
-**文件变更**：
+目标：先把 OpenClaw 已有事实收出来，不做路由接管。
 
-| 动作 | 文件 | 说明 |
-|------|------|------|
-| MODIFY | `extensions/octoclaw-runtime/src/extension-entry.ts` | 在 `before_model_resolve` 中调用 `recommend()`，写 replay event，不改返回值 |
-| MODIFY | `extensions/octoclaw-runtime/src/replay/replay.ts` | 新增 `router_recommendation` 事件类型，含 `shadowMode: true` |
-| MODIFY | `extensions/octoclaw-runtime/src/replay/replay-events.ts`（若存在）| 添加 event schema |
-| NEW | `extensions/octoclaw-runtime/src/router/shadow-bridge.ts` | Shadow mode 桥接：request 组装 → recommend → replay 写入 |
-| MODIFY | `tools/octoclawctl/src/nightly/` | nightly classifier 新增 `Router Quality` lane 统计 shadow vs actual 差异 |
+| 动作 | 文件/模块 | 说明 |
+|------|-----------|------|
+| NEW | `packages/octoclaw-policy/src/router-lite/model-intel.ts` | 汇总 OpenClaw config、pricing cache、provider catalog、auth profile usage/cooldown |
+| NEW | `packages/octoclaw-policy/src/router-lite/contracts.ts` | 使用 §4 Lite 合同 |
+| NEW | `packages/octoclaw-policy/src/router-lite/__tests__/model-intel.test.ts` | 覆盖 configured / price / capability / quotaPressure |
+| NEW/MODIFY | `tools/octoclawctl` | 增加 `router model-intel refresh` 或等价内部命令 |
 
-**Shadow mode 开关**（在 `openclaw.json` 配置）：
+完成标准：
+
+- 能生成 `model-intel-snapshot.json`。
+- snapshot 中每个价格/能力/健康字段都有 `source`。
+- 无法确认的套餐额度必须是 `quotaPressure=unknown`，不能写成 free。
+
+### P5-Lite-B：Config Analyze Proposal
+
+目标：发现“只配强模型、缺低成本候选”的配置缺口，但不自动修改 live config。
+
+| 动作 | 文件/模块 | 说明 |
+|------|-----------|------|
+| NEW | `packages/octoclaw-policy/src/router-lite/config-analyze.ts` | 基于 snapshot 生成 proposal |
+| NEW | `packages/octoclaw-policy/src/router-lite/__tests__/config-analyze.test.ts` | 覆盖只配强模型、缺同 provider mini、缺订阅候选 |
+| NEW/MODIFY | `tools/octoclawctl` | 增加 `router model-config analyze` |
+
+完成标准：
+
+- 只输出 proposal，不写 OpenClaw config。
+- `configured=false` 候选只能标记 shadow/proposal。
+- proposal 解释为什么建议加、需要什么 auth/profile、风险是什么。
+
+### P5-Lite-C：Shadow Recommendation
+
+目标：让 Auto Router Lite 推荐模型和预算，但默认只记录，不改变实际模型。
+
+| 动作 | 文件/模块 | 说明 |
+|------|-----------|------|
+| NEW | `packages/octoclaw-policy/src/router-lite/recommend.ts` | 纯函数推荐器 |
+| NEW | `extensions/octoclaw-runtime/src/router-lite/shadow-bridge.ts` | 组装 Lite request，写 shadow event |
+| MODIFY | runtime replay/telemetry 模块 | 记录 `router_lite_recommendation` |
+| NEW/MODIFY | `tools/octoclawctl` | 增加 `router shadow-report` |
+
+Shadow event 最小字段：
+
 ```json
 {
-  "plugins": {
-    "entries": {
-      "octoclaw-runtime": {
-        "config": {
-          "autoRouter": {
-            "shadowMode": true,       // 默认 true：只记录，不改 live path
-            "enabled": true
-          }
-        }
-      }
-    }
-  }
-}
-```
-
-**Replay 事件格式**：
-```jsonl
-{
-  "schema_version": "octoclaw.runtime_policy.replay_event/v1",
-  "event": "router_recommendation",
-  "at": "...",
+  "event": "router_lite_recommendation",
   "turnId": "...",
-  "decisionId": "...",
-  "shadowMode": true,
-  "recommendation": {
-    "executionContract": "spawn_single",
-    "routeClass": "coding",
-    "outputBudget": "medium",
-    "reasonCodes": ["has_code_block", "tool_need:high"],
-    "judge": { "kind": "rules", "confidence": 0.91 }
-  },
-  "actualExecutionContract": "spawn_single",
-  "diff": false
+  "snapshotId": "...",
+  "liveRoute": "delegate",
+  "actualModel": "openai/gpt-5.5",
+  "recommendedModel": "openai/gpt-5.x-mini",
+  "outputBudget": "medium",
+  "mode": "shadow",
+  "reasonCodes": ["quality_floor:standard", "cheaper_same_provider"],
+  "ignoredReason": "not_configured"
 }
 ```
 
-**完成标准**：
-- Shadow mode 下 `octoclawctl nightly` 输出包含 `Router Quality` lane
-- `router_recommendation` 事件在 replay log 中可追踪
-- `diff: true` 率（推荐 ≠ 实际）有基线记录
+完成标准：
 
----
+- Shadow mode 默认开，不覆盖 live model。
+- 每条推荐都能解释 eligible/rejected 模型。
+- `confidence` 或 `complexity_confidence` 低时只记录 `ignoredReason=low_confidence`。
 
-### P5-C：Tiny Judge + Budget Planner（约 2 周）
+### P5-Lite-D：Gated Live
 
-**目标**：对规则不能覆盖的模糊样本，用 tiny judge 输出 route class + budget hint。
+目标：只在有证据后，小范围启用模型/预算推荐。
 
-**设计约束**：
-- Protected lanes 和规则已命中的 case **不走 judge**
-- Judge 只输出 `routeClass + outputBudget + confidence`，不直接绑定 provider
-- Judge 模型通过 `judge-fast.json` 配置（复用现有机制）
-- Judge 超时（默认 2000ms）时回退到规则 fallback
+首批 live 范围：
 
-**文件变更**：
+- 只覆盖 `liveRoute=delegate`。
+- 只允许 `configured=true` 模型。
+- 不自动切主 agent 模型。
+- 不处理 `status/provenance/session_control` 请求。
 
-| 动作 | 文件 | 说明 |
-|------|------|------|
-| NEW | `packages/octoclaw-policy/src/router/judge.ts` | Tiny judge 接口 + 调用封装 |
-| MODIFY | `packages/octoclaw-policy/src/router/contract-router.ts` | 接入 judge（仅模糊样本） |
-| MODIFY | `packages/octoclaw-policy/src/router/budget.ts` | 基于 judge 结果的 budget 决策 |
-| MODIFY | `extensions/octoclaw-runtime/src/router/shadow-bridge.ts` | 接入 judge 并记录 judge 结果到 replay |
+推广门槛：
 
-**Tiny judge 接口**：
-```typescript
-export interface TinyJudge {
-  /**
-   * 对模糊样本给出 route class 和 budget 推荐。
-   * 超时（timeoutMs）时 resolve({ routeClass: null, confidence: 0 })。
-   */
-  classify(request: RouterRequest, timeoutMs?: number): Promise<{
-    routeClass: RouteRecommendation["routeClass"] | null;
-    outputBudget: RouteRecommendation["outputBudget"] | null;
-    confidence: number;
-    raw?: string;
-  }>;
-}
+| 条件 | 门槛 |
+|------|------|
+| shadow 样本数 | ≥ 100 或至少 7 天数据 |
+| quality gate | pass 或人工抽查无明显降质 |
+| cost delta | 推荐方案估算成本下降或持平 |
+| fallback/error | 不高于当前 live baseline |
+| rollback | 一个 config flag 可立即回 shadow |
 
-/** 工厂函数：从 judge-fast.json 配置构建 TinyJudge */
-export function createTinyJudge(configPath?: string): TinyJudge;
+## 六、数据流全图（Lite）
+
+```text
+OpenClaw config / pricing cache / provider catalog / auth usage
+  -> model-intel snapshot
+
+user turn
+  -> existing judge: route/confidence/complexity/complexity_confidence
+  -> runtime compact signals
+  -> RouterLiteRequest + snapshot
+  -> recommend()
+  -> shadow event: actualModel vs recommendedModel
+  -> nightly/replay report
+  -> gated live only after evidence
 ```
-
-**完成标准**：
-- Judge 调用在 replay 中可见（`judge.kind: "rules+tiny-judge"`）
-- Judge 超时不影响 live path（有 fallback）
-- Budget planner 在 nightly 里输出 `cost/budget accuracy` 指标
-
----
-
-### P5-D：Outcome 回流 + 推广（约 2 周）
-
-**目标**：把 router recommendation 的结果接入 nightly-eval，建立质量 gate。
-
-**文件变更**：
-
-| 动作 | 文件 | 说明 |
-|------|------|------|
-| MODIFY | `extensions/octoclaw-runtime/src/router/shadow-bridge.ts` | 记录 `router_outcome` 事件（含 cost/latency 实测值） |
-| MODIFY | `tools/octoclawctl/src/nightly/classifier.ts` | Router Quality lane：precision/recall/cost_delta/latency_delta |
-| MODIFY | `tools/octoclawctl/src/nightly-eval/runner.ts` | 新增 `routerQuality` eval step |
-| NEW | `tools/octoclawctl/src/calibration/router-gate.ts` | Router quality calibration gate |
-| MODIFY | `tools/octoclawctl/src/cli.ts` | 新增 `router shadow-report` 命令 |
-
-**Router Quality nightly lane 指标**：
-```
-Router Quality:
-  precision        — 推荐 == 实际 的比例
-  false_delegate   — 实际走 spawn_single 但推荐 direct 的案例
-  false_direct     — 实际走 direct 但推荐 delegate 的案例
-  cost_delta_usd   — 推荐 vs 实际 cost 差（负数 = 省钱）
-  latency_delta_ms — 推荐 vs 实际 latency 差
-  coverage         — 有 judge 输出的比例（太低说明规则覆盖太广）
-```
-
-**推广门槛（gated promotion）**：
-
-| 条件 | 值 | 说明 |
-|------|-----|------|
-| precision | ≥ 0.85 | 推荐与实际一致率 |
-| false_delegate rate | ≤ 0.05 | 误判 delegate 率 |
-| cost_delta_usd | ≤ 0 | 推荐比实际省钱（或持平） |
-| calibration gate | pass | 与上一个 baseline 对比不回退 |
-
-满足上述条件后，可将 `shadowMode: false` 推送到 macmini，正式接管 delegated lanes。
-
----
-
-## 六、数据流全图
-
-```
-request (message + session)
-  ↓
-shadow-bridge.ts
-  ↓ extractSignals()
-RouterRequest
-  ↓ matchProtectedLane()
-  ├──► protected: direct + control_observer/session_control → replay event → skip judge
-  ↓ routeExecutionContract() [rules first]
-  ├──► rule matched: confidence ≥ 0.9 → skip judge
-  ↓ tinyJudge.classify() [only ambiguous]
-  ↓ budgetPlanner()
-RouteRecommendation
-  ↓
-  ├── shadowMode=true:  replay "router_recommendation" (diff vs live)
-  └── shadowMode=false: override before_model_resolve response + replay "router_outcome"
-  ↓
-execution (live path unchanged in shadow mode)
-  ↓
-replay "router_outcome" { actualModel, costUsd, latencyMs }
-  ↓
-nightly-eval (Router Quality lane)
-  ↓
-calibration gate → promote → baseline 更新
-```
-
----
 
 ## 七、与 Phase 2 反馈链路的集成点
 
-Auto Router 不自建评估体系，完全复用 Phase 2 已有的七步链路：
+Auto Router Lite 不自建评估体系，只给现有 replay/nightly 增加一个轻量 lane：
 
-| 步骤 | Phase 2 工具 | Phase 5 新增 |
-|------|-------------|-------------|
-| observe | `replay.ts` | 新增 `router_recommendation` / `router_outcome` 两类事件 |
-| summarize | `octoclawctl nightly` | 新增 Router Quality 第 6 条 lane |
-| review | `octoclawctl review` | shadow diff=true 的 case 作为 review 样本 |
-| curate | `octoclawctl curate` | router misclassification 作为重要 fixture 来源 |
-| validate | `octoclawctl nightly-eval run` | 新增 `routerQuality` eval step |
-| promote | `octoclawctl nightly-eval promote` | Router quality gate pass 才允许 promote |
-| learn | 内置于 promote | router outcome 版本演进即学习记录 |
+| 指标 | 用途 |
+|------|------|
+| `recommendation_coverage` | 有多少 turn 能给出推荐 |
+| `ignored_reason_count` | 为什么没有推荐或没有启用 |
+| `estimated_cost_delta` | 推荐模型相对实际模型的估算成本差 |
+| `quality_gate` | replay/eval/人工抽查是否降质 |
+| `configured_gap_count` | 有多少推荐卡在未配置候选 |
+| `quota_unknown_count` | 有多少推荐受额度未知影响 |
 
----
+## 八、受保护请求规则
 
-## 八、受保护 Lane 清单与规则
+受保护请求不进入模型省钱优化：
 
-以下 lane 必须 bypass delegated optimization，**不能**混入业务训练集：
+- status/provenance：问进度、来源、是否派发、哪个模型跑的。
+- session control：切模型、改配置、改变当前会话行为。
+- low-confidence judge：judge 置信度不足时，不做 live 推荐。
 
-```typescript
-// packages/octoclaw-policy/src/router/protected-lanes.ts
+实现要求：
 
-/**
- * 触发 control_observer 的关键词模式（不区分大小写）。
- * 命中时：executionContract = "direct", agentScope = "main_stable"
- */
-export const CONTROL_OBSERVER_PATTERNS = [
-  /\b(status|状态|进度|state)\b/i,
-  /\b(details|详情|detail|详细)\b/i,
-  /\b(timeline|时间线|历史)\b/i,
-  /\b(当前.*模型|用的什么模型|什么模型在跑)\b/i,
-  /\b(provenance|来源|是谁做的|子任务|dispatch了吗)\b/i,
-  /\b(octoclaw_status|octoclaw_details)\b/i,
-];
-
-/**
- * 触发 session_control 的关键词模式。
- * 命中时：executionContract = "direct", agentScope = "main_stable"
- */
-export const SESSION_CONTROL_PATTERNS = [
-  /\b(切换.*模型|换成|switch.*model|use.*model)\b/i,
-  /\b(session.*control|会话.*配置)\b/i,
-];
-```
-
----
+- 优先消费结构化信号：`statusOrProvenanceRequest`、`sessionControlRequest`、recent execution coverage。
+- 不新增中文/英文关键词墙。自然语言样本只用于 fixture 和回归。
+- 这些请求可以记录 shadow event，但 `ignoredReason` 必须明确，不允许静默改模型。
 
 ## 九、Golden Fixture 要求
 
-在 P5-A 完成时，必须建立以下 golden 集：
+第一批只需要覆盖模型推荐，不覆盖完整执行合同：
 
-| 类别 | 样本数 | 来源 |
+| 类别 | 样本数 | 断言 |
 |------|--------|------|
-| control_observer bypass | ≥ 5 | 从 nightly replay 中用 `octoclawctl curate` 导出 |
-| session_control bypass | ≥ 3 | 手工构造 |
-| coding → spawn_single | ≥ 5 | 从 replay 导出 |
-| research → spawn_single | ≥ 5 | 从 replay 导出 |
-| fast_chat → direct | ≥ 5 | 从 replay 导出 |
-| ambiguous → tiny judge | ≥ 3 | 从 review 失败样本构造 |
+| simple reply | ≥ 5 | 低复杂度，不推荐强制切 delegated 模型 |
+| normal delegate coding | ≥ 5 | 能推荐 standard/strong coding 候选 |
+| deep delegate | ≥ 3 | qualityFloor 至少 strong |
+| status/provenance | ≥ 5 | ignoredReason 明确，不 live 推荐 |
+| session control | ≥ 3 | ignoredReason 明确，不 live 推荐 |
+| quota high/cooldown | ≥ 3 | 候选被拒绝并解释原因 |
 
-Golden 文件位置：`extensions/octoclaw-runtime/src/router/__fixtures__/`
+## 十、不该做的事（Lite 专项）
 
-格式与 `octoclawctl curate` 输出的 JSONL 格式完全兼容，每条加 `"fixture": true` 标记。
-
----
-
-## 十、不该做的事（补充 Phase 5 专项）
-
-1. **不要在 shadow 期未满 7 天就推 live**（至少跑完 1 个完整 nightly 周期）
-2. **不要把 control_observer 样本混进 route 训练**（会让模型学出"status 查询也要 spawn"的错误路径）
-3. **不要让 judge 超时影响 live path**（always fallback to rules，不 block）
-4. **不要把 recommendation 和 resolution 混在同一函数**（`recommend()` 不感知 gateway 细节）
-5. **不要跳过 calibration gate 直接改 live config**（每次修改都要有 baseline 对比）
+1. 不要恢复胖 judge schema。
+2. 不要启动时静默改 OpenClaw config。
+3. 不要把 `configured=false` 模型放进 live。
+4. 不要把未知套餐额度当免费额度。
+5. 不要做新 learned router 或 tiny judge；现有 judge 已经够用。
+6. 不要为了 protected lane 增加关键词 guard。
+7. 不要把 OmniRoute 当上游依赖；只借鉴它的 opt-in sync、quota stale handling 和 cost-first strategy。
 
 ---
 
 ## 附：实现检查清单
 
-### P5-A 完成标准
+### P5-0 当前切入点（2026-05-08）
 
-- [ ] `packages/octoclaw-policy/src/router/` 目录创建，包含 contracts/signal/contract-router/budget/index
-- [ ] `recommend()` 函数在已有 replay fixture 上与当前 decision 一致率 ≥ 90%
-- [ ] Protected lanes golden fixtures 可通过测试
+- [ ] 新增 `openspec/changes/auto-router-lite-0.5.x/` 或等价 implementation packet，明确 P5-Lite-A/B/C 的 acceptance gate。
+- [ ] 从现有 replay/fixtures 中抽取最小 golden 集：simple reply、normal delegate coding、deep delegate、status_or_provenance、session_control、quota/cooldown。
+- [ ] 明确 `RouterLiteRequest` 不读取原始 transcript 全量，只读取 judge 四字段和 runtime compact signals。
+- [ ] 明确 judge 简化后的四字段只作为 signal 来源之一；router 不要求 judge 输出 role/workType/scope/tool hints。
+- [ ] 明确 protected lane 规则不能靠新增中文/英文关键词堆叠解决，必须由 execution coverage / request_kind / session control 等结构化信号优先。
+
+### P5-Lite-A 完成标准
+
+- [ ] `packages/octoclaw-policy/src/router-lite/` 目录创建，包含 `contracts.ts`、`model-intel.ts`、`index.ts`
+- [ ] 能生成 `model-intel-snapshot.json`
+- [ ] snapshot 每个价格/能力/健康字段都有 source
 - [ ] TypeScript 编译 0 错误，pnpm test 无新失败
+- [ ] 未知套餐额度保持 `quotaPressure=unknown`
 
-### P5-B 完成标准
+### P5-Lite-B 完成标准
 
-- [ ] `shadow-bridge.ts` 接线 `before_model_resolve`（shadow mode 默认开）
-- [ ] `router_recommendation` 事件在 replay log 中可见
-- [ ] `octoclawctl nightly` 输出包含 `Router Quality` lane（precision/coverage/diff_rate）
-- [ ] macmini 7 天 shadow 数据可查，diff_rate < 20%（太高说明规则有问题）
+- [ ] `config-analyze.ts` 能生成配置缺口 proposal
+- [ ] proposal 不自动写 OpenClaw config
+- [ ] `configured=false` 候选只能进入 shadow/proposal
+- [ ] proposal 解释 auth/profile/risk
 
-### P5-C 完成标准
+### P5-Lite-C 完成标准
 
-- [ ] TinyJudge 接口实现，超时 fallback 测试通过
-- [ ] judge 调用在 replay 中有 `judge.kind: "rules+tiny-judge"` 标记
-- [ ] budget_delta 指标在 nightly 中可查
+- [ ] `recommend()` 是纯函数，不调用 runtime、不写 state、不发消息
+- [ ] `router_lite_recommendation` shadow event 在 replay log 中可见
+- [ ] shadow event 能同时记录 actualModel、recommendedModel、eligible/rejected、ignoredReason
+- [ ] `octoclawctl router shadow-report` 或 nightly report 能展示 cost delta / quality gate / configured gap
 
-### P5-D 完成标准
+### P5-Lite-D 完成标准
 
-- [ ] `router_outcome` 事件带 cost/latency 实测值
-- [ ] nightly-eval 包含 `routerQuality` step（pass/fail/unknown）
-- [ ] precision ≥ 0.85、false_delegate ≤ 0.05 连续 7 天 pass
-- [ ] `shadowMode: false` 在满足门槛后才推送，通过 `octoclawctl nightly-eval promote`
+- [ ] 只对 `liveRoute=delegate` 且 `configured=true` 候选开放 live
+- [ ] 不自动切主 agent 模型
+- [ ] 至少 7 天或 ≥ 100 条 shadow 样本通过 quality/cost gate
+- [ ] 有一键回 shadow 的配置开关
 
 ---
 

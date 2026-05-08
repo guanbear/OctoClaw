@@ -146,7 +146,7 @@ describe("SlackAdapter", () => {
       const body = JSON.parse(String(init?.body));
       expect(body.channel).toBe("C123ABCDEF");
       expect(body.text).toContain("done");
-      expect(body.text).toContain("route=delegate | model=direct_main · thread | via=native_announce | wc=wc-12345");
+      expect(body.text).toContain("route=delegate | model=zhipu/GLM-5.1 · thread | via=native_announce | wc=wc-12345");
       expect(body.thread_ts).toBe("1700000000.000100");
       return { json: async () => ({ ok: true, ts: "1700000000.000220" }) } as Response;
     });
@@ -164,6 +164,7 @@ describe("SlackAdapter", () => {
       content: "done",
       provenance: {
         route: "delegate",
+        model: "worker_research",
         via: "native_announce",
         workContractId: "wc-1234567890",
       },

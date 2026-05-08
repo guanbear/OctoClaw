@@ -733,6 +733,8 @@ Gate 逻辑修改需仔细测试，避免破坏现有 intent-matched 路径的�
 
 2026-05-06 调整：本机 OpenClaw 已升级到 `2026.5.4`，所以 4.29 的性能数字只保留为历史 baseline，不再作为 5.4 的最终结论。0.5.1 仍不进入 warm pool production implementation；先在 5.4 上重新采集 simple reply / planner-native delegate / Slack thread-binding evidence，再决定是否恢复任何 warm-pool 工作。
 
+2026-05-08 调整：当前本机 Slack/委派体感性能已经明显改善，性能不再是近期主要阻塞。warm pool / resident runner 继续不做生产化；本性能文档只保留为证据和上游 prep 跟踪。近期产品/架构主线转向 Auto Router shadow-first，详见 `octoclaw-phase5-auto-router-design-2026-04-30.md`。
+
 | 阶段 | 内容 | 前置条件 |
 | --- | --- | --- |
 | **0.5.1 P0** | 保留 30s soft budget，但超时后允许 late final / 一次轻量只读工具；prompt 注入不再强制 delegate | 0.5.0 release branch |

@@ -187,6 +187,8 @@ octoclaw_dispatch
 | Phase 4 基底收敛 | ✅ 基本完成，仍需持续验收 | live path 已收成 `syncMode=managed`，legacy mirrored 只读归一；还应继续做 field/revision/wait/cancel 映射审计 |
 | Phase 5 Auto Router | ⚠️ 基础已完成，核心仍待实现 | route/budget/outcome schema、model shadow、nightly gate 已有；真正的 router core、shadow recommendation outcome、gated promotion 仍是下一阶段 |
 
+2026-05-08 优先级更新：本机 OpenClaw + OctoClaw 当前 Slack/委派体感性能已经明显改善，性能不再是最近一轮主要阻塞项。warm pool / resident runner 继续保持非主线；OpenClaw prep performance 只作为观测和上游 PR 跟踪保留。近期主线转为 **Auto Router shadow-first**：先做可解释推荐、replay diff、nightly gate，不直接接管 live route。
+
 ### 4.3 roadmap 中逐项落地清单
 
 | roadmap 项 | 当前状态 |
@@ -419,28 +421,39 @@ N1 采用最小可恢复 ledger 路径，不做大爆炸：第一步只实现 `w
 
 ### N3：Auto Router shadow-first（4-8 周）
 
-目标：做推荐器，不做新的总控运行时；先 shadow，后 gate，再推广。
+目标：做推荐器，不做新的总控运行时；先 shadow，后 gate，再推广。2026-05-08 起，N3 是性能线之后的推荐主线，但第一阶段仍然不改变 live path。
+
+当前前置判断：
+
+1. `reply | delegate` 仍是唯一 live route authority；Auto Router Lite 第一阶段只推荐模型、预算、配置缺口和 shadow diff，不推荐 execution contract / worker pool。
+2. warm pool / resident runner 不作为 Auto Router 前置条件，也不作为近期默认优化。
+3. 已有 judge 字段已经简化，Auto Router 不应重新引入 role/workType/tool_need_hint/duration_hint 这类未消费胖字段。
+4. 所有关键词型拦截只能降级为 fixture/规则测试素材；不能再作为 live guard 的主要实现方式。
+5. P5-Lite-A/B/C 的成功标准是“模型推荐可信且可度量”，不是“马上让路由变聪明”。
 
 实现顺序：
 
-1. P5-A：在 `@octoclaw/policy` 内先落纯 TS router core；已有 schema 不重写，补实现和测试。
-   - 输入：message、context token、channel/surface、session continuity、protected-lane signals。
-   - 输出：execution contract、route class、worker pool、budget、reason codes。
-   - 映射：execution contract -> `reply | delegate` live route。
-2. P5-B：shadow mode 接线。
+1. P5-Lite-A：在 `@octoclaw/policy` 内先落 `router-lite` model-intel snapshot。
+   - 输入：OpenClaw config、pricing cache、provider catalog、auth profile usage/cooldown。
+   - 输出：候选模型的价格、能力、健康、quota pressure、source。
+   - 未知套餐额度保持 `quotaPressure=unknown`，不能当免费。
+2. P5-Lite-B：配置缺口 proposal。
+   - 识别只配强模型、缺低成本候选的情况。
+   - 只输出 proposal，不自动写 OpenClaw config。
+3. P5-Lite-C：shadow recommendation 接线。
    - 不改变 live path。
-   - 只写 replay outcome：old decision vs recommendation、cost/latency/validation。
+   - 只写 replay outcome：actualModel vs recommendedModel、eligible/rejected、ignoredReason、estimated cost delta。
    - 至少连续 7 天 nightly baseline。
-3. P5-C：tiny judge + budget planner。
-   - 只处理 ambiguous samples。
-   - budget 是 first-class 输出，不只是模型后处理字段。
-4. P5-D：gated promotion。
-   - precision / false_delegate / false_reply / latency / cost / fallback / timeout 全过 gate 后，才允许局部 live。
+4. P5-Lite-D：gated live。
+   - 只对 `liveRoute=delegate` 且 `configured=true` 候选开放。
+   - quality / cost / fallback / timeout 全过 gate 后，才允许局部 live。
 
 硬边界：
 
 - 不做 online RL / bandit。
 - 不把 learned router 放入 hot path。
+- 不新增 tiny judge；现有 judge 四字段继续作为语义信号来源。
+- 不用 Auto Router 重新解决子 agent 冷启动；性能只进入 budget/latency telemetry。
 - 不优化 `control_observer` / `session_control` 这类 protected lane。
 - 不跳过 nightly-eval 和 calibration gate。
 

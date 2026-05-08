@@ -3,6 +3,7 @@
 > 状态：P2.5 配套设计底稿（2026-04-08，post-P2.5 深化已纳入）  
 > 用途：把 OctoClaw 内部的路由子系统收成独立设计面，供 P2 / P2.5 / 后续 router/model-intel 深化实现时统一边界。  
 > N0 更新：当前实现入口和阶段计划以 [`octoclaw-ts-rebuild-design-v2.md`](./octoclaw-ts-rebuild-design-v2.md) 与 [`octoclaw-phase5-auto-router-design-2026-04-30.md`](./octoclaw-phase5-auto-router-design-2026-04-30.md) 为准。本文保留为 Auto Router 战略底稿；文中的 `runner / spawn_single / spawn_multi` 均按 execution contract / lane 理解，不是 live route authority。
+> 2026-05-08 更新：本文战略判断仍保留，但近期 implementation 以 Phase 5 shadow-first 为准。性能线和 warm pool / resident runner 不再是 Auto Router 前置条件；judge 已收窄为轻量四字段，Auto Router 不应重新要求 role/workType/tool_need_hint/duration_hint 等胖字段；protected lane 不能靠新增关键词 guard 作为主要实现。
 > 关联文档：[`octoclaw-design-foundation.md`](./octoclaw-design-foundation.md)、[`archive/octoclaw-execution-plan.md`](./archive/octoclaw-execution-plan.md)、[`archive/octoclaw-auto-router-implementation-checklist.md`](./archive/octoclaw-auto-router-implementation-checklist.md)、[`archive/octoclaw-router-model-intel-deepening-design.md`](./archive/octoclaw-router-model-intel-deepening-design.md)
 
 ---
@@ -57,6 +58,8 @@ P2.5 之后的深化路径不再写在这份文档里单独扩张，而是由 fo
   - `runner`
   - `spawn_single`
   - `spawn_multi`
+
+当前实现口径：这些 contract 只是 recommendation lane。live route authority 仍只有 `reply | delegate`；`runner` 也不表示必须存在常驻 runner，默认应按 on-demand / native-backed 能力理解。
 
 ## 2.1 当前代码基线（2026-04-05 校验）
 
@@ -284,7 +287,7 @@ NadirClaw 对 OctoClaw 最有价值的不是语义分类本身，而是它把“
   - 主 agent 直接完成
 - `runner`
   - 交给轻任务执行 lane
-  - 可以是常驻 runner，也可以是 on-demand runner
+  - 当前默认按 on-demand / workflow inspect 理解；resident runner 只能是未来 opt-in acceleration，不是 Auto Router 前提
 - `spawn_single`
   - 交给单个子 agent / worker
 - `spawn_multi`
@@ -301,7 +304,7 @@ NadirClaw 对 OctoClaw 最有价值的不是语义分类本身，而是它把“
   - 是否允许 direct override
 - `runner`
   - 选择 runner 的 `model_band / profile / output_budget`
-  - 决定 daemon / on-demand 下的执行预算
+  - 决定 workflow / on-demand 下的执行预算；不假设 daemon 常驻
 - `spawn_single`
   - 选择子 agent 的 profile / model / budget
 - `spawn_multi`
@@ -311,6 +314,8 @@ NadirClaw 对 OctoClaw 最有价值的不是语义分类本身，而是它把“
 
 - 先做 `execution contract routing`
 - 再做 `lane-local model/budget routing`
+
+2026-05-08 收窄：第一拍不做 `spawn_multi` live 推广，也不实现 resident runner lane。`spawn_multi` 只保留为未来 route class / fixture 设计目标；P5-A/P5-B 先覆盖 `direct` 与 `spawn_single` 的 shadow recommendation。
 
 ### 4.1.2 OctoClaw 的 route output 不能缩成“只剩模型”
 
@@ -324,6 +329,8 @@ NadirClaw 对 OctoClaw 最有价值的不是语义分类本身，而是它把“
 - `protocol`
 - `profile`
 - `skill_bundle`
+
+当前实现约束：这些字段是 router recommendation 的内部解释字段，不是 judge active schema。judge 只提供轻量语义建议；router 可以从 runtime compact signals、execution coverage、WorkContract、channel/surface 和 replay fixture 推导这些字段，但不要求 judge 一次性输出。
 
 原因很直接：
 
@@ -985,6 +992,8 @@ P4 不需要把 TaskFlow 变成 router，但要让 route truth 能跟着任务�
 - 不建议把 provider 细节混进 signal layer
 - 不建议把 Auto Router 直接写成另一个黑盒 runtime
 - 不建议把脱敏 / proxy / memory isolation 作为当前主线
+- 不建议把 warm pool / resident runner 作为 Auto Router 成立前提
+- 不建议为 protected lane 继续堆中文/英文关键词 guard；关键词只能作为 fixture 生成和回归样本来源，live 逻辑应优先读结构化信号
 
 这些都可能以后要做，但不是当前这版设计的主轴。
 
