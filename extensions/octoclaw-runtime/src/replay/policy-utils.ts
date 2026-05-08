@@ -183,24 +183,39 @@ export function compactPolicyPrompt(decision: Record<string, unknown>): string {
   const blocked = asStringArray(toolPolicy.blocked_patterns).slice(0, 8);
   const allowedControls = asStringArray(toolPolicy.allowed_control_tools).slice(0, 8);
   const evidenceSummary = String(executionPacket.evidenceSummary ?? executionLayer.evidence_summary ?? "").trim();
+  const route = String(routeDecision.route ?? "reply");
+  const requestKind = String(routerDecision.request_kind ?? "");
+  const decisionSource = String(workContract.decisionSource ?? routeDecision.route_source ?? "");
+  const executionPacketId = String(executionPacket.packetId ?? "");
+  const executionCoverage = String(asRecord(asRecord(executionPacket.coverage).execution).coverage ?? executionLayer.coverage ?? "");
+  const dispatchExecuted = executionPacket.dispatchExecuted ?? executionLayer.dispatch_executed;
+  const spawnExecuted = executionPacket.spawnExecuted ?? executionLayer.spawn_executed;
+  const shouldProjectExecutionFacts = route !== "reply"
+    || requestKind === "status_or_provenance"
+    || decisionSource === "execution_coverage"
+    || Boolean(executionPacketId)
+    || Boolean(executionCoverage)
+    || dispatchExecuted === true
+    || spawnExecuted === true
+    || Boolean(evidenceSummary);
   const parts = [
-    `route=${String(routeDecision.route ?? "reply")}`,
-    `worker_pool=${String(routeDecision.worker_pool ?? "octoclaw-main")}`,
+    `route=${route}`,
+    route !== "reply" ? `worker_pool=${String(routeDecision.worker_pool ?? "octoclaw-main")}` : "",
     `task_class=${String(routeDecision.task_class ?? "")}`,
-    `request_kind=${String(routerDecision.request_kind ?? "")}`,
+    `request_kind=${requestKind}`,
     `protected_lane=${String(routeDecision.protected_lane ?? "")}`,
     `must_delegate_via=${String(toolPolicy.must_delegate_via ?? "")}`,
     `policy_judge=${String(judge.selected ?? "")}`,
-    `WorkContract=${String(workContract.workContractId ?? canonicalDecision.workContractId ?? "")}`,
-    `work_contract_route=${String(workContract.route ?? "")}`,
-    `decision_source=${String(workContract.decisionSource ?? routeDecision.route_source ?? "")}`,
-    `ExecutionCoverage=${String(executionPacket.packetId ?? "")}`,
-    `coverage=${String(asRecord(asRecord(executionPacket.coverage).execution).coverage ?? executionLayer.coverage ?? "")}`,
-    `reply_mode=${String(executionPacket.replyMode ?? workContract.replyMode ?? "")}`,
-    `dispatch_executed=${String(executionPacket.dispatchExecuted ?? executionLayer.dispatch_executed ?? "")}`,
-    `spawn_executed=${String(executionPacket.spawnExecuted ?? executionLayer.spawn_executed ?? "")}`,
-    `evidence=${evidenceSummary}`,
-  ].filter((item) => !item.endsWith("=") && !item.endsWith("=undefined"));
+    shouldProjectExecutionFacts ? `WorkContract=${String(workContract.workContractId ?? canonicalDecision.workContractId ?? "")}` : "",
+    shouldProjectExecutionFacts ? `work_contract_route=${String(workContract.route ?? "")}` : "",
+    shouldProjectExecutionFacts ? `decision_source=${decisionSource}` : "",
+    shouldProjectExecutionFacts ? `ExecutionCoverage=${executionPacketId}` : "",
+    shouldProjectExecutionFacts ? `coverage=${executionCoverage}` : "",
+    shouldProjectExecutionFacts ? `reply_mode=${String(executionPacket.replyMode ?? workContract.replyMode ?? "")}` : "",
+    shouldProjectExecutionFacts ? `dispatch_executed=${String(dispatchExecuted ?? "")}` : "",
+    shouldProjectExecutionFacts ? `spawn_executed=${String(spawnExecuted ?? "")}` : "",
+    shouldProjectExecutionFacts ? `evidence=${evidenceSummary}` : "",
+  ].filter((item) => item && !item.endsWith("=") && !item.endsWith("=undefined"));
   if (allowedControls.length > 0) parts.push(`allowed_control_tools=${allowedControls.join(",")}`);
   if (blocked.length > 0) parts.push(`blocked_patterns=${blocked.join(",")}`);
   return parts.join(" | ");

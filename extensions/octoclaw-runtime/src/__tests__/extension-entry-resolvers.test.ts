@@ -2,7 +2,7 @@ import fsSync from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { buildPromptContextProjection, extractInboundMessageTimestamp, resolveDelegationCapability, resolveReactionAckConfig } from "../extension-entry.js";
+import { buildPromptContextProjection, extractInboundMessageTimestamp, parseOctoClawStatusFastPathCommand, resolveDelegationCapability, resolveReactionAckConfig } from "../extension-entry.js";
 import { nativeSpawnIntentStore } from "../delegate/native-spawn-intent-store.js";
 import { policyState } from "../state/policy-state.js";
 import { envOverrides } from "../resolve/env.js";
@@ -115,6 +115,29 @@ describe("resolveReactionAckConfig", () => {
       reactionEmoji: "ok_hand",
       reactionAckEnabled: true,
     });
+  });
+});
+
+describe("parseOctoClawStatusFastPathCommand", () => {
+  it("accepts explicit status panel commands without routing through judge/model", () => {
+    expect(parseOctoClawStatusFastPathCommand("八爪鱼状态")).toEqual({ trigger: "八爪鱼状态", format: "anchors" });
+    expect(parseOctoClawStatusFastPathCommand("octoclaw status")).toEqual({ trigger: "octoclaw status", format: "anchors" });
+    expect(parseOctoClawStatusFastPathCommand("状态面板")).toEqual({ trigger: "状态面板", format: "anchors" });
+    expect(parseOctoClawStatusFastPathCommand("任务面板")).toEqual({ trigger: "任务面板", format: "anchors" });
+    expect(parseOctoClawStatusFastPathCommand("派发状态")).toEqual({ trigger: "派发状态", format: "anchors" });
+    expect(parseOctoClawStatusFastPathCommand("/octostatus")).toEqual({ trigger: "/octostatus", format: "anchors" });
+  });
+
+  it("supports Slack mentions, trailing punctuation, and explicit formats", () => {
+    expect(parseOctoClawStatusFastPathCommand("<@U123> 八爪鱼状态？")).toEqual({ trigger: "八爪鱼状态", format: "anchors" });
+    expect(parseOctoClawStatusFastPathCommand("OCTOCLAW   STATUS compact")).toEqual({ trigger: "octoclaw status", format: "compact" });
+    expect(parseOctoClawStatusFastPathCommand("/octostatus raw")).toEqual({ trigger: "/octostatus", format: "raw" });
+  });
+
+  it("does not catch broader natural-language status questions", () => {
+    expect(parseOctoClawStatusFastPathCommand("八爪鱼状态怎么样")).toBeNull();
+    expect(parseOctoClawStatusFastPathCommand("看下 octoclaw status")).toBeNull();
+    expect(parseOctoClawStatusFastPathCommand("状态面板发我一下")).toBeNull();
   });
 });
 

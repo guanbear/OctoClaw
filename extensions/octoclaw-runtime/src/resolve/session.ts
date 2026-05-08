@@ -10,6 +10,7 @@ import {
   buildConversationIntentPacket,
 } from "../conversation-grounding.js";
 import { normalizeSemanticPrompt } from "../semantic-prompt.js";
+import { stripProjectionFooterFromText } from "../projection-footer-sanitizer.js";
 import { isRecord, type UnknownRecord } from "../util/type-coercion.js";
 import fsSync from "node:fs";
 
@@ -982,7 +983,7 @@ export function unwrapImRelayPrompt(raw: Record<string, unknown> | string): stri
 }
 
 export function normalizeInboundPrompt(raw: Record<string, unknown> | string): string {
-  const text = stringValue(typeof raw === "string" ? raw : raw.prompt ?? raw.raw ?? "");
+  const text = stripProjectionFooterFromText(stringValue(typeof raw === "string" ? raw : raw.prompt ?? raw.raw ?? ""));
   if (!text) {
     return "";
   }

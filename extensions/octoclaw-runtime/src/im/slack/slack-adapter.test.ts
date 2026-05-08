@@ -42,7 +42,7 @@ describe("SlackAdapter", () => {
       workerPool: "octoclaw-main",
       workContractId: "wc-1234567890",
       thread: true,
-    })).toBe("北京天气很好。\n\n• route=reply | model=zhipu/GLM-5.1 · thread | via=judge | worker=octoclaw-main | wc=wc-12345");
+    })).toBe("北京天气很好。\n\n• octoclaw: route=reply | model=zhipu/GLM-5.1 · thread | via=judge | worker=octoclaw-main | wc=wc-12345");
   });
 
   it("resolves Slack message turn anchors from Slack ts aliases", () => {
@@ -57,7 +57,7 @@ describe("SlackAdapter", () => {
     mockRunCommand = async (_command, args) => {
       const messageIndex = args.indexOf("--message");
       expect(messageIndex).toBeGreaterThan(-1);
-      expect(args[messageIndex + 1]).toContain("• route=reply | model=zhipu/GLM-5.1");
+      expect(args[messageIndex + 1]).toContain("• octoclaw: route=reply | model=zhipu/GLM-5.1");
       return { code: 0, stdout: JSON.stringify({ ok: true, ts: "1700000000.000300" }), stderr: "" };
     };
 

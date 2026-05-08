@@ -69,6 +69,14 @@ function createRouteSeal(input: ResolveCurrentRouteSealInput, route: LiveRoute, 
   };
 }
 
+function acceptedObjectionRoute(policyJson: UnknownRecord): LiveRoute | null {
+  const routeHintPolicy = isRecord(policyJson.route_hint_policy) ? policyJson.route_hint_policy : {};
+  if (routeHintPolicy.objection_accepted !== true) return null;
+  const requestedRoute = canonicalLiveRoute(routeHintPolicy.objection_requested_route);
+  const routeDecision = isRecord(policyJson.route_decision) ? policyJson.route_decision : {};
+  return requestedRoute ?? normalizeToLiveRoute(asString(routeDecision.route)) ?? normalizeToLiveRoute(asString(policyJson.route));
+}
+
 export function normalizeToLiveRoute(raw: string): LiveRoute | null {
   const normalized = raw.trim();
   if (normalized === "direct") return "reply";
@@ -89,6 +97,26 @@ export function validateRouteSeal(seal: RouteSeal, turnId: string, threadBinding
 
 export function resolveCurrentRouteSeal(input: ResolveCurrentRouteSealInput): RouteSeal {
   const policyJson = input.policyJson ?? {};
+  const objectionRoute = acceptedObjectionRoute(policyJson);
+  if (objectionRoute) {
+    const routeDecision = isRecord(policyJson.route_decision) ? policyJson.route_decision : {};
+    return createRouteSeal(input, objectionRoute, "accepted_objection", {
+      ...policyJson,
+      route_decision: {
+        ...routeDecision,
+        route: objectionRoute,
+        reason_codes: Array.from(new Set([
+          ...reasonCodesFrom(routeDecision.reasonCodes ?? routeDecision.reason_codes, "route_objection_accepted"),
+          "route_objection_accepted",
+        ])),
+      },
+      reason_codes: Array.from(new Set([
+        ...reasonCodesFrom(policyJson.reasonCodes ?? policyJson.reason_codes, "route_objection_accepted"),
+        "route_objection_accepted",
+      ])),
+    });
+  }
+
   const policyRouteSeal = policyJson.routeSeal;
   if (isRecord(policyRouteSeal)) {
     const candidateRoute = normalizeToLiveRoute(asString(policyRouteSeal.route));

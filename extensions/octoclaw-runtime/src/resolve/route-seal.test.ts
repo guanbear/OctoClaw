@@ -139,6 +139,37 @@ describe("route-seal resolver", () => {
     expect(result.reasonCodes).toEqual(["answer_current_turn"]);
   });
 
+  it("stamps accepted objection as the route seal source", () => {
+    const result = resolveCurrentRouteSeal({
+      requestId: "req-objection",
+      turnId: "turn-objection",
+      threadBindingKey: "thread-objection",
+      policyJson: {
+        routeSeal: seal({
+          requestId: "req-objection",
+          turnId: "turn-objection",
+          threadBindingKey: "thread-objection",
+          route: "delegate",
+          source: "local_judge",
+        }),
+        route_decision: {
+          route: "reply",
+          reason_codes: ["ts_policy_route:reply", "route_objection_accepted"],
+        },
+        route_hint_policy: {
+          objection_submitted: true,
+          objection_accepted: true,
+          objection_requested_route: "reply",
+          judge_route: "delegate",
+        },
+      },
+    });
+
+    expect(result.route).toBe("reply");
+    expect(result.source).toBe("accepted_objection");
+    expect(result.reasonCodes).toContain("route_objection_accepted");
+  });
+
   it("normalizes legacy runner route_decision route to delegate", () => {
     const result = resolveCurrentRouteSeal({
       requestId: "req-runner",

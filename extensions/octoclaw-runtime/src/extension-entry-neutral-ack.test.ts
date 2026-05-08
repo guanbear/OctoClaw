@@ -24,6 +24,7 @@ let originalRuntimeDbPath: string | undefined;
 let originalWorkspaceEnv: string | undefined;
 let originalNeutralAckDelay: string | undefined;
 let originalNeutralAckTextFallbackDelay: string | undefined;
+let originalRuntimeLedger: string | undefined;
 
 async function waitForFireAndForget(): Promise<void> {
   await Promise.resolve();
@@ -46,6 +47,7 @@ beforeEach(() => {
   originalWorkspaceEnv = process.env.WORKSPACE;
   originalNeutralAckDelay = process.env.OCTOCLAW_NEUTRAL_ACK_DELAY_MS;
   originalNeutralAckTextFallbackDelay = process.env.OCTOCLAW_NEUTRAL_ACK_TEXT_FALLBACK_DELAY_MS;
+  originalRuntimeLedger = process.env.OCTOCLAW_RUNTIME_LEDGER;
   tempWorkspace = fs.mkdtempSync(path.join(osModule.tmpdir(), "octoclaw-neutral-ack-"));
   envOverrides.workspaceRoot = tempWorkspace;
   process.env.WORKSPACE = tempWorkspace;
@@ -68,10 +70,13 @@ afterEach(() => {
   else process.env.OCTOCLAW_NEUTRAL_ACK_DELAY_MS = originalNeutralAckDelay;
   if (originalNeutralAckTextFallbackDelay === undefined) delete process.env.OCTOCLAW_NEUTRAL_ACK_TEXT_FALLBACK_DELAY_MS;
   else process.env.OCTOCLAW_NEUTRAL_ACK_TEXT_FALLBACK_DELAY_MS = originalNeutralAckTextFallbackDelay;
+  if (originalRuntimeLedger === undefined) delete process.env.OCTOCLAW_RUNTIME_LEDGER;
+  else process.env.OCTOCLAW_RUNTIME_LEDGER = originalRuntimeLedger;
   originalRuntimeDbPath = undefined;
   originalWorkspaceEnv = undefined;
   originalNeutralAckDelay = undefined;
   originalNeutralAckTextFallbackDelay = undefined;
+  originalRuntimeLedger = undefined;
   if (tempWorkspace) fs.rmSync(tempWorkspace, { recursive: true, force: true });
   tempWorkspace = "";
 });
@@ -568,5 +573,52 @@ describe("neutral Slack ACK hook dedupe", () => {
     const neutralAckEvents = readReplayEvents().filter((entry) => entry.event === "neutral_inbound_ack");
     expect(neutralAckEvents.some((entry) => entry.sent === false && entry.reason === "reaction_ack_failed_no_text_fallback")).toBe(true);
     expect(neutralAckEvents.some((entry) => entry.sent === false && entry.reason === "reply_streaming" && entry.fallback_stage === "text_after_reaction_failed")).toBe(true);
+  });
+
+  it("handles explicit OctoClaw status commands in before_dispatch without model dispatch", async () => {
+    process.env.OCTOCLAW_RUNTIME_LEDGER = "off";
+    const handlers = new Map<string, Function>();
+    const adapter: IMAdapter = {
+      channel: "slack",
+      capabilityLevel: "L2",
+      canHandle: (sessionKey) => sessionKey.includes("c0statusfastpath"),
+      resolveTarget: () => ({ channel: "slack", target: "channel:c0statusfastpath", threadTs: "1777770000.888888" }),
+      send: async () => ({ sent: true, delivered: true, messageId: "1777770001.000009" }),
+      react: async () => ({ ok: true }),
+    };
+    registerIMAdapter(adapter);
+    plugin.register({
+      pluginConfig: { ackReactionEmoji: "eyes" },
+      on: (event, handler) => handlers.set(event, handler),
+      registerTool: () => {},
+      registerCommand: () => {},
+      logger: {},
+    });
+
+    const beforeDispatch = handlers.get("before_dispatch");
+    expect(beforeDispatch).toBeTruthy();
+    const result = await beforeDispatch!(
+      { prompt: "八爪鱼状态", message_ts: "1777770000.888888" },
+      {
+        sessionKey: "agent:main:slack:channel:c0statusfastpath:thread:1777770000.888888",
+        sessionId: "status-fast-path-session",
+        agentId: "main",
+        channelId: "slack",
+        cwd: tempWorkspace,
+      },
+    );
+    await waitForFireAndForget();
+
+    expect(result).toMatchObject({ handled: true });
+    expect(result.text).toContain("八爪鱼状态");
+    expect(result.text).toContain("暂无任务");
+    const statusEvents = readReplayEvents().filter((entry) => entry.event === "status_fast_path_handled");
+    expect(statusEvents).toHaveLength(1);
+    expect(statusEvents[0]).toMatchObject({
+      trigger: "八爪鱼状态",
+      format: "anchors",
+      imType: "slack",
+      handled: true,
+    });
   });
 });

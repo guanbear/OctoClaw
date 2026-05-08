@@ -56,6 +56,27 @@ describe("task state retention", () => {
     expect(readArchivedTaskState({ archivePath: paths.archivePath }).map((task) => task.id)).toEqual(["task-stale"]);
   });
 
+  it("archives stale sealed WorkContract records", () => {
+    const paths = makePaths();
+    fsSync.writeFileSync(paths.taskStatePath, JSON.stringify({
+      tasks: [
+        { id: "wc-stale-reply", route: "reply", status: "sealed", updated_at: "2026-04-25T00:30:00.000Z" },
+        { id: "wc-fresh-reply", route: "reply", status: "sealed", updated_at: "2026-04-25T01:30:00.000Z" },
+      ],
+    }), "utf-8");
+
+    const result = pruneTaskStateCache({
+      ...paths,
+      now: "2026-04-25T02:00:00.000Z",
+      minRunIntervalMs: 0,
+      force: true,
+    });
+
+    expect(result.archivedTaskIds).toEqual(["wc-stale-reply"]);
+    expect(readTaskIds(paths.taskStatePath)).toEqual(["wc-fresh-reply"]);
+    expect(readArchivedTaskState({ archivePath: paths.archivePath }).map((task) => task.id)).toEqual(["wc-stale-reply"]);
+  });
+
   it("archives terminal records after the terminal retention window", () => {
     const paths = makePaths();
     fsSync.writeFileSync(paths.taskStatePath, JSON.stringify({

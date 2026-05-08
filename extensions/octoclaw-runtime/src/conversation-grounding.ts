@@ -11,6 +11,7 @@ import { buildDelegateStatusPacket } from "./context/delegate-packets.js";
 import { sanitizeMainContextInjection } from "./context/context-budget.js";
 import type { DelegateStatusPacket } from "@octoclaw/contracts/delegate-context";
 import { normalizeSemanticPrompt } from "./semantic-prompt.js";
+import { stripProjectionFooterFromText } from "./projection-footer-sanitizer.js";
 import { openRuntimeLedger } from "./runtime-ledger/index.js";
 import type { DatabaseSync } from "./runtime-ledger/types.js";
 import { isRecord } from "./util/type-coercion.js";
@@ -273,10 +274,10 @@ function unwrapQueuedBusyPrompt(raw: string): string {
 
 function extractMessageText(content: unknown): string {
   if (typeof content === "string") {
-    return content.trim();
+    return stripProjectionFooterFromText(content);
   }
   if (Array.isArray(content)) {
-    return content
+    return stripProjectionFooterFromText(content
       .map((part) => {
         if (typeof part === "string") {
           return part;
@@ -287,11 +288,10 @@ function extractMessageText(content: unknown): string {
         return "";
       })
       .filter(Boolean)
-      .join("\n")
-      .trim();
+      .join("\n"));
   }
   if (isRecord(content) && typeof content.text === "string") {
-    return content.text.trim();
+    return stripProjectionFooterFromText(content.text);
   }
   return "";
 }
@@ -329,7 +329,7 @@ function unwrapCodexHarnessPrompt(raw: string): string {
 }
 
 function extractPromptText(event: JsonRecord): string {
-  const prompt = stringValue(event.prompt);
+  const prompt = stripProjectionFooterFromText(stringValue(event.prompt));
   const harnessPrompt = unwrapCodexHarnessPrompt(prompt);
   if (harnessPrompt) {
     return harnessPrompt;

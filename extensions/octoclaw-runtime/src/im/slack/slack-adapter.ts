@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { resolveModelId } from "@octoclaw/policy/model";
 import { runCommand, resolveWorkspaceRoot } from "../../resolve/env.js";
+import { hasProjectionFooter, OCTOCLAW_PROJECTION_FOOTER_PREFIX } from "../../projection-footer-sanitizer.js";
 import type { IMAdapter, IMMessageTurnAnchorParams, IMProjectionFooter, IMSendParams } from "../adapter.js";
 import type { MessageDeliveryEnvelope, MessageDeliveryResult } from "../delivery-port.js";
 
@@ -240,7 +241,7 @@ function applyEnvelopeFooter(envelope: MessageDeliveryEnvelope): { content: stri
   if (!projection) {
     return {
       content: envelope.content,
-      footerSource: envelope.footerMode === "debug" && /route=\w+\s*\|/u.test(envelope.content) ? "adapter" : "none",
+      footerSource: envelope.footerMode === "debug" && hasProjectionFooter(envelope.content) ? "adapter" : "none",
     };
   }
   const rendered = renderSlackProjectionFooter(envelope.content, projection);
@@ -252,7 +253,7 @@ function applyEnvelopeFooter(envelope: MessageDeliveryEnvelope): { content: stri
 
 export function renderSlackProjectionFooter(message: string, projection: IMProjectionFooter): string {
   const content = stringValue(message);
-  if (!content || /route=\w+\s*\|/u.test(content)) return message;
+  if (!content || hasProjectionFooter(content)) return message;
   const route = projection.route === "delegate" ? "delegate" : "reply";
   const model = stringValue(projection.model) || "direct_main";
   const primaryFooter = [`route=${route}`, `model=${model}`].join(" | ") + (projection.thread ? " · thread" : "");
@@ -265,7 +266,7 @@ export function renderSlackProjectionFooter(message: string, projection: IMProje
     debugParts,
   ].filter(Boolean).join(" | ");
   const footer = [primaryFooter, detailFooter].filter(Boolean).join(" | ");
-  return `${content}\n\n• ${footer}`;
+  return `${content}\n\n• ${OCTOCLAW_PROJECTION_FOOTER_PREFIX} ${footer}`;
 }
 
 async function postSlackApi<T extends Record<string, unknown>>(

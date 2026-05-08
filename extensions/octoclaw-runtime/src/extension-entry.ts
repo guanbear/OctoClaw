@@ -25,6 +25,7 @@ import { sendRouteCommitAck } from "./ack/ack-route-commit.js";
 import { fetchLatestUserMessageTsForSessionKey } from "./im/slack-thread-anchor.js";
 import { renderIMProjectionFooter } from "./im/projection-footer.js";
 import type { IMProjectionFooter } from "./im/adapter.js";
+import { hasProjectionFooter } from "./projection-footer-sanitizer.js";
 import {
   buildPolicyMetadata,
   detectSessionBoundary,
@@ -67,6 +68,7 @@ import {
 import { recordAckReplay, recordPolicyReplay } from "./replay/replay.js";
 import { policyState, type PolicyStateEntry } from "./state/policy-state.js";
 import { getCommandRegistrations, getToolRegistrations } from "./tools/registration.js";
+import { buildNativeStatusOutput } from "./tools/runtime-status.js";
 import { evaluateNativeSessionsSendGate, evaluateNativeSpawnGate } from "./delegate/native-spawn-gate.js";
 import { isPlannerAllowedForSession, resolveSpawnBackend, resolveSpeculativePreloadEnabled } from "./config/index.js";
 import { findWorkContractByNativeChildSessionKey, loadWorkContract, saveWorkContract, updateWorkContract } from "./work-contract/store.js";
@@ -106,6 +108,7 @@ import { buildPromptContextProjection, extractMessageText, extractPromptText, re
 export { extractInboundMessageTimestamp, extractInboundMessageTimestampWithSource, resolveSlackMessageReceivedSessionKey } from "./inbound-timestamps.js";
 export type { InboundMessageTimestampSource } from "./inbound-timestamps.js";
 import { extractInboundMessageTimestamp, extractInboundMessageTimestampWithSource, findInboundMessageTimestamp, resolveSlackMessageReceivedSessionKey, SLACK_MESSAGE_TS_PATTERN, type InboundMessageTimestampSource } from "./inbound-timestamps.js";
+import { detectIMType } from "./im-status-renderer.js";
 
 type NativeAnnounceSendMessage = (params: {
   sessionKey: string;
@@ -237,6 +240,29 @@ const OCTOCLAW_PRE_DELEGATION_CONFIRM_CONTEXT = [
 let watchdogInterval: ReturnType<typeof setInterval> | null = null;
 let taskStateRetentionInterval: ReturnType<typeof setInterval> | null = null;
 const recentCompactionNotices = new Map<string, number>();
+
+export type OctoClawStatusFastPathCommand = {
+  format: "anchors" | "compact" | "table" | "lanes" | "raw";
+  trigger: string;
+};
+
+function normalizeStatusFastPathPrompt(prompt: string): string {
+  return stringValue(prompt)
+    .replace(/^\s*(?:<@[^>]+>\s*)+/u, "")
+    .replace(/[？?。！!；;：:，,、\s]+$/u, "")
+    .trim();
+}
+
+export function parseOctoClawStatusFastPathCommand(prompt: string): OctoClawStatusFastPathCommand | null {
+  const normalized = normalizeStatusFastPathPrompt(prompt);
+  if (!normalized) return null;
+  const match = normalized.match(/^(八爪鱼状态|octoclaw\s+status|状态面板|任务面板|派发状态|\/octostatus)(?:\s+(anchors|compact|table|lanes|raw))?$/iu);
+  if (!match) return null;
+  return {
+    trigger: stringValue(match[1]).toLowerCase().replace(/\s+/gu, " "),
+    format: (stringValue(match[2]) || "anchors").toLowerCase() as OctoClawStatusFastPathCommand["format"],
+  };
+}
 
 function runTaskStateRetention(logger?: LoggerLike): void {
   try {
@@ -1673,6 +1699,11 @@ function resolveRouteSource(state: UnknownRecord): string {
   const decision = asRecord(state.decision);
   const routeDecision = asRecord(decision.route_decision);
   const routeHintPolicy = asRecord(decision.route_hint_policy);
+  const routeSeal = asRecord(decision.routeSeal || state.routeSeal);
+  const routeSealSource = stringValue(routeSeal.source);
+  if (routeSealSource === "accepted_objection" || Boolean(routeHintPolicy.objection_accepted)) {
+    return "accepted_objection";
+  }
   const source = stringValue(routeDecision.route_source || routeDecision.final_judge_source || snapshot.via || snapshot.source);
   const confidence = asRecord(decision).judge_confidence ?? routeDecision.route_confidence;
   const finalRoute = stringValue(routeDecision.route);
@@ -1773,7 +1804,7 @@ function hasThreadProjection(event: UnknownRecord, ctx: UnknownRecord): boolean 
 function appendReplyProjectionFooter(content: string, state: UnknownRecord, event: UnknownRecord, ctx: UnknownRecord): string {
   if (!replyProjectionFooterEnabled() || internalAckProjectionSuppressed()) return content;
   // Don't double-stamp
-  if (/route=\w+\s*\|/u.test(content)) return content;
+  if (hasProjectionFooter(content)) return content;
   if (/\[ack\s*·/iu.test(content)) return content;
 
   const decision = asRecord(state.decision);
@@ -3010,7 +3041,7 @@ export const plugin = {
       });
     }, 180);
 
-    registerLifecycleHook("before_dispatch", (event, ctx) => {
+    registerLifecycleHook("before_dispatch", async (event, ctx) => {
       const prompt = extractPromptText(event);
       const eventRecord = asRecord(event);
       const ctxRecord = asRecord(ctx);
@@ -3044,6 +3075,29 @@ export const plugin = {
       }).catch((error) => {
         pi.logger?.warn?.(`octoclaw neutral inbound ACK failed: ${String(error)}`);
       });
+      const statusCommand = parseOctoClawStatusFastPathCommand(prompt);
+      if (statusCommand) {
+        const sessionKey = stringValue(mergedCtx.sessionKey || eventRecord.sessionKey || stateKey);
+        const imType = sessionKey ? detectIMType(sessionKey) : "plain";
+        const startedAt = Date.now();
+        const text = await buildNativeStatusOutput(statusCommand.format, imType, mergedCtx);
+        void recordPolicyReplay(
+          "status_fast_path_handled",
+          {
+            sessionKey: sessionKey || stringValue(ctxRecord.sessionKey),
+            sessionId: stringValue(mergedCtx.sessionId || eventRecord.sessionId),
+            stateKey,
+            trigger: statusCommand.trigger,
+            format: statusCommand.format,
+            imType,
+            elapsedMs: Date.now() - startedAt,
+            handled: true,
+          },
+          pi.logger,
+          null,
+        ).catch(() => {});
+        return { handled: true, text };
+      }
     }, 260);
 
     registerLifecycleHook("subagent_ended", async (event, ctx) => {

@@ -13,6 +13,8 @@ import { readTaskStateDocumentDetailed } from "../state/task-state-store.js";
 import { getToolRegistrations } from "../tools/registration.js";
 import { buildWorkContractFromPolicy, buildWorkDecisionSeal } from "../work-contract/builders.js";
 import { loadWorkContract, saveWorkContract } from "../work-contract/store.js";
+import { confirmNativeSpawn } from "../delegate/native-spawn-confirm.js";
+import { nativeSpawnIntentStore } from "../delegate/native-spawn-intent-store.js";
 import { openRuntimeLedger } from "./index.js";
 
 const fs = fsSync as unknown as {
@@ -428,6 +430,93 @@ describe("runtime ledger hot-path tool integration", () => {
     expect(result.error).toBe("spawn_not_confirmed");
     expect(result.dispatch_executed).toBe(true);
     expectDispatchSideEffects(workContractId);
+  });
+
+  it("planner dispatch admits ledger ticket and confirm records native attempt refs", async () => {
+    useTempWorkspace();
+    process.env.OCTOCLAW_RUNTIME_LEDGER = "enforce";
+    process.env.OCTOCLAW_SPAWN_BACKEND = "planner";
+    const contract = seedWorkContract({ sessionKey: "session-hot-path-planner-ledger" });
+    seedDelegationTicket(contract);
+
+    const result = await executeDispatch({
+      task: contract.userAsk,
+      delegateTaskId: `delegate-task:${contract.workContractId}`,
+      workContractId: contract.workContractId,
+      policyJson: JSON.stringify(delegateDecision(contract.sessionKey)),
+    }, {
+      sessionKey: contract.sessionKey,
+      sessionId: "session-hot-path-planner-ledger-test",
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      status: "requires_native_spawn",
+      delegation_method: "octoclaw_dispatch_planner",
+      ticket_enforced: true,
+      ticket_admission_reason: "ticket_admitted",
+    });
+
+    const spawnIntentId = String(result.spawn_intent_id);
+    const attemptId = String(result.attempt_id);
+    const sessionsSpawnArgs = result.sessions_spawn_args as Record<string, unknown>;
+    expect(spawnIntentId).not.toBe("");
+    expect(attemptId).toBe(`delegate-task:${contract.workContractId}:attempt:1`);
+
+    let db = openDb();
+    try {
+      const ticket = db.prepare("SELECT status FROM delegation_tickets WHERE work_contract_id = ?").get(contract.workContractId);
+      expect(ticket?.status).toBe("used");
+      const attempt = db.prepare("SELECT * FROM task_attempts WHERE attempt_id = ?").get(attemptId);
+      expect(attempt).toMatchObject({
+        work_contract_id: contract.workContractId,
+        delegate_task_id: `delegate-task:${contract.workContractId}`,
+        status: "admitted",
+      });
+      const queue = db.prepare("SELECT * FROM scheduler_queue WHERE attempt_id = ?").get(attemptId);
+      expect(queue).toMatchObject({ work_contract_id: contract.workContractId, queue_status: "admitted" });
+    } finally {
+      db.close();
+    }
+
+    const started = nativeSpawnIntentStore.transitionToSpawnCallStarted({
+      spawnIntentId,
+      sessionKey: contract.sessionKey,
+      sessionsSpawnArgs: sessionsSpawnArgs as never,
+    });
+    expect(started.ok).toBe(true);
+
+    const confirmed = await confirmNativeSpawn({
+      spawnIntentId,
+      workContractId: contract.workContractId,
+      sessionKey: contract.sessionKey,
+      sessionsSpawnStatus: "accepted",
+      runId: "run-planner-ledger",
+      childRunId: "child-run-planner-ledger",
+      childSessionKey: "agent:main:subagent:planner-ledger",
+      notify: false,
+    });
+    expect(confirmed).toMatchObject({ ok: true, status: "accepted" });
+
+    db = openDb();
+    try {
+      const attempt = db.prepare("SELECT * FROM task_attempts WHERE attempt_id = ?").get(attemptId);
+      expect(attempt).toMatchObject({
+        status: "running",
+        native_flow_id: "sessions_spawn:run-planner-ledger",
+        child_session_key: "agent:main:subagent:planner-ledger",
+        child_run_id: "child-run-planner-ledger",
+      });
+      const queue = db.prepare("SELECT * FROM scheduler_queue WHERE attempt_id = ?").get(attemptId);
+      expect(queue?.queue_status).toBe("running");
+      const events = db.prepare(
+        "SELECT event_type FROM runtime_events WHERE work_contract_id = ? ORDER BY event_id",
+      ).all(contract.workContractId).map((event) => String(event.event_type));
+      expect(events).toContain("delegation_ticket_used");
+      expect(events).toContain("task_attempt_spawn_confirmed");
+    } finally {
+      db.close();
+    }
   });
 
   it("dispatch tool is blocked without valid ticket in enforce mode", async () => {

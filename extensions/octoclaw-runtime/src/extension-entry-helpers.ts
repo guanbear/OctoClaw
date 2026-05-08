@@ -1,6 +1,7 @@
 import { buildStatusQueryPacket } from "./core/delegate/index.js";
 import type { DelegateAttempt, DelegateProgressEvent, DelegateTask, NativeTaskBinding, StatusQueryPacket } from "@octoclaw/contracts/delegate";
 import { normalizeInboundPrompt } from "./resolve/session.js";
+import { stripProjectionFooterFromText } from "./projection-footer-sanitizer.js";
 import { policyState, type PolicyStateEntry } from "./state/policy-state.js";
 import { type UnknownRecord, asRecord } from "./util/type-coercion.js";
 import { stringValue } from "./extension-entry-shared.js";
@@ -66,10 +67,10 @@ export function resolveDelegationCapability(options: {
 
 export function extractMessageText(content: unknown): string {
   if (typeof content === "string") {
-    return content.trim();
+    return stripProjectionFooterFromText(content);
   }
   if (Array.isArray(content)) {
-    return content
+    return stripProjectionFooterFromText(content
       .map((part) => {
         if (typeof part === "string") return part;
         if (part && typeof part === "object" && typeof (part as { text?: unknown }).text === "string") {
@@ -78,11 +79,10 @@ export function extractMessageText(content: unknown): string {
         return "";
       })
       .filter(Boolean)
-      .join("\n")
-      .trim();
+      .join("\n"));
   }
   if (content && typeof content === "object" && typeof (content as { text?: unknown }).text === "string") {
-    return String((content as { text: string }).text).trim();
+    return stripProjectionFooterFromText(String((content as { text: string }).text));
   }
   return "";
 }

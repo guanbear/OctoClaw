@@ -1,4 +1,5 @@
 import { emitExecutionTransitionNotification } from "../ack/execution-transition-notifier.js";
+import { openRuntimeLedger } from "../runtime-ledger/index.js";
 import { updateWorkContract } from "../work-contract/store.js";
 import type { NativeBindingRef, WorkContract } from "@octoclaw/contracts/work-contract";
 import { nativeSpawnIntentStore } from "./native-spawn-intent-store.js";
@@ -224,6 +225,141 @@ function nativeIntentStoreError(error: unknown): string {
   return `native_spawn_intent_store_error:${errorMessage(error)}`;
 }
 
+function markPlannerAttemptInLedger(input: {
+  intent: NativeSpawnIntent;
+  status: "running" | "failed";
+  nowIso: string;
+  runId?: string;
+  childRunId?: string;
+  childSessionKey?: string;
+  errorMessage?: string;
+}): void {
+  const attemptId = asString(input.intent.attemptId);
+  const workContractId = asString(input.intent.workContractId);
+  const delegateTaskId = asString(input.intent.delegateTaskId) || (workContractId ? `delegate-task:${workContractId}` : "");
+  if (!attemptId || !workContractId || !delegateTaskId) return;
+
+  const opened = openRuntimeLedger({ mode: "best_effort" });
+  if (opened.status !== "ok" || !opened.db) return;
+
+  const db = opened.db;
+  const flowId = input.runId ? `sessions_spawn:${input.runId}` : "";
+  const queueId = `queue:${attemptId}`;
+  const attemptJson = {
+    work_contract_id: workContractId,
+    delegate_task_id: delegateTaskId,
+    spawn_intent_id: input.intent.spawnIntentId,
+    dispatch_mode: input.intent.dispatchMode,
+    planner_confirm: true,
+  };
+  try {
+    db.exec("BEGIN");
+    const existing = db.prepare("SELECT attempt_id FROM task_attempts WHERE attempt_id = ?").get(attemptId);
+    if (!existing) {
+      const maxRow = db.prepare("SELECT MAX(attempt_no) AS max_no FROM task_attempts WHERE work_contract_id = ?").get(workContractId);
+      const attemptNo = maxRow && maxRow.max_no != null ? Number(maxRow.max_no) + 1 : 1;
+      db.prepare(
+        `INSERT INTO task_attempts (
+           attempt_id, work_contract_id, delegate_task_id, attempt_no,
+           attempt_kind, status, native_flow_id, child_session_key, child_run_id,
+           started_at, updated_at, ended_at, terminal_outcome, error_message,
+           attempt_json, revision
+         ) VALUES (?, ?, ?, ?, 'initial', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
+      ).run(
+        attemptId,
+        workContractId,
+        delegateTaskId,
+        attemptNo,
+        input.status,
+        flowId || null,
+        asString(input.childSessionKey) || null,
+        asString(input.childRunId) || null,
+        input.status === "running" ? input.nowIso : null,
+        input.nowIso,
+        input.status === "failed" ? input.nowIso : null,
+        input.status === "failed" ? "failed" : null,
+        input.status === "failed" ? asString(input.errorMessage) : null,
+        JSON.stringify(attemptJson),
+      );
+    }
+
+    if (input.status === "running") {
+      db.prepare(
+        `UPDATE task_attempts
+         SET status = 'running',
+             native_flow_id = COALESCE(NULLIF(native_flow_id, ''), ?),
+             child_session_key = COALESCE(NULLIF(?, ''), child_session_key),
+             child_run_id = COALESCE(NULLIF(?, ''), child_run_id),
+             started_at = COALESCE(started_at, ?),
+             updated_at = ?,
+             revision = revision + 1
+         WHERE attempt_id = ?`,
+      ).run(
+        flowId,
+        asString(input.childSessionKey),
+        asString(input.childRunId),
+        input.nowIso,
+        input.nowIso,
+        attemptId,
+      );
+      db.prepare(
+        `INSERT OR IGNORE INTO scheduler_queue (
+           queue_id, work_contract_id, attempt_id, queue_status, priority,
+           dependency_ids_json, resource_keys_json, created_at, updated_at, revision
+         ) VALUES (?, ?, ?, 'running', 0, '[]', '[]', ?, ?, 0)`,
+      ).run(queueId, workContractId, attemptId, input.nowIso, input.nowIso);
+      db.prepare(
+        `UPDATE scheduler_queue
+         SET queue_status = 'running', updated_at = ?, revision = revision + 1
+         WHERE attempt_id = ? AND queue_status <> 'terminal'`,
+      ).run(input.nowIso, attemptId);
+      db.prepare(
+        `INSERT INTO runtime_events (event_type, work_contract_id, attempt_id, payload_json, created_at)
+         VALUES ('task_attempt_spawn_confirmed', ?, ?, ?, ?)`,
+      ).run(workContractId, attemptId, JSON.stringify({
+        spawnIntentId: input.intent.spawnIntentId,
+        runId: input.runId ?? null,
+        childRunId: input.childRunId ?? null,
+        childSessionKey: input.childSessionKey ?? null,
+      }), input.nowIso);
+    } else {
+      db.prepare(
+        `UPDATE task_attempts
+         SET status = 'failed',
+             ended_at = COALESCE(ended_at, ?),
+             terminal_outcome = COALESCE(terminal_outcome, 'failed'),
+             error_message = COALESCE(NULLIF(?, ''), error_message),
+             updated_at = ?,
+             revision = revision + 1
+         WHERE attempt_id = ?`,
+      ).run(input.nowIso, asString(input.errorMessage), input.nowIso, attemptId);
+      db.prepare(
+        `INSERT OR IGNORE INTO scheduler_queue (
+           queue_id, work_contract_id, attempt_id, queue_status, priority,
+           dependency_ids_json, resource_keys_json, created_at, updated_at, revision
+         ) VALUES (?, ?, ?, 'terminal', 0, '[]', '[]', ?, ?, 0)`,
+      ).run(queueId, workContractId, attemptId, input.nowIso, input.nowIso);
+      db.prepare(
+        `UPDATE scheduler_queue
+         SET queue_status = 'terminal', updated_at = ?, revision = revision + 1
+         WHERE attempt_id = ?`,
+      ).run(input.nowIso, attemptId);
+      db.prepare(
+        `INSERT INTO runtime_events (event_type, work_contract_id, attempt_id, payload_json, created_at)
+         VALUES ('task_attempt_spawn_failed', ?, ?, ?, ?)`,
+      ).run(workContractId, attemptId, JSON.stringify({
+        spawnIntentId: input.intent.spawnIntentId,
+        error: input.errorMessage ?? "",
+      }), input.nowIso);
+    }
+    db.exec("COMMIT");
+  } catch {
+    try { db.exec("ROLLBACK"); } catch {}
+  } finally {
+    try { db.close(); } catch {}
+  }
+}
+
 function contractStillHasNativeRefs(input: {
   contract: WorkContract;
   intent: NativeSpawnIntent;
@@ -384,13 +520,23 @@ export async function confirmNativeSpawn(input: ConfirmNativeSpawnInput): Promis
 
   const status = asString(input.sessionsSpawnStatus).toLowerCase();
   if (status !== "accepted") {
+    const now = input.now ?? new Date();
+    const nowIso = now.toISOString();
     const failure = nativeSpawnIntentStore.markFailed({
       spawnIntentId,
       workContractId,
       sessionKey: asString(input.sessionKey) || undefined,
       error: asString(input.error) || `sessions_spawn_${status || "not_accepted"}`,
-      now: input.now,
+      now,
     });
+    if (failure.ok && failure.intent) {
+      markPlannerAttemptInLedger({
+        intent: failure.intent,
+        status: "failed",
+        nowIso,
+        errorMessage: asString(input.error) || `sessions_spawn_${status || "not_accepted"}`,
+      });
+    }
     return {
       ok: false,
       status: failure.ok ? "failed" : "error",
@@ -456,6 +602,14 @@ export async function confirmNativeSpawn(input: ConfirmNativeSpawnInput): Promis
   if (existingIntent.status === "accepted") {
     const childRunId = asString(existingIntent.childRunId) || runId;
     const childSessionKey = asString(existingIntent.childSessionKey);
+    markPlannerAttemptInLedger({
+      intent: existingIntent,
+      status: "running",
+      nowIso,
+      runId,
+      childRunId,
+      childSessionKey,
+    });
     const ack = await maybeSendAcceptedAck({
       confirmInput: input,
       intent: existingIntent,
@@ -535,6 +689,14 @@ export async function confirmNativeSpawn(input: ConfirmNativeSpawnInput): Promis
   const intent = confirm.intent;
   const confirmedChildRunId = asString(intent.childRunId) || childRunId;
   const confirmedChildSessionKey = asString(intent.childSessionKey) || childSessionKey;
+  markPlannerAttemptInLedger({
+    intent,
+    status: "running",
+    nowIso,
+    runId,
+    childRunId: confirmedChildRunId,
+    childSessionKey: confirmedChildSessionKey,
+  });
 
   const ack = await maybeSendAcceptedAck({
     confirmInput: input,

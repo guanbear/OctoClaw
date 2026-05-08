@@ -424,7 +424,7 @@ describe("guardOutboundMessageForPolicyState", () => {
       Date.now(),
     );
 
-    expect(guarded?.content).toContain("\n\n• route=reply | model=zhipu/GLM-5.1");
+    expect(guarded?.content).toContain("\n\n• octoclaw: route=reply | model=zhipu/GLM-5.1");
     expect(guarded?.content).not.toContain("model=unknown");
   });
 
@@ -587,6 +587,43 @@ describe("guardOutboundMessageForPolicyState", () => {
     expect(guarded?.content).not.toContain("证据投影");
     expect(guarded?.content).not.toContain("WorkContract");
     policyState.clearState(key);
+  });
+
+  it("shows accepted route objections in debug footer provenance", () => {
+    const previousProjectionFooterMode = process.env.OCTOCLAW_PROJECTION_FOOTER_MODE;
+    process.env.OCTOCLAW_PROJECTION_FOOTER_MODE = "debug";
+    const now = Date.now();
+    const key = "agent:main:slack:channel:c0as4dappu3";
+    policyState.setState(key, {
+      decision: {
+        route_decision: { route: "reply", route_source: "judge" },
+        route_hint_policy: {
+          judge_route: "delegate",
+          objection_accepted: true,
+          objection_requested_route: "reply",
+        },
+        routeSeal: { route: "reply", source: "accepted_objection" },
+        model_policy: { selected_model: "zhipu/GLM-5.1" },
+        request: { metadata: { message_id: "1777380003.000001" } },
+      },
+      inboundMessageTs: "1777380003.000001",
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    try {
+      const guarded = guardOutboundMessageForPolicyState(
+        { to: "C0AS4DAPPU3", content: "这个可以直接回复。", metadata: { channelId: "C0AS4DAPPU3", threadTs: "1777380003.000001" } },
+        { channelId: "slack" },
+        now,
+      );
+
+      expect(guarded?.content).toContain("via=accepted_objection");
+    } finally {
+      policyState.clearState(key);
+      if (previousProjectionFooterMode === undefined) delete process.env.OCTOCLAW_PROJECTION_FOOTER_MODE;
+      else process.env.OCTOCLAW_PROJECTION_FOOTER_MODE = previousProjectionFooterMode;
+    }
   });
 
   it("prefers policy model over host shim in footer projection", () => {

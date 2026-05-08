@@ -1040,6 +1040,29 @@ describe("regression round 4: execution coverage projections", () => {
     expect(text).toContain("spawn_executed=false");
   });
 
+  it("keeps ordinary reply policy prompt projections compact", () => {
+    const text = compactPolicyPrompt({
+      route_decision: { route: "reply", route_source: "rule", task_class: "main_direct" },
+      router_decision_v2: { request_kind: "simple_reply" },
+      work_contract: {
+        workContractId: "wc-ordinary-reply",
+        route: "reply",
+      },
+      _execution_coverage_packet: {
+        dispatchExecuted: false,
+        spawnExecuted: false,
+      },
+    });
+
+    expect(text).toContain("route=reply");
+    expect(text).toContain("task_class=main_direct");
+    expect(text).not.toContain("worker_pool=");
+    expect(text).not.toContain("WorkContract=");
+    expect(text).not.toContain("ExecutionCoverage=");
+    expect(text).not.toContain("dispatch_executed=");
+    expect(text).not.toContain("spawn_executed=");
+  });
+
   it("builds a slim delegate policy projection without dropping correction and evidence facts", () => {
     const decision = {
       route_decision: {

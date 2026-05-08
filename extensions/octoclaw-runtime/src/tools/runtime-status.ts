@@ -308,6 +308,10 @@ export function plannerDispatchResponse(params: {
   workContractId: string;
   delegateTaskId: string;
   attemptId: string;
+  ticketId?: string;
+  queueId?: string;
+  ticketAdmissionReason?: string;
+  ticketEnforced?: boolean;
   sessionsSpawnArgs: Record<string, unknown>;
   sessionsSendArgs?: Record<string, unknown>;
   dispatchMode?: "new_spawn" | "send_to_speculative";
@@ -338,6 +342,10 @@ export function plannerDispatchResponse(params: {
     delegateTaskId: params.delegateTaskId,
     attempt_id: params.attemptId,
     attemptId: params.attemptId,
+    ...(params.ticketId ? { ticket_id: params.ticketId, ticketId: params.ticketId } : {}),
+    ...(params.queueId ? { queue_id: params.queueId, queueId: params.queueId } : {}),
+    ...(params.ticketAdmissionReason ? { ticket_admission_reason: params.ticketAdmissionReason } : {}),
+    ticket_enforced: params.ticketEnforced === true,
     sessions_spawn_args: params.sessionsSpawnArgs,
     sessionsSpawnArgs: params.sessionsSpawnArgs,
     ...(params.sessionsSendArgs ? {

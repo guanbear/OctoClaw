@@ -180,7 +180,7 @@ describe("octoclaw_dispatch planner backend", () => {
     expect(stored?.decision?.work_contract).toMatchObject({ route: "delegate", nextAction: "dispatch" });
   });
 
-  it("returns a native sessions_spawn plan without legacy scheduler side effects", async () => {
+  it("returns a native sessions_spawn plan with ledger admission and without legacy materialization side effects", async () => {
     process.env.OCTOCLAW_SPAWN_BACKEND = "planner";
     process.env.OCTOCLAW_RUNTIME_LEDGER = "enforce";
     process.env.OCTOCLAW_SCHEDULER_ENABLED = "1";
@@ -227,8 +227,10 @@ describe("octoclaw_dispatch planner backend", () => {
     expect(body.sessionsSpawnArgs.task).toContain("do not infer hidden parent transcript");
     expect(JSON.stringify(body.sessionsSpawnArgs).length).toBeLessThan(5_000);
     expect(nativeSpawnIntentStore.get(body.spawnIntentId)?.status).toBe("planned");
-    expect(countRows("scheduler_queue", "work_contract_id = ?", [contract.workContractId])).toBe(0);
-    expect(countRows("task_attempts", "work_contract_id = ?", [contract.workContractId])).toBe(0);
+    expect(body.ticket_enforced).toBe(true);
+    expect(body.ticket_admission_reason).toBe("ticket_admitted");
+    expect(countRows("scheduler_queue", "work_contract_id = ?", [contract.workContractId])).toBe(1);
+    expect(countRows("task_attempts", "work_contract_id = ?", [contract.workContractId])).toBe(1);
     expect(countRows("completion_bindings", "work_contract_id = ?", [contract.workContractId])).toBe(0);
     const events = readReplayEvents();
     expect(events).toContainEqual(expect.objectContaining({

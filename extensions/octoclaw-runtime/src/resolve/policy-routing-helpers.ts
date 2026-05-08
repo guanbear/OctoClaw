@@ -11,6 +11,7 @@ import {
   normalizeInboundPrompt,
   unwrapQueuedBusyPrompt,
 } from "./session.js";
+import { stripProjectionFooterFromText } from "../projection-footer-sanitizer.js";
 import { policyState } from "../state/policy-state.js";
 import {
   type UnknownRecord,
@@ -415,21 +416,20 @@ export function selectContinuationRoute(metadata: UnknownRecord): LiveRoute | nu
 
 function extractMessageText(content: unknown): string {
   if (typeof content === "string") {
-    return content.trim();
+    return stripProjectionFooterFromText(content);
   }
   if (Array.isArray(content)) {
-    return content
+    return stripProjectionFooterFromText(content
       .map((part) => {
         if (typeof part === "string") return part;
         if (isRecord(part) && typeof part.text === "string") return String(part.text);
         return "";
       })
       .filter(Boolean)
-      .join("\n")
-      .trim();
+      .join("\n"));
   }
   if (isRecord(content) && typeof content.text === "string") {
-    return String(content.text).trim();
+    return stripProjectionFooterFromText(String(content.text));
   }
   return "";
 }

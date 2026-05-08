@@ -58,7 +58,7 @@ import { escalateBudgetedMainDecision } from "../budgeted-main.js";
 import { getModelMap } from "../model-map.js";
 import { detectIMType } from "../im-status-renderer.js";
 import { buildDelegationTicketDryRun } from "../runtime-ledger/ticket-dry-run.js";
-import { admitDelegationTicketForDispatch } from "../runtime-ledger/ticket-enforcement.js";
+import { admitDelegationTicketForDispatch, issueDelegationTicketCandidate } from "../runtime-ledger/ticket-enforcement.js";
 import { openRuntimeLedger } from "../runtime-ledger/index.js";
 import { isSchedulerEnabled } from "../runtime-ledger/feature-flags.js";
 import { resolveRuntimeLedgerMode } from "../runtime-ledger/shadow.js";
@@ -1739,6 +1739,75 @@ export function getToolRegistrations(options: ToolRegistrationOptions = {}): Too
               return dispatchHonestyFailure({ route: resolvedRoute, error: errorMessage, retryable: true, terminal: false });
             }
 
+            const ticketIssue = dispatchWorkContract
+              ? issueDelegationTicketCandidate({
+                  contract: dispatchWorkContract,
+                  candidate: ticketCandidate,
+                })
+              : { ok: false, skipped: true, reason: "missing_work_contract" };
+            const ticketAdmission = admitDelegationTicketForDispatch({
+              contract: dispatchWorkContract,
+              candidate: ticketCandidate,
+              delegateTaskId,
+              attemptId,
+              workerPool: asString(asRecord(cachedDecision.route_decision).worker_pool),
+              modelProfile: selectedModel || asString(metadata.model),
+            });
+            if (!ticketAdmission.allowed) {
+              try {
+                nativeSpawnIntentStore.markFailed({
+                  spawnIntentId: intent.spawnIntentId,
+                  workContractId,
+                  sessionKey: managedSessionKey || stateKey || asString(params.sessionKey),
+                  error: `delegation_ticket_rejected:${ticketAdmission.reason}`,
+                });
+              } catch {}
+              const errorMessage = `delegation_ticket_rejected:${ticketAdmission.reason}`;
+              await recordPolicyReplay("dispatch_planner_ticket_rejected", {
+                sessionKey: managedSessionKey,
+                sessionId: asString(ctx.sessionId),
+                route: resolvedRoute,
+                error: errorMessage,
+                ticket_decision: ticketCandidate.ticket_decision,
+                ticket_denial_reason: ticketAdmission.reason,
+                is_new_work: ticketCandidate.is_new_work,
+                expected_deliverable: ticketCandidate.expected_deliverable,
+                work_contract_id: ticketAdmission.work_contract_id ?? ticketCandidate.work_contract_id ?? null,
+                ticket_id: ticketAdmission.ticket_id ?? ticketCandidate.ticket_id ?? null,
+                attempt_id: ticketAdmission.attempt_id ?? attemptId,
+                queue_id: ticketAdmission.queue_id ?? null,
+                spawn_intent_id: intent.spawnIntentId,
+                dispatch_executed: false,
+                spawn_executed: false,
+                materialized: false,
+                retryable: ticketAdmission.reason === "ledger_unavailable",
+                terminal: ticketAdmission.reason !== "ledger_unavailable",
+              }, toolLogger(ctx), cachedDecision);
+              await recordDispatchTerminalFailure(errorMessage, { route: resolvedRoute });
+              return dispatchHonestyFailure({
+                route: resolvedRoute,
+                error: errorMessage,
+                retryable: ticketAdmission.reason === "ledger_unavailable",
+                terminal: ticketAdmission.reason !== "ledger_unavailable",
+                details: {
+                  rejected: true,
+                  rejection_reason: ticketAdmission.reason,
+                  ticket_decision: ticketCandidate.ticket_decision,
+                  ticket_denial_reason: ticketAdmission.reason,
+                  is_new_work: ticketCandidate.is_new_work,
+                  expected_deliverable: ticketCandidate.expected_deliverable,
+                  work_contract_id: ticketAdmission.work_contract_id ?? ticketCandidate.work_contract_id ?? null,
+                  ticket_id: ticketAdmission.ticket_id ?? ticketCandidate.ticket_id ?? null,
+                  attempt_id: ticketAdmission.attempt_id ?? attemptId,
+                  queue_id: ticketAdmission.queue_id ?? null,
+                  spawn_intent_id: intent.spawnIntentId,
+                  dispatch_executed: false,
+                  spawn_executed: false,
+                  materialized: false,
+                },
+              });
+            }
+
             const nextState = {
               ...(state ?? {}),
               prompt: asString(params.task),
@@ -1777,6 +1846,12 @@ export function getToolRegistrations(options: ToolRegistrationOptions = {}): Too
               work_contract_id: workContractId,
               delegate_task_id: delegateTaskId,
               attempt_id: attemptId,
+              ticket_id: ticketAdmission.ticket_id ?? null,
+              queue_id: ticketAdmission.queue_id ?? null,
+              ticket_issue_ok: ticketIssue.ok === true,
+              ticket_issue_reason: ticketIssue.reason ?? "",
+              ticket_admission_reason: ticketAdmission.reason,
+              ticket_enforced: ticketAdmission.enforced,
               spawn_intent_id: intent.spawnIntentId,
               canonical_args_hash: intent.canonicalArgsHash,
               expires_at: intent.expiresAt,
@@ -1796,6 +1871,10 @@ export function getToolRegistrations(options: ToolRegistrationOptions = {}): Too
               workContractId,
               delegateTaskId,
               attemptId,
+              ticketId: ticketAdmission.ticket_id,
+              queueId: ticketAdmission.queue_id,
+              ticketAdmissionReason: ticketAdmission.reason,
+              ticketEnforced: ticketAdmission.enforced,
               sessionsSpawnArgs,
               sessionsSendArgs: sessionsSendArgs || undefined,
               dispatchMode,
