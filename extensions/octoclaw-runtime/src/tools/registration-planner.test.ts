@@ -787,6 +787,15 @@ describe("octoclaw_dispatch planner backend", () => {
     const body = JSON.parse(String(response.text));
     expect(body.ok).toBe(true);
     expect(body.status).toBe("already_started");
+    expect(body.execution_state).toBe("already_started");
+    expect(body.terminal).toBe(false);
+    expect(body.is_failure).toBe(false);
+    expect(body.in_progress).toBe(true);
+    expect(body.awaiting_completion).toBe(true);
+    expect(body.next_action).toBe("sessions_yield");
+    expect(body.completion_status).toBe("pending");
+    expect(body.instruction).toContain("not a failure");
+    expect(body.instruction).toContain("Do not report degraded/failed");
     expect(body.spawn_executed).toBe(true);
     expect(body.run_id).toBe("run-existing-planner");
     expect(body.child_session_key).toBe("agent:main:subagent:existing-planner");

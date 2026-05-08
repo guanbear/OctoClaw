@@ -75,7 +75,7 @@ import { detectIMType, buildSlackStatusOutput, type StatusTaskSummary } from "..
 import { buildDelegationTicketDryRun } from "../runtime-ledger/ticket-dry-run.js";
 import { admitDelegationTicketForDispatch } from "../runtime-ledger/ticket-enforcement.js";
 import { openRuntimeLedger } from "../runtime-ledger/index.js";
-import { rebuildTaskStateProjection, writeRebuiltTaskState } from "../runtime-ledger/projection-rebuild.js";
+import { rebuildTaskStateProjection } from "../runtime-ledger/projection-rebuild.js";
 import { isSchedulerEnabled } from "../runtime-ledger/feature-flags.js";
 import { resolveRuntimeLedgerMode } from "../runtime-ledger/shadow.js";
 import { performCrashRecovery } from "../runtime-ledger/crash-recovery.js";
@@ -541,12 +541,19 @@ function nativePlannerAlreadyStartedResponse(params: {
     childSessionKey: params.refs.childSessionKey || null,
     worker_pool: params.workerPool,
     model: params.model,
+    execution_state: "already_started",
+    terminal: false,
+    is_failure: false,
+    in_progress: true,
+    awaiting_completion: true,
+    next_action: "sessions_yield",
+    completion_status: "pending",
     dispatch_executed: true,
     spawn_executed: true,
     materialized: false,
     result_materialized: false,
     ack_sent: false,
-    instruction: "Native sessions_spawn is already accepted for this WorkContract. Do not call sessions_spawn or legacy dispatch again; wait for native_announce completion or use octoclaw_status.",
+    instruction: "Native sessions_spawn is already accepted for this WorkContract. This is idempotent in-progress success, not a failure. Do not call sessions_spawn or legacy dispatch again; call sessions_yield and wait for native_announce completion or refresh with octoclaw_status. Do not report degraded/failed solely because result_materialized is currently false.",
   };
   return toolResponse(JSON.stringify(body), body);
 }
@@ -728,13 +735,12 @@ async function readActiveRuntimeTaskState(options: { includeSynthetic?: boolean 
     const projection = rebuildTaskStateProjection();
     if (!projection.degraded) {
       tasks = projection.tasks.filter(isRecord) as RuntimeTaskStateRecord[];
-      const writeResult = writeRebuiltTaskState();
       void recordPolicyReplay("task_state_projection_rebuilt", {
         source: "ledger",
-        reason: "status_read_projection_refresh",
+        reason: "status_read_sqlite_projection",
         task_count: projection.tasks.length,
-        cache_written: writeResult.written,
-        cache_write_error: writeResult.error ?? "",
+        cache_written: false,
+        cache_write_error: "",
       }).catch(() => undefined);
     } else {
       const readResult = readTaskStateDocumentDetailed();
@@ -1646,7 +1652,7 @@ function statusPanelRelevantMs(task: RuntimeStatusTaskView): number | null {
 
 function statusPanelRetentionMs(task: RuntimeStatusTaskView): number | null {
   if (["failed", "completed", "canceled"].includes(task.status)) return STATUS_PANEL_TERMINAL_VISIBLE_MS;
-  if (["timed_out", "blocked"].includes(task.status)) return STATUS_PANEL_STALE_VISIBLE_MS;
+  if (["timed_out", "blocked", "registered", "deliverable_ready"].includes(task.status)) return STATUS_PANEL_STALE_VISIBLE_MS;
   return null;
 }
 
@@ -1675,12 +1681,15 @@ function buildRuntimeStatusTaskView(record: RuntimeTaskStateRecord, nowMs = Date
   const endMs = timestampMs(completedAt) ?? nowMs;
   const elapsedMs = startMs === null ? null : Math.max(0, endMs - startMs);
   const fallbackProjection = projectRuntimeStatus(record, nowMs);
+  const fallbackTerminal = ["completed", "failed", "canceled"].includes(fallbackProjection.status);
   const nativeProjectionAuthoritative = Boolean(nativeProjection && (
     ["run", "flow", "latest"].includes(nativeProjection.source)
-    || nativeProjection.reason === "native_id_known_but_registry_missing"
-    || nativeProjection.reason === "native_registry_lookup_failed"
-    || nativeProjection.reason === "native_registry_unavailable"
-    || nativeProjection.reason === "task_state_cache_degraded"
+    || (!fallbackTerminal && (
+      nativeProjection.reason === "native_id_known_but_registry_missing"
+      || nativeProjection.reason === "native_registry_lookup_failed"
+      || nativeProjection.reason === "native_registry_unavailable"
+      || nativeProjection.reason === "task_state_cache_degraded"
+    ))
   ));
   const projected = nativeProjectionAuthoritative && nativeProjection
     ? { status: nativeProjection.status, reason: nativeProjection.reason }
@@ -3085,6 +3094,8 @@ export function getToolRegistrations(options: ToolRegistrationOptions = {}): Too
             dispatchStatus: "already_started",
             dispatchExecuted: true,
             spawnExecuted: true,
+            resultMaterialized: false,
+            result_materialized: false,
             childSessionKey: existingNativePlannerRefs.childSessionKey,
             childRunId: existingNativePlannerRefs.childRunId || existingNativePlannerRefs.runId,
             runId: existingNativePlannerRefs.runId,
@@ -3248,36 +3259,44 @@ export function getToolRegistrations(options: ToolRegistrationOptions = {}): Too
             && ticketCandidate.ticket_denial_reason === "not_new_work"
             && hasNonNewWorkFollowupEvidence(cachedDecision, metadata);
           if (recentDelegated && recentDelegatedInCurrentContext && rejectedAsFollowup) {
-            const errorMessage = "blocked_by_recent_delegated_execution_guard:recent_delegated_without_new_work_ticket";
-            await recordPolicyReplay("dispatch_recent_delegated_blocked", {
-              sessionKey: managedSessionKey,
-              sessionId: asString(ctx.sessionId),
-              route: resolvedRoute,
-              error: errorMessage,
+            const fallbackBody = {
+              ok: true,
+              route: "reply",
+              dispatch_skipped: true,
+              fallback_to_main_reply: true,
+              reason: "not_new_work",
+              guard: "recent_delegated_execution_guard",
+              rejection_reason: "recent_delegated_without_new_work_ticket",
               recent_delegated_key: recentDelegated.key,
               ticket_decision: ticketCandidate.ticket_decision,
               ticket_denial_reason: ticketCandidate.ticket_denial_reason,
+              is_new_work: ticketCandidate.is_new_work,
+              expected_deliverable: ticketCandidate.expected_deliverable,
+              work_contract_id: ticketCandidate.work_contract_id ?? null,
+              ticket_id: ticketCandidate.ticket_id ?? null,
               dispatch_executed: false,
               spawn_executed: false,
               materialized: false,
-              retryable: false,
-              terminal: true,
-            }, toolLogger(ctx), cachedDecision);
-            await recordDispatchTerminalFailure(errorMessage, { route: resolvedRoute });
-            return dispatchHonestyFailure({
+              main_session_action: "answer_followup_or_refresh_status",
+            };
+            await recordPolicyReplay("dispatch_recent_delegated_reused_main_reply", {
+              sessionKey: managedSessionKey,
+              sessionId: asString(ctx.sessionId),
               route: resolvedRoute,
-              error: errorMessage,
-              retryable: false,
-              terminal: true,
-              details: {
-                rejected: true,
-                rejection_reason: "recent_delegated_without_new_work_ticket",
-                recent_delegated_key: recentDelegated.key,
-                dispatch_executed: false,
-                spawn_executed: false,
-                materialized: false,
-              },
-            });
+              recent_delegated_key: recentDelegated.key,
+              ticket_decision: ticketCandidate.ticket_decision,
+              ticket_denial_reason: ticketCandidate.ticket_denial_reason,
+              is_new_work: ticketCandidate.is_new_work,
+              expected_deliverable: ticketCandidate.expected_deliverable,
+              work_contract_id: ticketCandidate.work_contract_id ?? null,
+              ticket_id: ticketCandidate.ticket_id ?? null,
+              dispatch_executed: false,
+              spawn_executed: false,
+              materialized: false,
+              fallback_to_main_reply: true,
+              terminal: false,
+            }, toolLogger(ctx), cachedDecision);
+            return toolResponse(JSON.stringify(fallbackBody), fallbackBody);
           }
           if (plannerEnabled) {
             if (ticketCandidate.ticket_decision !== "ticket_would_issue") {

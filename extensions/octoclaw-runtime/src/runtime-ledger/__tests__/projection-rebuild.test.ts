@@ -58,6 +58,7 @@ function seedWorkContract(dbPath: string, opts: {
   workContractId: string;
   route?: "reply" | "delegate";
   status?: string;
+  updatedAt?: string;
   complexityFinal?: string;
   deliveryTarget?: Record<string, unknown>;
   workContract?: Record<string, unknown>;
@@ -67,7 +68,7 @@ function seedWorkContract(dbPath: string, opts: {
       `INSERT INTO work_contracts (
          work_contract_id, route, intent_class, expected_deliverable, complexity_final,
          delivery_target_json, work_contract_json, status, created_at, updated_at
-       ) VALUES (?, ?, 'delegated_work', 'deliverable', ?, ?, ?, ?, '2026-01-01T00:00:00.000Z', '2026-01-01T00:01:00.000Z')`,
+       ) VALUES (?, ?, 'delegated_work', 'deliverable', ?, ?, ?, ?, '2026-01-01T00:00:00.000Z', ?)`,
     ).run(
       opts.workContractId,
       opts.route ?? "delegate",
@@ -80,6 +81,7 @@ function seedWorkContract(dbPath: string, opts: {
         turnId: `turn-${opts.workContractId}`,
       }),
       opts.status ?? "sealed",
+      opts.updatedAt ?? "2026-01-01T00:01:00.000Z",
     );
   });
 }
@@ -224,6 +226,53 @@ describe("projection-rebuild", () => {
 
       expect(rebuildTaskStateProjection({ dbPath }).tasks.map((record) => record.workContractId)).toEqual(["wc-active"]);
     });
+
+    it("keeps recent terminal work contracts visible for status follow-ups", () => {
+      const dbPath = tmpDbPath();
+      const now = new Date("2026-01-02T00:00:00.000Z");
+      seedWorkContract(dbPath, {
+        workContractId: "wc-recent-completed",
+        status: "completed",
+        updatedAt: "2026-01-01T23:55:00.000Z",
+        workContract: {
+          workContractId: "wc-recent-completed",
+          route: "delegate",
+          sessionKey: "session-wc-recent-completed",
+          turnId: "turn-wc-recent-completed",
+          telemetry: {
+            dispatchExecuted: true,
+            spawnExecuted: true,
+            resultMaterialized: true,
+            deliveryStatus: "delivered",
+            childRunId: "run-recent",
+            childSessionKey: "child-recent",
+          },
+          nativeSpawnRefs: {
+            openclawRunId: "run-recent",
+            childSessionKey: "child-recent",
+          },
+        },
+      });
+      seedWorkContract(dbPath, {
+        workContractId: "wc-old-completed",
+        status: "completed",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      });
+
+      const projection = rebuildTaskStateProjection({ dbPath, now, recentTerminalRetentionMs: 60 * 60 * 1000 });
+
+      expect(projection.tasks.map((record) => record.workContractId)).toEqual(["wc-recent-completed"]);
+      expect(projection.tasks[0]).toMatchObject({
+        status: "completed",
+        dispatch_executed: true,
+        spawn_executed: true,
+        result_materialized: true,
+        delivery_status: "delivered",
+        run_id: "run-recent",
+        child_session_key: "child-recent",
+      });
+      expect(projection.ledgerWorkContractIds).toEqual(["wc-old-completed", "wc-recent-completed"]);
+    });
   });
 
   describe("writeRebuiltTaskState", () => {
@@ -289,6 +338,34 @@ describe("projection-rebuild", () => {
       expect(result.taskCount).toBe(2);
       expect(parsed.tasks.map((record) => record.workContractId)).toEqual(["wc-ledger", "legacy"]);
       expect(parsed.tasks[0].status).toBe("sealed");
+    });
+
+    it("removes stale cache entries shadowed by ledger records outside the projection window", () => {
+      const dir = tmpDir();
+      const dbPath = path.join(dir, "runtime.sqlite");
+      const taskStatePath = path.join(dir, "task-state.json");
+      fs.writeFileSync(taskStatePath, JSON.stringify({
+        tasks: [
+          { id: "wc-terminal-old", workContractId: "wc-terminal-old", status: "registered" },
+          { id: "external-cache", workContractId: "external-cache", status: "registered" },
+        ],
+      }));
+      seedWorkContract(dbPath, {
+        workContractId: "wc-terminal-old",
+        status: "completed",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      });
+
+      const result = writeRebuiltTaskState({
+        dbPath,
+        taskStatePath,
+        now: new Date("2026-01-03T00:00:00.000Z"),
+        recentTerminalRetentionMs: 60 * 60 * 1000,
+      });
+      const parsed = JSON.parse(fs.readFileSync(taskStatePath, "utf-8")) as { tasks: Array<Record<string, unknown>> };
+
+      expect(result.taskCount).toBe(1);
+      expect(parsed.tasks.map((record) => record.workContractId)).toEqual(["external-cache"]);
     });
 
     it("writes atomically", () => {

@@ -57,7 +57,7 @@ function routeFrom(input: DelegationTicketDryRunInput): string {
   return firstString(input.contract?.route, routeDecision.route, payload.route);
 }
 
-function isFollowup(input: DelegationTicketDryRunInput): boolean {
+function isSemanticFollowup(input: DelegationTicketDryRunInput): boolean {
   const contract = input.contract;
   const decision = asRecord(input.decision);
   const metadata = asRecord(input.metadata);
@@ -71,8 +71,6 @@ function isFollowup(input: DelegationTicketDryRunInput): boolean {
   );
   const requestIntentPacket = asRecord(requestMetadata.intent_packet);
   const routerDecision = asRecord(decision.router_decision_v2);
-  const executionCoverage = asRecord(decision._execution_coverage_packet);
-  const coverageExecution = asRecord(asRecord(executionCoverage.coverage).execution);
 
   const intentClass = firstString(
     contract?.intentClass,
@@ -98,7 +96,15 @@ function isFollowup(input: DelegationTicketDryRunInput): boolean {
   return intentClass === "execution_followup"
     || requestKind === "status_or_provenance"
     || asBoolean(conversationControl.provenance_followup)
-    || asBoolean(conversationControl.status_followup)
+    || asBoolean(conversationControl.status_followup);
+}
+
+function isFollowup(input: DelegationTicketDryRunInput): boolean {
+  const decision = asRecord(input.decision);
+  const executionCoverage = asRecord(decision._execution_coverage_packet);
+  const coverageExecution = asRecord(asRecord(executionCoverage.coverage).execution);
+
+  return isSemanticFollowup(input)
     || asBoolean(coverageExecution.supports_provenance_reply)
     || asBoolean(coverageExecution.supports_status_reply);
 }
@@ -189,7 +195,19 @@ export function buildDelegationTicketDryRun(
 
   const explicitNewWork = explicitNewWorkSignal(input);
 
-  if (route !== "delegate" || isFollowup(input) || explicitNewWork === false) {
+  if (route !== "delegate" || explicitNewWork === false || isSemanticFollowup(input)) {
+    return {
+      ticket_decision: "ticket_not_issued",
+      ticket_denial_reason: "not_new_work",
+      is_new_work: false,
+      expected_deliverable: expectedDeliverable,
+      ...(ticketId ? { ticket_id: ticketId } : {}),
+      ...(workContractId ? { work_contract_id: workContractId } : {}),
+      ...(delegateTaskId ? { delegate_task_id: delegateTaskId } : {}),
+    };
+  }
+
+  if (explicitNewWork !== true && isFollowup(input)) {
     return {
       ticket_decision: "ticket_not_issued",
       ticket_denial_reason: "not_new_work",

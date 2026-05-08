@@ -113,6 +113,27 @@ describe("buildDelegationTicketDryRun", () => {
     expect(result.is_new_work).toBe(false);
   });
 
+  it("does not let explicit new work override explicit existing-execution relation", () => {
+    const result = buildDelegationTicketDryRun({
+      decision: {
+        route_decision: {
+          route: "delegate",
+          is_new_work: true,
+          expected_deliverable: "重新说明刚才的执行来源",
+        },
+        router_decision_v2: { request_kind: "delegated_task" },
+      },
+      metadata: {
+        relation_to_recent_execution: "existing_execution_provenance_query",
+      },
+      payload: { task: "重新说明刚才为什么没派发" },
+    });
+
+    expect(result.ticket_decision).toBe("ticket_not_issued");
+    expect(result.ticket_denial_reason).toBe("not_new_work");
+    expect(result.is_new_work).toBe(false);
+  });
+
   it("would issue a ticket for new work relation with valid deliverable", () => {
     const result = buildDelegationTicketDryRun({
       decision: {
@@ -143,6 +164,33 @@ describe("buildDelegationTicketDryRun", () => {
     expect(result.ticket_denial_reason).toBe("");
     expect(result.is_new_work).toBe(true);
     expect(result.expected_deliverable).toBe("查证 OpenClaw 两个 release 的差异，并输出 5 句话中文总结。");
+  });
+
+  it("lets explicit new work override prior execution coverage follow-up support", () => {
+    const result = buildDelegationTicketDryRun({
+      decision: {
+        route_decision: {
+          route: "delegate",
+          is_new_work: true,
+          expected_deliverable: "重新派发一个子 agent 并测量派发耗时",
+        },
+        router_decision_v2: { request_kind: "delegated_task" },
+        _execution_coverage_packet: {
+          coverage: {
+            execution: {
+              supports_provenance_reply: true,
+              supports_status_reply: true,
+            },
+          },
+        },
+      },
+      payload: { task: "再试一次派发子 agent 并测量耗时" },
+    });
+
+    expect(result.ticket_decision).toBe("ticket_would_issue");
+    expect(result.ticket_denial_reason).toBe("");
+    expect(result.is_new_work).toBe(true);
+    expect(result.expected_deliverable).toBe("重新派发一个子 agent 并测量派发耗时");
   });
 
   it("does not issue a ticket for ambiguous relation without explicit new-work signal", () => {

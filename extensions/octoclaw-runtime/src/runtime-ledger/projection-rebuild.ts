@@ -58,10 +58,13 @@ interface CompletionBindingRow extends UnknownRecord {
 export interface RebuildTaskStateProjectionInput {
   dbPath?: string;
   sqlite?: SqliteProvider;
+  now?: Date;
+  recentTerminalRetentionMs?: number;
 }
 
 export interface RebuiltTaskStateProjection {
   tasks: TaskStateRecord[];
+  ledgerWorkContractIds: string[];
   rebuiltAt: string;
   source: "ledger";
   degraded?: boolean;
@@ -95,6 +98,7 @@ interface ProjectionFsLike {
 }
 
 const fs = fsSync as unknown as ProjectionFsLike;
+const DEFAULT_RECENT_TERMINAL_RETENTION_MS = 24 * 60 * 60 * 1000;
 
 function asString(value: unknown): string {
   return String(value ?? "").trim();
@@ -211,15 +215,50 @@ function atomicWriteJson(targetPath: string, value: unknown): boolean {
   }
 }
 
+function recentTerminalCutoff(input: RebuildTaskStateProjectionInput, rebuiltAt: string): string {
+  const nowMs = input.now instanceof Date ? input.now.getTime() : Date.parse(rebuiltAt);
+  const retentionMs = Math.max(0, input.recentTerminalRetentionMs ?? DEFAULT_RECENT_TERMINAL_RETENTION_MS);
+  return new Date(nowMs - retentionMs).toISOString();
+}
+
+function ledgerWorkContractIds(db: DatabaseSync): string[] {
+  return db.prepare("SELECT work_contract_id FROM work_contracts ORDER BY work_contract_id").all()
+    .map((row) => asString((row as UnknownRecord).work_contract_id))
+    .filter(Boolean);
+}
+
 function buildRecord(contract: WorkContractRow, attempt: TaskAttemptRow | null, binding: CompletionBindingRow | null): TaskStateRecord {
   const workContract = parseJsonRecord(contract.work_contract_json) as unknown as WorkContract;
   const workContractRecord = workContract as unknown as UnknownRecord;
+  const telemetry = isRecord(workContractRecord.telemetry) ? workContractRecord.telemetry : {};
+  const delegate = isRecord(workContractRecord.delegate) ? workContractRecord.delegate : {};
+  const nativeBinding = isRecord(delegate.nativeBinding) ? delegate.nativeBinding : {};
+  const nativeRefs = isRecord(workContractRecord.nativeSpawnRefs) ? workContractRecord.nativeSpawnRefs : {};
+  const mainContext = isRecord(workContractRecord.mainContext) ? workContractRecord.mainContext : {};
+  const visibleIds = isRecord(mainContext.visibleIds) ? mainContext.visibleIds : {};
   const deliveryTarget = parseJsonRecord(contract.delivery_target_json);
   const sessionKey = asString(valueFrom(workContractRecord, "sessionKey", "session_key"));
   const turnId = asString(valueFrom(workContractRecord, "turnId", "turn_id"));
-  const nativeTaskId = attempt?.native_task_id || undefined;
-  const nativeFlowId = attempt?.native_flow_id || undefined;
-  const childSessionKey = attempt?.child_session_key || undefined;
+  const nativeTaskId = attempt?.native_task_id || asString(valueFrom(nativeRefs, "openclawTaskId", "nativeTaskId", "native_task_id")) || undefined;
+  const nativeFlowId = attempt?.native_flow_id
+    || asString(valueFrom(nativeRefs, "openclawFlowId", "nativeFlowId", "native_flow_id"))
+    || asString(valueFrom(nativeBinding, "flowId", "flow_id", "nativeFlowId", "native_flow_id"))
+    || undefined;
+  const runId = asString(valueFrom(nativeRefs, "openclawRunId", "runId", "run_id"))
+    || asString(valueFrom(nativeBinding, "runId", "run_id"))
+    || asString(valueFrom(visibleIds, "openclawRunId", "runId", "run_id"))
+    || undefined;
+  const childRunId = attempt?.child_run_id
+    || asString(valueFrom(nativeBinding, "childRunId", "child_run_id"))
+    || asString(valueFrom(telemetry, "childRunId", "child_run_id"))
+    || runId
+    || undefined;
+  const childSessionKey = attempt?.child_session_key
+    || asString(valueFrom(nativeRefs, "childSessionKey", "child_session_key"))
+    || asString(valueFrom(nativeBinding, "childSessionKey", "child_session_key"))
+    || asString(valueFrom(telemetry, "childSessionKey", "child_session_key"))
+    || asString(valueFrom(visibleIds, "childSessionKey", "child_session_key"))
+    || undefined;
   const updatedAt = attempt?.updated_at || contract.updated_at;
   const record: TaskStateRecord = {
     id: contract.work_contract_id,
@@ -257,12 +296,24 @@ function buildRecord(contract: WorkContractRow, attempt: TaskAttemptRow | null, 
     attempt_kind: attempt?.attempt_kind,
     childSessionKey,
     child_session_key: childSessionKey,
-    childRunId: attempt?.child_run_id || undefined,
-    child_run_id: attempt?.child_run_id || undefined,
     modelProfile: attempt?.model_profile || valueFrom(workContractRecord, "modelProfile", "model_profile"),
     model_profile: attempt?.model_profile || valueFrom(workContractRecord, "modelProfile", "model_profile"),
     workerPool: attempt?.worker_pool || valueFrom(workContractRecord, "workerPool", "worker_pool"),
     worker_pool: attempt?.worker_pool || valueFrom(workContractRecord, "workerPool", "worker_pool"),
+    dispatchExecuted: valueFrom(telemetry, "dispatchExecuted", "dispatch_executed"),
+    dispatch_executed: valueFrom(telemetry, "dispatchExecuted", "dispatch_executed"),
+    spawnExecuted: valueFrom(telemetry, "spawnExecuted", "spawn_executed"),
+    spawn_executed: valueFrom(telemetry, "spawnExecuted", "spawn_executed"),
+    resultMaterialized: valueFrom(telemetry, "resultMaterialized", "result_materialized"),
+    result_materialized: valueFrom(telemetry, "resultMaterialized", "result_materialized"),
+    runId,
+    run_id: runId,
+    childRunId,
+    child_run_id: childRunId,
+    delivery: {
+      status: asString(valueFrom(telemetry, "deliveryStatus", "delivery_status")) || "none",
+    },
+    delivery_status: asString(valueFrom(telemetry, "deliveryStatus", "delivery_status")) || "none",
     workContract,
     work_contract: workContract,
     createdAt: contract.created_at,
@@ -295,15 +346,18 @@ function buildRecord(contract: WorkContractRow, attempt: TaskAttemptRow | null, 
 export function rebuildTaskStateProjection(input: RebuildTaskStateProjectionInput = {}): RebuiltTaskStateProjection {
   const rebuiltAt = new Date().toISOString();
   const opened = openDb(input);
-  if (!opened.db) return { tasks: [], rebuiltAt, source: "ledger", degraded: true, error: opened.error ?? "ledger_unavailable" };
+  if (!opened.db) return { tasks: [], ledgerWorkContractIds: [], rebuiltAt, source: "ledger", degraded: true, error: opened.error ?? "ledger_unavailable" };
 
   const db = opened.db;
   try {
+    const allWorkContractIds = ledgerWorkContractIds(db);
+    const terminalCutoff = recentTerminalCutoff(input, rebuiltAt);
     const contracts = db.prepare(
       `SELECT * FROM work_contracts
-       WHERE status NOT IN ('completed', 'canceled', 'failed')
+       WHERE status NOT IN ('completed', 'canceled', 'cancelled', 'failed')
+          OR COALESCE(completed_at, updated_at, created_at) >= ?
        ORDER BY updated_at DESC, work_contract_id`,
-    ).all().map(normalizeWorkContractRow);
+    ).all(terminalCutoff).map(normalizeWorkContractRow);
 
     const tasks = contracts.map((contract) => {
       const attempt = normalizeAttemptRow(db.prepare(
@@ -322,7 +376,7 @@ export function rebuildTaskStateProjection(input: RebuildTaskStateProjectionInpu
         : null;
       return buildRecord(contract, attempt, binding);
     });
-    return { tasks, rebuiltAt, source: "ledger" };
+    return { tasks, ledgerWorkContractIds: allWorkContractIds, rebuiltAt, source: "ledger" };
   } finally {
     db.close();
   }
@@ -334,7 +388,9 @@ export function writeRebuiltTaskState(input: WriteRebuiltTaskStateInput = {}): W
     const projection = rebuildTaskStateProjection(input);
     const readResult = readTaskStateDocumentDetailed(targetPath);
     const existing = readResult.status === "ok" || readResult.status === "missing" ? readResult.document.tasks : [];
-    const ledgerIds = new Set(projection.tasks.map(recordIdentity).filter(Boolean));
+    const ledgerIds = new Set((projection.ledgerWorkContractIds.length > 0
+      ? projection.ledgerWorkContractIds
+      : projection.tasks.map(recordIdentity)).filter(Boolean));
     const merged = [
       ...projection.tasks,
       ...existing.filter((record) => !ledgerIds.has(recordIdentity(record))),

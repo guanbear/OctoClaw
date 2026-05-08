@@ -857,6 +857,59 @@ describe("octoclaw_dispatch honesty", () => {
     }
   });
 
+  it("soft-falls back when the recent delegated guard sees a non-new follow-up", async () => {
+    const stateKey = "session-recent-delegated-soft-fallback";
+    const task = "Explain the previous dispatch guard result";
+    const decision = {
+      ...delegateDecision("delegate"),
+      is_new_work: false,
+      route_decision: {
+        ...delegateDecision("delegate").route_decision,
+        is_new_work: false,
+        expected_deliverable: "Explain the previous dispatch guard result",
+      },
+      router_decision_v2: { request_kind: "status_or_provenance" },
+      _execution_coverage_packet: {
+        coverage: {
+          execution: {
+            supports_status_reply: true,
+            supports_provenance_reply: true,
+          },
+        },
+      },
+    };
+    policyState.set(stateKey, {
+      prompt: task,
+      decision,
+      delegated: true,
+      dispatchExecuted: true,
+      spawnExecuted: true,
+    });
+
+    const result = await executeDispatch({
+      task,
+      policyJson: JSON.stringify(decision),
+      metadataJson: JSON.stringify({ session_key: stateKey }),
+    }, {
+      sessionKey: stateKey,
+      canonicalSessionKey: stateKey,
+      sessionId: "session-recent-delegated-soft-fallback-test",
+      helperInvoker: successfulHelper(),
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.route).toBe("reply");
+    expect(result.guard).toBe("recent_delegated_execution_guard");
+    expect(result.fallback_to_main_reply).toBe(true);
+    expect(result.reason).toBe("not_new_work");
+    expect(result.rejection_reason).toBe("recent_delegated_without_new_work_ticket");
+    expect(result.recent_delegated_key).toBe(stateKey);
+    expect(result.dispatch_executed).toBe(false);
+    expect(result.spawn_executed).toBe(false);
+    expect(result.materialized).toBe(false);
+    expect(result.error).toBeUndefined();
+  });
+
   it("does not treat prior WorkContract continuity as current spawn evidence", async () => {
     useTempWorkContractLedger();
     const contract = seedWorkContract();
