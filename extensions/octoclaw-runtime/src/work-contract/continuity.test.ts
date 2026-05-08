@@ -42,8 +42,11 @@ vi.mock("node:fs", () => ({ default: mockFs }));
 
 describe("child session continuity", () => {
   let ledgerPath: string;
+  let originalRuntimeLedger: string | undefined;
 
   beforeEach(() => {
+    originalRuntimeLedger = process.env.OCTOCLAW_RUNTIME_LEDGER;
+    process.env.OCTOCLAW_RUNTIME_LEDGER = "off";
     mockFs.files.clear();
     mockFs.directories.clear();
     mockFs.existsSync.mockClear();
@@ -56,6 +59,8 @@ describe("child session continuity", () => {
   });
 
   afterEach(() => {
+    if (originalRuntimeLedger !== undefined) process.env.OCTOCLAW_RUNTIME_LEDGER = originalRuntimeLedger;
+    else delete process.env.OCTOCLAW_RUNTIME_LEDGER;
     vi.restoreAllMocks();
   });
 
@@ -598,8 +603,11 @@ const coverage: ContextCoverageSnapshot = {
 
 describe("Phase B acceptance: child session continuity invariants", () => {
   let ledgerPath: string;
+  let originalRuntimeLedger: string | undefined;
 
   beforeEach(() => {
+    originalRuntimeLedger = process.env.OCTOCLAW_RUNTIME_LEDGER;
+    process.env.OCTOCLAW_RUNTIME_LEDGER = "off";
     mockFs.files.clear();
     mockFs.directories.clear();
     mockFs.existsSync.mockClear();
@@ -610,6 +618,8 @@ describe("Phase B acceptance: child session continuity invariants", () => {
   });
 
   afterEach(() => {
+    if (originalRuntimeLedger !== undefined) process.env.OCTOCLAW_RUNTIME_LEDGER = originalRuntimeLedger;
+    else delete process.env.OCTOCLAW_RUNTIME_LEDGER;
     vi.restoreAllMocks();
   });
 

@@ -51,6 +51,9 @@ describe("execution transition integration", () => {
     resetExecTransitionState();
     vi.restoreAllMocks();
     vi.useRealTimers();
+    process.env.OCTOCLAW_SPAWN_BACKEND = "legacy";
+    process.env.OCTOCLAW_RUNTIME_LEDGER = "off";
+    delete process.env.OCTOCLAW_PLANNER_ALLOWLIST;
     adapter.send.mockReset();
     adapter.react.mockReset();
     adapter.resolveTarget.mockReset();
@@ -62,6 +65,9 @@ describe("execution transition integration", () => {
     vi.useRealTimers();
     resetExecTransitionState();
     envOverrides.workspaceRoot = "";
+    delete process.env.OCTOCLAW_SPAWN_BACKEND;
+    delete process.env.OCTOCLAW_RUNTIME_LEDGER;
+    delete process.env.OCTOCLAW_PLANNER_ALLOWLIST;
     delete process.env.OCTOCLAW_WORK_CONTRACT_LEDGER_PATH;
     for (const dir of tempDirs.splice(0)) {
       fs.rmSync(dir, { recursive: true, force: true });

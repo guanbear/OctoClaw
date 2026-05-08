@@ -38,8 +38,11 @@ vi.mock("node:fs", () => ({ default: mockFs }));
 
 describe("work contract materializer", () => {
   let ledgerPath: string;
+  let originalRuntimeLedger: string | undefined;
 
   beforeEach(() => {
+    originalRuntimeLedger = process.env.OCTOCLAW_RUNTIME_LEDGER;
+    process.env.OCTOCLAW_RUNTIME_LEDGER = "off";
     mockFs.files.clear();
     mockFs.directories.clear();
     mockFs.existsSync.mockClear();
@@ -52,6 +55,8 @@ describe("work contract materializer", () => {
   });
 
   afterEach(() => {
+    if (originalRuntimeLedger !== undefined) process.env.OCTOCLAW_RUNTIME_LEDGER = originalRuntimeLedger;
+    else delete process.env.OCTOCLAW_RUNTIME_LEDGER;
     vi.restoreAllMocks();
   });
 

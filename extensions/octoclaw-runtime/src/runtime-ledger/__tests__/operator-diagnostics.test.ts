@@ -296,7 +296,7 @@ describe("operator-diagnostics", () => {
   describe("operatorRebuildProjection", () => {
     it("returns disabled when flag is off", () => {
       db = openTempLedger(dbPath);
-      delete process.env.OCTOCLAW_TASK_STATE_REBUILD;
+      process.env.OCTOCLAW_TASK_STATE_REBUILD = "0";
 
       const result = operatorRebuildProjection({ dbPath });
 

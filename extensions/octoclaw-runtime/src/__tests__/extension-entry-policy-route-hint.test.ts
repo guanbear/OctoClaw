@@ -26,6 +26,11 @@ const ENV_KEYS = [
   "OCTOCLAW_SPAWN_BACKEND",
   "OCTOCLAW_PLANNER_ALLOWLIST",
   "OCTOCLAW_SPECULATIVE_PRELOAD",
+  "OCTOCLAW_RUNTIME_LEDGER",
+  "OCTOCLAW_SCHEDULER_ENABLED",
+  "OCTOCLAW_TASK_STATE_REBUILD",
+  "OCTOCLAW_DELEGATION",
+  "OCTOCLAW_ROUTE_HINT",
 ] as const;
 let originalEnv: Partial<Record<(typeof ENV_KEYS)[number], string | undefined>> = {};
 
@@ -1201,15 +1206,18 @@ describe("speculative preload planner path", () => {
       { prompt },
       { sessionKey: key, sessionId: aliasKey, agentId: "main", channelId: "slack", cwd: tempWorkspace },
     );
+    const speculative = (policyState.getState(key) as unknown as Record<string, unknown>)?.speculativePreload as Record<string, unknown>;
+    expect(speculative).toMatchObject({ status: "hinted" });
     policyState.setState(aliasKey, {
       prompt,
       workContractId,
       decision: budgetedMainDecision("delegate"),
       routeHintSubmitted: true,
+      speculativePreload: speculative,
+      speculative_preload: speculative,
       createdAt: Date.now() + 1,
       updatedAt: Date.now() + 1,
     });
-    const speculative = (policyState.getState(key) as unknown as Record<string, unknown>)?.speculativePreload as Record<string, unknown>;
 
     const prematureDispatch = await beforeToolCall!(
       { toolName: "octoclaw_dispatch", params: { task: prompt } },

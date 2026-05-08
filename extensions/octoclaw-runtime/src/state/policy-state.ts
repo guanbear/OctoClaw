@@ -95,6 +95,8 @@ export interface PolicyStateEntry {
   latestExecutionReceipt?: import("../receipt.js").TurnExecutionReceipt;
   budgetedMain?: Record<string, unknown>;
   budgeted_main?: Record<string, unknown>;
+  speculativePreload?: Record<string, unknown>;
+  speculative_preload?: Record<string, unknown>;
   updatedAt?: number;
   createdAt?: number;
   extraState?: Record<string, unknown>;

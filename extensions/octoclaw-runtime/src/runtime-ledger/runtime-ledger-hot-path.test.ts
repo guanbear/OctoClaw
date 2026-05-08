@@ -285,10 +285,14 @@ vi.setConfig({ testTimeout: 30_000 });
 describe("runtime ledger hot-path tool integration", () => {
   beforeEach(() => {
     clearPolicyState();
+    process.env.OCTOCLAW_SPAWN_BACKEND = "legacy";
+    delete process.env.OCTOCLAW_PLANNER_ALLOWLIST;
     vi.spyOn(globalThis, "fetch");
   });
 
   afterEach(() => {
+    delete process.env.OCTOCLAW_SPAWN_BACKEND;
+    delete process.env.OCTOCLAW_PLANNER_ALLOWLIST;
     delete process.env.OCTOCLAW_RUNTIME_LEDGER;
     delete process.env.OCTOCLAW_SCHEDULER_ENABLED;
     delete process.env.OCTOCLAW_TASK_STATE_REBUILD;
