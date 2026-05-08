@@ -74,7 +74,7 @@ import {
   isRecord,
   asRecord,
   asString,
-  asNumberParsedOptional as asNumber,
+  asNumberOptional as asNumber,
 } from "../util/type-coercion.js";
 import {
   nestedRecord,
