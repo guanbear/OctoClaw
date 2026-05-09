@@ -12,6 +12,18 @@ import type { PolicyStateEntry } from "../state/policy-state.js";
 import { policyState } from "../state/policy-state.js";
 
 const now = new Date("2026-04-25T12:00:00.000Z");
+const { mockWorkContractStore } = vi.hoisted(() => ({
+  mockWorkContractStore: new Map<string, unknown>(),
+}));
+
+vi.mock("../work-contract/store.js", () => ({
+  saveWorkContract: (contract: { workContractId?: string }) => {
+    if (!contract.workContractId) return false;
+    mockWorkContractStore.set(contract.workContractId, contract);
+    return true;
+  },
+  loadWorkContract: (workContractId: string) => mockWorkContractStore.get(workContractId) ?? null,
+}));
 
 function clearPolicyState(): void {
   for (const { key } of policyState.entries()) {
@@ -102,6 +114,7 @@ function nextActionForNativeBinding(binding: NativeBindingRef): "dispatch" | "wa
 
 describe("WorkContract coverage acceptance", () => {
   beforeEach(() => {
+    mockWorkContractStore.clear();
     vi.useFakeTimers();
     vi.setSystemTime(now);
     clearPolicyState();
@@ -110,6 +123,7 @@ describe("WorkContract coverage acceptance", () => {
   afterEach(() => {
     clearPolicyState();
     vi.useRealTimers();
+    mockWorkContractStore.clear();
   });
 
   it("provenance follow-up after reply+toolsUsed should not spawn", () => {

@@ -2,11 +2,17 @@
 
 Date: 2026-05-09
 Branch: `v0.5.0`
-Status: current repository hygiene plan
+Status: completed repository hygiene baseline / ongoing guardrail
 
 This plan covers repository debt that is outside the runtime cleanup work. The
 runtime cleanup itself is tracked in
 [`octoclaw-runtime-convergence-cleanup-plan-2026-05-07.md`](./octoclaw-runtime-convergence-cleanup-plan-2026-05-07.md).
+
+2026-05-09 update: the baseline cleanup in this document has been applied on
+`v0.5.0`. Engineering logs and generated reports have been moved under
+`docs/archive/engineering-log/`, current entry docs are listed below, and
+version/terminology references have been aligned to `0.5.0`. Future work here
+is a guardrail, not a pending cleanup batch.
 
 ## 1. Scope
 
@@ -106,18 +112,33 @@ Do not describe these as current product paths:
 - Python as route/status authority.
 - resident runner, tmux, or ClawTeam as required substrate.
 
-## 6. Remaining Cleanup
+## 6. Completed Baseline And Ongoing Guardrails
 
-### Should do
+### Completed baseline
 
-1. Keep top-level `docs/` focused on current docs; move stale active-looking docs
-   to `docs/archive/` after adding a current replacement or banner.
+1. Top-level `docs/` now points to current architecture, runtime cleanup,
+   terminology, state-truth, and repo-hygiene entries.
+2. Historical engineering logs and generated reports have been moved under
+   `docs/archive/engineering-log/`.
+3. README, README.zh-CN, SKILL, package versions, manifest version, and
+   `version.txt` are aligned to `0.5.0`.
+4. Active docs describe `octoclaw_spawn`, completion files, child-finalizer,
+   delivery outbox, fake detached runtime, and Python route/status authority
+   only as removed or forbidden paths.
+5. The detailed module map is maintained in Chinese at
+   [`octoclaw-architecture-map-2026-05-09.md`](./octoclaw-architecture-map-2026-05-09.md).
+
+### Ongoing guardrails
+
+1. Keep top-level `docs/` focused on current docs. New stale active-looking
+   docs should be archived only after adding a replacement or banner.
 2. Keep generated reports out of the root. New generated evidence belongs under
    `docs/archive/engineering-log/reports/` unless it is part of a live OpenSpec
    change.
 3. Update historical docs only with short "superseded by" banners, not
    wholesale rewrites.
-4. Keep README and SKILL aligned with the runtime cleanup plan.
+4. Keep README and SKILL aligned with the runtime cleanup plan on future
+   release branches.
 
 ### Do not do automatically
 

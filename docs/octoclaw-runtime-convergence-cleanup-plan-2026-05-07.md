@@ -1,10 +1,12 @@
 # OctoClaw Runtime 收口与清理计划
 
 日期：2026-05-07
-状态：implementation planning / cleanup roadmap
+状态：post-implementation review / cleanup audit reference
 策略：delete-first convergence，不建立旧 runtime 长期兼容层
 
 > 2026-05-08 handoff note: `v0.5.0` 当前代码已经完成 WP-A 到 WP-G 的大部分收口实现和测试记录；live Slack acceptance smoke 因缺少真实环境仍未执行。给 OpenCode 继续处理时，不要让它重新实现已经删除的旧模块，而是先拉最新 `v0.5.0`，按第 12 节做 verify/audit/smoke，只有发现回归或未完成项时才补代码。
+>
+> 2026-05-09 Codex review note: 已拉取并复查 `origin/worker/pc1-pc2-opencode-20260502`。该分支是 `origin/v0.5.0` 的祖先，当前没有需要再 merge 的新增 diff；OpenCode 的 WP-A 到 WP-G 代码/测试证据已经体现在 `v0.5.0` 和 `openspec/changes/runtime-convergence-cleanup-0.5.x/tasks.md`。本轮本地审计确认 legacy finalizer/outbox/spawn/detached runtime 没有回到 planner 正常路径；唯一未做的仍是真实 Slack/acceptance smoke，因为需要可用 live Slack 环境。
 
 相关文档：
 
@@ -47,7 +49,7 @@ completion file / child-finalizer / delivery outbox / octoclaw_spawn
 
 ---
 
-## 2. 当前未收口项
+## 2. 原始未收口项（已按 WP-A-G 收口，保留为设计背景）
 
 ### 2.1 `task-state.json` 仍超过 projection 职责
 
@@ -657,9 +659,9 @@ This creates the stable base needed for the later cleanup. Removing finalizer/ou
 
 ---
 
-## 12. OpenCode / GLM-5 执行交付包
+## 12. OpenCode / GLM-5 执行交付包（已执行，保留为复查清单）
 
-本节是给 OpenCode / GLM-5 的直接执行说明。不要只把前面的路线当背景读完后自由发挥；实现必须按这里的工作包切片推进，每个工作包只能改自己的 write scope，并把测试结果回填到 `openspec/changes/runtime-convergence-cleanup-0.5.x/tasks.md`。
+本节最初是给 OpenCode / GLM-5 的直接执行说明。2026-05-09 复查后，WP-A 到 WP-G 已经完成并记录到 OpenSpec tasks；后续再给 OpenCode 时，应把这里当复查清单和回归审计边界，不要当成“重新实现一次”的任务书。
 
 ### 12.1 必读文件
 
@@ -755,7 +757,7 @@ Constraints:
 - Do not commit. Report changed files, tests run, failures, and remaining risks.
 ```
 
-如果一次性派给 OpenCode，请把任务限定成“verify and finish remaining gaps”，而不是“从零实现 WP-A-G”。当前分支上 WP-A-G 的 OpenSpec checklist 已基本打勾；OpenCode 应先确认这些删除边界仍成立：
+如果再次派给 OpenCode，请把任务限定成“verify and finish remaining gaps”，而不是“从零实现 WP-A-G”。当前分支上 WP-A-G 的 OpenSpec checklist 已打勾；OpenCode 应先确认这些删除边界仍成立：
 
 ```bash
 rg "flushDeliveryOutbox|appendToDeliveryOutbox|resolveDeliveryOutboxPath|trySpawnSubagentRuntime|detached-task-runtime" extensions/octoclaw-runtime/src
