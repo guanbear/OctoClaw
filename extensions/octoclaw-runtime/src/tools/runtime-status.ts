@@ -8,6 +8,7 @@ import { createOctoClawRuntimePlugin } from "../plugin.js";
 import { projectNativeStatus, type NativeStatusProjection, type NativeStatusProjectorInput } from "../state/native-status-projector.js";
 import { buildSlackStatusOutput, type StatusTaskSummary } from "../im-status-renderer.js";
 import { normalizeLiveRoute } from "../resolve/route-helpers.js";
+import { firstDisplayModel } from "../model-display.js";
 import type { NativeBindingRef } from "@octoclaw/contracts/work-contract";
 import { asBoolean, asRecord, asString, isRecord, type UnknownRecord } from "../util/type-coercion.js";
 import {
@@ -579,6 +580,19 @@ function runtimeTaskComplexityBand(record: RuntimeTaskStateRecord): string {
   ) ?? "unknown";
 }
 
+function runtimeTaskModel(record: RuntimeTaskStateRecord, runtimeTruth: UnknownRecord, delegateAttempt: UnknownRecord): string {
+  return firstDisplayModel(
+    record.model,
+    asRecord(runtimeTruth.model_policy).selected_model,
+    runtimeTruth.model,
+    delegateAttempt.model,
+    record.modelProfile,
+    record.model_profile,
+    delegateAttempt.modelProfile,
+    delegateAttempt.model_profile,
+  );
+}
+
 function projectRuntimeStatus(record: RuntimeTaskStateRecord, nowMs = Date.now()): { status: string; reason: string } {
   const rawStatus = asString(record.status, "unknown");
   const route = runtimeTaskRoute(record);
@@ -700,13 +714,7 @@ export function buildRuntimeStatusTaskView(record: RuntimeTaskStateRecord, nowMs
     completedAt,
     elapsedMs,
     elapsedText: formatElapsed(elapsedMs),
-    model: optionalString(
-      record.model,
-      record.model_profile,
-      delegateAttempt.model,
-      runtimeTruth.model,
-      asRecord(runtimeTruth.model_policy).selected_model,
-    ) ?? "unknown",
+    model: runtimeTaskModel(record, runtimeTruth, delegateAttempt),
     backend: optionalString(record.backend, workerPool, binding.controllerId, runtimeTruth.backend) ?? "unknown",
     workerPool,
     childSessionKey: optionalString(nativeProjectionAuthoritative ? nativeProjection?.childSessionKey : "", evidence.childSessionKey) ?? "",

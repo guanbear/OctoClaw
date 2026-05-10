@@ -43,7 +43,7 @@ import {
 import { buildLiveJudgeContextPacket } from "./resolve/llm-judge.js";
 import { initNativeHelperBridge } from "./adapter/native-helper.js";
 import { buildTurnExecutionReceipt, type TurnExecutionReceipt } from "./receipt.js";
-import { resolveModelId } from "@octoclaw/policy/model";
+import { firstDisplayModel } from "./model-display.js";
 import {
   assistantMessageText,
   guardAssistantMessageForPolicyState,
@@ -1659,38 +1659,24 @@ function resolveDisplayModel(state: UnknownRecord, event: UnknownRecord, ctx: Un
   const modelPolicy = asRecord(decision.model_policy);
   const runtimeTruth = asRecord(decision.runtime_truth);
 
-  // Policy/decision model takes priority over host shim values.
-  const policyModel = firstStringValue(
+  return firstDisplayModel(
     snapshot.model,
     snapshot.modelId,
     snapshot.model_id,
     modelPolicy.selected_model,
     modelPolicy.model,
-    state.modelProfile,
-    state.model_profile,
     runtimeTruth.model,
     decision.model,
-  );
-
-  // Host shim values (event/ctx) are fallback only when no policy model exists.
-  const shimModel = firstStringValue(
     event.model,
     event.modelId,
     event.model_id,
     ctx.model,
     ctx.modelId,
     ctx.model_id,
+    state.modelProfile,
+    state.model_profile,
+    "direct_main",
   );
-
-  const candidate = policyModel || shimModel || "direct_main";
-
-  // If it looks like a profile name, resolve to actual model ID
-  const resolved = (() => {
-    try { return resolveModelId(candidate as Parameters<typeof resolveModelId>[0]); } catch { return null; }
-  })();
-  const fullModelId = resolved || candidate;
-
-  return fullModelId;
 }
 
 /** Extract route source label for footer: "judge(0.87)" / "rule" / "fallback" / "agent↑judge=delegate" */

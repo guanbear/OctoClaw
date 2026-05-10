@@ -651,6 +651,32 @@ describe("guardOutboundMessageForPolicyState", () => {
     policyState.clearState(key);
   });
 
+  it("does not expose internal runtime profile labels in footer projection", () => {
+    const now = Date.now();
+    const key = "agent:main:slack:channel:c0profilemodel";
+    policyState.setState(key, {
+      decision: {
+        route_decision: { route: "reply" },
+        model_policy: { selected_model: "direct_main" },
+        request: { metadata: { message_id: "1777380003.000001" } },
+      },
+      inboundMessageTs: "1777380003.000001",
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    const guarded = guardOutboundMessageForPolicyState(
+      { to: "C0PROFILEMODEL", content: "测试。", metadata: { channelId: "C0PROFILEMODEL", threadTs: "1777380003.000001" } },
+      { channelId: "slack", model: "cliproxyapi/gpt-5.5" },
+      now,
+    );
+
+    expect(guarded?.content).toContain("model=");
+    expect(guarded?.content).not.toContain("model=direct_main");
+    expect(guarded?.content).not.toContain("model=unknown");
+    policyState.clearState(key);
+  });
+
   it("falls back to host shim model when no policy model exists", () => {
     const now = Date.now();
     const key = "agent:main:slack:channel:c0nofallback";

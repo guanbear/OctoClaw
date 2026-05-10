@@ -2,8 +2,8 @@ import fs from "node:fs";
 import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
-import { resolveModelId } from "@octoclaw/policy/model";
 import { runCommand, resolveWorkspaceRoot } from "../../resolve/env.js";
+import { firstDisplayModel } from "../../model-display.js";
 import { hasProjectionFooter, OCTOCLAW_PROJECTION_FOOTER_PREFIX } from "../../projection-footer-sanitizer.js";
 import type { IMAdapter, IMMessageTurnAnchorParams, IMProjectionFooter, IMSendParams } from "../adapter.js";
 import type { MessageDeliveryEnvelope, MessageDeliveryResult } from "../delivery-port.js";
@@ -223,13 +223,9 @@ function slackTargetSource(params: { replyToMessageId?: string; threadTs?: strin
 
 function envelopeProjectionFooter(envelope: MessageDeliveryEnvelope): IMProjectionFooter | null {
   if (envelope.footerMode !== "debug" || !envelope.provenance) return null;
-  const rawModel = stringValue(envelope.provenance.model || envelope.provenance.modelId) || "direct_main";
-  const model = (() => {
-    try { return resolveModelId(rawModel as Parameters<typeof resolveModelId>[0]); } catch { return rawModel; }
-  })();
   return {
     route: envelope.provenance.route === "delegate" ? "delegate" : "reply",
-    model,
+    model: firstDisplayModel(envelope.provenance.model, envelope.provenance.modelId, "direct_main"),
     via: envelope.provenance.via,
     workContractId: envelope.provenance.workContractId,
     thread: Boolean(normalizeSlackMessageTs(envelope.target.replyToMessageId || envelope.target.threadTs)),
@@ -255,7 +251,7 @@ export function renderSlackProjectionFooter(message: string, projection: IMProje
   const content = stringValue(message);
   if (!content || hasProjectionFooter(content)) return message;
   const route = projection.route === "delegate" ? "delegate" : "reply";
-  const model = stringValue(projection.model) || "direct_main";
+  const model = firstDisplayModel(projection.model, "direct_main");
   const primaryFooter = [`route=${route}`, `model=${model}`].join(" | ") + (projection.thread ? " · thread" : "");
   const debugParts = [
     stringValue(projection.workerPool) && `worker=${stringValue(projection.workerPool)}`,

@@ -70,6 +70,19 @@ describe("SlackAdapter", () => {
     expect(result.sent).toBe(true);
   });
 
+  it("does not expose runtime model profile labels in projection footers", () => {
+    const adapter = new SlackAdapter();
+    const rendered = adapter.renderProjectionFooter("收到。", {
+      route: "reply",
+      model: "direct_main",
+      thread: true,
+    });
+
+    expect(rendered).toContain("route=reply | model=");
+    expect(rendered).not.toContain("model=direct_main");
+    expect(rendered).not.toContain("model=unknown");
+  });
+
   it("sends Slack messages through Slack Web API by default without invoking OpenClaw CLI", async () => {
     delete process.env.OCTOCLAW_LEGACY_CLI_DELIVERY;
     process.env.SLACK_BOT_TOKEN = "xoxb-test";
