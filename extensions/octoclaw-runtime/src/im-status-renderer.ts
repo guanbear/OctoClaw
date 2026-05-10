@@ -36,6 +36,8 @@ export interface StatusTaskSummary {
   elapsedText: string;
   delegatedAt: string;
   completedAt: string;
+  startedAtDisplay: string;
+  completedAtDisplay: string;
   statusReason: string;
   route: string;
 }
@@ -69,12 +71,20 @@ function slackTaskBlock(task: StatusTaskSummary): string {
   const cleanTitle = title.replace(/^[✅⚠️❌]\s*/, "").slice(0, 120);
   const header = `${emoji} *${task.status}* · ${cleanTitle}${complexity}${modelPart}${elapsed}`;
 
+  const timeLine = (() => {
+    const isActive = ["running", "queued", "materializing", "registered", "blocked"].includes(task.status);
+    if (isActive && task.startedAtDisplay) return `\n> ⏱ ${task.startedAtDisplay}`;
+    if (isActive && task.delegatedAt) return `\n> ⏱ 委派：${task.delegatedAt}`;
+    if (task.completedAtDisplay) return `\n> ⏱ 完成：${task.completedAtDisplay}`;
+    return "";
+  })();
+
   const cleanSummary = task.summary
     .replace(/^[✅⚠️❌]\s*/, "")
     .slice(0, 180);
 
-  if (!cleanSummary || cleanSummary === cleanTitle) return header;
-  return `${header}\n> ${cleanSummary}`;
+  if (!cleanSummary || cleanSummary === cleanTitle) return `${header}${timeLine}`;
+  return `${header}${timeLine}\n> ${cleanSummary}`;
 }
 
 export interface SlackStatusOutput {
@@ -163,6 +173,8 @@ export function buildFeishuStatusCard(
       task.complexityBand !== "unknown" ? `复杂度：${task.complexityBand}` : "",
       task.model !== "unknown" ? `模型：${task.model}` : "",
       task.elapsedText !== "unknown" ? `耗时：${task.elapsedText}` : "",
+      task.startedAtDisplay && (task.status === "running" || task.status === "queued") ? `启动：${task.startedAtDisplay}` : "",
+      task.completedAtDisplay ? `完成：${task.completedAtDisplay}` : "",
       task.summary ? `\n${task.summary.slice(0, 150)}` : "",
     ].filter(Boolean).join(" · "),
   }));

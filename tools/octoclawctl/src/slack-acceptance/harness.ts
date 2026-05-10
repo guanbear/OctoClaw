@@ -19,6 +19,7 @@ import { sanitizeForArtifact } from "./sanitize.js";
 
 const SAFE_SLACK_TOOLS = new Set(["message.send", "message.update", "message.react", "message.typing"]);
 const DEFAULT_ACCEPTANCE_MARKER_PREFIX = "[OCTOCLAW_ACCEPTANCE]";
+const PARENT_ECHO_AFTER_NATIVE_ANNOUNCE_WINDOW_MS = 60_000;
 
 function makeAcceptanceRunId(label: string): string {
   const safeLabel = label.toLowerCase().replace(/[^a-z0-9_.-]+/gu, "-").replace(/^-+|-+$/gu, "") || "acceptance";
@@ -441,6 +442,50 @@ function replayEventFooterSource(event: Record<string, unknown>): string {
   return asString(event.footerSource || event.footer_source);
 }
 
+function replayEventChainTokens(event: Record<string, unknown>): Set<string> {
+  return new Set([
+    ...replayEventKeys(event),
+    replayEventWorkContractId(event),
+    replayEventSpawnIntentId(event),
+    replayEventRunId(event),
+    replayEventChildSessionKey(event),
+    asString(event.target),
+    asString(event.conversationId || event.conversation_id),
+    asString(event.replyToMessageId || event.reply_to_message_id),
+    asString(event.inboundMessageTs || event.inbound_message_ts),
+  ].filter(Boolean));
+}
+
+function replayEventsShareChain(a: Record<string, unknown>, b: Record<string, unknown>): boolean {
+  const aTokens = replayEventChainTokens(a);
+  if (aTokens.size === 0) return false;
+  for (const token of replayEventChainTokens(b)) {
+    if (aTokens.has(token)) return true;
+  }
+  return false;
+}
+
+function countParentEchoAfterNativeAnnounce(events: Array<{ event: Record<string, unknown>; at: number }>): number {
+  const deliveries: Array<{ event: Record<string, unknown>; at: number }> = [];
+  let count = 0;
+  for (const entry of events) {
+    const eventName = asString(entry.event.event);
+    if (eventName === "native_announce_final_delivered") {
+      deliveries.push(entry);
+      continue;
+    }
+    if (eventName !== "outbound_message_sending_guard") continue;
+    if (asBoolean(entry.event.cancel)) continue;
+    const matchedDelivery = deliveries.find((delivery) => (
+      entry.at >= delivery.at
+      && entry.at - delivery.at <= PARENT_ECHO_AFTER_NATIVE_ANNOUNCE_WINDOW_MS
+      && replayEventsShareChain(delivery.event, entry.event)
+    ));
+    if (matchedDelivery) count += 1;
+  }
+  return count;
+}
+
 function stageNameForReplayEvent(event: Record<string, unknown>): string {
   const eventName = asString(event.event);
   const transitionKind = asString(event.transitionKind);
@@ -589,8 +634,12 @@ async function collectReplayEvidence(
     });
   }
 
-  for (const index of Array.from(matched).sort((a, b) => events[a].at - events[b].at)) {
-    const { event, at } = events[index];
+  const matchedEvents = Array.from(matched)
+    .sort((a, b) => events[a].at - events[b].at)
+    .map((index) => events[index]);
+  const parentEchoAfterNativeAnnounceCount = countParentEchoAfterNativeAnnounce(matchedEvents);
+
+  for (const { event, at } of matchedEvents) {
     const eventName = asString(event.event);
     const transitionKind = asString(event.transitionKind);
     const eventWorkContractId = replayEventWorkContractId(event);
@@ -658,6 +707,7 @@ async function collectReplayEvidence(
     targetSource: targetSource || undefined,
     footerSource: footerSource || undefined,
     duplicateFinalCount,
+    parentEchoAfterNativeAnnounceCount,
     workContractId: nativeWorkContractId || Array.from(workContractIds)[0],
     spawnIntentId: spawnIntentId || undefined,
     runId: runId || undefined,
@@ -1142,6 +1192,9 @@ async function runCase(client: SlackAcceptanceClient, config: SlackAcceptanceRes
   const rawReplayEvidence = await collectReplayEvidence(config.replayPath, sentIso, config.sessionKey, posted.ts, threadTs);
   const replayEvidence = enrichReplayEvidenceFromTranscript(rawReplayEvidence, finalCollection.replies, final);
   progress.push(progressEvent(caseStartMs, "replay_evidence_collected", replayEvidence.reason));
+  if ((replayEvidence.parentEchoAfterNativeAnnounceCount ?? 0) > 0) {
+    errors.push(`parent_echo_after_native_announce:${replayEvidence.parentEchoAfterNativeAnnounceCount}`);
+  }
   const effectiveAck = caseConfig.ackRequired === true
     ? fastFinalSatisfiesAck(ack, final, allReplies, posted.ts, ackTimeoutMs)
     : ack;

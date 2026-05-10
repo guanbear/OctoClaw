@@ -709,6 +709,7 @@ describe("no-spawn replay assertion", () => {
       targetSource: "inbound_anchor",
       footerSource: "envelope",
       duplicateFinalCount: 0,
+      parentEchoAfterNativeAnnounceCount: 0,
     });
     expect(delegatedCase.replayEvidence?.stageMs).toEqual(expect.objectContaining({
       message_received: expect.any(Number),
@@ -734,6 +735,78 @@ describe("no-spawn replay assertion", () => {
     expect(renderSlackAcceptanceMarkdown(report)).toContain("decision_bucket=budgeted_main_then_delegate");
     expect(renderSlackAcceptanceMarkdown(report)).toContain("footerVia=native_announce");
     expect(renderSlackAcceptanceMarkdown(report)).toContain("delivery_transport=slack_api");
+    expect(renderSlackAcceptanceMarkdown(report)).toContain("parentEchoAfterNativeAnnounce=0");
+  });
+
+  it("fails when replay shows uncanceled parent echo after native announce delivery", async () => {
+    const replayPath = path.join(tmpDir, "replay-parent-echo.jsonl");
+    const threadTs = "1234567890.000001";
+    const sessionKey = `slack:channel:C_ACC_TEST:thread:${threadTs}`;
+    const replayEvents = [
+      { at: "2099-12-31T23:59:49.000Z", event: "message_received_observed", sessionKey, inboundMessageTs: threadTs },
+      { at: "2099-12-31T23:59:58.000Z", event: "native_announce_final_delivered", sessionKey, stateKey: sessionKey, workContractId: "wc-echo" },
+      { at: "2099-12-31T23:59:59.000Z", event: "outbound_message_sending_guard", sessionKey, stateKey: sessionKey, workContractId: "wc-echo", target: "C_ACC_TEST", cancel: false, returned: true },
+    ];
+    await fs.writeFile(replayPath, replayEvents.map((event) => JSON.stringify(event)).join("\n"), "utf8");
+
+    const client = createMockClient([
+      { ts: "1234567890.150001", text: "OpenClaw 总结" },
+    ]);
+    const config = parseSlackAcceptanceConfig(validConfig({
+      cases: [{
+        kind: "delegated_work",
+        prompt: "test",
+        ackRequired: false,
+        finalRequired: true,
+        expectFinal: ["OpenClaw"],
+      }],
+      replayPath,
+    }), validEnv());
+    config.finalTimeoutMs = 100;
+    config.pollIntervalMs = 1;
+
+    const report = await runSlackAcceptanceHarness(client, config);
+    const delegatedCase = report.cases.find((c) => c.kind === "delegated_work")!;
+
+    expect(delegatedCase.status).toBe("fail");
+    expect(report.overallGate).toBe("fail");
+    expect(delegatedCase.errors.join("\n")).toContain("parent_echo_after_native_announce:1");
+    expect(delegatedCase.replayEvidence?.parentEchoAfterNativeAnnounceCount).toBe(1);
+  });
+
+  it("does not fail when replay shows native announce duplicate guard cancellation", async () => {
+    const replayPath = path.join(tmpDir, "replay-parent-echo-cancelled.jsonl");
+    const threadTs = "1234567890.000001";
+    const sessionKey = `slack:channel:C_ACC_TEST:thread:${threadTs}`;
+    const replayEvents = [
+      { at: "2099-12-31T23:59:49.000Z", event: "message_received_observed", sessionKey, inboundMessageTs: threadTs },
+      { at: "2099-12-31T23:59:58.000Z", event: "native_announce_final_delivered", sessionKey, stateKey: sessionKey, workContractId: "wc-echo-cancelled" },
+      { at: "2099-12-31T23:59:59.000Z", event: "outbound_message_sending_guard", sessionKey, stateKey: sessionKey, workContractId: "wc-echo-cancelled", target: "C_ACC_TEST", cancel: true, returned: true },
+    ];
+    await fs.writeFile(replayPath, replayEvents.map((event) => JSON.stringify(event)).join("\n"), "utf8");
+
+    const client = createMockClient([
+      { ts: "1234567890.150001", text: "OpenClaw 总结" },
+    ]);
+    const config = parseSlackAcceptanceConfig(validConfig({
+      cases: [{
+        kind: "delegated_work",
+        prompt: "test",
+        ackRequired: false,
+        finalRequired: true,
+        expectFinal: ["OpenClaw"],
+      }],
+      replayPath,
+    }), validEnv());
+    config.finalTimeoutMs = 100;
+    config.pollIntervalMs = 1;
+
+    const report = await runSlackAcceptanceHarness(client, config);
+    const delegatedCase = report.cases.find((c) => c.kind === "delegated_work")!;
+
+    expect(delegatedCase.status).toBe("pass");
+    expect(report.overallGate).toBe("pass");
+    expect(delegatedCase.replayEvidence?.parentEchoAfterNativeAnnounceCount).toBe(0);
   });
 });
 

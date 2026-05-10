@@ -12,7 +12,9 @@ import { firstDisplayModel } from "../model-display.js";
 import type { NativeBindingRef } from "@octoclaw/contracts/work-contract";
 import { asBoolean, asRecord, asString, isRecord, type UnknownRecord } from "../util/type-coercion.js";
 import {
+  formatAbsoluteShort,
   formatElapsed,
+  formatTimeAgo,
   firstTimestamp,
   hasExplicitFalse,
   hasExplicitTrue,
@@ -73,6 +75,8 @@ export interface RuntimeStatusTaskView {
   completedAt: string;
   elapsedMs: number | null;
   elapsedText: string;
+  startedAtDisplay: string;
+  completedAtDisplay: string;
   model: string;
   backend: string;
   workerPool: string;
@@ -688,6 +692,22 @@ export function buildRuntimeStatusTaskView(record: RuntimeTaskStateRecord, nowMs
     artifactRefs.length > 0 ? `artifact_refs=${artifactRefs.join(",")}` : undefined,
     compactArtifactRefs.length > 0 ? `artifact_refs=${compactArtifactRefs.join(",")}` : undefined,
   ) ?? "none";
+  const formatTimestampDisplay = (valueMs: number | null): string => {
+    if (valueMs === null) return "";
+    const relative = formatTimeAgo(valueMs, nowMs);
+    const absolute = formatAbsoluteShort(valueMs);
+    return [relative, absolute].filter(Boolean).join(" · ");
+  };
+  const startedAtDisplay = formatTimestampDisplay(startMs ?? timestampMs(delegatedAt));
+  const completedTimestampMs = timestampMs(completedAt);
+  const completedAtDisplay = formatTimestampDisplay(completedTimestampMs);
+  const actionableReason = (() => {
+    if (projected.reason === "native_id_known_but_registry_missing") return "native_accepted_result_not_reconciled";
+    if (projected.reason === "native_registry_lookup_failed") return "native_accepted_result_not_reconciled";
+    if (projected.reason === "native_registry_unavailable") return "native_registry_unavailable_diagnostic";
+    if (projected.reason === "task_state_cache_degraded") return "cache_degraded_rebuild_recommended";
+    return projected.reason;
+  })();
   return {
     taskId: asString(record.id),
     status: projected.status,
@@ -714,12 +734,14 @@ export function buildRuntimeStatusTaskView(record: RuntimeTaskStateRecord, nowMs
     completedAt,
     elapsedMs,
     elapsedText: formatElapsed(elapsedMs),
+    startedAtDisplay,
+    completedAtDisplay,
     model: runtimeTaskModel(record, runtimeTruth, delegateAttempt),
     backend: optionalString(record.backend, workerPool, binding.controllerId, runtimeTruth.backend) ?? "unknown",
     workerPool,
     childSessionKey: optionalString(nativeProjectionAuthoritative ? nativeProjection?.childSessionKey : "", evidence.childSessionKey) ?? "",
     runId: optionalString(nativeProjectionAuthoritative ? nativeProjection?.runId : "", evidence.runId) ?? "",
-    statusReason: projected.reason,
+    statusReason: actionableReason,
     resultLocation,
   };
 }
@@ -954,6 +976,8 @@ export async function buildNativeStatusOutput(format: string, imType: string = "
       elapsedText: t.elapsedText,
       delegatedAt: t.delegatedAt,
       completedAt: t.completedAt,
+      startedAtDisplay: t.startedAtDisplay,
+      completedAtDisplay: t.completedAtDisplay,
       statusReason: t.statusReason,
       route: t.route,
     }));
@@ -1018,7 +1042,8 @@ export async function buildNativeStatusOutput(format: string, imType: string = "
         const model = task.model && task.model !== "unknown" ? task.model : "";
         const band = task.complexityBand && task.complexityBand !== "unknown" ? task.complexityBand : "";
         const title = truncateText(task.title || task.summary || "未命名任务", 60);
-        const metaParts = [task.status, elapsed, model, band].filter(Boolean);
+        const timeInfo = task.completedAtDisplay || task.startedAtDisplay || "";
+        const metaParts = [task.status, elapsed, timeInfo, model, band].filter(Boolean);
         const metaStr = metaParts.length > 0 ? ` | ${metaParts.join(" | ")}` : "";
         lines.push(`- ${id}${metaStr} | ${title}`);
         shown++;

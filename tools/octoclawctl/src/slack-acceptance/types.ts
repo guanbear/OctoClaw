@@ -178,6 +178,7 @@ export interface SlackAcceptanceReplayEvidence {
   targetSource?: string;
   footerSource?: string;
   duplicateFinalCount?: number;
+  parentEchoAfterNativeAnnounceCount?: number;
   workContractId?: string;
   spawnIntentId?: string;
   runId?: string;

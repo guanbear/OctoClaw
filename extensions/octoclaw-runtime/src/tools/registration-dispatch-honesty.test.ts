@@ -10,6 +10,7 @@ import { buildExecutionCoverageLayer } from "../resolve/execution-coverage-prech
 import { buildMemoryCoverageLayer } from "../resolve/memory-coverage-precheck.js";
 import { policyState } from "../state/policy-state.js";
 import { dispatchReplyToMessageId, getToolRegistrations } from "./registration.js";
+import { formatAbsoluteShort, formatTimeAgo } from "./registration-helpers.js";
 import { buildWorkContractFromPolicy, buildWorkDecisionSeal } from "../work-contract/builders.js";
 import { loadWorkContract, saveWorkContract } from "../work-contract/store.js";
 
@@ -249,6 +250,14 @@ describe("dispatchReplyToMessageId", () => {
 });
 
 describe("octoclaw_dispatch honesty", () => {
+  it("formats status panel timestamps with relative and absolute time", () => {
+    const startedAt = new Date(2026, 4, 10, 12, 33).getTime();
+    const now = startedAt + 2 * 60_000;
+
+    expect(formatTimeAgo(startedAt, now)).toBe("2分钟前");
+    expect(formatAbsoluteShort(startedAt)).toBe("2026-05-10 12:33");
+  });
+
   beforeEach(() => {
     previousEnv = {};
     for (const key of ENV_KEYS) {
@@ -519,7 +528,7 @@ describe("octoclaw_dispatch honesty", () => {
     expect(tableOutput).toContain("backend=octoclaw-research");
     expect(tableOutput).toContain("result=none");
     expect(tableOutput).toContain("delegated_at=2026-04-25T00:00:00.000Z");
-    expect(tableOutput).toContain("reason=native_registry_unavailable");
+    expect(tableOutput).toContain("reason=native_registry_unavailable_diagnostic");
 
     const anchorsResponse = await statusTool().execute({ format: "anchors" }, {});
     const anchorsOutput = String((anchorsResponse.json as Record<string, unknown>).raw_output);
@@ -552,7 +561,7 @@ describe("octoclaw_dispatch honesty", () => {
     const tableOutput = String((tableResponse.json as Record<string, unknown>).raw_output);
 
     expect(tableOutput).toContain("task-continuity-no-spawn | degraded(native_registry_unavailable) | delegate");
-    expect(tableOutput).toContain("reason=native_registry_unavailable");
+    expect(tableOutput).toContain("reason=native_registry_unavailable_diagnostic");
     expect(tableOutput).not.toContain("task-continuity-no-spawn | running(running)");
   });
 

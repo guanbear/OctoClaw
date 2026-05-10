@@ -578,3 +578,209 @@ cost 10%
   - 成本预计省多少？
   - 为什么没有启用推荐？
   - 是能力不够、未配置、额度压力高，还是稳定性差？
+
+---
+
+## 16. 2026-05-10 实施细化：能力、价格、健康、套餐怎么持续更新
+
+Auto Router Lite 不能靠手写模型表，因为新模型几乎每天出现。第一版也不应该追求“全网最强模型榜单”，而是只回答 OctoClaw 真实需要的四个问题：
+
+1. 这个模型当前能不能在本机 OpenClaw 配置里调用？
+2. 它是否满足本次任务的最低能力门槛？
+3. 它的边际成本、套餐压力、速度和失败率是否优于当前模型？
+4. 推荐它是否有足够证据，还是只能 shadow/proposal？
+
+### 16.1 source 优先级
+
+`model-intel-snapshot` 按来源分层合并，不在热路径拉远端 catalog。
+
+| 来源 | 用途 | 可信度 |
+|------|------|--------|
+| OpenClaw `models list --json` | configured、available、contextWindow、local、tags | 高，代表本机可见事实 |
+| OpenClaw config / plugin manifest / provider catalog | native context、input modality、reasoning、static cost | 中高，取决于 freshness |
+| OpenClaw pricing cache / `resolveModelCostConfig()` | market price、cache read/write price、tiered pricing | 高，价格主源 |
+| `openclaw status --usage --json` / Gateway `usage.status` | provider usage window、reset、quota pressure | 中高，仅覆盖支持 usage 的 provider |
+| local replay/nightly | p50/p95 latency、failure rate、tool-call failure、timeout、fallback、user correction | 最高，代表本机真实效果 |
+| OpenRouter / models.dev / provider catalog sync | 新模型发现、context、公开价格、supported parameters | 中，不能直接 live |
+| operator override | 套餐、模型偏好、禁用/降权 | 高，但必须带 owner/freshness |
+| external leaderboard | codingTier cold-start 先验 | 低，只能 proposal/shadow |
+
+每个字段都必须带 `source[]`、`freshness`、`confidence`。缺 source 的字段不能进入 hard decision。
+
+### 16.2 能力不是一个总分
+
+第一版不要给模型打一个“综合智商分”。能力拆成可验证字段：
+
+```typescript
+type CapabilityEvidence =
+  | "declared"        // catalog/config 说支持
+  | "probed"          // 本机 smoke probe 通过
+  | "observed"        // 真实任务 replay 证明稳定
+  | "operator_override"
+  | "heuristic";      // 名称/榜单推断，只能低置信
+
+interface CapabilityLite {
+  contextWindow?: number;
+  input: Array<"text" | "image" | "audio" | "video">;
+  toolUse: "yes" | "no" | "unknown";
+  structuredOutput: "yes" | "no" | "unknown";
+  reasoning: "yes" | "no" | "unknown";
+  promptCache: "yes" | "no" | "unknown";
+  codingTier: "mini" | "standard" | "strong" | "frontier" | "unknown";
+  confidence: "high" | "medium" | "low" | "unknown";
+  evidence: CapabilityEvidence[];
+}
+```
+
+`codingTier` 的含义也收窄：它只表示 OctoClaw delegated coding/workspace tasks 的最低质量层，不表示通用排行榜排名。
+
+### 16.3 新模型如何进系统
+
+新模型进入 live 的状态机：
+
+```text
+external/catalog discovered
+  -> proposal only, confidence=low
+  -> metadata normalized, still not live
+  -> cheap probes pass: tool / structured / tiny coding / latency
+  -> shadow eligible, confidence=medium
+  -> local replay/nightly 样本足够且不降质
+  -> configured=true 后才允许 gated live
+```
+
+硬规则：
+
+- `configured=false` 永远不能 live。
+- `heuristic` 或榜单来源不能 live。
+- `toolUse=unknown` 不能承接需要工具的 delegated task。
+- `quotaPressure=unknown` 不能当免费。
+- catalog 超过 TTL 未刷新时，能力降为 stale，不参与 live 升级。
+
+### 16.4 probe 设计
+
+probe 必须便宜、少量、可限流，默认只对 proposal 候选或用户指定 provider 跑。
+
+| Probe | 目的 | 成功标准 |
+|-------|------|----------|
+| tool smoke | 验证能否稳定调用工具 | 调用 noop/tool echo，参数可解析 |
+| structured smoke | 验证 JSON/schema 输出 | 输出可 parse 且字段完整 |
+| tiny coding smoke | 粗测 coding lane | 通过 2-3 个 deterministic fixture，不用 LLM judge |
+| context smoke | 验证大上下文声明不过分虚 | 仅对 long-context 候选运行 |
+| latency smoke | 得到粗略 p50 初值 | 记录，不作为唯一淘汰依据 |
+
+probe 结果只把模型从 proposal 推到 shadow，不直接推 live。真正 live gate 看本地真实任务 outcome。
+
+### 16.5 价格
+
+价格不由 OctoClaw 自己维护一张表。优先使用 OpenClaw 已有能力：
+
+```text
+OpenClaw config / models.providers.*.models[].cost
+  -> models.json cost index
+  -> Gateway pricing cache
+  -> OpenRouter / LiteLLM mapping
+  -> estimateUsageCost()
+```
+
+Snapshot 里同时保存：
+
+- `marketPrice`：公开 token 价格。
+- `estimatedCostForTask`：按当前任务预算估算。
+- `costConfidence`：config/cache 高，external 中，missing unknown。
+- `missingCostReason`：没有价格时必须显式说明，不能按 0 处理。
+
+### 16.6 套餐和额度
+
+套餐不是市场价格，必须分开建模：
+
+```typescript
+interface PlanLite {
+  type: "pay_as_you_go" | "subscription" | "free_quota" | "unknown";
+  quotaPressure: "low" | "medium" | "high" | "unknown";
+  effectiveCostBand: "free_or_sunk" | "cheap" | "normal" | "expensive" | "unknown";
+  resetAt?: string;
+  source: string[];
+}
+```
+
+规则：
+
+- 有 provider usage window 且剩余额度充足，才可以把套餐模型轻微升权。
+- usage API 不支持时保持 `quotaPressure=unknown`。
+- rate limit / 429 / cooldown 直接进入 health 降权。
+- 套餐“理论上免费”不等于可无限使用；高压 quota 仍要避开。
+
+### 16.7 健康
+
+健康优先来自本地真实运行，不来自 catalog：
+
+| 字段 | 来源 |
+|------|------|
+| `available` | OpenClaw auth/model list/provider probe |
+| `cooldown` | usage status、429/rate limit、runtime failure |
+| `recentFailureRate` | replay/nightly |
+| `p50LatencyMs / p95LatencyMs` | replay/nightly + probe 初值 |
+| `toolCallFailureRate` | replay/nightly |
+| `timeoutRate` | replay/nightly |
+
+健康 gate 在价格之前。便宜但近期失败率高的模型不能进入推荐。
+
+### 16.8 A/B/C 具体落地
+
+#### A：model-intel snapshot
+
+目标：生成只读事实快照，不改 runtime 行为。
+
+输入：
+
+- `openclaw models list --json`
+- OpenClaw config / plugin manifest / provider catalog
+- Gateway pricing cache / usage-cost
+- `openclaw status --usage --json`
+- replay/nightly health rollup
+- optional external catalog sync
+- operator overrides
+
+输出：
+
+- `router-lite/model-intel-snapshot.json`
+- 每个字段带 source、freshness、confidence
+- 新模型默认 proposal-only
+
+#### B：config analyze proposal
+
+目标：发现配置缺口，不自动写 OpenClaw config。
+
+典型提示：
+
+- 只配了 frontier/strong，没有 cheap delegated lane。
+- 有同 provider mini/standard 候选，但未配置。
+- 有套餐低压模型，但当前 fallback 未利用。
+- 当前 configured 模型缺 tool-use/structured-output 证据。
+
+输出：
+
+- `router-lite/model-config-proposal.json`
+- 每条建议包含 expected use、risk、required auth、why_not_live。
+
+#### C：shadow recommendation
+
+目标：每次实际 route/model 决策旁路写推荐事件。
+
+```text
+judge四字段 + runtime compact signals + snapshot
+  -> hard gates
+  -> mode scoring(cost_first | balanced | reliable_fast)
+  -> actual vs recommended
+  -> replay shadow event
+```
+
+Shadow event 必须回答：
+
+- 推荐了哪个模型和 output budget？
+- 当前实际模型是什么？
+- 为什么没有推荐更便宜模型？
+- 预计成本差是多少？
+- 是能力不够、未配置、额度高压、健康差，还是证据不足？
+
+Live gate 仍按原文：连续 7 天或至少 100 条 shadow 样本，质量不降、成本不升、失败率不升，且一键回 shadow。

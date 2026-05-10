@@ -126,6 +126,27 @@ export function formatElapsed(ms: number | null): string {
   return `${days}d${hours % 24 ? `${hours % 24}h` : ""}`;
 }
 
+export function formatTimeAgo(timestampMs: number | null, nowMs: number): string {
+  if (timestampMs === null || !Number.isFinite(timestampMs) || timestampMs < 0) return "";
+  const diffMs = nowMs - timestampMs;
+  if (diffMs < 0) return "刚刚";
+  const seconds = Math.floor(diffMs / 1000);
+  if (seconds < 60) return seconds <= 5 ? "刚刚" : `${seconds}秒前`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}分钟前`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}小时前`;
+  const days = Math.floor(hours / 24);
+  return `${days}天前`;
+}
+
+export function formatAbsoluteShort(timestampMs: number | null): string {
+  if (timestampMs === null || !Number.isFinite(timestampMs)) return "";
+  const d = new Date(timestampMs);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
 export function firstTimestamp(...values: unknown[]): string {
   for (const value of values) {
     const text = asString(value);

@@ -2946,9 +2946,10 @@ export const plugin = {
       const ctxRecord = asRecord(ctx);
       const visibleDelivery = outboundLooksLikeVisibleDeliveryHook(eventRecord, ctxRecord);
       const content = outboundDeliveryContent(eventRecord);
+      const stateInfo = visibleDelivery ? getPolicyStateForContext(ctxRecord) : { key: "", state: null };
+      const stateRecord = asRecord(stateInfo.state);
       if (visibleDelivery && outboundDeliveryContent(eventRecord).trim().toUpperCase() !== "NO_REPLY") {
-        const stateInfo = getPolicyStateForContext(ctxRecord);
-        const cancellations = cancelNeutralAckTimersForContext(eventRecord, ctxRecord, asRecord(stateInfo.state));
+        const cancellations = cancelNeutralAckTimersForContext(eventRecord, ctxRecord, stateRecord);
         if (cancellations.length > 0) {
           recordNeutralAckCancellations("message_sending", cancellations, "formal_reply_visible", stateInfo.key);
         }
@@ -2962,6 +2963,9 @@ export const plugin = {
             channelId: stringValue(ctxRecord.channelId || ctxRecord.channel || eventRecord.channel || asRecord(eventRecord.metadata).channel),
             conversationId: stringValue(ctxRecord.conversationId || ctxRecord.conversation_id || eventRecord.to),
             target: stringValue(resolveOutboundPolicyTarget(eventRecord, ctxRecord)),
+            stateKey: stateInfo.key,
+            workContractId: stringValue(stateRecord.workContractId || stateRecord.work_contract_id),
+            nativeAnnounceDelivered: stateRecord.nativeAnnounceDelivered === true || stateRecord.native_announce_delivered === true,
             content_len: content.length,
             returned: guarded ? true : false,
             cancel: guarded?.cancel === true,
