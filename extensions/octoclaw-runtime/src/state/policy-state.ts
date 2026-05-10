@@ -87,6 +87,8 @@ export interface PolicyStateEntry {
   native_announce_completion_pending?: boolean;
   nativeAnnounceDelivered?: boolean;
   native_announce_delivered?: boolean;
+  nativeAnnounceDeliveredAt?: number;
+  native_announce_delivered_at?: string;
   nativeAnnounceResultHash?: string;
   native_announce_result_hash?: string;
   outbound_guard_cancelled?: boolean;

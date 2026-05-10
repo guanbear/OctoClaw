@@ -83,6 +83,7 @@ beforeEach(() => {
   process.env.OCTOCLAW_RUNTIME_DB_PATH = path.join(tempWorkspace, ".octoclaw", "runtime", "octoclaw-runtime.sqlite");
 });
 afterEach(() => {
+  vi.useRealTimers();
   nativeSpawnIntentStore.clearForTests();
   resetNeutralInboundAckDedupeForTests();
   for (const entry of policyState.entries()) {
@@ -291,6 +292,88 @@ describe("guardOutboundMessageForPolicyState", () => {
       outbound_guard_cancelled: true,
     });
     policyState.clearState(key);
+  });
+
+  it("cancels unanchored Slack parent final right after native announce delivery", () => {
+    const now = Date.now();
+    const key = "agent:main:slack:default:direct:u0al9t5u89z";
+    policyState.setState(key, {
+      decision: {
+        route_decision: { route: "delegate", route_source: "native_announce" },
+        work_contract: { workContractId: "wc-native-delivered", route: "delegate" },
+      },
+      delegated: true,
+      dispatchExecuted: true,
+      spawnExecuted: true,
+      resultMaterialized: true,
+      nativeAnnounceDelivered: true,
+      nativeAnnounceDeliveredAt: now,
+      nativeAnnounceResultHash: "result-hash",
+      deliveryStatus: "delivered",
+      workContractId: "wc-native-delivered",
+      createdAt: now - 30_000,
+      updatedAt: now,
+    });
+
+    const guarded = guardOutboundMessageForPolicyState(
+      { to: "user:U0AL9T5U89Z", content: "已完成查询，OpenClaw 今天没有看到新的 release。" },
+      { channelId: "slack" },
+      now + 3_000,
+    );
+
+    expect(guarded).toEqual({ cancel: true });
+    expect(policyState.getState(key)).toMatchObject({
+      outbound_guard_cancelled: true,
+      outbound_guard_cancel_reason: "native_announce_already_delivered",
+    });
+    policyState.clearState(key);
+  });
+
+  it("does not cancel unanchored Slack reply when a newer reply state exists after native announce delivery", () => {
+    const now = Date.now();
+    const deliveredKey = "agent:main:slack:default:direct:u0al9t5u89z";
+    const followupKey = "agent:main:slack:default:direct:u0al9t5u89z:thread:1777368525.770689";
+    vi.useFakeTimers();
+    vi.setSystemTime(now);
+    policyState.setState(deliveredKey, {
+      decision: {
+        route_decision: { route: "delegate", route_source: "native_announce" },
+        work_contract: { workContractId: "wc-native-delivered", route: "delegate" },
+      },
+      delegated: true,
+      dispatchExecuted: true,
+      spawnExecuted: true,
+      resultMaterialized: true,
+      nativeAnnounceDelivered: true,
+      nativeAnnounceDeliveredAt: now,
+      nativeAnnounceResultHash: "result-hash",
+      deliveryStatus: "delivered",
+      workContractId: "wc-native-delivered",
+      createdAt: now - 30_000,
+      updatedAt: now,
+    });
+    vi.setSystemTime(now + 2_000);
+    policyState.setState(followupKey, {
+      decision: {
+        route_decision: { route: "reply", route_source: "policy" },
+        work_contract: { workContractId: "wc-followup", route: "reply" },
+      },
+      inboundMessageTs: "1777368525.770689",
+      workContractId: "wc-followup",
+      createdAt: now + 2_000,
+      updatedAt: now + 2_000,
+    });
+
+    const guarded = guardOutboundMessageForPolicyState(
+      { to: "user:U0AL9T5U89Z", content: "没有，我只看到一次子任务结果，后面是父会话总结。" },
+      { channelId: "slack" },
+      now + 3_000,
+    );
+
+    expect(guarded?.cancel).not.toBe(true);
+    vi.useRealTimers();
+    policyState.clearState(deliveredKey);
+    policyState.clearState(followupKey);
   });
 
   it("defaults outbound projection footer off without explicit env", () => {

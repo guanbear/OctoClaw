@@ -1256,6 +1256,10 @@ function buildNativeAnnouncePolicyState(input: {
     native_announce_delivered: input.delivered,
     nativeAnnounceResultHash: input.completion.resultHash,
     native_announce_result_hash: input.completion.resultHash,
+    ...(input.delivered ? {
+      nativeAnnounceDeliveredAt: input.now,
+      native_announce_delivered_at: new Date(input.now).toISOString(),
+    } : {}),
     deliveryStatus: input.delivered ? "delivered" : "pending",
     delivery_status: input.delivered ? "delivered" : "pending",
     formal_reply_visible: input.delivered || input.current.formal_reply_visible,
@@ -1281,6 +1285,23 @@ function isNativeAnnounceAlreadyDelivered(state: unknown): boolean {
   return record.nativeAnnounceDelivered === true
     || record.native_announce_delivered === true
     || stringValue(record.deliveryStatus || record.delivery_status).toLowerCase() === "delivered";
+}
+
+function nativeAnnounceDeliveredAtMs(state: UnknownRecord): number {
+  const raw = state.nativeAnnounceDeliveredAt
+    ?? state.native_announce_delivered_at
+    ?? state.updatedAt
+    ?? state.updated_at;
+  if (typeof raw === "number" && Number.isFinite(raw)) return raw;
+  const parsed = Date.parse(stringValue(raw));
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function shouldCancelNativeAnnounceDeliveredOutbound(match: { anchored: boolean; state: PolicyStateEntry }, state: UnknownRecord, now: number): boolean {
+  if (!isNativeAnnounceAlreadyDelivered(state)) return false;
+  if (match.anchored) return true;
+  const deliveredAt = nativeAnnounceDeliveredAtMs(state);
+  return deliveredAt > 0 && now - deliveredAt <= 60 * 1000;
 }
 
 function applyNativeAnnounceCompletionState(input: {
@@ -1845,12 +1866,13 @@ export function guardOutboundMessageForPolicyState(event: UnknownRecord, ctx: Un
     return fallbackReplacement && fallbackReplacement !== content ? outboundGuardReplacement(event, fallbackReplacement) : undefined;
   }
   const stateRecord = hydrateOutboundStateWithNativeRefs(asRecord(match.state));
-  if (match.anchored && isNativeAnnounceAlreadyDelivered(stateRecord)) {
+  if (shouldCancelNativeAnnounceDeliveredOutbound(match, stateRecord, now)) {
     updatePolicyState(match.key, (current) => ({
       ...(current ?? {}),
       ...stateRecord,
       outbound_guard_cancelled: true,
       outbound_guard_cancelled_at: new Date(now).toISOString(),
+      outbound_guard_cancel_reason: "native_announce_already_delivered",
     }));
     return { cancel: true };
   }
