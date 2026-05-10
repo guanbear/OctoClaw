@@ -10,3 +10,4 @@ export * from "./compound/index.js";
 export * from "./admission/index.js";
 export * from "./caps/index.js";
 export * from "./spec/index.js";
+export * from "./router-lite/index.js";

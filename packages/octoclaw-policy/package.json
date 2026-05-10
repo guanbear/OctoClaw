@@ -17,7 +17,8 @@
     "./roles": { "types": "./dist/roles/index.d.ts", "default": "./dist/roles/index.js" },
     "./compound": { "types": "./dist/compound/index.d.ts", "default": "./dist/compound/index.js" },
     "./admission": { "types": "./dist/admission/index.d.ts", "default": "./dist/admission/index.js" },
-    "./caps": { "types": "./dist/caps/index.d.ts", "default": "./dist/caps/index.js" }
+    "./caps": { "types": "./dist/caps/index.d.ts", "default": "./dist/caps/index.js" },
+    "./router-lite": { "types": "./dist/router-lite/index.d.ts", "default": "./dist/router-lite/index.js" }
   },
   "dependencies": {
     "@octoclaw/contracts": "workspace:*"

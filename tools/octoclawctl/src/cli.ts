@@ -19,6 +19,7 @@ import { SlackWebApiAcceptanceClient } from "./slack-acceptance/index.js";
 import { disablePlugin, enablePlugin, getConfigValue, restartAll, setConfigValue, showStatus } from "./manage.js";
 import { buildWorkspace, cloneOrUpdate, DEFAULT_REF, DEFAULT_REPO_URL, deployExtension, deployPackages, setupSymlinks, syncOctoClawCoreRules, syncOpenClawPluginEntry, syncSlackDeliveryHookCompatibility, uninstallDeployment, validateLoad, writeSourceManifest } from "./install.js";
 import { readConfig, syncToOpenClawPluginConfig, writeConfig } from "./config.js";
+import { analyzeModelConfig, buildModelIntelSnapshot, type ModelIntelSnapshot } from "@octoclaw/policy/router-lite";
 import type { CalibrationInputFile } from "./calibration/types.js";
 import type { SlackAcceptanceFormat } from "./slack-acceptance/types.js";
 import type { NightlyEvalConfig, LaunchAgentConfig } from "./nightly-eval/index.js";
@@ -53,6 +54,7 @@ type CliCommand =
   | "repair"
   | "nightly"
   | "nightly-eval"
+  | "router"
   | "slack-acceptance";
 type JsonRecord = Record<string, unknown>;
 
@@ -1185,8 +1187,8 @@ export function parseCliArgs(argv: string[]): ParsedCliArgs {
   if (command === "details" && positionals[1] && !taskId) {
     taskId = positionals[1];
   }
-  if (command && !["install", "update", "deploy", "enable", "disable", "config", "uninstall", "calibration-gate", "review", "curate", "status", "details", "queue", "timeline", "health", "up", "down", "restart", "patrol", "reconcile", "repair", "nightly", "nightly-eval", "slack-acceptance"].includes(command)) {
-    throw new Error(`Unknown action: ${command}. Expected one of: install, update, deploy, enable, disable, config, uninstall, calibration-gate, review, curate, status, details, queue, timeline, health, up, down, restart, patrol, reconcile, repair, nightly, nightly-eval, slack-acceptance`);
+  if (command && !["install", "update", "deploy", "enable", "disable", "config", "uninstall", "calibration-gate", "review", "curate", "status", "details", "queue", "timeline", "health", "up", "down", "restart", "patrol", "reconcile", "repair", "nightly", "nightly-eval", "router", "slack-acceptance"].includes(command)) {
+    throw new Error(`Unknown action: ${command}. Expected one of: install, update, deploy, enable, disable, config, uninstall, calibration-gate, review, curate, status, details, queue, timeline, health, up, down, restart, patrol, reconcile, repair, nightly, nightly-eval, router, slack-acceptance`);
   }
   if (limit !== undefined && (!Number.isFinite(limit) || limit <= 0)) {
     throw new Error(`Unknown limit: ${String(limit)}. Expected a positive integer`);
@@ -1337,6 +1339,8 @@ export function printUsage(): string {
     "  octoclawctl nightly-eval uninstall-launchagent",
     "  octoclawctl nightly-eval print-plist --config <eval-config.json> --output-dir <dir> [--schedule-hour 2]",
     "  octoclawctl nightly-eval deliver-slack --config <slack-acceptance.json> --output-dir <nightly-report-dir> [--format markdown|json]",
+    "  octoclawctl router model-intel refresh [--output-dir <dir>] [--openclaw-home <dir>] [--format json]",
+    "  octoclawctl router model-config analyze [--input <snapshot.json>] [--output-dir <dir>] [--format json]",
     "  octoclawctl slack-acceptance --config <acceptance.json> --output-dir <dir> [--format markdown|json]",
     "  octoclawctl calibration-gate --baseline <report.json> --candidate <report.json> --output-dir <dir> [--format markdown|json]",
     "",
@@ -1405,6 +1409,57 @@ async function spawnAndCollect(command: string, args: string[], options: SpawnOp
       resolve({ code: code ?? 1, stdout: stdout.trim(), stderr: stderr.trim() });
     });
   });
+}
+
+function parseFirstJsonRecord(text: string): JsonRecord | undefined {
+  const direct = tryParseJsonRecord(text);
+  if (direct) return direct;
+
+  for (let start = text.indexOf("{"); start >= 0; start = text.indexOf("{", start + 1)) {
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    for (let index = start; index < text.length; index += 1) {
+      const char = text[index];
+      if (inString) {
+        if (escaped) {
+          escaped = false;
+        } else if (char === "\\") {
+          escaped = true;
+        } else if (char === "\"") {
+          inString = false;
+        }
+        continue;
+      }
+      if (char === "\"") {
+        inString = true;
+        continue;
+      }
+      if (char === "{") {
+        depth += 1;
+        continue;
+      }
+      if (char === "}") {
+        depth -= 1;
+        if (depth === 0) {
+          const parsed = tryParseJsonRecord(text.slice(start, index + 1));
+          if (parsed) return parsed;
+          break;
+        }
+      }
+    }
+  }
+
+  return undefined;
+}
+
+function tryParseJsonRecord(text: string): JsonRecord | undefined {
+  try {
+    const parsed = JSON.parse(text);
+    return isRecord(parsed) ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 async function spawnDaemon(command: string, args: string[], logFilePath: string, pidFilePath: string, env: Record<string, string | undefined>): Promise<number> {
@@ -1782,6 +1837,113 @@ async function runNightlyEvalLaunchAgentCommand(parsed: ParsedCliArgs, _env: Rec
   throw new Error(`Unknown nightly-eval subcommand: ${parsed.nightlyEvalSubcommand}`);
 }
 
+function resolveRouterLiteOutputDir(parsed: ParsedCliArgs, openclawHome: string): string {
+  return resolvePath(parsed.outputDir ?? path.join(openclawHome, "workspace", "tmp", "octopus", "router-lite"));
+}
+
+async function runOpenClawJsonCommand(args: string[], env: Record<string, string | undefined>): Promise<JsonRecord | undefined> {
+  let binaryPath: string;
+  try {
+    binaryPath = resolveOpenClawBinary(env);
+  } catch {
+    return undefined;
+  }
+
+  const result = await spawnAndCollect(binaryPath, args, { env: { ...process.env, ...env } });
+  if (result.code !== 0) {
+    return undefined;
+  }
+  return parseFirstJsonRecord(result.stdout);
+}
+
+function assertModelIntelSnapshot(value: unknown, filePath: string): ModelIntelSnapshot {
+  if (!isRecord(value) || value.schemaVersion !== "octoclaw.router_lite.model_intel_snapshot/v1" || !Array.isArray(value.models)) {
+    throw new Error(`Invalid router-lite model intel snapshot: ${filePath}`);
+  }
+  return value as unknown as ModelIntelSnapshot;
+}
+
+function countModels(snapshot: ModelIntelSnapshot): { configured: number; proposalOnly: number } {
+  return {
+    configured: snapshot.models.filter((model) => model.configured).length,
+    proposalOnly: snapshot.models.filter((model) => model.proposalOnly).length,
+  };
+}
+
+async function runRouterLiteCommand(parsed: ParsedCliArgs, env: Record<string, string | undefined>, openclawHome: string): Promise<string> {
+  const [area, action] = parsed.extraArgs;
+  const outputDir = resolveRouterLiteOutputDir(parsed, openclawHome);
+  const wantsJson = parsed.format === "json";
+
+  if (area === "model-intel" && action === "refresh") {
+    const commandEnv = { ...env, OPENCLAW_HOME: openclawHome };
+    const openClawModelsList = await runOpenClawJsonCommand(["models", "list", "--json"], commandEnv);
+    const usageStatus = await runOpenClawJsonCommand(["status", "--usage", "--json"], commandEnv);
+    const usageCost = await runOpenClawJsonCommand(["gateway", "usage-cost", "--days", "3", "--json"], commandEnv);
+    const openClawConfig = await readJsonFile(path.join(openclawHome, "openclaw.json"));
+    const legacyCatalog = await readJsonFile(path.join(openclawHome, "workspace", "tmp", "octopus", "model-catalog.json"));
+    const snapshot = buildModelIntelSnapshot({
+      openClawModelsList,
+      openClawConfig,
+      legacyCatalog,
+      usageStatus,
+      usageCost,
+    });
+    const snapshotPath = path.join(outputDir, "model-intel-snapshot.json");
+    await ensureDir(outputDir);
+    await fs.writeFile(snapshotPath, `${JSON.stringify(snapshot, null, 2)}\n`, "utf8");
+    const counts = countModels(snapshot);
+    if (wantsJson) {
+      return JSON.stringify({
+        snapshotPath,
+        snapshotId: snapshot.snapshotId,
+        generatedAt: snapshot.generatedAt,
+        models: snapshot.models.length,
+        ...counts,
+        sourceStatus: snapshot.sourceStatus,
+      }, null, 2);
+    }
+    return [
+      `Model intel snapshot written: ${snapshotPath}`,
+      `snapshotId=${snapshot.snapshotId}`,
+      `models=${snapshot.models.length} configured=${counts.configured} proposalOnly=${counts.proposalOnly}`,
+      `sources=${snapshot.sourceStatus.map((source) => `${source.source}:${source.status}`).join(", ")}`,
+    ].join("\n");
+  }
+
+  if (area === "model-config" && action === "analyze") {
+    const inputPath = resolvePath(parsed.input ?? path.join(outputDir, "model-intel-snapshot.json"));
+    const rawSnapshot = await readJsonFile(inputPath);
+    const snapshot = assertModelIntelSnapshot(rawSnapshot, inputPath);
+    const proposal = analyzeModelConfig(snapshot);
+    const proposalPath = path.join(outputDir, "model-config-proposal.json");
+    await ensureDir(outputDir);
+    await fs.writeFile(proposalPath, `${JSON.stringify(proposal, null, 2)}\n`, "utf8");
+    const actions = proposal.proposals.reduce<Record<string, number>>((acc, item) => {
+      acc[item.action] = (acc[item.action] ?? 0) + 1;
+      return acc;
+    }, {});
+    if (wantsJson) {
+      return JSON.stringify({
+        proposalPath,
+        snapshotId: proposal.snapshotId,
+        generatedAt: proposal.generatedAt,
+        proposals: proposal.proposals.length,
+        actions,
+        summary: proposal.summary,
+      }, null, 2);
+    }
+    return [
+      `Model config proposal written: ${proposalPath}`,
+      `snapshotId=${proposal.snapshotId}`,
+      `proposals=${proposal.proposals.length}`,
+      `actions=${Object.entries(actions).map(([name, count]) => `${name}:${count}`).join(", ") || "none"}`,
+    ].join("\n");
+  }
+
+  throw new Error("router command expects: router model-intel refresh OR router model-config analyze");
+}
+
 async function runCommandFromSnapshot(parsed: ParsedCliArgs, env: Record<string, string | undefined>): Promise<string> {
   const snapshot = await loadStatusSnapshot(env);
   switch (parsed.command) {
@@ -1955,7 +2117,7 @@ export async function main(
       return 0;
     }
     if (!parsed.command) {
-      io.stderr("Unknown action: (missing). Expected one of: install, update, deploy, enable, disable, config, uninstall, calibration-gate, status, details, queue, timeline, health, up, down, restart, patrol, reconcile, repair, nightly, nightly-eval, slack-acceptance");
+      io.stderr("Unknown action: (missing). Expected one of: install, update, deploy, enable, disable, config, uninstall, calibration-gate, status, details, queue, timeline, health, up, down, restart, patrol, reconcile, repair, nightly, nightly-eval, router, slack-acceptance");
       return 1;
     }
 
@@ -1997,6 +2159,10 @@ export async function main(
     if (parsed.command === "uninstall") {
       await uninstallDeployment(openclawHome);
       io.stdout("OctoClaw deployment removed from OpenClaw extensions/packages");
+      return 0;
+    }
+    if (parsed.command === "router") {
+      io.stdout(await runRouterLiteCommand(parsed, env, openclawHome));
       return 0;
     }
 

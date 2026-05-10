@@ -43,6 +43,9 @@ importers:
 
   tools/octoclawctl:
     dependencies:
+      '@octoclaw/policy':
+        specifier: workspace:*
+        version: link:../../packages/octoclaw-policy
       '@octoclaw/runtime':
         specifier: workspace:*
         version: link:../../extensions/octoclaw-runtime

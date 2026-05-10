@@ -784,3 +784,41 @@ Shadow event 必须回答：
 - 是能力不够、未配置、额度高压、健康差，还是证据不足？
 
 Live gate 仍按原文：连续 7 天或至少 100 条 shadow 样本，质量不降、成本不升、失败率不升，且一键回 shadow。
+
+### 16.9 2026-05-10 落地状态
+
+A/B 已落成只读骨架，未接入 live route/model selection：
+
+- `packages/octoclaw-policy/src/router-lite/contracts.ts`：定义 `ModelIntelSnapshot`、`ModelIntelLite`、price/capability/health/plan、proposal、shadow event 合同。
+- `packages/octoclaw-policy/src/router-lite/model-intel.ts`：合并 `openclaw models list --json`、`~/.openclaw/openclaw.json`、旧 `model-catalog.json`、usage/status/cost 信号。
+- `packages/octoclaw-policy/src/router-lite/config-analyze.ts`：生成 proposal-only 建议，不写 OpenClaw config。
+- `octoclawctl router model-intel refresh [--output-dir <dir>] [--openclaw-home <dir>] [--format json]`
+- `octoclawctl router model-config analyze [--input <snapshot.json>] [--output-dir <dir>] [--format json]`
+
+默认输出目录：
+
+```text
+~/.openclaw/workspace/tmp/octopus/router-lite/
+  model-intel-snapshot.json
+  model-config-proposal.json
+```
+
+当前本机轻量验证：
+
+```text
+router model-intel refresh:
+  models=14 configured=4 proposalOnly=10
+  sources=openclaw_models_list/openclaw_config/legacy_model_catalog/openclaw_usage_status/openclaw_usage_cost all ok
+
+router model-config analyze:
+  proposals=12
+  actions=add_capability_probe:4, add_plan_override:4, refresh_catalog:4
+```
+
+注意：
+
+- 这一步不会自动给 OpenClaw 增加模型，也不会替换主 agent/子 agent 模型。
+- `configured=false` 候选只进 proposal。
+- `quotaPressure=unknown` 不当免费。
+- 缺 `toolUse` / `structuredOutput` 证据时，只建议 probe，不用于 delegated task live gate。
+- C 阶段才会把实际模型和推荐模型写 shadow event；D 阶段才考虑 gated live。
