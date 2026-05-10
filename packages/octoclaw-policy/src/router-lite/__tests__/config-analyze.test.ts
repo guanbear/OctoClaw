@@ -55,7 +55,7 @@ describe("router-lite model config analysis", () => {
       expect.objectContaining({
         provider: "cliproxyapi",
         candidateModel: "cliproxyapi/gpt-5.5",
-        action: "add_capability_probe",
+        action: "add_compatibility_probe",
         reason: "tool_or_structured_capability_unknown",
       }),
     ]));

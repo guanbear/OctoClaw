@@ -105,11 +105,11 @@ function analyzeProvider(provider: string, models: ModelIntelLite[]): ModelConfi
     }
     if (model.capability.toolUse === "unknown" || model.capability.structuredOutput === "unknown") {
       proposals.push({
-        id: makeProposalId(provider, "add_capability_probe", model.modelKey),
+        id: makeProposalId(provider, "add_compatibility_probe", model.modelKey),
         provider,
         candidateModel: model.modelKey,
         priority: "medium",
-        action: "add_capability_probe",
+        action: "add_compatibility_probe",
         reason: "tool_or_structured_capability_unknown",
         expectedUse: "decide whether this configured model can safely handle delegated tool-using work",
         risk: "cheap smoke probes only; do not infer from model name alone",

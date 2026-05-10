@@ -147,6 +147,10 @@ function mergePrice(base: RouterLitePrice, incoming?: Partial<RouterLitePrice>):
     outputUsdPerMTok: incoming.outputUsdPerMTok ?? base.outputUsdPerMTok,
     cacheReadUsdPerMTok: incoming.cacheReadUsdPerMTok ?? base.cacheReadUsdPerMTok,
     cacheWriteUsdPerMTok: incoming.cacheWriteUsdPerMTok ?? base.cacheWriteUsdPerMTok,
+    blendedUsdPerMTok: incoming.blendedUsdPerMTok ?? base.blendedUsdPerMTok,
+    ratioBaselineModel: incoming.ratioBaselineModel ?? base.ratioBaselineModel,
+    ratioToBaseline: incoming.ratioToBaseline ?? base.ratioToBaseline,
+    conflict: incoming.conflict ?? base.conflict,
     confidence: maxConfidence([base.confidence, incoming.confidence], "unknown"),
     sources: unique([...base.sources, ...(incoming.sources ?? [])]),
     missingCostReason: incoming.missingCostReason ?? base.missingCostReason,
@@ -175,6 +179,9 @@ function mergeHealth(base: RouterLiteHealth, incoming?: Partial<RouterLiteHealth
     available: incoming.available && incoming.available !== "unknown" ? incoming.available : base.available,
     cooldown: incoming.cooldown ?? base.cooldown,
     quotaPressure: incoming.quotaPressure && incoming.quotaPressure !== "unknown" ? incoming.quotaPressure : base.quotaPressure,
+    p50FirstTokenMs: incoming.p50FirstTokenMs ?? base.p50FirstTokenMs,
+    p95FirstTokenMs: incoming.p95FirstTokenMs ?? base.p95FirstTokenMs,
+    p50OutputTokensPerSecond: incoming.p50OutputTokensPerSecond ?? base.p50OutputTokensPerSecond,
     p50LatencyMs: incoming.p50LatencyMs ?? base.p50LatencyMs,
     p95LatencyMs: incoming.p95LatencyMs ?? base.p95LatencyMs,
     recentFailureRate: incoming.recentFailureRate ?? base.recentFailureRate,
@@ -269,10 +276,18 @@ function priceFromCost(cost: unknown, source: string): Partial<RouterLitePrice> 
     outputUsdPerMTok: output,
     cacheReadUsdPerMTok: cacheRead,
     cacheWriteUsdPerMTok: cacheWrite,
+    blendedUsdPerMTok: blendedPrice(input, output),
     confidence: "high",
     sources: [source],
     missingCostReason: undefined,
   };
+}
+
+function blendedPrice(input?: number, output?: number): number | undefined {
+  if (input === undefined && output === undefined) return undefined;
+  const safeInput = input ?? 0;
+  const safeOutput = output ?? 0;
+  return (safeInput * 3 + safeOutput) / 4;
 }
 
 function modelFromOpenClawList(item: unknown): PartialModelIntel | undefined {
@@ -378,6 +393,7 @@ function modelsFromLegacyCatalog(catalog: unknown): PartialModelIntel[] {
       marketPrice: {
         inputUsdPerMTok: inputPrice,
         outputUsdPerMTok: outputPrice,
+        blendedUsdPerMTok: blendedPrice(inputPrice, outputPrice),
         confidence: inputPrice !== undefined || outputPrice !== undefined ? "medium" : "unknown",
         sources: inputPrice !== undefined || outputPrice !== undefined ? ["legacy_model_catalog"] : [],
         missingCostReason: inputPrice === undefined && outputPrice === undefined ? "legacy_catalog_missing_price" : undefined,
@@ -429,6 +445,38 @@ function addUsageSignals(models: ModelIntelLite[], usageStatus: unknown, usageCo
   }));
 }
 
+function normalizeModelName(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, "");
+}
+
+function findPriceBaseline(models: ModelIntelLite[], baselineModel = "glm-5.1"): ModelIntelLite | undefined {
+  const normalizedBaseline = normalizeModelName(baselineModel);
+  return models.find((model) => normalizeModelName(model.model) === normalizedBaseline)
+    ?? models.find((model) => normalizeModelName(model.modelKey).endsWith(normalizedBaseline));
+}
+
+function addPriceRatios(models: ModelIntelLite[], baselineModel = "glm-5.1"): ModelIntelLite[] {
+  const baseline = findPriceBaseline(models, baselineModel);
+  const baselinePrice = baseline?.marketPrice.blendedUsdPerMTok;
+  if (!baseline || baselinePrice === undefined || baselinePrice <= 0) return models;
+  return models.map((model) => {
+    const blended = model.marketPrice.blendedUsdPerMTok ?? blendedPrice(
+      model.marketPrice.inputUsdPerMTok,
+      model.marketPrice.outputUsdPerMTok,
+    );
+    if (blended === undefined) return model;
+    return {
+      ...model,
+      marketPrice: {
+        ...model.marketPrice,
+        blendedUsdPerMTok: blended,
+        ratioBaselineModel: baseline.modelKey,
+        ratioToBaseline: blended / baselinePrice,
+      },
+    };
+  });
+}
+
 export function buildModelIntelSnapshot(input: BuildModelIntelSnapshotInput): ModelIntelSnapshot {
   const generatedAt = input.generatedAt ?? new Date().toISOString();
   const partials: PartialModelIntel[] = [
@@ -446,7 +494,7 @@ export function buildModelIntelSnapshot(input: BuildModelIntelSnapshotInput): Mo
   for (const partial of partials) {
     merged.set(partial.modelKey, mergeModel(merged.get(partial.modelKey), partial));
   }
-  const models = addUsageSignals(
+  const models = addPriceRatios(addUsageSignals(
     Array.from(merged.values()).map((model) => ({
       ...model,
       proposalOnly: !model.configured,
@@ -460,7 +508,7 @@ export function buildModelIntelSnapshot(input: BuildModelIntelSnapshotInput): Mo
     })),
     input.usageStatus,
     input.usageCost,
-  ).sort((a, b) => a.modelKey.localeCompare(b.modelKey));
+  )).sort((a, b) => a.modelKey.localeCompare(b.modelKey));
 
   return {
     schemaVersion: "octoclaw.router_lite.model_intel_snapshot/v1",

@@ -83,6 +83,8 @@ export interface PolicyStateEntry {
   delivery_status?: string;
   dispatchStatus?: string;
   dispatch_status?: string;
+  dispatchRoute?: string;
+  dispatch_route?: string;
   nativeAnnounceCompletionPending?: boolean;
   native_announce_completion_pending?: boolean;
   nativeAnnounceDelivered?: boolean;
@@ -91,6 +93,12 @@ export interface PolicyStateEntry {
   native_announce_delivered_at?: string;
   nativeAnnounceResultHash?: string;
   native_announce_result_hash?: string;
+  nativeAnnounceBlocked?: boolean;
+  native_announce_blocked?: boolean;
+  nativeAnnounceBlocker?: string;
+  native_announce_blocker?: string;
+  nativeAnnounceBlockedHash?: string;
+  native_announce_blocked_hash?: string;
   outbound_guard_cancelled?: boolean;
   outbound_guard_cancelled_at?: string;
   latestStatus?: import("@octoclaw/contracts/work-contract").WorkContractStatus;

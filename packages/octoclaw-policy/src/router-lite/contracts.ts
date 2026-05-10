@@ -12,6 +12,10 @@ export interface RouterLitePrice {
   outputUsdPerMTok?: number;
   cacheReadUsdPerMTok?: number;
   cacheWriteUsdPerMTok?: number;
+  blendedUsdPerMTok?: number;
+  ratioBaselineModel?: string;
+  ratioToBaseline?: number;
+  conflict?: boolean;
   confidence: RouterLiteConfidence;
   sources: string[];
   missingCostReason?: string;
@@ -34,6 +38,9 @@ export interface RouterLiteHealth {
   available: RouterLiteTriState;
   cooldown: boolean;
   quotaPressure: RouterLiteQuotaPressure;
+  p50FirstTokenMs?: number;
+  p95FirstTokenMs?: number;
+  p50OutputTokensPerSecond?: number;
   p50LatencyMs?: number;
   p95LatencyMs?: number;
   recentFailureRate?: number;
@@ -79,7 +86,7 @@ export interface ModelConfigProposalItem {
   provider: string;
   candidateModel?: string;
   priority: "low" | "medium" | "high";
-  action: "add_configured_model" | "refresh_catalog" | "add_plan_override" | "add_capability_probe";
+  action: "add_configured_model" | "refresh_catalog" | "add_plan_override" | "add_compatibility_probe";
   reason: string;
   expectedUse: string;
   risk: string;

@@ -111,13 +111,26 @@ interface ModelIntelEntry {
 
 按优先级合并：
 
-1. OpenClaw provider catalog：context、tool、structured output、vision、reasoning。
+1. OpenClaw provider catalog：context、tool、structured output、vision、reasoning 等硬能力。
 2. OpenClaw config：用户显式配置的模型、profile、baseUrl、cost。
-3. 本地 replay/eval：成功率、返工率、工具调用失败、超时。
-4. 外部 registry：OpenRouter、LiteLLM、models.dev，只做补充。
-5. 人工 override：用户明确声明某模型适合/不适合某类任务。
+3. 外部榜单/API：PinchBench、Artificial Analysis、Aider、LiveCodeBench、SWE-bench、BFCL、LMArena/LiveBench、中文榜单，提供场景能力先验。
+4. 本地 replay/nightly：成功率、返工率、工具调用失败、超时、速度、用户纠正。
+5. 外部 registry：OpenRouter、LiteLLM、models.dev，补价格、上下文、supported parameters 和同供应商候选。
+6. 人工 override：用户明确声明某模型适合/不适合某类任务。
 
-不要用榜单直接决定 live。榜单只适合 cold-start 标注 `codingTier`。
+不要用单个榜单直接决定 live。榜单只适合 cold-start 场景分和 shadow/proposal；live 仍要看本地 replay/nightly 和配置。
+
+能力必须分场景，但场景不能过细。固定一个“综合模型分”只能作为兜底，不适合作为主要选模依据。OctoClaw 的任务分布不是通用聊天榜单，也不是纯算法题榜单，至少要区分：
+
+| OctoClaw 场景分 | 代表任务 | 主要证据 |
+|-----------------|----------|----------|
+| `coding_worker` | 改代码、修测试、生成脚本、repo 内多文件修改 | PinchBench coding、Aider、SWE-bench、LiveCodeBench、本地 coding replay |
+| `agentic_tool_task` | 多工具、多步骤、文件/集成/记忆/状态操作 | PinchBench overall、skills、integrations、memory、BFCL、本地 tool failure |
+| `research_lookup` | 查资料、读网页、整理事实、轻量研究 | PinchBench research、Artificial Analysis general、LiveBench、本地 web/tool 成功率 |
+| `data_log_analysis` | CSV、日志、表格、报表、异常分析 | PinchBench csv/log/analysis、本地数据任务 replay |
+| `main_reasoning` | 主 agent 设计判断、复杂权衡、失败兜底 | Artificial Analysis reasoning、LiveBench/LMArena、PinchBench analysis、本地纠错率 |
+
+选模型时先由 judge/runtime signals 把任务映射到场景，再用对应场景分排序。没有明确场景时使用 `default_delegate_score`，它也必须由上面几个场景分加权得来，而不是一个外部榜单总分。
 
 ---
 
@@ -154,10 +167,13 @@ interface ModelIntelEntry {
 
 可以借鉴：
 
-- coding leaderboard
-- long context benchmark
-- tool-use / function-call benchmark
-- reasoning benchmark
+- PinchBench：OpenClaw agent 实战，适合 `agentic_tool_task` 和 OctoClaw delegated worker 先验。
+- Aider / SWE-bench：更贴近 repo edit、debug、patch review，适合 `coding_worker`。
+- LiveCodeBench / SciCode / CritPt：更偏代码生成和算法，不能单独代表 repo 修改能力。
+- BFCL：function/tool calling，适合 `agentic_tool_task` 的 hard/soft evidence。
+- Artificial Analysis：通用 intelligence/coding/speed/price 索引，适合能力和价格的跨源参考。
+- LMArena / LiveBench：偏通用偏好和复杂任务，适合 `main_reasoning` 辅助。
+- OpenCompass / SuperCLUE / C-Eval / CMMLU：中文能力辅助，不直接替代 coding/agent 能力。
 
 使用方式：
 
@@ -176,7 +192,7 @@ leaderboard rank high
   -> 直接 live
 ```
 
-原因：榜单任务和 OctoClaw 的真实任务分布不同；榜单不反映你的 provider 额度、延迟、失败率、工具调用稳定性。
+原因：榜单任务和 OctoClaw 的真实任务分布不同；榜单不反映你的 provider 额度、延迟、失败率、工具调用稳定性。PinchBench 虽然和 OpenClaw 相关，但仍混有 runtime、provider、benchmark version、timeout、judge scaffold 等因素，所以也不能单源拍板。
 
 ### OmniRoute
 
@@ -609,7 +625,12 @@ Auto Router Lite 不能靠手写模型表，因为新模型几乎每天出现。
 
 ### 16.2 能力不是一个总分
 
-第一版不要给模型打一个“综合智商分”。能力拆成可验证字段：
+第一版不要给模型打一个“综合智商分”。能力拆成两层：
+
+1. 硬能力：上下文、工具、结构化输出、reasoning、prompt cache。
+2. 场景能力：coding worker、agentic tool task、research lookup、data/log analysis、main reasoning。
+
+硬能力是 gate；场景能力是排序依据。硬能力不过线时，场景分再高也不能进 live。
 
 ```typescript
 type CapabilityEvidence =
@@ -633,6 +654,55 @@ interface CapabilityLite {
 ```
 
 `codingTier` 的含义也收窄：它只表示 OctoClaw delegated coding/workspace tasks 的最低质量层，不表示通用排行榜排名。
+
+场景能力的最小结构：
+
+```typescript
+interface ScenarioAbilityScore {
+  score?: number;       // 0-100
+  tier: "S" | "A" | "B" | "C" | "unknown";
+  confidence: "high" | "medium" | "low" | "unknown";
+  sources: Array<{
+    source: "pinchbench" | "aider" | "swe_bench" | "bfcl" | "artificial_analysis" | "local_replay" | "operator_override";
+    score?: number;
+    version?: string;
+    sampleCount?: number;
+    fetchedAt: string;
+  }>;
+}
+
+interface ScenarioAbilityLite {
+  codingWorker: ScenarioAbilityScore;
+  agenticToolTask: ScenarioAbilityScore;
+  researchLookup: ScenarioAbilityScore;
+  dataLogAnalysis: ScenarioAbilityScore;
+  mainReasoning: ScenarioAbilityScore;
+  defaultDelegate: ScenarioAbilityScore;
+}
+```
+
+`defaultDelegate` 只在任务分类不清时使用，权重保守：
+
+```text
+defaultDelegate =
+  35% codingWorker
+  30% agenticToolTask
+  15% dataLogAnalysis
+  10% researchLookup
+  10% mainReasoning
+```
+
+PinchBench 的原始 category 不能直接等同 OctoClaw 场景。它应该作为证据映射：
+
+| PinchBench 原始分类 | OctoClaw 场景 |
+|---------------------|---------------|
+| `coding` | `codingWorker` |
+| `skills` / `integrations` / `memory` / `productivity` | `agenticToolTask` |
+| `research` | `researchLookup` |
+| `csv_analysis` / `log_analysis` / `analysis` | `dataLogAnalysis` |
+| `analysis` / `meeting_analysis` / `writing` | `mainReasoning` |
+
+这也是为什么报告里可以展示 raw categories，但 router 只消费 OctoClaw 场景分。
 
 ### 16.3 新模型如何进系统
 
@@ -720,10 +790,25 @@ interface PlanLite {
 | `cooldown` | usage status、429/rate limit、runtime failure |
 | `recentFailureRate` | replay/nightly |
 | `p50LatencyMs / p95LatencyMs` | replay/nightly + probe 初值 |
+| `p50FirstTokenMs / p95FirstTokenMs` | 定时 probe + 真实请求 telemetry |
+| `p50OutputTokensPerSecond` | 定时 probe + 真实请求 telemetry |
 | `toolCallFailureRate` | replay/nightly |
 | `timeoutRate` | replay/nightly |
 
 健康 gate 在价格之前。便宜但近期失败率高的模型不能进入推荐。
+
+响应速度、生成速度和稳定性由 OctoClaw 自己定时维护，不从榜单推断。建议每 6-12 小时对 configured 模型跑低成本 probe，并从真实 delegated work 聚合：
+
+```text
+configured models
+  -> short response probe: first_token_ms, output_tps
+  -> tool smoke probe: tool_call_success
+  -> structured smoke probe: json_parse_success
+  -> nightly replay sample: task_success, timeout, user_correction
+  -> health rollup
+```
+
+定时健康结果只更新 `health` 和 `scenarioAbility.sources += local_replay`；不自动改 live 配置。
 
 ### 16.8 A/B/C 具体落地
 
@@ -812,7 +897,7 @@ router model-intel refresh:
 
 router model-config analyze:
   proposals=12
-  actions=add_capability_probe:4, add_plan_override:4, refresh_catalog:4
+  actions=add_compatibility_probe:4, add_plan_override:4, refresh_catalog:4
 ```
 
 注意：
@@ -822,3 +907,43 @@ router model-config analyze:
 - `quotaPressure=unknown` 不当免费。
 - 缺 `toolUse` / `structuredOutput` 证据时，只建议 probe，不用于 delegated task live gate。
 - C 阶段才会把实际模型和推荐模型写 shadow event；D 阶段才考虑 gated live。
+
+### 16.10 2026-05-10 外部数据源试跑结论
+
+新增只读原型脚本：
+
+```text
+pnpm router:model-intel:prototype
+node scripts/router-lite-model-intel-prototype.mjs --format json
+```
+
+脚本只拉外部公开源，不读取本地 secret，不接入 live route：
+
+- OpenRouter `/api/v1/models`：价格、context、supported parameters。
+- PinchBench official leaderboard：OpenClaw agent 实战 best/average、成本、耗时、提交数。
+- PinchBench best submission：按 task category 生成 OctoClaw 场景分。
+
+价格倍率基准使用 `z-ai/glm-5.1 = 1.00x`，混合价格口径为 `3 input : 1 output`。这比用 GPT-5.5 当 1.00x 更适合成本优化，因为 GLM 5.1 是当前可用中高能力 worker 的中间价位参考。
+
+当前试跑样例显示：
+
+| 模型 | API in/out $/M | 成本倍率，GLM 5.1=1 | 场景信号，PinchBench best submission | 结论 |
+|------|----------------|----------------------|----------------------------------------|------|
+| `deepseek/deepseek-v4-flash` | 0.14 / 0.28 | 约 0.105x | best 85；codingWorker 89；样本低 | 高性价比 worker 候选 |
+| `deepseek/deepseek-v4-pro` | 0.435 / 0.87 | 约 0.327x | best 59；codingWorker 76；样本低且异常 | 不能因 Pro 名称直接优先 |
+| `z-ai/glm-5.1` | 1.05 / 3.5 | 1.00x | best 77；codingWorker 88；样本低 | 基准模型 |
+| `z-ai/glm-5-turbo` | 1.2 / 4.0 | 约 1.143x | best 86；codingWorker 89；dataLog 92 | 值得优先评估 |
+| `openai/gpt-5.5` | 5 / 30 | 约 6.767x | best 89；mainReasoning 91；dataLog 94 | 高难兜底，不默认 worker |
+| `openai/gpt-5.4-mini` | 0.75 / 4.5 | 约 1.015x | best 82；codingWorker 86；dataLog 91 | 平衡 worker 候选 |
+| `openai/gpt-5.4-nano` | 0.2 / 1.25 | 约 0.278x | best 77；codingWorker 77 | 简单/低风险任务候选 |
+| `minimax/minimax-m2.7` | 0.299 / 1.2 | 约 0.315x | best 72；codingWorker 80 | 便宜但需更多本地验证 |
+| `xiaomi/mimo-v2.5` | 0.4 / 2.0 | 约 0.481x | best/avg 约 89/89；codingWorker 91；样本低 | 自动候选发现很重要 |
+
+价格源也暴露了一个硬要求：同一模型在 OpenRouter live API、models.dev、官方/供应商 catalog 之间可能冲突。`model-intel` 必须记录 `price.conflict=true` 和来源列表，不能静默覆盖。
+
+能力源的结论：
+
+- PinchBench 对 OctoClaw 很相关，但它是 OpenClaw agent 实战榜，不是通用模型智力榜。
+- Aider/SWE-bench/LiveCodeBench/BFCL 仍要作为 `codingWorker` 和 `agenticToolTask` 的补充证据。
+- 本地 nightly/replay 是最终 live gate，特别是 first-token latency、output TPS、失败率、timeout、工具调用失败。
+- 没有场景证据的新模型只能进 proposal/shadow，不能进默认 live。

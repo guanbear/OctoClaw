@@ -42,10 +42,19 @@ function sampleSnapshot() {
     },
     legacyCatalog: {
       models: [
-        {
-          id: "gpt-5.5-mini",
-          provider: "cliproxyapi",
-          short_name: "GPT 5.5 Mini",
+          {
+            id: "glm-5.1",
+            provider: "z-ai",
+            configured: false,
+            size_class: "strong",
+            pricing: { input: 1, output: 3 },
+            modalities: { input: ["text"] },
+            capability_hints: { tool_call: "yes", reasoning: "yes" },
+          },
+          {
+            id: "gpt-5.5-mini",
+            provider: "cliproxyapi",
+            short_name: "GPT 5.5 Mini",
           available: true,
           configured: false,
           size_class: "mini",
@@ -85,6 +94,9 @@ describe("router-lite model intel", () => {
       outputUsdPerMTok: 10,
       cacheReadUsdPerMTok: 0.2,
       cacheWriteUsdPerMTok: 1,
+      blendedUsdPerMTok: 4,
+      ratioBaselineModel: "z-ai/glm-5.1",
+      ratioToBaseline: 2.6666666666666665,
       confidence: "high",
     });
     expect(model?.marketPrice.sources).toContain("openclaw_config");

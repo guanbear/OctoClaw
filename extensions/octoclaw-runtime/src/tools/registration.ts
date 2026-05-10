@@ -1148,7 +1148,7 @@ export function getToolRegistrations(options: ToolRegistrationOptions = {}): Too
           expectedSeconds: { type: "number", description: "Main agent's estimate of how long this task should take. Used as timeout baseline." },
           timeoutSeconds: { type: "number", description: "Runner timeout in seconds." },
           sessionKey: { type: "string", description: "Optional session key override." },
-          metadataJson: { type: "string", description: "Optional JSON object with extra session metadata. For delegated work, include known anchors as context_refs: { primaryFiles, readScope, writeScope, sourcePolicy, maxToolCalls, workspaceMode }." },
+          metadataJson: { type: "string", description: "Optional JSON object with extra session metadata. For delegated work, include known anchors as context_refs: { primaryFiles, readScope, writeScope, sourcePolicy, maxToolCalls, workspaceMode }. For explicit persistent side effects without a narrower write target, use context_refs: { requestedSideEffects: true, workspaceMode: \"write_allowed\" }." },
           policyJson: { type: "string", description: "Optional precomputed runtime policy decision JSON." },
           workContractId: { type: "string", description: "Optional sealed WorkContract id to dispatch without re-judging." },
           delegateTaskId: { type: "string", description: "Optional delegate task id for continuation-aware dispatch." },

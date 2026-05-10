@@ -252,6 +252,44 @@ describe("octoclaw_dispatch planner backend", () => {
     }));
   });
 
+  it("honors explicit side-effect context refs with a bounded write scope", async () => {
+    process.env.OCTOCLAW_SPAWN_BACKEND = "planner";
+    const contract = seedWorkContract("session-planner-cron-write-scope");
+    const task = [
+      "创建一个定时任务，每12小时检查并处理GitHub PR。",
+      "使用OpenClaw的定时任务机制设置cron，确保任务能够持续运行。",
+    ].join("\n");
+
+    const response = await dispatchTool().execute({
+      task,
+      workContractId: contract.workContractId,
+      policyJson: JSON.stringify(delegateDecision(contract)),
+      metadataJson: JSON.stringify({
+        context_refs: {
+          requestedSideEffects: true,
+          workspaceMode: "write_allowed",
+          maxToolCalls: 6,
+        },
+      }),
+      timeoutSeconds: 300,
+    }, {
+      sessionKey: contract.sessionKey,
+      sessionId: "session-planner-cron-write-scope",
+      cwd: tempWorkspace,
+    });
+
+    const body = JSON.parse(String(response.text));
+    const spawnTask = String(body.sessionsSpawnArgs.task);
+    expect(body.ok).toBe(true);
+    expect(spawnTask).toContain("\"contextStrategy\": \"explicit_refs\"");
+    expect(spawnTask).toContain("\"workspaceMode\": \"write_allowed\"");
+    expect(spawnTask).toContain("\"writeScope\": [");
+    expect(spawnTask).toContain("\"requested:side_effects\"");
+    expect(spawnTask).toContain("native CLI/API for the target system");
+    expect(spawnTask).toContain("smallest requested native CLI/API change");
+    expect(spawnTask).toContain("\"maxToolCalls\": 6");
+  });
+
   it("keeps native sessions_spawn labels unique when repeated task text is delegated", async () => {
     process.env.OCTOCLAW_SPAWN_BACKEND = "planner";
     const firstContract = seedWorkContract("session-planner-label-unique");
@@ -384,7 +422,7 @@ describe("octoclaw_dispatch planner backend", () => {
     expect(body.sessionsSpawnArgs.cwd).toBe(liveRoot);
     expect(body.sessionsSpawnArgs.task).toContain(`"cwd": "${liveRoot}"`);
     expect(body.sessionsSpawnArgs.task).toContain(`"workspaceRoot": "${liveRoot}"`);
-    expect(body.sessionsSpawnArgs.task).toContain("missing_context_refs");
+    expect(body.sessionsSpawnArgs.task).toContain("blocked worker result packet");
     expect(body.sessionsSpawnArgs.task).not.toContain(`"cwd": "${openclawWorkspace}"`);
     expect(nativeSpawnIntentStore.get(body.spawnIntentId)?.sessionsSpawnArgs.cwd).toBe(liveRoot);
   });

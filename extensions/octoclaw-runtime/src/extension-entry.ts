@@ -125,6 +125,7 @@ const OCTOCLAW_DELEGATION_SYSTEM_CONTEXT = [
   "Do not explain delegation strategy, routing rationale, or task boundary analysis to the user. Use octoclaw_dispatch directly.",
   "When delegated work depends on local code, docs, or repo state, pass the smallest known anchors to octoclaw_dispatch as metadataJson.context_refs.",
   "Use this shape when anchors are known: {\"context_refs\":{\"primaryFiles\":[\"path\"],\"readScope\":[\"dir\"],\"sourcePolicy\":\"local refs first\",\"maxToolCalls\":4,\"workspaceMode\":\"read_only\"}}.",
+  "When the user explicitly requests a persistent side effect and no narrower write target is known, pass {\"context_refs\":{\"requestedSideEffects\":true,\"workspaceMode\":\"write_allowed\"}}; do not rely on the child to infer write permission from wording.",
   "If anchors are not already known, use at most one lightweight read-only lookup to find exact refs, or dispatch without refs and let the child report missing context; never fabricate refs just to fill the packet.",
   "Do not emit user-visible coordinator chatter or ACK text such as '我来写'、'收到，我看一下'、'我先确认一下派发边界'. Runtime ACK handles acknowledgments as tracked deliverables.",
   "Before tool calls or route_hint, emit no user-visible text. User-visible output should only contain authoritative status receipt, final result, or clear failure.",
@@ -133,7 +134,8 @@ const OCTOCLAW_DELEGATION_SYSTEM_CONTEXT = [
 const OCTOCLAW_DELEGATION_SLIM_SYSTEM_CONTEXT = [
   "OctoClaw delegated-route context: before native spawn, answer directly only if this turn can be fully resolved now without background work.",
   "If delegation is still needed, use octoclaw_dispatch; do not hand-write sessions_spawn args or bypass the returned planner intent.",
-  "Pass only already-known local anchors as metadataJson.context_refs; if anchors are unknown, dispatch without fabricated refs and let the child report missing_context_refs.",
+  "Pass only already-known local anchors as metadataJson.context_refs; if anchors are unknown, dispatch without fabricated refs and let the child return a blocked worker result packet.",
+  "For explicit persistent side effects, pass metadataJson.context_refs.requestedSideEffects=true and workspaceMode=write_allowed.",
   "Emit no user-visible ACK/coordinator text before accepted native run evidence and OctoClaw confirm exist.",
 ].join("\n");
 
@@ -779,6 +781,11 @@ interface NativeAnnounceCompletion {
   resultHash: string;
 }
 
+interface NativeAnnounceBlocker {
+  blocked: true;
+  reason: string;
+}
+
 const NATIVE_ANNOUNCE_BLOCKED_TOOLS = new Set([
   "octoclaw_dispatch",
   "octoclaw_dispatch_confirm",
@@ -787,6 +794,41 @@ const NATIVE_ANNOUNCE_BLOCKED_TOOLS = new Set([
 
 function regexGroup(text: string, pattern: RegExp): string {
   return stringValue(pattern.exec(text)?.[1]);
+}
+
+function extractOctoClawWorkerResultPacket(text: string): UnknownRecord {
+  const raw = regexGroup(
+    text,
+    /<<<BEGIN_OCTOCLAW_WORKER_RESULT>>>\s*([\s\S]*?)\s*<<<END_OCTOCLAW_WORKER_RESULT>>>/u,
+  );
+  if (!raw) return {};
+  try {
+    return asRecord(JSON.parse(raw));
+  } catch {
+    return {};
+  }
+}
+
+function extractNativeAnnounceBlocker(completion: NativeAnnounceCompletion): NativeAnnounceBlocker | null {
+  const resultText = stringValue(completion.resultText);
+  const status = stringValue(completion.status).toLowerCase();
+  const workerResult = extractOctoClawWorkerResultPacket(resultText);
+  if (
+    stringValue(workerResult.schemaVersion || workerResult.schema_version) === "octoclaw.worker_result.v1"
+    && stringValue(workerResult.status).toLowerCase() === "blocked"
+  ) {
+    const blockers = Array.isArray(workerResult.blockers)
+      ? workerResult.blockers.map((item) => stringValue(item)).filter(Boolean)
+      : [];
+    const rawReason = blockers[0] || stringValue(workerResult.summary) || "child reported missing context";
+    const reason = rawReason.replace(/\s+/gu, " ").trim().slice(0, 220) || "child reported missing context";
+    return { blocked: true, reason };
+  }
+  const structuredBlocked = status === "blocked" || status.startsWith("blocked ");
+  if (!structuredBlocked) return null;
+  const rawReason = "child reported missing context";
+  const reason = rawReason.replace(/\s+/gu, " ").trim().slice(0, 220) || "child reported missing context";
+  return { blocked: true, reason };
 }
 
 function nativeAnnounceProvenance(event: UnknownRecord): UnknownRecord {
@@ -1105,10 +1147,12 @@ function markNativeAnnounceCompletionOnContract(
   completion: NativeAnnounceCompletion,
   delivered: boolean,
   nowIso: string,
+  blocker?: NativeAnnounceBlocker | null,
 ): WorkContract | null {
   return updateWorkContract(workContractId, (contract) => {
     const ids = contractNativeIds(contract);
     const childSessionKey = ids.childSessionKey || completion.sourceSessionKey;
+    const isBlocked = blocker?.blocked === true;
     const previousDelegate = contract.delegate;
     const nextDelegate = previousDelegate
       ? {
@@ -1117,19 +1161,20 @@ function markNativeAnnounceCompletionOnContract(
             ? {
                 ...previousDelegate.nativeBinding,
                 childSessionKey,
-                status: "succeeded" as const,
-                currentStep: "completed",
+                status: isBlocked ? "blocked" as const : "succeeded" as const,
+                currentStep: isBlocked ? "blocked" : "completed",
               }
             : previousDelegate.nativeBinding,
-          nextAction: "deliver" as const,
+          nextAction: isBlocked ? "ask_user" as const : "deliver" as const,
+          ...(isBlocked ? { blocker: blocker.reason } : {}),
         }
       : previousDelegate;
-    const deliveryStatus = delivered ? "delivered" : (
+    const deliveryStatus = isBlocked ? "blocked" : delivered ? "delivered" : (
       nativeAnnounceDeliveryAlreadySent(contract) ? "delivered" : "pending"
     );
     return {
       ...contract,
-      status: "completed" as const,
+      status: isBlocked ? "blocked" as const : "completed" as const,
       ...(nextDelegate ? { delegate: nextDelegate } : {}),
       continuity: {
         ...contract.continuity,
@@ -1147,8 +1192,10 @@ function markNativeAnnounceCompletionOnContract(
       },
       mainContext: {
         ...contract.mainContext,
-        statusLine: delivered ? "Child result delivered." : "Child result ready for delivery.",
-        nextAction: "deliver",
+        statusLine: isBlocked
+          ? `Child result blocked: ${blocker.reason}`
+          : delivered ? "Child result delivered." : "Child result ready for delivery.",
+        nextAction: isBlocked ? "ask_user" : "deliver",
         visibleIds: {
           ...contract.mainContext.visibleIds,
           childSessionKey: childSessionKey || contract.mainContext.visibleIds.childSessionKey,
@@ -1168,6 +1215,7 @@ function buildNativeAnnouncePolicyState(input: {
   completion: NativeAnnounceCompletion;
   delivered: boolean;
   now: number;
+  blocker?: NativeAnnounceBlocker | null;
 }): PolicyStateEntry {
   const ids = contractNativeIds(input.contract);
   const decision = asRecord(input.current.decision);
@@ -1180,6 +1228,7 @@ function buildNativeAnnouncePolicyState(input: {
   const workContractProjection = asRecord(decision.work_contract);
   const childSessionKey = ids.childSessionKey || input.completion.sourceSessionKey;
   const runId = ids.runId || ids.childRunId;
+  const isBlocked = input.blocker?.blocked === true;
   return {
     ...input.current,
     canonicalSessionKey: input.stateKey,
@@ -1189,17 +1238,21 @@ function buildNativeAnnouncePolicyState(input: {
       route_decision: {
         ...routeDecision,
         route: "delegate",
-        route_source: "native_announce",
-        task_class: stringValue(routeDecision.task_class) || "delegated_completion_delivery",
+        route_source: isBlocked ? "native_announce_blocker" : "native_announce",
+        task_class: isBlocked
+          ? "delegated_completion_blocked"
+          : stringValue(routeDecision.task_class) || "delegated_completion_delivery",
       },
       work_contract: {
         ...workContractProjection,
         workContractId: input.contract.workContractId,
         work_contract_id: input.contract.workContractId,
         route: "delegate",
+        status: isBlocked ? "blocked" : stringValue(workContractProjection.status || "completed"),
         childSessionKey,
         openclawRunId: runId,
         spawnIntentId: ids.spawnIntentId,
+        ...(isBlocked ? { blocker: input.blocker?.reason } : {}),
       },
       runtime_truth: {
         ...runtimeTruth,
@@ -1219,9 +1272,10 @@ function buildNativeAnnouncePolicyState(input: {
       },
       delivery: {
         ...asRecord(decision.delivery),
-        status: input.delivered ? "delivered" : "pending",
+        status: isBlocked ? "blocked" : input.delivered ? "delivered" : "pending",
         resultMaterialized: true,
         result_materialized: true,
+        ...(isBlocked ? { blocker: input.blocker?.reason } : {}),
       },
       hook_interface: {
         ...hookInterface,
@@ -1233,7 +1287,7 @@ function buildNativeAnnouncePolicyState(input: {
     },
     delegated: true,
     dispatchRoute: "delegate",
-    dispatchStatus: input.delivered ? "result_delivered" : "result_ready",
+    dispatchStatus: isBlocked ? "blocked" : input.delivered ? "result_delivered" : "result_ready",
     dispatchExecuted: true,
     dispatch_executed: true,
     spawnExecuted: true,
@@ -1250,18 +1304,31 @@ function buildNativeAnnouncePolicyState(input: {
     child_run_id: ids.childRunId || runId,
     childSessionKey,
     child_session_key: childSessionKey,
-    nativeAnnounceCompletionPending: !input.delivered,
-    native_announce_completion_pending: !input.delivered,
-    nativeAnnounceDelivered: input.delivered,
-    native_announce_delivered: input.delivered,
-    nativeAnnounceResultHash: input.completion.resultHash,
-    native_announce_result_hash: input.completion.resultHash,
+    ...(isBlocked ? {
+      nativeAnnounceBlocked: true,
+      native_announce_blocked: true,
+      nativeAnnounceBlocker: input.blocker?.reason,
+      native_announce_blocker: input.blocker?.reason,
+      nativeAnnounceBlockedHash: input.completion.resultHash,
+      native_announce_blocked_hash: input.completion.resultHash,
+      nativeAnnounceCompletionPending: false,
+      native_announce_completion_pending: false,
+      nativeAnnounceDelivered: false,
+      native_announce_delivered: false,
+    } : {
+      nativeAnnounceCompletionPending: !input.delivered,
+      native_announce_completion_pending: !input.delivered,
+      nativeAnnounceDelivered: input.delivered,
+      native_announce_delivered: input.delivered,
+      nativeAnnounceResultHash: input.completion.resultHash,
+      native_announce_result_hash: input.completion.resultHash,
+    }),
     ...(input.delivered ? {
       nativeAnnounceDeliveredAt: input.now,
       native_announce_delivered_at: new Date(input.now).toISOString(),
     } : {}),
-    deliveryStatus: input.delivered ? "delivered" : "pending",
-    delivery_status: input.delivered ? "delivered" : "pending",
+    deliveryStatus: isBlocked ? "blocked" : input.delivered ? "delivered" : "pending",
+    delivery_status: isBlocked ? "blocked" : input.delivered ? "delivered" : "pending",
     formal_reply_visible: input.delivered || input.current.formal_reply_visible,
     updatedAt: input.now,
   } as PolicyStateEntry;
@@ -1277,6 +1344,11 @@ function isNativeAnnounceDeliveryState(state: unknown): boolean {
     || dispatchStatus === "result_ready"
     || dispatchStatus === "result_delivered"
     || Boolean(stringValue(record.nativeAnnounceResultHash || record.native_announce_result_hash));
+}
+
+function isNativeAnnounceBlockedState(state: unknown): boolean {
+  const record = asRecord(state);
+  return record.nativeAnnounceBlocked === true || record.native_announce_blocked === true;
 }
 
 function isNativeAnnounceAlreadyDelivered(state: unknown): boolean {
@@ -1311,6 +1383,7 @@ function applyNativeAnnounceCompletionState(input: {
   completion: NativeAnnounceCompletion;
   delivered: boolean;
   now: number;
+  blocker?: NativeAnnounceBlocker | null;
 }): void {
   const aliasKeys = Array.from(new Set([
     input.stateKey,
@@ -1327,6 +1400,7 @@ function applyNativeAnnounceCompletionState(input: {
       completion: input.completion,
       delivered: input.delivered,
       now: input.now,
+      blocker: input.blocker,
     }));
   }
 }
@@ -1339,6 +1413,7 @@ function nativeAnnouncePromptProjection(input: {
   contract: WorkContract;
   completion: NativeAnnounceCompletion;
   delivered: boolean;
+  blocker?: NativeAnnounceBlocker | null;
 }): { prependSystemContext?: string; prependContext?: string } {
   const ids = contractNativeIds(input.contract);
   if (input.delivered) {
@@ -1350,6 +1425,24 @@ function nativeAnnouncePromptProjection(input: {
         "This native subagent_announce result was already delivered to the user.",
         "Reply exactly NO_REPLY. Do not send another final message and do not call tools.",
       ].join("\n")],
+      contextPayload: "",
+      shouldInjectPolicyProjection: false,
+    }) ?? {};
+  }
+  if (input.blocker?.blocked === true) {
+    return buildPromptContextProjection({
+      prependSystem: [[
+        "[OctoClaw native child completion]",
+        `workContractId=${input.contract.workContractId}`,
+        `childSessionKey=${ids.childSessionKey || input.completion.sourceSessionKey}`,
+        ids.runId ? `runId=${ids.runId}` : "",
+        `blocker=${input.blocker.reason}`,
+        "OpenClaw native subagent_announce matched an existing accepted sessions_spawn WorkContract, but the child returned a blocker instead of a final result.",
+        "Treat this as a recoverable missing-context handoff, not as a failed dispatch and not as a new user request.",
+        "If the missing information is already available in the current conversation or runtime metadata, call octoclaw_dispatch once with a clarified task and explicit context_refs/writeScope when needed.",
+        "If the missing information is not available, ask the user one concise question.",
+        "Do not call sessions_spawn directly. Do not say the task was not dispatched or still pending.",
+      ].filter(Boolean).join("\n")],
       contextPayload: "",
       shouldInjectPolicyProjection: false,
     }) ?? {};
@@ -1425,8 +1518,9 @@ async function handleNativeAnnounceCompletion(input: {
 
   const directDeliveryEnabled = nativeAnnounceDirectDeliveryEnabled(input.pluginConfig);
   const alreadyDelivered = nativeAnnounceDeliveryAlreadySent(matchedContract);
+  const blocker = extractNativeAnnounceBlocker(nativeAnnounceCompletion);
   const currentState = asRecord(getPolicyStateForContext(input.ctx).state);
-  const directDelivery: SendIMResult & { sessionKey: string; replyToMessageId: string } = !alreadyDelivered && directDeliveryEnabled
+  const directDelivery: SendIMResult & { sessionKey: string; replyToMessageId: string } = !blocker && !alreadyDelivered && directDeliveryEnabled
     ? await deliverNativeAnnounceCompletion({
         contract: matchedContract,
         completion: nativeAnnounceCompletion,
@@ -1436,7 +1530,12 @@ async function handleNativeAnnounceCompletion(input: {
         cwd: input.cwd || stringValue(input.ctx.cwd) || process.cwd(),
         sendMessage: input.sendMessage,
       })
-    : { sent: false, error: alreadyDelivered ? "already_delivered" : "direct_delivery_disabled", sessionKey: "", replyToMessageId: "" };
+    : {
+        sent: false,
+        error: blocker ? "child_blocked" : alreadyDelivered ? "already_delivered" : "direct_delivery_disabled",
+        sessionKey: "",
+        replyToMessageId: "",
+      };
   const delivered = alreadyDelivered || directDelivery.sent;
   const now = Date.now();
   const nowIso = new Date(now).toISOString();
@@ -1445,6 +1544,7 @@ async function handleNativeAnnounceCompletion(input: {
     nativeAnnounceCompletion,
     delivered,
     nowIso,
+    blocker,
   ) ?? matchedContract;
   applyNativeAnnounceCompletionState({
     ctx: input.ctx,
@@ -1453,6 +1553,7 @@ async function handleNativeAnnounceCompletion(input: {
     completion: nativeAnnounceCompletion,
     delivered,
     now,
+    blocker,
   });
   void recordPolicyReplay(
     alreadyDelivered ? "native_announce_completion_duplicate" : "native_announce_completion_matched",
@@ -1462,8 +1563,10 @@ async function handleNativeAnnounceCompletion(input: {
       workContractId: updatedContract.workContractId,
       sourceSessionKey: nativeAnnounceCompletion.sourceSessionKey,
       resultHash: nativeAnnounceCompletion.resultHash,
+      blocked: Boolean(blocker),
+      blocker: blocker?.reason || "",
       delivered,
-      directDeliveryAttempted: !alreadyDelivered && directDeliveryEnabled,
+      directDeliveryAttempted: !blocker && !alreadyDelivered && directDeliveryEnabled,
       directDeliverySent: directDelivery.sent,
       directDeliveryError: directDelivery.error || "",
       delivery_transport: directDelivery.transport || "",
@@ -1510,6 +1613,7 @@ async function handleNativeAnnounceCompletion(input: {
       contract: updatedContract,
       completion: nativeAnnounceCompletion,
       delivered,
+      blocker,
     }),
   };
 }
@@ -3713,6 +3817,21 @@ export const plugin = {
         bindRouteHintPromptToCurrentContext(ctx, toolParams);
       }
       let { key: stateKey, state } = getPolicyStateForContext(ctx);
+      if (state && isNativeAnnounceBlockedState(state) && toolName === "octoclaw_dispatch") {
+        void recordPolicyReplay(
+          "native_announce_blocker_redispatch_allowed",
+          {
+            sessionKey: stateKey || "",
+            sessionId: stringValue(ctx.sessionId),
+            toolName,
+            workContractId: stringValue(asRecord(state).workContractId || asRecord(state).work_contract_id),
+            blocker: stringValue(asRecord(state).nativeAnnounceBlocker || asRecord(state).native_announce_blocker),
+          },
+          pi.logger,
+          asRecord(state.decision),
+        ).catch(() => {});
+        return;
+      }
       if (state && isNativeAnnounceDeliveryState(state) && NATIVE_ANNOUNCE_BLOCKED_TOOLS.has(toolName)) {
         updatePolicyState(stateKey, (current) => ({
           ...current,

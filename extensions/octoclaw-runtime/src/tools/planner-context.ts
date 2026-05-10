@@ -99,7 +99,9 @@ function plannerContextRecord(...values: unknown[]): UnknownRecord {
 
 function normalizePlannerWorkspaceMode(value: unknown, fallback: "read_only" | "write_allowed" = "write_allowed"): "read_only" | "write_allowed" {
   const mode = asString(value);
-  return mode === "read_only" || mode === "readonly" || mode === "read-only" ? "read_only" : fallback;
+  if (mode === "read_only" || mode === "readonly" || mode === "read-only") return "read_only";
+  if (mode === "write_allowed" || mode === "shared_workspace" || mode === "isolated_worktree") return "write_allowed";
+  return fallback;
 }
 
 function normalizePlannerRole(value: unknown): "observer" | "default" | "code" | "research" | "review" {
@@ -150,6 +152,7 @@ export function buildPlannerContextPacket(params: {
     routeDecision.context_refs,
     routeDecision.contextRefs,
   );
+  const hasExplicitContextPacket = Object.keys(contextRefs).length > 0;
   const delegateScope = params.workContract?.delegate?.scope;
   const rawCwd = asString(params.cwd, resolveWorkspaceRoot());
   const cwd = resolvePlannerNativeCwd(rawCwd) || rawCwd;
@@ -188,9 +191,20 @@ export function buildPlannerContextPacket(params: {
       primaryFiles,
     ],
   });
+  const explicitSideEffectsRequested = hasExplicitContextPacket && (
+    contextRefs.requestedSideEffects === true
+    || contextRefs.requested_side_effects === true
+    || contextRefs.sideEffects === true
+    || contextRefs.side_effects === true
+  );
+  const contextWorkspaceMode = contextRefs.workspaceMode ?? contextRefs.workspace_mode;
+  const contextGrantsWrite = normalizePlannerWorkspaceMode(contextWorkspaceMode, "read_only") === "write_allowed";
   const writeScope = plannerStringArray(
     contextRefs.writeScope,
     contextRefs.write_scope,
+    explicitSideEffectsRequested || (contextGrantsWrite && !contextRefs.writeScope && !contextRefs.write_scope)
+      ? "requested:side_effects"
+      : undefined,
     delegateScope?.write,
   );
   const artifactRefs = params.workContract?.delegate?.artifactRefs ?? [];
@@ -218,8 +232,11 @@ export function buildPlannerContextPacket(params: {
       : undefined,
     plannerDefaultMaxToolCalls(role, hasExplicitContextRefs),
   );
+  const requestedSideEffectScope = writeScope.includes("requested:side_effects");
   const defaultSourcePolicy = hasExplicitContextRefs
-    ? "Use explicit refs and local workspace first. Use external web only when the task explicitly needs current outside facts or local refs are insufficient."
+    ? requestedSideEffectScope
+      ? "Use the supplied task brief first. For requested side effects, prefer the native CLI/API for the target system, make only the smallest requested change, and verify with a read-only status/list command. If the target or destination is ambiguous, stop with a blocker instead of broadening scope."
+      : "Use explicit refs and local workspace first. Use external web only when the task explicitly needs current outside facts or local refs are insufficient."
     : "Use the supplied task brief first. No explicit refs were provided, so avoid broad workspace inventory; use external web only when the task explicitly needs current outside facts.";
   const sourcePolicy = optionalString(
     hasExplicitContextRefs ? contextRefs.sourcePolicy : undefined,
@@ -281,10 +298,14 @@ export function buildPlannerContextPacket(params: {
     hasExplicitContextRefs
       ? "- Start from primaryFiles/readScope/artifactRefs; do not expand beyond them unless the task cannot be answered otherwise."
       : "- No primaryFiles/readScope/artifactRefs were supplied. Treat the task as bounded by the brief; avoid broad workspace inventory and use only narrowly targeted read-only checks when indispensable.",
+    workspaceMode === "write_allowed"
+      ? "- For write_allowed work, make the smallest requested native CLI/API change and verify it with a read-only status/list command."
+      : "",
     "- Do not run broad discovery under /Users, memory/wiki search, or web search unless explicit refs fail and the task requires it.",
     "- If a fast file search tool is unavailable, use a scoped fallback under cwd/workspaceRoot only.",
-    "- Treat maxToolCalls as a hard budget. If the budget or context is insufficient, stop and return partial findings or a missing_context_refs blocker.",
-    "- Do not search package installs, shell history, or unrelated OpenClaw state to discover a repo. If cwd/workspaceRoot do not contain the needed source, report missing_context_refs.",
+    "- Treat maxToolCalls as a hard budget. If the budget or context is insufficient, stop and return a blocked worker result packet.",
+    "- If you are blocked, include exactly one control block: <<<BEGIN_OCTOCLAW_WORKER_RESULT>>> {\"schemaVersion\":\"octoclaw.worker_result.v1\",\"delegateTaskId\":\"<handoff.delegateTaskId>\",\"attemptId\":\"<handoff.attemptId>\",\"status\":\"blocked\",\"summary\":\"<short reason>\",\"blockers\":[\"<missing input>\"]} <<<END_OCTOCLAW_WORKER_RESULT>>>.",
+    "- Do not search package installs, shell history, or unrelated OpenClaw state to discover a repo. If cwd/workspaceRoot do not contain the needed source, return a blocked worker result packet.",
     "- Native announce handles final delivery; do not create side-channel result files.",
   ].join("\n");
 }
