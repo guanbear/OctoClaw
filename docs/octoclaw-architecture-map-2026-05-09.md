@@ -165,7 +165,7 @@ sequenceDiagram
   User->>Host: inbound turn
   Host->>Entry: before_prompt_build / before_tool_call / agent_end hooks
   Entry->>Resolve: session、grounding、coverage、route context
-  Resolve->>Policy: intent、route、judge、role、model
+  Resolve->>Policy: intent、route、judge(route/complexity only)、resolver role/model
   Policy-->>Resolve: PolicyDecision
   Resolve-->>Entry: reply 或 delegate decision
 
@@ -225,8 +225,8 @@ flowchart TD
 | `plugin.ts` / `index.ts` | 包导出和 OpenClaw 插件入口。 |
 | `config/index.ts` | 功能配置：planner backend、speculative preload、ledger flags、ACK 设置。 |
 | `resolve/session.ts` | Session 边界、state key、managed-agent context、policy metadata。 |
-| `resolve/policy-resolver.ts` | 主策略解析：local rules、judge、route、role、model、coverage。 |
-| `resolve/llm-judge.ts` | Judge context packet 和可选 LLM judge 调用。 |
+| `resolve/policy-resolver.ts` | 主策略解析：local rules、judge route/complexity、runtime metadata、role/model、coverage。 |
+| `resolve/llm-judge.ts` | Judge context packet 和可选 LLM judge 调用；active hot path 只接受 route/confidence/complexity/complexity_confidence。 |
 | `resolve/route-seal.ts` | 构建和校验 route seal metadata。 |
 | `resolve/runtime-recovery.ts` | Recovery 分类和 runtime 异常事实。 |
 | `conversation-grounding.ts` | 从 durable status/projection facts 构建 prompt grounding。 |

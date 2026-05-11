@@ -49,6 +49,7 @@ import {
   coerceStartupDecisionBucket,
   coerceUnitConfidence,
   extractPromptText,
+  hardDelegateReasonsAllowFollowupOverride,
   isDegradedDelegateJudgeResult,
   isDelegateAttempt,
   isDelegateTask,
@@ -213,22 +214,39 @@ function attachWorkContractToPolicyDecision(input: {
     authority: hasConflict ? "execution_wins" : executionLayer.coverage && executionLayer.coverage !== "none" ? "execution_wins" : memoryLayer.coverage && memoryLayer.coverage !== "none" ? "memory_only" : "none",
   };
   const conversationControl = asRecord(input.metadata.conversation_control);
-  const intentClass = intentClassFromPolicy(input.decision.intent_class || conversationControl.intent_class || "undetermined");
+  const intentClass = intentClassFromPolicy(
+    structuredIntentClass(input.metadata)
+      || input.decision.intent_class
+      || conversationControl.intent_class
+      || "undetermined",
+  );
+  const routeDecision = asRecord(input.decision.route_decision);
+  const hardDelegateSignal = asBoolean(input.decision._hard_delegate_signal)
+    || asBoolean(routeDecision.hard_delegate_signal);
+  const hardDelegateCanOverrideFollowup = hardDelegateReasonsAllowFollowupOverride(
+    asStringArray(input.metadata.hard_delegate_reasons).length > 0
+      ? asStringArray(input.metadata.hard_delegate_reasons)
+      : asStringArray(routeDecision.hard_delegate_reasons),
+  );
   const statusSurfaceControlAllowed = asBoolean(conversationControl.status_followup)
     || asString(conversationControl.surface_id) === "octoclaw_task_status_panel";
-  const isExecutionFollowup = intentClass === "execution_followup"
+  const isExecutionFollowup = !(hardDelegateSignal && hardDelegateCanOverrideFollowup) && (
+    intentClass === "execution_followup"
     || asBoolean(conversationControl.provenance_followup)
-    || statusSurfaceControlAllowed;
+    || statusSurfaceControlAllowed
+  );
   const executionSupportsReply = asBoolean(executionLayer.supports_provenance_reply)
     || asBoolean(executionLayer.supports_status_reply)
     || asBoolean(executionLayer.requires_control_plane_refresh);
+  const executionCoverageReplyOverride = asBoolean(input.metadata.execution_coverage_reply_override);
+  const executionCoverageReplyApplied = (isExecutionFollowup && executionSupportsReply) || executionCoverageReplyOverride;
   const executionCoveragePacket: ExecutionCoveragePacket = {
     packetId: stableId("execution-coverage", [input.stateKey, input.prompt, String(Date.now())]),
     turnId: stableId("turn", [input.stateKey, input.prompt]),
     sessionKey: input.stateKey,
     coverage: coverageSnapshot,
-    route: isExecutionFollowup && executionSupportsReply ? "reply" : authoritativeDecisionRoute(input.decision) === "delegate" ? "delegate" : "reply",
-    replyMode: isExecutionFollowup && executionSupportsReply ? "answer" : undefined,
+    route: executionCoverageReplyApplied ? "reply" : authoritativeDecisionRoute(input.decision) === "delegate" ? "delegate" : "reply",
+    replyMode: executionCoverageReplyApplied ? "answer" : undefined,
     dispatchExecuted: asBoolean(executionLayer.dispatch_executed),
     spawnExecuted: asBoolean(executionLayer.spawn_executed),
     resultMaterialized: asBoolean(executionLayer.result_materialized),
@@ -239,7 +257,7 @@ function attachWorkContractToPolicyDecision(input: {
   input.metadata._execution_coverage_packet = executionCoveragePacket;
   input.decision._execution_coverage_packet = executionCoveragePacket;
   const workRoute = executionCoveragePacket.route;
-  const decisionSource = isExecutionFollowup && executionSupportsReply
+  const decisionSource = executionCoverageReplyApplied
     ? "execution_coverage"
     : workDecisionSourceFromPolicy(input.decision._judge_source || asRecord(input.decision.route_decision).final_judge_source || "local_judge");
   const decisionSeal = buildWorkDecisionSeal(
@@ -341,9 +359,12 @@ function buildPhaseTwoPolicyInput(_prompt: string, metadata: UnknownRecord = {})
   const forcedObserve = conversationLaneHint === "observe" || conversationLaneHint === "control_observer";
   const startupClassification = classifyStartupCost(_prompt, metadata);
   applyStartupCostClassification(metadata, startupClassification);
-  const isExecutionOrStatusFollowup = asBoolean(conversationControl.provenance_followup)
+  const hardDelegateCanOverrideFollowup = hardDelegateReasonsAllowFollowupOverride(startupClassification.hardDelegateReasons);
+  const isExecutionOrStatusFollowup = !(startupClassification.hardDelegateSignal && hardDelegateCanOverrideFollowup) && (
+    asBoolean(conversationControl.provenance_followup)
     || asBoolean(conversationControl.status_followup)
-    || (conversationControl.intent_class === "execution_followup" && !startupClassification.hardDelegateSignal);
+    || conversationControl.intent_class === "execution_followup"
+  );
   const forcedDelegate = !isExecutionOrStatusFollowup && startupClassification.hardDelegateSignal;
   const explicitRouteObjection = asBoolean(metadata.route_objection);
   const explicitReplyObjection = explicitRouteObjection && objectionRequestedRoute === "reply";
@@ -537,6 +558,7 @@ export function applyPhaseTwoLivePathPolicy(decision: UnknownRecord, metadata: U
   const startupDurationHint = asString(metadata.duration_hint, "short");
   const startupToolNeedHint = asString(metadata.tool_need_hint, "none");
   const hardDelegateSignal = asBoolean(metadata.hard_delegate_signal);
+  const hardDelegateCanOverrideFollowup = hardDelegateReasonsAllowFollowupOverride(asStringArray(metadata.hard_delegate_reasons));
   const trustedRouteRequest = isTrustedRouteRequest(metadata);
   const normalizedRequestedLiveRoute = normalizeLiveRoute(routeRequest || (trustedRouteRequest ? routeHint : "") || priorRouteDecision.route || stickyRouteDecision.route, liveRoute);
   const routeHintSubmitted = Boolean(routeHint || routeRequest);
@@ -634,13 +656,16 @@ export function applyPhaseTwoLivePathPolicy(decision: UnknownRecord, metadata: U
   }
   const conversationControl = trustedConversationControl(metadata);
   const intentClass = structuredIntentClass(metadata);
-  const isExecutionOrStatusFollowup = asBoolean(conversationControl.provenance_followup)
+  const isExecutionOrStatusFollowup = !(hardDelegateSignal && hardDelegateCanOverrideFollowup) && (
+    asBoolean(conversationControl.provenance_followup)
     || asBoolean(conversationControl.status_followup)
-    || (intentClass === "execution_followup" && !hardDelegateSignal);
+    || intentClass === "execution_followup"
+  );
   const executionCoverageSupportsReply = asBoolean(executionLayer.supports_provenance_reply)
     || asBoolean(executionLayer.supports_status_reply);
   if (isExecutionOrStatusFollowup && executionCoverageSupportsReply) {
     liveRoute = "reply";
+    metadata.execution_coverage_reply_override = true;
   }
 
   const role = workflowRoleForRoute(liveRoute, tsJudgeInput.workType || asString(priorRouteDecision.work_type, "research"));
@@ -724,6 +749,7 @@ export function applyPhaseTwoLivePathPolicy(decision: UnknownRecord, metadata: U
     duration_hint: startupDurationHint,
     tool_need_hint: startupToolNeedHint,
     hard_delegate_signal: hardDelegateSignal,
+    hard_delegate_reasons: asStringArray(metadata.hard_delegate_reasons),
     reason_codes: Array.from(new Set([
       ...asStringArray(priorRouteDecision.reason_codes),
       ...startupReasonCodes,
@@ -823,6 +849,7 @@ export function applyPhaseTwoLivePathPolicy(decision: UnknownRecord, metadata: U
   nextDecision._duration_hint = startupDurationHint;
   nextDecision._tool_need_hint = startupToolNeedHint;
   nextDecision._hard_delegate_signal = hardDelegateSignal;
+  nextDecision._hard_delegate_reasons = asStringArray(metadata.hard_delegate_reasons);
   nextDecision._route_hint_required = routeHintPolicyRequired;
   if (metadata.runtime_truth) {
     nextDecision.runtime_truth = metadata.runtime_truth;
@@ -1142,15 +1169,19 @@ export async function resolveStatelessPolicyDecision(task: string, options: Unkn
         const timeoutExecutionOverride = asBoolean(timeoutExecutionLayer.supports_provenance_reply)
           || asBoolean(timeoutExecutionLayer.supports_status_reply);
         const timeoutRequiresRefresh = asBoolean(timeoutExecutionLayer.requires_control_plane_refresh);
-        const timeoutIsFollowup = asBoolean(conversationControl.provenance_followup)
+        const timeoutHardDelegateCanOverrideFollowup = hardDelegateReasonsAllowFollowupOverride(startupClassification.hardDelegateReasons);
+        const timeoutIsFollowup = !(startupClassification.hardDelegateSignal && timeoutHardDelegateCanOverrideFollowup) && (
+          asBoolean(conversationControl.provenance_followup)
           || asBoolean(conversationControl.status_followup)
-          || (intentClass === "execution_followup" && !startupClassification.hardDelegateSignal);
+          || intentClass === "execution_followup"
+        );
         const isFollowupNoCoverage = timeoutIsFollowup
           && !timeoutExecutionOverride
           && !timeoutRequiresRefresh;
         if ((timeoutExecutionOverride || timeoutRequiresRefresh) && timeoutIsFollowup) {
           judgeRouteOverride = "reply";
           judgeSucceeded = true;
+          metadata.execution_coverage_reply_override = timeoutExecutionOverride;
           deterministicFallbackApplied = !degradedDelegateJudge;
           degradedFallbackApplied = degradedDelegateJudge;
           judgeShadowLog = judgeShadowLog ?? {};
@@ -1216,8 +1247,9 @@ export async function resolveStatelessPolicyDecision(task: string, options: Unkn
 
         const isProvenanceOrStatusFollowup = asBoolean(conversationControl.provenance_followup)
           || asBoolean(conversationControl.status_followup);
-        const isExecutionOrStatusFollowup = isProvenanceOrStatusFollowup
-          || (intentClass === "execution_followup" && !startupClassification.hardDelegateSignal);
+        const hardDelegateCanOverrideFollowup = hardDelegateReasonsAllowFollowupOverride(startupClassification.hardDelegateReasons);
+        const isExecutionOrStatusFollowup = !(startupClassification.hardDelegateSignal && hardDelegateCanOverrideFollowup)
+          && (isProvenanceOrStatusFollowup || intentClass === "execution_followup");
         const delegateHintAgreesWithJudge = !isProvenanceOrStatusFollowup
           && judgeRouteOverride === "delegate"
           && asString(metadata.route_hint) === "delegate";
@@ -1229,6 +1261,7 @@ export async function resolveStatelessPolicyDecision(task: string, options: Unkn
         } else if (executionCoverageOverride && isExecutionOrStatusFollowup) {
           judgeRouteOverride = "reply";
           judgeSucceeded = true;
+          metadata.execution_coverage_reply_override = true;
           executionOverrideApplied = true;
           validatorOverrideReasons.push("validator:execution_coverage_override→reply(intent_guard)");
           if (process.env.OCTOCLAW_JUDGE_DEBUG) {
@@ -1310,9 +1343,12 @@ export async function resolveStatelessPolicyDecision(task: string, options: Unkn
 
   const finalIntentClass = structuredIntentClass(metadata);
   const finalConversationControl = trustedConversationControl(metadata);
-  const finalIsExecutionOrStatusFollowup = asBoolean(finalConversationControl.provenance_followup)
+  const finalHardDelegateCanOverrideFollowup = hardDelegateReasonsAllowFollowupOverride(startupClassification.hardDelegateReasons);
+  const finalIsExecutionOrStatusFollowup = !(startupClassification.hardDelegateSignal && finalHardDelegateCanOverrideFollowup) && (
+    asBoolean(finalConversationControl.provenance_followup)
     || asBoolean(finalConversationControl.status_followup)
-    || (finalIntentClass === "execution_followup" && !startupClassification.hardDelegateSignal);
+    || finalIntentClass === "execution_followup"
+  );
   const deterministicNewWorkDelegate = finalDecision.route === "delegate"
     && !finalIsExecutionOrStatusFollowup
     && (
@@ -1364,6 +1400,7 @@ export async function resolveStatelessPolicyDecision(task: string, options: Unkn
       duration_hint: startupClassification.durationHint,
       tool_need_hint: startupClassification.toolNeedHint,
       hard_delegate_signal: startupClassification.hardDelegateSignal,
+      hard_delegate_reasons: startupClassification.hardDelegateReasons,
       reason_codes: startupClassification.reasonCodes,
     },
     model_policy: {
@@ -1399,6 +1436,7 @@ export async function resolveStatelessPolicyDecision(task: string, options: Unkn
     _duration_hint: startupClassification.durationHint,
     _tool_need_hint: startupClassification.toolNeedHint,
     _hard_delegate_signal: startupClassification.hardDelegateSignal,
+    _hard_delegate_reasons: startupClassification.hardDelegateReasons,
     _route_hint_required: routeHintRequired,
     _judge_ack_text: judgeAckText,
     _judge_shadow_log: judgeShadowLog,

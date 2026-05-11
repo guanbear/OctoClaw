@@ -727,6 +727,16 @@ Over time, `route_decision`, `tool_policy`, and `router_decision_v2` become comp
   workContractId?: string;
   delegateTaskId?: string;
   continuationMode?: "new" | "resume_preferred" | "new_attempt" | "status_only";
+  forceRoute?: "auto" | "reply" | "delegate";
+  model?: string; // explicit child model override, e.g. gpt-5.5
+  metadata?: {
+    conversation_control?: { explicit_delegate_request?: boolean };
+    route_objection?: boolean;
+    objection_requested_route?: "reply" | "delegate";
+    objection_reason?: string;
+    is_new_work?: boolean;
+    expected_deliverable?: string;
+  };
   policyJson?: string; // compatibility only
 }
 ```
@@ -735,11 +745,13 @@ Rules:
 
 1. If `workContractId` exists, load contract and do not rejudge route.
 2. If only legacy `policyJson` exists, convert to WorkContract and seal.
-3. If route is `reply`, reject dispatch.
+3. If route is `reply`, reject dispatch unless this is an explicit structural delegate override and the sealed reply has not executed.
 4. If WorkContract says provenance/status-only, reject dispatch/spawn.
 5. If continuing same delegate task, prefer child session resume.
 6. If the prompt is a dispatch-failure follow-up, reject dispatch/spawn and return state-grounded status payload.
 7. If a new request relates to existing running work, resolve relation first: `independent`, `depends_on`, `amends`, or `status_only`.
+
+Explicit structural delegate override means the dispatch call itself carries trusted metadata, not natural-language keywords: `forceRoute:"delegate"` plus at least one of explicit `model`, `conversation_control.explicit_delegate_request`, accepted route objection, or `is_new_work + expected_deliverable`. This is the escape hatch for cases like “use gpt-5.5 subagent now” after an earlier reply seal. The override creates a new audited delegate seal/source; it must not mutate an already executed reply into a fake delegate history.
 
 ### 7.7 `runtime-payloads.ts`
 

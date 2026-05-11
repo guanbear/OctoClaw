@@ -219,6 +219,8 @@ export function dispatchHonestySuccess(params: {
   nativeFlowId?: string | null;
   resultMaterialized?: boolean;
   deliveryStatus?: string | null;
+  model?: string | null;
+  modelProfile?: string | null;
 }): Record<string, unknown> {
   const body = {
     ok: true,
@@ -242,6 +244,8 @@ export function dispatchHonestySuccess(params: {
     native_flow_id: params.nativeFlowId ?? null,
     result_materialized: params.resultMaterialized === true,
     delivery_status: params.deliveryStatus ?? null,
+    model: asString(params.model || params.modelProfile) || null,
+    model_profile: asString(params.modelProfile || params.model) || null,
   };
   return toolResponse(JSON.stringify(body), body);
 }

@@ -45,6 +45,22 @@ export interface StartupCostClassification {
   hardDelegateReasons: string[];
 }
 
+const FOLLOWUP_OVERRIDE_HARD_DELEGATE_REASONS = new Set([
+  "metadata_requires_delegation",
+  "metadata_requires_observation",
+  "hard_boundary_control",
+  "explicit_delegate_control",
+  "force_route_delegate",
+  "tool_need_required",
+  "duration_long",
+  "work_type_code",
+  "work_type_review",
+]);
+
+export function hardDelegateReasonsAllowFollowupOverride(reasons: string[]): boolean {
+  return reasons.some((reason) => FOLLOWUP_OVERRIDE_HARD_DELEGATE_REASONS.has(reason));
+}
+
 export function isDelegateTask(value: unknown): value is DelegateTask {
   return isRecord(value)
     && typeof value.delegateTaskId === "string"
@@ -157,41 +173,7 @@ export function coerceFiniteNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
-export function promptMatches(prompt: string, pattern: RegExp | RegExp[]): boolean {
-  return Array.isArray(pattern)
-    ? pattern.some((item) => item.test(prompt))
-    : pattern.test(prompt);
-}
-
-const DELEGATE_EXECUTOR_PATTERN = String.raw`(?:opencode|glm|子\s*agent|子代理|sub\s*-?\s*agent)`;
-const DELEGATE_ACTION_PATTERN = String.raw`(?:修|改|写|做|跑|测|执行|构建|测试|处理|完成|实现|排查|审核|验证|调研|查|研究|分析|review|build|test|run|measure|benchmark|implement|fix|edit|debug|lint|refactor|research|summarize|handle|complete|execute|investigate|analyze)`;
-const EXPLICIT_DELEGATE_PROMPT_PATTERNS = [
-  /\b(delegate this|delegate to|run in background|run in parallel|parallel(?:ize| work| tasks?)|background (?:work|task|job))\b/iu,
-  new RegExp(String.raw`\bdelegate\s+(?:a\s+|the\s+)?${DELEGATE_EXECUTOR_PATTERN}\s+(?:to\s+)?[\s\S]{0,20}${DELEGATE_ACTION_PATTERN}\b`, "iu"),
-  new RegExp(String.raw`(?:让|叫|请|交(?:给|由)|用|派(?:给)?|委派(?:给)?|分配给|指派给)\s*${DELEGATE_EXECUTOR_PATTERN}\s*[\s\S]{0,20}${DELEGATE_ACTION_PATTERN}`, "iu"),
-  new RegExp(String.raw`${DELEGATE_EXECUTOR_PATTERN}\s*[\s\S]{0,16}(?:修代码|跑测试|跑构建|做一下|后台处理|来(?:做|写|改|修|跑|调研|查))`, "iu"),
-  new RegExp(String.raw`(?:派(?:个|一个|一次)?|委派)\s*${DELEGATE_EXECUTOR_PATTERN}?\s*(?:来)?[\s\S]{0,20}${DELEGATE_ACTION_PATTERN}`, "iu"),
-  new RegExp(String.raw`(?:后台|并行)\s*[\s\S]{0,16}${DELEGATE_ACTION_PATTERN}`, "iu"),
-];
-const CODE_TEST_BUILD_WORK_PATTERNS = [
-  /\b(?:implement|fix|refactor|edit|patch|commit|push|debug|lint)\b/iu,
-  /\b(?:run|execute)\s+(?:tests?|build|command|lint|tsc|vitest|pytest)\b/iu,
-  /\bbuild\s+(?:the\s+)?(?:app|project|package|extension|plugin|runtime|dist)\b/iu,
-  /\b(?:write)\s+(?:code|tests?|script)\b/iu,
-  /\b(?:please|can you|could you)\s+(?:review|validate)\b|\b(?:review|validate)\s+(?:code|changes?|patch|pr|pull request|build|tests?|results?|fix|implementation)\b/iu,
-  /\b(?:validation|regression)\s+(?:run|check|test|suite)\b/iu,
-  /(?:请|帮(?:我)?|给我|直接|现在|继续|先|再|然后|把|将|你来)?[\s\S]{0,12}(?:修改|修复|实现|重构|编辑|改代码|提交|跑(?:一下)?(?:测试|构建|命令|lint|tsc|vitest|pytest)|运行(?:测试|构建|检查|命令|lint|tsc|vitest|pytest)|执行(?:测试|构建|命令|lint|tsc|vitest|pytest)|部署)/iu,
-  /(?:请|帮(?:我)?|给我|直接|现在|继续|你来)[\s\S]{0,12}(?:验证|审核|排查|处理)(?:构建|测试|修复|结果|回归|日志|报错|失败|问题|PR|代码|改动|这个|一下)?/iu,
-  /(?:验证|审核|排查|处理)(?:构建|测试|修复|结果|回归|日志|报错|失败|问题|PR|代码|改动|这个|一下)[\s\S]{0,16}(?:结果|原因|失败|通过|修复|收口)?/iu,
-  /(?:测试|构建|回归|验收)[\s\S]{0,24}(?:跑一下|执行|运行|验证|检查|补齐|修复|通过|收口)/iu,
-];
-const MULTI_STEP_TOOL_WORK_PATTERNS = [
-  /\b(?:first|then|after that)\b[\s\S]{0,120}\b(?:run|build|test|edit|fix|read|inspect|validate|review|execute|debug|deploy)\b/iu,
-  /先[\s\S]{0,80}(?:再|然后)[\s\S]{0,80}(?:跑|执行|修|改|实现|验证|构建|测试|提交|部署|排查|查看|读取|检查)/iu,
-  /(?:多步|端到端|完整(?:验证|排查|实现|测试)|e2e)[\s\S]{0,80}(?:跑|执行|修|改|实现|验证|构建|测试|提交|部署|排查|检查|工具|命令)/iu,
-];
-
-export function classifyStartupCost(prompt: string, metadata: UnknownRecord = {}): StartupCostClassification {
+export function classifyStartupCost(_prompt: string, metadata: UnknownRecord = {}): StartupCostClassification {
   const conversationControl = trustedConversationControl(metadata);
   const intentClass = structuredIntentClass(metadata);
   const routeHint = asString(metadata.route_hint || conversationControl.route_hint);
@@ -199,13 +181,7 @@ export function classifyStartupCost(prompt: string, metadata: UnknownRecord = {}
   const requestSource = routeRequestSource(metadata);
   const workType = asString(metadata.workType ?? metadata.work_type);
   const relationToRecentExecution = asString(metadata.relation_to_recent_execution ?? metadata.relationToRecentExecution);
-  const rawPrompt = asString(prompt);
-  const provenanceOrStatusPrompt = promptMatches(
-    rawPrompt,
-    /(刚才|之前|上次|那个任务|任务判定|谁[\s\S]{0,12}(查|做|写)|怎么查|自己[\s\S]{0,20}子\s*agent|是不是[\s\S]{0,12}(子\s*agent|委派)|(?:为啥|为什么|为何)[\s\S]{0,18}(派发|委派|dispatch|spawn)|没[\s\S]{0,12}(派发|委派|dispatch|spawn)[\s\S]{0,12}成功|was[\s\S]{0,20}delegated|who[\s\S]{0,20}(did|handled))/iu,
-  );
-  const isStatusOrProvenanceFollowup = provenanceOrStatusPrompt
-    || asBoolean(conversationControl.provenance_followup)
+  const isStatusOrProvenanceFollowup = asBoolean(conversationControl.provenance_followup)
     || asBoolean(conversationControl.status_followup)
     || relationToRecentExecution === "existing_execution_followup"
     || relationToRecentExecution === "existing_execution_provenance_query";
@@ -215,23 +191,6 @@ export function classifyStartupCost(prompt: string, metadata: UnknownRecord = {}
     || intentClass === "fresh_live_lookup";
   const requiresStateGrounding = asBoolean(conversationControl.require_state_grounding)
     || asBoolean(asRecord(metadata.intent_packet).require_state_grounding);
-
-  const negatedDelegatePrompt = promptMatches(
-    rawPrompt,
-    /不要[\s\S]{0,12}(委派|派|子\s*agent|sub\s*-?\s*agent)|不(?:要|用)?[\s\S]{0,8}(委派|派|子\s*agent|sub\s*-?\s*agent)/iu,
-  );
-  const explicitDelegatePrompt = !negatedDelegatePrompt && promptMatches(
-    rawPrompt,
-    EXPLICIT_DELEGATE_PROMPT_PATTERNS,
-  );
-  const codeOrMutationPrompt = promptMatches(
-    rawPrompt,
-    CODE_TEST_BUILD_WORK_PATTERNS,
-  );
-  const multiStepPrompt = promptMatches(
-    rawPrompt,
-    MULTI_STEP_TOOL_WORK_PATTERNS,
-  );
 
   const metadataToolNeed = coerceStartupToolNeedHint(metadata.tool_need_hint ?? metadata.toolNeedHint, "none");
   const metadataDuration = coerceStartupDurationHint(metadata.duration_hint ?? metadata.durationHint, "short");
@@ -264,7 +223,7 @@ export function classifyStartupCost(prompt: string, metadata: UnknownRecord = {}
     || remoteOrMixedScope
     || judgeEvidenceRequired
     || judgeLowConfidenceReply;
-  const hardDelegateReasons = isStatusOrProvenanceFollowup ? [] : [
+  const hardDelegateReasons = [
     asBoolean(metadata.requiresDelegation) ? "metadata_requires_delegation" : "",
     asBoolean(metadata.requiresObservation) ? "metadata_requires_observation" : "",
     asBoolean(metadata.hardBoundaryControl) || asBoolean(conversationControl.required) ? "hard_boundary_control" : "",
@@ -276,9 +235,6 @@ export function classifyStartupCost(prompt: string, metadata: UnknownRecord = {}
     metadataDuration === "long" ? "duration_long" : "",
     workType === "code" ? "work_type_code" : "",
     workType === "review" ? "work_type_review" : "",
-    explicitDelegatePrompt ? "prompt_explicit_delegate" : "",
-    codeOrMutationPrompt ? "prompt_code_test_build_review_validation" : "",
-    multiStepPrompt ? "prompt_multistep_tool_work" : "",
   ].filter(Boolean);
 
   const hardDelegateSignal = hardDelegateReasons.length > 0;

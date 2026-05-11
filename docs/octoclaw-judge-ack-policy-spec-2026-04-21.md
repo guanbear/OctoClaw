@@ -28,7 +28,8 @@ v1 只保留一个热路径 authority judge，再加一个可选本地文案增�
 
 1. `local_judge`
    - 热路径 authority
-   - 负责 route / reply_mode / delegate_role / complexity / scope / tool_need_hint / duration_hint / confidence
+   - 只负责 route / complexity / confidence
+   - 不负责 role、scope、tool/duration hint、expected deliverable 或 dispatch 授权
 2. `ack_writer`
    - 非 authority
    - 只负责短 ACK / nudge 文案
@@ -203,28 +204,23 @@ v1 可以复用同一个本地 Qwen 服务，但必须按 job type 分开：
 
 ## 5. judge 输出 contract
 
-`local_judge` 至少输出：
+`local_judge` active hot-path 只输出：
 
 ```json
 {
   "route": "reply | delegate",
-  "reply_mode": "answer | clarify | null",
-  "delegate_role": "observer | default | code | research | review | null",
-  "coordination_mode_hint": "solo_worker | advisor_assisted | multi_agent_controlled | null",
   "complexity": "simple | normal | deep | null",
-  "scope": "local | remote | both | unknown",
-  "tool_need_hint": "none | maybe | required",
-  "duration_hint": "short | medium | long",
   "confidence": 0.0,
-  "reason_codes": []
+  "complexity_confidence": 0.0
 }
 ```
 
 当前实现注意：
 
-1. `packages/octoclaw-policy/src/spec/decision-policy-spec.ts` 已把 `confidence`、`scope`、`tool_need_hint`、`duration_hint` 标成 required。
-2. `packages/octoclaw-policy/src/judge/judge-schema.ts` 和 `extensions/octoclaw-runtime/src/resolve/llm-judge.ts` 的热路径校验仍偏宽：缺失 `confidence` 会被默认成 `0.7`，`scope/tool_need_hint/duration_hint` 可为空。
-3. 下一轮应收紧 validator，或把缺字段结果显式降级为 fallback/degraded judge result，不能让弱输出无痕进入 authoritative route。
+1. active validator 只接受 `route`、`confidence`、`complexity`、`complexity_confidence`。
+2. parser 仍兼容旧字段，目的是让旧 replay / 旧模型输出不直接崩溃；兼容字段不能成为 active dispatch 授权。
+3. 缺字段、abstain 或 degraded judge result 不可 actionable。
+4. role、scope、tool/duration hint、is_new_work、expected_deliverable 必须从 runtime metadata、WorkContract、tool params 或结构化 objection/control 得到。
 
 `ack_writer` 至少输出：
 
@@ -361,6 +357,19 @@ v1 应明确写死：
 4. scope 不明优先 `clarify`
 5. 不允许靠猜 scope / guess target 把 case 硬压成 `reply.answer`
 
+2026-05-11 update：active judge schema 不再让 LLM 输出 role/workType/scope/tool_need_hint/duration_hint/reason_codes/is_new_work/expected_deliverable 等胖字段。热路径只接受：
+
+```json
+{
+  "route": "reply",
+  "confidence": 0.86,
+  "complexity": "simple",
+  "complexity_confidence": 0.8
+}
+```
+
+parser 可以兼容旧字段用于 replay/backfill，但这些旧字段不能直接驱动 active validator 或 hard dispatch 授权。role、tool/duration hint、expected deliverable 等应来自 runtime metadata、WorkContract、tool params 或主模型提交的结构化 objection/control，而不是来自 judge 的自然语言猜测。
+
 但这里必须有一个强例外：
 
 1. provenance/status follow-up 不等于新工作
@@ -418,7 +427,7 @@ user: "为啥没派发成功呢"
 
 ## 11. validator 默认收口
 
-为防止实现时把 `tool_need_hint` / `duration_hint` 当装饰字段，默认收口规则应写死：
+历史版本曾要求 judge 输出 `tool_need_hint` / `duration_hint` 并把它们当 validator 收口信号：
 
 ```yaml
 validator_default_rules:
@@ -432,9 +441,11 @@ validator_default_rules:
     then: "reply remains eligible"
 ```
 
-一句话：
+2026-05-11 以后，这组字段不再由 active judge 输出。等价的收口信号仍然存在，但来源必须变成结构化 runtime metadata / WorkContract / tool params / accepted objection：
 
-> `tool_need_hint` 和 `duration_hint` 不是参考信息，而是默认 route 收口信号。
+- `tool_need_hint=required`、`duration_hint=long` 可以作为 hard delegate reason，但只能来自可信结构化输入。
+- judge 的 `route=delegate` 是候选，不足以单独覆盖 execution/status follow-up。
+- prompt 文本关键词不能替代这些结构化输入。
 
 ## 12. judge 上下文
 
@@ -574,6 +585,8 @@ ACK controller 在 Phase 1 不需要再次调用 judge，只需要消费一个�
 真正的 route / mode / role / complexity / scope 规则，只能来自 canonical `decision policy spec`。
 
 因此实现上允许通过 `prependSystemContext`、plugin rule、host rule 或未来等价机制注入主 agent 规则；但这层不能复制、改写或替代 judge rubric。主 agent 可以提交 route hint / objection，不能 silent override sealed WorkContract。
+
+route hint / objection 必须是结构化信号。用户文本里出现“子 agent”“delegate”“跑测试”等词，本身不能成为 runtime hard delegate authority。若需要推翻尚未执行的 reply seal，应通过 `octoclaw_dispatch` 的 `forceRoute:"delegate"`、显式 `model`、`conversation_control.explicit_delegate_request`、accepted objection 或 `is_new_work + expected_deliverable` 生成新的可审计 seal source。
 
 ## 14. 落地边界
 

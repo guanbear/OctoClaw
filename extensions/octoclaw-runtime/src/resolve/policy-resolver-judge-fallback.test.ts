@@ -139,13 +139,17 @@ describe("policy resolver judge timeout fallback", () => {
     expect(routeDecisionOf(decision).tool_need_hint).toBe("maybe");
   });
 
-  it("routes explicit Chinese delegation wording to delegate when judge times out", async () => {
+  it("routes structured explicit delegation control to delegate when judge times out", async () => {
     vi.spyOn(globalThis, "fetch").mockRejectedValueOnce(new DOMException("timeout", "AbortError"));
 
     const prompt = "请委派子 agent 做一个很小的验收任务：只确认 OctoClaw 0.5.0 planner/native smoke 收到本条消息，并用一句中文总结，不需要联网。";
     const decision = await resolveStatelessPolicyDecision(prompt, {
       metadata: {
         _judgeFastConfig: localJudgeConfig,
+        conversation_control: {
+          source: "explicit_conversation_control",
+          explicit_delegate_request: true,
+        },
       },
     });
 
@@ -170,7 +174,7 @@ describe("policy resolver judge timeout fallback", () => {
     });
   });
 
-  it("routes explicit English delegation wording to delegate when judge times out", async () => {
+  it("does not turn bare delegation wording into a hard delegate when judge times out", async () => {
     vi.spyOn(globalThis, "fetch").mockRejectedValueOnce(new DOMException("timeout", "AbortError"));
 
     const decision = await resolveStatelessPolicyDecision("delegate this to a sub-agent", {
@@ -180,15 +184,15 @@ describe("policy resolver judge timeout fallback", () => {
     });
 
     expect(routeDecisionOf(decision)).toMatchObject({
-      route: "delegate",
-      route_source: "fallback",
+      route: "reply",
+      route_source: "rule",
       judge_timeout: true,
-      final_judge_source: "timeout_fallback",
-      hard_delegate_signal: true,
+      final_judge_source: "timeout",
+      hard_delegate_signal: false,
     });
   });
 
-  it("rejects minimal delegate judge output and falls back to hard prompt signals", async () => {
+  it("rejects minimal delegate judge output without using hard prompt fallback", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(minimalJudgeResponse("delegate", 0.7));
 
     const decision = await resolveStatelessPolicyDecision("delegate this to a sub-agent", {
@@ -198,19 +202,18 @@ describe("policy resolver judge timeout fallback", () => {
     });
 
     expect(routeDecisionOf(decision)).toMatchObject({
-      route: "delegate",
-      route_source: "fallback",
-      final_judge_source: "timeout_fallback",
-      hard_delegate_signal: true,
+      route: "reply",
+      route_source: "rule",
+      final_judge_source: "timeout",
+      hard_delegate_signal: false,
     });
-    expect(decision._judge_route).toBe("delegate");
+    expect(decision._judge_route).toBe(null);
     const shadowLog = decision._judge_shadow_log as Record<string, unknown>;
-    expect(shadowLog.judge_parse_failure).toBe(false);
-    expect(shadowLog.judge_schema_degraded).toBe(false);
+    expect(shadowLog.judge_timeout).toBe(true);
     expect(decision._judge_failure_class).toBe("invalid_json");
   });
 
-  it("routes compact Chinese subagent wording to delegate when judge times out", async () => {
+  it("does not route compact Chinese subagent wording by keyword when judge times out", async () => {
     vi.spyOn(globalThis, "fetch").mockRejectedValueOnce(new DOMException("timeout", "AbortError"));
 
     const decision = await resolveStatelessPolicyDecision("帮我派一个子agent来调研", {
@@ -220,16 +223,15 @@ describe("policy resolver judge timeout fallback", () => {
     });
 
     expect(routeDecisionOf(decision)).toMatchObject({
-      route: "delegate",
-      route_source: "fallback",
+      route: "reply",
+      route_source: "rule",
       judge_timeout: true,
-      final_judge_source: "timeout_fallback",
-      hard_delegate_signal: true,
-      is_new_work: true,
+      final_judge_source: "timeout",
+      hard_delegate_signal: false,
     });
   });
 
-  it("routes Chinese subagent latency probes to delegate when judge replies", async () => {
+  it("keeps subagent latency probes on the judge route without keyword override", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(minimalJudgeResponse("reply", 0.9));
 
     const prompt = "你派一次子agent要多久呢 如果不知道就测一下";
@@ -240,17 +242,11 @@ describe("policy resolver judge timeout fallback", () => {
     });
 
     expect(routeDecisionOf(decision)).toMatchObject({
-      route: "delegate",
-      route_source: "fallback",
-      final_judge_source: "timeout_fallback",
-      decision_bucket: "must_delegate",
-      hard_delegate_signal: true,
-      is_new_work: true,
-      expected_deliverable: prompt,
+      route: "reply",
+      route_source: "rule",
+      final_judge_source: "timeout",
+      hard_delegate_signal: false,
     });
-    expect((routeDecisionOf(decision).reason_codes as string[])).toEqual(
-      expect.arrayContaining([expect.stringContaining("hard_delegate:prompt_explicit_delegate")]),
-    );
   });
 
   it("keeps local judge timeout for simple chat on reply", async () => {
@@ -351,7 +347,7 @@ describe("policy resolver judge timeout fallback", () => {
     "派 GLM 跑测试",
     "交给子 agent 后台处理",
     "Delegate a subagent to research runtime ledger ticket issuance.",
-  ])("keeps explicit executor work as hard delegate when judge times out: %s", async (prompt) => {
+  ])("does not use executor wording as hard delegate when judge times out: %s", async (prompt) => {
     vi.spyOn(globalThis, "fetch").mockRejectedValueOnce(new DOMException("timeout", "AbortError"));
 
     const decision = await resolveStatelessPolicyDecision(prompt, {
@@ -361,11 +357,10 @@ describe("policy resolver judge timeout fallback", () => {
     });
 
     expect(routeDecisionOf(decision)).toMatchObject({
-      route: "delegate",
+      route: "reply",
       judge_timeout: true,
-      final_judge_source: "timeout_fallback",
-      decision_bucket: "must_delegate",
-      hard_delegate_signal: true,
+      final_judge_source: "timeout",
+      hard_delegate_signal: false,
     });
   });
 });
@@ -1702,7 +1697,7 @@ describe("SR-P1 startup-cost-aware delegation tightening", () => {
       );
     });
 
-    it("natural test execution request forces delegate on judge timeout", async () => {
+    it("natural test execution wording does not force delegate on judge timeout", async () => {
       vi.spyOn(globalThis, "fetch").mockRejectedValueOnce(new DOMException("timeout", "AbortError"));
 
       const decision = await resolveStatelessPolicyDecision("跑一下测试看看结果", {
@@ -1712,17 +1707,14 @@ describe("SR-P1 startup-cost-aware delegation tightening", () => {
       });
 
       expect(routeDecisionOf(decision)).toMatchObject({
-        route: "delegate",
+        route: "reply",
         judge_timeout: true,
-        decision_bucket: "must_delegate",
-        hard_delegate_signal: true,
+        final_judge_source: "timeout",
+        hard_delegate_signal: false,
       });
-      expect((routeDecisionOf(decision).reason_codes as string[])).toEqual(
-        expect.arrayContaining([expect.stringContaining("hard_delegate:prompt_code_test_build_review_validation")]),
-      );
     });
 
-    it("natural build validation request forces delegate on judge timeout", async () => {
+    it("natural build validation wording does not force delegate on judge timeout", async () => {
       vi.spyOn(globalThis, "fetch").mockRejectedValueOnce(new DOMException("timeout", "AbortError"));
 
       const decision = await resolveStatelessPolicyDecision("请验证构建并告诉我结果", {
@@ -1732,14 +1724,14 @@ describe("SR-P1 startup-cost-aware delegation tightening", () => {
       });
 
       expect(routeDecisionOf(decision)).toMatchObject({
-        route: "delegate",
+        route: "reply",
         judge_timeout: true,
-        decision_bucket: "must_delegate",
-        hard_delegate_signal: true,
+        final_judge_source: "timeout",
+        hard_delegate_signal: false,
       });
     });
 
-    it("executor mention only delegates when paired with requested work", async () => {
+    it("executor mention does not delegate without structured control", async () => {
       vi.spyOn(globalThis, "fetch").mockRejectedValueOnce(new DOMException("timeout", "AbortError"));
 
       const decision = await resolveStatelessPolicyDecision("让 opencode 跑测试并汇总结果", {
@@ -1749,17 +1741,14 @@ describe("SR-P1 startup-cost-aware delegation tightening", () => {
       });
 
       expect(routeDecisionOf(decision)).toMatchObject({
-        route: "delegate",
+        route: "reply",
         judge_timeout: true,
-        decision_bucket: "must_delegate",
-        hard_delegate_signal: true,
+        final_judge_source: "timeout",
+        hard_delegate_signal: false,
       });
-      expect((routeDecisionOf(decision).reason_codes as string[])).toEqual(
-        expect.arrayContaining([expect.stringContaining("hard_delegate:prompt_explicit_delegate")]),
-      );
     });
 
-    it("multi-step tool work forces delegate on judge timeout", async () => {
+    it("multi-step tool wording does not force delegate on judge timeout", async () => {
       vi.spyOn(globalThis, "fetch").mockRejectedValueOnce(new DOMException("timeout", "AbortError"));
 
       const decision = await resolveStatelessPolicyDecision("先读日志再跑测试，最后告诉我失败原因", {
@@ -1769,14 +1758,11 @@ describe("SR-P1 startup-cost-aware delegation tightening", () => {
       });
 
       expect(routeDecisionOf(decision)).toMatchObject({
-        route: "delegate",
+        route: "reply",
         judge_timeout: true,
-        decision_bucket: "must_delegate",
-        hard_delegate_signal: true,
+        final_judge_source: "timeout",
+        hard_delegate_signal: false,
       });
-      expect((routeDecisionOf(decision).reason_codes as string[])).toEqual(
-        expect.arrayContaining([expect.stringContaining("hard_delegate:prompt_multistep_tool_work")]),
-      );
     });
 
     it("duration_hint=long forces delegate on judge timeout", async () => {

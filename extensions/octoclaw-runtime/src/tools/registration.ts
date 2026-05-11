@@ -339,6 +339,31 @@ function isBudgetedMainDispatchEscalationAllowed(input: {
     || routeDecision.dispatch_required === true;
 }
 
+function isExplicitDelegateDispatchOverride(input: {
+  params: UnknownRecord;
+  metadata: UnknownRecord;
+  cachedDecision: UnknownRecord;
+  resolvedRoute: string;
+}): boolean {
+  if (input.resolvedRoute !== "delegate") return false;
+  if (authoritativeDecisionRoute(input.cachedDecision, "reply") !== "reply") return false;
+  const conversationControl = asRecord(input.metadata.conversation_control);
+  const requestedRoute = normalizeLiveRoute(
+    input.metadata.objection_requested_route
+      ?? input.metadata.requested_route
+      ?? input.params.forceRoute,
+    "reply",
+  );
+  const explicitRouteObjection = input.metadata.route_objection === true
+    && requestedRoute === "delegate"
+    && Boolean(asString(input.metadata.objection_reason));
+  const explicitConversationControl = conversationControl.explicit_delegate_request === true;
+  const explicitModelOverride = Boolean(asString(input.params.model || input.metadata.model));
+  const explicitNewWork = (input.metadata.is_new_work === true || input.metadata.isNewWork === true)
+    && Boolean(asString(input.metadata.expected_deliverable || input.metadata.expectedDeliverable || input.params.task));
+  return explicitRouteObjection || explicitConversationControl || explicitModelOverride || explicitNewWork;
+}
+
 function shouldPromoteBudgetedMainDispatch(input: {
   decision: UnknownRecord;
   state: UnknownRecord | null;
@@ -1144,6 +1169,7 @@ export function getToolRegistrations(options: ToolRegistrationOptions = {}): Too
           command: { type: "string", description: "Optional shell command context for the routed task." },
           cwd: { type: "string", description: "Optional working directory override." },
           forceRoute: { type: "string", enum: ["auto", "reply", "delegate"] },
+          model: { type: "string", description: "Optional explicit child model override for delegated dispatch, for example gpt-5.5." },
           complexityBand: { type: "string", enum: ["simple", "normal", "deep"], description: "Task complexity band. simple=light research/observer work, normal=GLM-5.1, deep=gpt-5.4" },
           expectedSeconds: { type: "number", description: "Main agent's estimate of how long this task should take. Used as timeout baseline." },
           timeoutSeconds: { type: "number", description: "Runner timeout in seconds." },
@@ -1206,10 +1232,11 @@ export function getToolRegistrations(options: ToolRegistrationOptions = {}): Too
           cachedDecision = escalateBudgetedMainDecision(cachedDecision, reason);
           hadCachedDecision = true;
         }
-        const initialMetadata = applyUserMetadataOverrides(
+        let initialMetadata = applyUserMetadataOverrides(
           {
             ...buildPolicyMetadata(ctx, { stateKey: stateKey || asString(asRecord(cachedDecision.request).session_key) }),
             ...(asString(params.sessionKey) ? { session_key: asString(params.sessionKey) } : {}),
+            ...(asString(params.model) ? { model: asString(params.model), model_override_source: "dispatch_param" } : {}),
           },
           parseObjectJson(params.metadataJson),
         );
@@ -1248,8 +1275,48 @@ export function getToolRegistrations(options: ToolRegistrationOptions = {}): Too
             },
           });
         }
-        const routeSealState = selectRouteSealState(ctx, stateKey, state);
-        const cachedRouteSeal = validCachedRouteSeal(routeSealState, cachedDecision, initialMetadata);
+        let routeSealState = selectRouteSealState(ctx, stateKey, state);
+        let cachedRouteSeal = validCachedRouteSeal(routeSealState, cachedDecision, initialMetadata);
+        const explicitDelegateDispatchOverride = cachedRouteSeal?.route === "reply"
+          && isExplicitDelegateDispatchOverride({
+            params: asRecord(params),
+            metadata: initialMetadata,
+            cachedDecision,
+            resolvedRoute,
+          });
+        if (explicitDelegateDispatchOverride) {
+          const overrideConversationControl = {
+            ...asRecord(initialMetadata.conversation_control),
+            source: "explicit_conversation_control",
+            explicit_delegate_request: true,
+            intent_class: "delegated_work",
+          };
+          initialMetadata = {
+            ...initialMetadata,
+            conversation_control: overrideConversationControl,
+            requested_route: "delegate",
+            route_request_source: "force_route",
+            route_request_trusted: true,
+            is_new_work: true,
+            expected_deliverable: asString(initialMetadata.expected_deliverable || initialMetadata.expectedDeliverable || params.task).slice(0, 200),
+          };
+          cachedDecision = await resolveStatelessPolicyDecision(asString(params.task), {
+            command: asString(params.command),
+            metadata: initialMetadata,
+            forceRoute: "delegate",
+          });
+          freshDecisionSource = "explicit_delegate_dispatch_override";
+          hadCachedDecision = true;
+          const overrideWorkContractId = selectDispatchWorkContractId(asRecord(params), cachedDecision);
+          if (overrideWorkContractId) {
+            const validation = validateDispatchWorkContract(loadWorkContract(overrideWorkContractId), overrideWorkContractId);
+            if (validation.ok) {
+              dispatchWorkContract = validation.contract;
+            }
+          }
+          routeSealState = { routeSeal: cachedDecision.routeSeal };
+          cachedRouteSeal = validCachedRouteSeal(routeSealState, cachedDecision, initialMetadata);
+        }
         if (!hadCachedDecision && isDelegatedRoute && managedSessionKey && !params.policyJson) {
           const driftSummary = `sealed_decision_required: managed session ${managedSessionKey.slice(0, 40)}… requires cached/passed policy for delegated route=${resolvedRoute}; got fresh decision from freeform prompt (source=${freshDecisionSource}). This violates §4.6.1 (dispatch must not re-judge).`;
           await recordPolicyReplay("sealed_decision_required", {
@@ -1306,6 +1373,16 @@ export function getToolRegistrations(options: ToolRegistrationOptions = {}): Too
             hadCachedDecision,
             policyJsonProvided: Boolean(params.policyJson),
           }, toolLogger(ctx), cachedDecision);
+        } else if (explicitDelegateDispatchOverride) {
+          await recordPolicyReplay("sealed_explicit_delegate_dispatch_allowed", {
+            sessionKey: managedSessionKey,
+            sessionId: asString(ctx.sessionId),
+            route: resolvedRoute,
+            sealedRoute: "reply",
+            hadCachedDecision,
+            policyJsonProvided: Boolean(params.policyJson),
+            model: asString(params.model || initialMetadata.model),
+          }, toolLogger(ctx), cachedDecision);
         }
         let metadata = initialMetadata;
         metadata = finalizeDispatchMetadata(ctx, metadata, { stateKey, state, cachedDecision });
@@ -1350,11 +1427,13 @@ export function getToolRegistrations(options: ToolRegistrationOptions = {}): Too
         const modelMap = await getModelMap();
         const complexityModelMap = modelMap.complexity as unknown as Record<string, string>;
         const budgetModelMap = modelMap.budget as unknown as Record<string, string>;
-        const selectedModel = complexityBand && complexityModelMap[complexityBand]
-          ? complexityModelMap[complexityBand]
-          : budgetBand && budgetModelMap[budgetBand]
+        const explicitModelOverride = asString(params.model || metadata.model);
+        const selectedModel = explicitModelOverride
+          || (complexityBand && complexityModelMap[complexityBand]
+            ? complexityModelMap[complexityBand]
+            : budgetBand && budgetModelMap[budgetBand]
             ? budgetModelMap[budgetBand]
-            : "";
+            : "");
         if (complexityBand) {
           metadata.complexity_band = complexityBand;
         }
@@ -2517,6 +2596,8 @@ export function getToolRegistrations(options: ToolRegistrationOptions = {}): Too
           nativeFlowId: materializedNativeFlowId,
           resultMaterialized: false,
           deliveryStatus: null,
+          model: selectedModel || asString(metadata.model),
+          modelProfile: selectedModel || asString(metadata.model),
         });
       },
     },

@@ -749,6 +749,58 @@ describe("octoclaw_dispatch honesty", () => {
     expect(result.execution_state).toBe("spawn_confirmed");
   });
 
+  it("allows explicit model delegate dispatch to replace an unexecuted sealed reply route", async () => {
+    const stateKey = "session-dispatch-honesty-explicit-model-override";
+    const routeSeal = seal({ route: "reply" });
+    policyState.set(stateKey, {
+      prompt: "Use gpt-5.5 child agent for this verification",
+      decision: {
+        request: { session_key: stateKey },
+        routeSeal,
+        route_decision: {
+          route: "reply",
+          system_preferred_route: "reply",
+          worker_pool: "octoclaw-main",
+          task_class: "main_direct",
+          decision_bucket: "must_reply",
+        },
+        tool_policy: {
+          allow_direct_tools: true,
+          must_delegate_via: "",
+          block_tool_patterns: ["octoclaw_dispatch", "spawn"],
+        },
+        _decision_bucket: "must_reply",
+      },
+      routeSeal,
+      dispatchExecuted: false,
+      spawnExecuted: false,
+    });
+
+    const result = await executeDispatch({
+      task: "Use gpt-5.5 child agent for this verification",
+      forceRoute: "delegate",
+      model: "gpt-5.5",
+      metadataJson: JSON.stringify({
+        turnId: "turn-1",
+        threadBindingKey: "thread-1",
+        session_key: stateKey,
+      }),
+    }, {
+      sessionKey: stateKey,
+      canonicalSessionKey: stateKey,
+      sessionId: "session-dispatch-honesty-explicit-model-override-test",
+      turnId: "turn-1",
+      threadBindingKey: "thread-1",
+      helperInvoker: spawnedHelper(),
+    });
+
+    expect(result.ok, JSON.stringify(result)).toBe(true);
+    expect(result.route).toBe("delegate");
+    expect(result.model).toBe("gpt-5.5");
+    expect(result.seal_mismatch).not.toBe(true);
+    expect(result.execution_state).toBe("spawn_confirmed");
+  });
+
   it("promotes budgeted-main dispatch when the delegated WorkContract is stored on state", async () => {
     const stateKey = "session-budgeted-main-state-contract";
     const routeSeal = seal({ route: "reply" });

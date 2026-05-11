@@ -532,47 +532,32 @@ footer 不应承担：
 
 ### 7.1 当前 judge 的问题
 
-当前 judge 方向是对的，已经有结构化 schema、context packet、execution coverage、validator fallback。但实现上仍有几个问题：
+当前 judge 方向是对的，已经有结构化 schema、context packet、execution coverage、validator fallback。历史上几个问题的当前状态：
 
-1. judge 输出字段偏多，且部分字段直接进入 ACK/dispatch 逻辑。
+1. judge 输出字段偏多：2026-05-11 已把 active hot-path schema 收到四字段，旧字段仅兼容 replay/backfill。
 2. `ackText` 由 judge 输出，容易产生不稳定用户文案。
-3. 缺失 confidence 时默认成 `0.7`，可能让不完整输出直接 actionable。
-4. `isActionableJudgeResult` 注释说要排除 abstain，但代码只检查 confidence。
+3. 缺失 confidence 默认高置信度：2026-05-11 已收口为不可 actionable。
+4. `isActionableJudgeResult` 没排除 abstain/degraded：2026-05-11 已收口。
 5. judge timeout/fallback/validator/route seal 逻辑太多集中在 `policy-resolver.ts`。
 
 ### 7.2 推荐 judge schema
 
-judge 输出建议收敛成：
+judge 热路径输出已经收敛成四个字段：
 
 ```ts
 interface OctoClawJudgeOutput {
   route: "reply" | "delegate";
   confidence: number;
-  abstainReason?: string | null;
-
-  intentClass:
-    | "plain_chat"
-    | "execution_followup"
-    | "status_lookup"
-    | "fresh_live_lookup"
-    | "delegated_work";
-
-  isNewWork: boolean;
-  expectedDeliverable?: string;
-
-  role?: "observer_probe" | "worker_research" | "worker_code" | "worker_review";
-  complexityBand?: "simple" | "normal" | "deep";
-  expectedDurationBand?: "instant" | "short" | "medium" | "long";
-  qualityBar?: "standard" | "high" | "critical";
-  toolNeedHint?: "none" | "maybe" | "required";
-  reasonCodes: string[];
+  complexity: "simple" | "normal" | "deep";
+  complexity_confidence: number;
 }
 ```
 
 删除或降级：
 
 - `ackText`：不要由 judge 生成可见 ACK。
-- 过多兼容字段：放到 adapter/normalizer，不进入核心决策。
+- `role` / `workType` / `scope` / `tool_need_hint` / `duration_hint` / `reason_codes` / `is_new_work` / `expected_deliverable`：不再要求 active judge 输出，避免小模型在热路径上输出过胖字段、降低速度，并避免 hint 反向污染 route。
+- 过多兼容字段：parser 可以继续兼容旧回放或旧模型输出，但 active validator 只认四字段；这些兼容字段不能成为新的 dispatch 授权来源。
 - route alias：可以在 normalizer 处理，但 alias 输出应计入 degraded。
 
 ### 7.3 judge 热路径：确定性 precheck + 可选 cheap LLM
@@ -595,12 +580,12 @@ deterministic precheck 应优先处理：
 
 - 用户问“刚才那个任务怎么样了”：execution/status followup，走 reply/status，不 spawn。
 - 用户只是闲聊或确认：reply。
-- 用户明确“开个子 agent 查一下”：delegate candidate。
+- 用户明确“开个子 agent 查一下”：judge 语义上可判为 delegate candidate；runtime 不允许再用自然语言关键词作为 hard delegate authority。
 - 单步、目标明确的 fresh live lookup：先走 main fast path，超过预算再转 delegate。
 - long running、代码修改/测试/构建、多步工具链或 required write/tool work：delegate candidate。
 - 已有 sealed WorkContract 的 follow-up：复用 route seal，不重新判新任务。
 
-LLM judge 只处理灰区，不应每轮都成为关键路径。主模型纠正可以保留：judge 判 reply 但主模型发现需要长工具/执行时，可以提交 route hint 或调用 OctoClaw 委派入口；judge 判 delegate 但主模型能直接答时，可以直接答，前提是还没 spawn。任何“已委派”的用户可见表述都必须等 `sessions_spawn` accepted 且 `octoclaw_dispatch_confirm` 校验 runId。
+LLM judge 只处理灰区，不应每轮都成为关键路径。主模型纠正可以保留：judge 判 reply 但主模型发现需要长工具/执行时，可以提交结构化 route hint / objection，或调用带 `forceRoute:"delegate"`、`model`、`conversation_control.explicit_delegate_request` 等结构化字段的 OctoClaw 委派入口；judge 判 delegate 但主模型能直接答时，可以直接答，前提是还没 spawn。任何“已委派”的用户可见表述都必须等 `sessions_spawn` accepted 且 `octoclaw_dispatch_confirm` 校验 runId。
 
 ### 7.4 委派规则：主线程快路径预算
 
@@ -624,7 +609,9 @@ OctoClaw 最初目标是把长时间、工具密集、上下文污染高的工�
 - 可以并行处理。
 - 用户明确要求后台、子 agent、并行、不要阻塞。
 
-中间地带用 runtime 派生的 `budgeted_main_then_delegate` 预算：judge 只输出 `route=reply|delegate` 和成本信号（`confidence`、`tool_need_hint`、`duration_hint`、`scope`、`evidence_required`），主 runtime 再派生三档 bucket。`fresh_live_lookup`、`conversation_control.route_hint=delegate`、`fast_first_response` 只能作为 reason code，不能单独成为 hard delegate signal。
+这里的“用户明确要求”只能让 judge 或主模型提出 delegate candidate。最终 hard delegate / dispatch 授权必须来自结构化信号，例如 `conversation_control.explicit_delegate_request`、可信 `forceRoute=delegate`、`workType=code|review`、`tool_need_hint=required`、`duration_hint=long`、或 `octoclaw_dispatch` 的显式参数；不能靠 prompt 文本里的“子 agent / delegate / 跑测试”等关键词直接拦截。
+
+中间地带用 runtime 派生的 `budgeted_main_then_delegate` 预算：judge 只输出 `route=reply|delegate`、`confidence`、`complexity`、`complexity_confidence`，主 runtime 再结合结构化 metadata / WorkContract / tool params 派生三档 bucket。`fresh_live_lookup`、`conversation_control.route_hint=delegate`、`fast_first_response` 只能作为 reason code，不能单独成为 hard delegate signal。
 
 ```text
 budgeted_main_then_delegate:
@@ -649,10 +636,12 @@ rule、local judge、cheap LLM judge、route hint 和 AGENTS/system prompt 必�
 - `isNewWork=true`。
 - `expectedDeliverable` 非空且可验收。
 - 没有 execution followup/status coverage override。
-- 没有 sealed reply contract 冲突。
+- 没有已执行或不可替换的 sealed reply contract 冲突。
 - planner backend 可用，且当前会话允许调用原生 `sessions_spawn`。
 
 最终授权应在 WorkContract admission、spawn intent gate 和 `octoclaw_dispatch_confirm` 中完成。
+
+2026-05-11 implementation note：route seal 保护同一轮已确定的策略，不应被主模型静默覆盖；但它不应阻止用户或主模型在新的工具调用里提交结构化、可审计的显式委派。当前允许 `octoclaw_dispatch({ forceRoute:"delegate", model:"gpt-5.5", ... })` 这类带 explicit model / route objection / explicit_delegate_request / explicit new-work evidence 的调用替换一个尚未执行的 sealed reply policy，并重新生成 delegate WorkContract。这个例外必须记录为新 seal source / audit reason，不能退化为关键词匹配。
 
 ### 7.6 judge timeout 策略
 
@@ -669,12 +658,13 @@ timeout 结果应该带清晰 reason code，例如：
 - `judge_timeout_delegate_hard_boundary`
 - `execution_coverage_override_reply`
 
-### 7.7 明确 judge bug
+### 7.7 judge validation 收口状态
 
-两个应优先修的点：
+2026-05-11 已收口：
 
-1. `llm-judge.ts` 在缺失 confidence 时默认 `0.7`。建议缺失 confidence 视为 degraded/non-actionable，或最多 `0.5`。
-2. `judge-schema.ts` 的 `isActionableJudgeResult` 应检查 `abstainReason`。如果 `abstainReason` 非空，不应 actionable。
+1. `llm-judge.ts` 缺失 confidence 不再默认高置信度，缺字段输出不可 actionable。
+2. `judge-schema.ts` 的 active validator 要求四字段完整；`abstainReason`、schema degraded、degraded reasons 都会让结果不可 actionable。
+3. 旧 replay 字段仍可解析，但不能恢复为 active dispatch 授权。
 
 ## 8. 明显 bug 和高风险点
 
@@ -1059,7 +1049,7 @@ Slack/IM 发送切到 OpenClaw `runtime.channel.reply` / `runtime.channel.outbou
 
 1. 恢复中性首 ACK：Slack inbound 后 1-5s 内给 reaction/typing 或短文本，只表达“收到/正在判断”。
 2. 启动成本感知路由：短任务、状态/来源追问、单步 fresh lookup 默认 main fast path；硬委派仅用于明确后台/子 agent/并行、代码修改/测试/构建、多步工具链、review/validation、预计 90-120s 以上。
-3. judge 只做 router/admission signal；missing confidence、abstain、degraded、缺 `is_new_work` 或 `expected_deliverable` 都不可 actionable。
+3. judge 只做 router/admission signal；missing confidence、abstain、degraded 都不可 actionable；`is_new_work` / `expected_deliverable` 不再要求由 active judge 输出，dispatch admission 应从 WorkContract、tool params 或结构化 control 中验证。
 4. runtime-ledger SQLite 降级为 metadata/audit store，保留 OctoClaw 自有字段；执行状态以 OpenClaw native runs/flows/subagent registry 为准。
 5. NativeSpawnIntent/WorkContract/native refs 的 SQLite transition 要可观测，关键状态迁移要有原子性或 race test；`SQLITE_BUSY` 不能被误判为 no task/no spawn。
 6. footer 默认 off；debug footer 对 native child final 优先使用 accepted native refs / child announce provenance，不能被 parent delivery turn 误标成 `route=reply`。
@@ -1171,16 +1161,16 @@ return `ack:${parts.threadId}:${parts.anchorId ?? "none"}:${parts.routePhase}:${
 
 这会让 ACK0、tier、delegate accepted 或 progress ACK 在同一 turn 内互相误去重。推荐直接删除 tier ACK；如果保留，key 至少包含 `surface/target/thread/messageId/turnId/routePhase/ackStage`。
 
-### 15.5 judge degraded 结果仍可能被当成 actionable
+### 15.5 judge degraded 结果不可 actionable
 
-`extensions/octoclaw-runtime/src/resolve/llm-judge.ts` 的 `coerceJudgeOutput()` 在缺 confidence 时默认 `0.7`。`packages/octoclaw-policy/src/judge/judge-schema.ts` 的 `isActionableJudgeResult()` 只检查 `confidence >= minConfidence`，不检查 `abstainReason`、schema degraded、`is_new_work`、`expected_deliverable`。
+历史问题：`extensions/octoclaw-runtime/src/resolve/llm-judge.ts` 的 `coerceJudgeOutput()` 曾在缺 confidence 时给默认高置信度，`packages/octoclaw-policy/src/judge/judge-schema.ts` 的 actionable 判断也偏宽。
 
-这会把不完整 LLM 输出升级成可执行 delegate。建议：
+2026-05-11 当前口径：
 
-- 缺 confidence 默认 `0` 或最多 `0.5`，并标记 degraded。
+- 缺 confidence 默认 `0`，不可 actionable。
 - `abstainReason` 非空不可 actionable。
 - route=delegate 且 schema degraded 不可 dispatch。
-- route=delegate 必须 `is_new_work === true` 且 `expected_deliverable` 非空。
+- route=delegate 只是候选；真正 dispatch 仍必须由 WorkContract / tool params / 结构化 control 证明是新工作且有可验收交付物。
 - `ackText` 只进入 replay，不进入用户可见 ACK。
 
 ### 15.6 `buildSubagentSpawnMessage()` 仍强制 completion file
