@@ -55,8 +55,8 @@ import {
 } from "../delegate/speculative-preload.js";
 import { escalateBudgetedMainDecision, hasBudgetedMainEscalationEvidence } from "../budgeted-main.js";
 import {
+  evaluateDispatchAdmission,
   explicitDelegateDispatchRequest,
-  replySealDelegateDispatchAdmission,
   resolveDispatchTargetRoute,
 } from "../dispatch-admission.js";
 import { getModelMap } from "../model-map.js";
@@ -1390,33 +1390,34 @@ export function getToolRegistrations(options: ToolRegistrationOptions = {}): Too
             terminal: true,
           });
         }
-        const replySealDelegateAdmission = cachedRouteSeal
-          ? replySealDelegateDispatchAdmission({
-              cachedRouteSeal,
-              cachedDecision,
-              resolvedRoute,
-              hadCachedDecision,
-              params: asRecord(params),
-              metadata: initialMetadata,
-              dispatchCallImpliesDelegateObjection: true,
-              routeSealStates: [
-                routeSealState,
-                state,
-                policyState.get(managedSessionKey),
-                policyState.get(stateKey),
-                policyState.get(asString(ctx.canonicalSessionKey)),
-                policyState.get(asString(ctx.sessionKey)),
-                policyState.get(asString(initialMetadata.session_key)),
-              ],
-            })
-          : { allowed: false, reason: "" };
-        const budgetedMainEscalationAllowed = replySealDelegateAdmission.reason === "budgeted_main_escalation";
+        const routeSealStates = [
+          routeSealState,
+          state,
+          policyState.get(managedSessionKey),
+          policyState.get(stateKey),
+          policyState.get(asString(ctx.canonicalSessionKey)),
+          policyState.get(asString(ctx.sessionKey)),
+          policyState.get(asString(initialMetadata.session_key)),
+        ];
+        const budgetedMainEscalationEvidence = hasBudgetedMainEscalationEvidence(state, cachedDecision)
+          || routeSealStates.some((candidate) => hasBudgetedMainEscalationEvidence(candidate, cachedDecision));
+        const dispatchAdmissionResult = evaluateDispatchAdmission({
+          resolvedRoute,
+          cachedRouteSeal,
+          explicitWorkContractId,
+          requestedWorkContractId,
+          workContractRoute: requestedWorkContractId ? (loadWorkContract(requestedWorkContractId)?.route ?? null) : null,
+          explicitDelegateRequest,
+          budgetedMainEscalationEvidence,
+          statusFollowup: false,
+        });
+        const budgetedMainEscalationAllowed = dispatchAdmissionResult.reason === "budgeted_main_escalation";
         const staleReplyContractErrorIgnored = Boolean(
           workContractDispatchError
             && !explicitWorkContractId
             && resolvedRoute === "delegate"
             && String(workContractDispatchError.error || "").startsWith("work_contract_route_not_dispatchable:")
-            && replySealDelegateAdmission.allowed,
+            && dispatchAdmissionResult.supersedeStaleReplyWorkContract,
         );
         if (workContractDispatchError && !staleReplyContractErrorIgnored) {
           await recordDispatchTerminalFailure(workContractDispatchError.error, { route: workContractDispatchError.route });
@@ -1440,11 +1441,11 @@ export function getToolRegistrations(options: ToolRegistrationOptions = {}): Too
             sessionId: asString(ctx.sessionId),
             route: resolvedRoute,
             staleWorkContractId: requestedWorkContractId,
-            admissionReason: replySealDelegateAdmission.reason,
+            admissionReason: dispatchAdmissionResult.reason,
           }, toolLogger(ctx), cachedDecision);
           workContractDispatchError = null;
         }
-        if (cachedRouteSeal && resolvedRoute !== cachedRouteSeal.route && !replySealDelegateAdmission.allowed) {
+        if (cachedRouteSeal && resolvedRoute !== cachedRouteSeal.route && !dispatchAdmissionResult.allowed) {
           const driftSummary = `sealed_decision_required: managed session ${managedSessionKey.slice(0, 40)}… requires sealed route=${cachedRouteSeal.route}; got dispatch route=${resolvedRoute}. This violates §4.6.1 (dispatch must not re-route after seal).`;
           await recordPolicyReplay("sealed_decision_required", {
             sessionKey: managedSessionKey,
@@ -1481,7 +1482,7 @@ export function getToolRegistrations(options: ToolRegistrationOptions = {}): Too
             hadCachedDecision,
             policyJsonProvided: Boolean(params.policyJson),
             model: asString(params.model || initialMetadata.model),
-            reason: replySealDelegateAdmission.reason || explicitDelegateRequest.reason,
+            reason: dispatchAdmissionResult.reason || explicitDelegateRequest.reason,
           }, toolLogger(ctx), cachedDecision);
         }
         let metadata = initialMetadata;

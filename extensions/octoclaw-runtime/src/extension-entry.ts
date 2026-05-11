@@ -4564,26 +4564,41 @@ export const plugin = {
         && !isControlObserverDecision(decision)
         && !isSessionControlDecision(decision);
       if (routeHintIsRequired && !routeHintAlreadySubmitted && !directReplyToolsAllowed && !allowedPreHintTools.has(toolName)) {
-        updatePolicyState(stateKey, (current) => ({
-          ...current,
-          blockedTools: [...(Array.isArray(current.blockedTools) ? current.blockedTools.slice(-7) : []), toolName].filter(Boolean),
-        }));
-        void recordPolicyReplay(
-          "tool_blocked_before_route_hint",
-          {
-            sessionKey: stateKey || "",
-            sessionId: stringValue(ctx.sessionId),
-            route: stringValue(asRecord(decision.route_decision).route),
-            toolName,
-            requiredTool: routeHintTool,
-          },
-          pi.logger,
-          decision,
-        ).catch(() => {});
-        return {
-          block: true,
-          blockReason: `OctoClaw runtime policy requires ${routeHintTool} before using other tools.`,
-        };
+        if (toolName === "octoclaw_dispatch") {
+          void recordPolicyReplay(
+            "route_hint_dispatch_advisory",
+            {
+              sessionKey: stateKey || "",
+              sessionId: stringValue(ctx.sessionId),
+              route: stringValue(asRecord(decision.route_decision).route),
+              toolName,
+              requiredTool: routeHintTool,
+            },
+            pi.logger,
+            decision,
+          ).catch(() => {});
+        } else {
+          updatePolicyState(stateKey, (current) => ({
+            ...current,
+            blockedTools: [...(Array.isArray(current.blockedTools) ? current.blockedTools.slice(-7) : []), toolName].filter(Boolean),
+          }));
+          void recordPolicyReplay(
+            "tool_blocked_before_route_hint",
+            {
+              sessionKey: stateKey || "",
+              sessionId: stringValue(ctx.sessionId),
+              route: stringValue(asRecord(decision.route_decision).route),
+              toolName,
+              requiredTool: routeHintTool,
+            },
+            pi.logger,
+            decision,
+          ).catch(() => {});
+          return {
+            block: true,
+            blockReason: `OctoClaw runtime policy requires ${routeHintTool} before using other tools.`,
+          };
+        }
       }
 
       const workContractProjection = asRecord(decision.work_contract);
@@ -4601,26 +4616,41 @@ export const plugin = {
           dispatchCallImpliesDelegateObjection: true,
         }).requested;
       if (forbiddenContractTools.has(toolName) && !isDeterministicFallbackToDelegate && !isBudgetedMainDispatch && !isExplicitDelegateDispatch) {
-        updatePolicyState(stateKey, (current) => ({
-          ...current,
-          blockedTools: [...(Array.isArray(current.blockedTools) ? current.blockedTools.slice(-7) : []), toolName].filter(Boolean),
-        }));
-        void recordPolicyReplay(
-          "tool_blocked_work_contract_forbidden",
-          {
-            sessionKey: stateKey || "",
-            sessionId: stringValue(ctx.sessionId),
-            route: stringValue(workContractProjection.route || asRecord(decision.route_decision).route),
-            toolName,
-            workContractId: stringValue(workContractProjection.workContractId || workContractProjection.work_contract_id),
-          },
-          pi.logger,
-          decision,
-        ).catch(() => {});
-        return {
-          block: true,
-          blockReason: `OctoClaw WorkContract forbids ${toolName} for this turn.`,
-        };
+        if (toolName === "octoclaw_dispatch") {
+          void recordPolicyReplay(
+            "work_contract_forbidden_dispatch_advisory",
+            {
+              sessionKey: stateKey || "",
+              sessionId: stringValue(ctx.sessionId),
+              route: stringValue(workContractProjection.route || asRecord(decision.route_decision).route),
+              toolName,
+              workContractId: stringValue(workContractProjection.workContractId || workContractProjection.work_contract_id),
+            },
+            pi.logger,
+            decision,
+          ).catch(() => {});
+        } else {
+          updatePolicyState(stateKey, (current) => ({
+            ...current,
+            blockedTools: [...(Array.isArray(current.blockedTools) ? current.blockedTools.slice(-7) : []), toolName].filter(Boolean),
+          }));
+          void recordPolicyReplay(
+            "tool_blocked_work_contract_forbidden",
+            {
+              sessionKey: stateKey || "",
+              sessionId: stringValue(ctx.sessionId),
+              route: stringValue(workContractProjection.route || asRecord(decision.route_decision).route),
+              toolName,
+              workContractId: stringValue(workContractProjection.workContractId || workContractProjection.work_contract_id),
+            },
+            pi.logger,
+            decision,
+          ).catch(() => {});
+          return {
+            block: true,
+            blockReason: `OctoClaw WorkContract forbids ${toolName} for this turn.`,
+          };
+        }
       }
       if (isExplicitDelegateDispatch) {
         updatePolicyState(stateKey, (current) => ({
@@ -4670,6 +4700,22 @@ export const plugin = {
         return;
       }
       if (!workflowRule.block) {
+        return;
+      }
+
+      if (toolName === "octoclaw_dispatch") {
+        void recordPolicyReplay(
+          "workflow_enforcement_dispatch_advisory",
+          {
+            sessionKey: stateKey || "",
+            sessionId: stringValue(ctx.sessionId),
+            route: stringValue(workflowRule.route || asRecord(decision.route_decision).route),
+            toolName,
+            allowedTools: workflowRule.allowedTools,
+          },
+          pi.logger,
+          state?.decision as Record<string, unknown> | null,
+        ).catch(() => {});
         return;
       }
 

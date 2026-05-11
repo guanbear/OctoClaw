@@ -2580,7 +2580,7 @@ describe("before_tool_call route hint guard", () => {
     policyState.clearState(delegateKey);
   });
 
-  it("still blocks an explicit reply dispatch through a reply WorkContract", async () => {
+  it("does not block octoclaw_dispatch at the hook level for a reply WorkContract — dispatch admission decides", async () => {
     const handlers = new Map<string, Function>();
     plugin.register({
       on: (event, handler) => handlers.set(event, handler),
@@ -2611,9 +2611,14 @@ describe("before_tool_call route hint guard", () => {
       { sessionKey: key, agentId: "main" },
     ) as { block?: boolean; blockReason?: string } | undefined;
 
-    expect(result?.block).toBe(true);
-    expect(result?.blockReason).toContain("WorkContract forbids octoclaw_dispatch");
-    expect(policyState.getState(key)?.blockedTools).toEqual(["sessions_spawn", "octoclaw_dispatch"]);
+    expect(result).toBeUndefined();
+    expect(policyState.getState(key)?.blockedTools).not.toContain("octoclaw_dispatch");
+    await waitForFireAndForget();
+    const events = readReplayEvents();
+    expect(events).not.toContainEqual(expect.objectContaining({
+      event: "tool_blocked_work_contract_forbidden",
+      toolName: "octoclaw_dispatch",
+    }));
     policyState.clearState(key);
   });
 
@@ -3017,5 +3022,372 @@ describe("before_tool_call route hint guard", () => {
     policyState.clearState(key);
     nativeSpawnIntentStore.clearForTests();
     delete process.env.OCTOCLAW_SPAWN_BACKEND;
+  });
+
+  // ── Invariant 1: Budgeted-main escalation cannot deadlock ──────────────────
+  // After an ordinary tool is blocked/escalated and the block reason tells the
+  // model to call octoclaw_dispatch, a subsequent octoclaw_dispatch call MUST
+  // NOT be blocked by WorkContract forbiddenTools / route-hint / workflow
+  // enforcement.  The two-step sequence must complete in a single session.
+  it("[invariant-1] budgeted-main escalation does not deadlock: blocked write → octoclaw_dispatch admitted past sealed reply WorkContract", async () => {
+    const handlers = new Map<string, Function>();
+    plugin.register({
+      on: (event, handler) => handlers.set(event, handler),
+      registerTool: () => {},
+      registerCommand: () => {},
+      logger: {},
+    });
+
+    const key = "agent:main:slack:channel:c0invariant1:thread:t-no-deadlock";
+    const sessionId = "session-invariant1-no-deadlock";
+    const now = Date.now();
+    const prompt = "写一个总结文件";
+
+    const sealedReplyContract = buildWorkContractFromPolicy(
+      key,
+      prompt,
+      "undetermined",
+      coverageSnapshot(),
+      buildWorkDecisionSeal("local_judge", "reply", ["budgeted_main_initial_reply"]),
+      {
+        reply: {
+          replyMode: "answer",
+          grounding: "none",
+          allowedTools: [],
+          forbiddenTools: ["octoclaw_dispatch", "spawn"],
+          evidenceRefs: [],
+        },
+      },
+    );
+    expect(saveWorkContract(sealedReplyContract)).toBe(true);
+
+    // Set up budgeted-main state with sealed reply WorkContract that forbids dispatch
+    policyState.setState(key, {
+      prompt,
+      workContractId: sealedReplyContract.workContractId,
+      work_contract_id: sealedReplyContract.workContractId,
+      decision: {
+        ...budgetedMainDecision(),
+        workContractId: sealedReplyContract.workContractId,
+        work_contract: {
+          workContractId: sealedReplyContract.workContractId,
+          work_contract_id: sealedReplyContract.workContractId,
+          route: "reply",
+          status: "sealed",
+          forbiddenTools: ["octoclaw_dispatch", "spawn"],
+        },
+      },
+      budgetedMain: budgetedMainState(now - 2_000),
+      budgeted_main: budgetedMainState(now - 2_000),
+      createdAt: now - 5_000,
+      updatedAt: now,
+    });
+
+    const beforeToolCall = handlers.get("before_tool_call");
+    expect(beforeToolCall).toBeTruthy();
+
+    // Step 1: ordinary write tool is blocked with escalation
+    const writeResult = await beforeToolCall!(
+      { toolName: "write", params: { path: "docs/summary.md", content: "summary content" } },
+      { sessionKey: key, sessionId, agentId: "main" },
+    ) as { block?: boolean; blockReason?: string } | undefined;
+
+    expect(writeResult?.block).toBe(true);
+    expect(writeResult?.blockReason).toContain("write_tool_detected");
+    expect(writeResult?.blockReason).toContain("octoclaw_dispatch");
+
+    const escalatedState = policyState.getState(key);
+    expect(escalatedState?.dispatchStatus).toBe("budgeted_main_escalated");
+    expect(escalatedState?.decision?.route_decision).toMatchObject({
+      route: "delegate",
+      route_source: "budgeted_main_escalation",
+      is_new_work: true,
+    });
+
+    // Step 2: octoclaw_dispatch after escalation MUST NOT be blocked by the sealed reply WorkContract
+    const dispatchResult = await beforeToolCall!(
+      { toolName: "octoclaw_dispatch", params: { task: prompt } },
+      { sessionKey: key, sessionId, agentId: "main" },
+    ) as { block?: boolean; blockReason?: string } | undefined;
+
+    expect(dispatchResult).toBeUndefined();
+    expect(policyState.getState(key)?.blockedTools).not.toContain("octoclaw_dispatch");
+    const finalWcId = String(policyState.getState(key)?.workContractId ?? "");
+    expect(finalWcId).toBeTruthy();
+    expect(finalWcId).not.toBe(sealedReplyContract.workContractId);
+    expect(loadWorkContract(finalWcId)).toMatchObject({ route: "delegate" });
+
+    await waitForFireAndForget();
+    const events = readReplayEvents();
+    expect(events).toContainEqual(expect.objectContaining({
+      event: "budgeted_main_escalated",
+      reason: "write_tool_detected",
+    }));
+    // No "tool_blocked_work_contract_forbidden" for octoclaw_dispatch
+    expect(events).not.toContainEqual(expect.objectContaining({
+      event: "tool_blocked_work_contract_forbidden",
+      toolName: "octoclaw_dispatch",
+    }));
+    policyState.clearState(key);
+  });
+
+  // ── Invariant 2: Graphify-like multi-step install/analyze under stale reply ─
+  // Existing test "allows octoclaw_dispatch through a stale reply WorkContract as
+  // the dispatch arbiter" (line ~2620) covers the arbiter path; this test uses
+  // structured WorkContract + route seal + budget evidence for the full flow.
+  it("[invariant-2] graphify-like multi-step install+analyze under stale reply WorkContract reaches dispatch admission", async () => {
+    const handlers = new Map<string, Function>();
+    plugin.register({
+      on: (event, handler) => handlers.set(event, handler),
+      registerTool: () => {},
+      registerCommand: () => {},
+      logger: {},
+    });
+
+    const key = "agent:main:slack:default:direct:u0invariant2";
+    const now = Date.now();
+    const graphifyPrompt = "安装 graphify，并用 graphify 分析 /Users/guanbear/workspace/OctoClaw";
+
+    const staleReplyContract = buildWorkContractFromPolicy(
+      key,
+      "查一下状态",
+      "undetermined",
+      coverageSnapshot(),
+      buildWorkDecisionSeal("local_judge", "reply", ["budgeted_main_initial_reply"]),
+      {
+        reply: {
+          replyMode: "answer",
+          grounding: "none",
+          allowedTools: [],
+          forbiddenTools: ["octoclaw_dispatch", "spawn"],
+          evidenceRefs: [],
+        },
+      },
+    );
+    expect(saveWorkContract(staleReplyContract)).toBe(true);
+
+    policyState.setState(key, {
+      prompt: graphifyPrompt,
+      workContractId: staleReplyContract.workContractId,
+      work_contract_id: staleReplyContract.workContractId,
+      decision: {
+        route_decision: { route: "reply" },
+        work_contract: {
+          workContractId: staleReplyContract.workContractId,
+          work_contract_id: staleReplyContract.workContractId,
+          route: "reply",
+          status: "sealed",
+          forbiddenTools: ["octoclaw_dispatch", "spawn"],
+        },
+        hook_interface: {
+          before_tool_call: {
+            enabled: true,
+            route_hint_required: false,
+            route_hint_tool: "octoclaw_route_hint",
+            delegation_enforcement: true,
+          },
+        },
+        route_hint_policy: { required: false, submitted: false },
+        tool_policy: { allow_direct_tools: true },
+      },
+      blockedTools: ["sessions_spawn"],
+      createdAt: now - 60_000,
+      updatedAt: now,
+    });
+
+    const beforeToolCall = handlers.get("before_tool_call");
+    expect(beforeToolCall).toBeTruthy();
+
+    const result = await beforeToolCall!(
+      { toolName: "octoclaw_dispatch", params: { task: graphifyPrompt } },
+      { sessionKey: key, agentId: "main" },
+    ) as { block?: boolean; blockReason?: string } | undefined;
+
+    expect(result).toBeUndefined();
+    expect(policyState.getState(key)?.blockedTools).not.toContain("octoclaw_dispatch");
+    expect(policyState.getState(key)?.blockedTools).toEqual(["sessions_spawn"]);
+
+    await waitForFireAndForget();
+    const events = readReplayEvents();
+    expect(events).not.toContainEqual(expect.objectContaining({
+      event: "tool_blocked_work_contract_forbidden",
+      toolName: "octoclaw_dispatch",
+    }));
+    policyState.clearState(key);
+  });
+
+  // ── Invariant 3: Direct sessions_spawn bypass without pending NativeSpawnIntent ─
+  // sessions_spawn without a prior nativeSpawnIntentStore.create() must remain
+  // blocked regardless of route decision.  This tightens the existing "blocks
+  // sessions_spawn when no pending planner intent exists" test (line ~2850) by
+  // also verifying blockedTools is populated.  The native spawn gate blocks
+  // sessions_spawn even when hook_interface.before_tool_call.enabled is true.
+  it("[invariant-3] direct sessions_spawn bypass without pending NativeSpawnIntent remains blocked and records blockedTools", async () => {
+    nativeSpawnIntentStore.clearForTests();
+    const handlers = new Map<string, Function>();
+    plugin.register({
+      on: (event, handler) => handlers.set(event, handler),
+      registerTool: () => {},
+      registerCommand: () => {},
+      logger: {},
+    });
+
+    const key = "agent:main:slack:channel:c0invariant3:thread:t-spawn-bypass";
+
+    policyState.setState(key, {
+      decision: {
+        request: { session_key: key },
+        route_decision: { route: "delegate", decision_bucket: "must_delegate" },
+        hook_interface: {
+          before_tool_call: {
+            enabled: true,
+            route_hint_required: false,
+            route_hint_tool: "octoclaw_route_hint",
+            delegation_enforcement: true,
+          },
+        },
+        route_hint_policy: { required: false, submitted: true },
+        tool_policy: {
+          must_delegate_via: "octoclaw_dispatch",
+          allowed_control_tools: ["octoclaw_dispatch", "octoclaw_status", "octoclaw_route_hint"],
+        },
+      },
+      routeHintSubmitted: true,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    });
+
+    const beforeToolCall = handlers.get("before_tool_call");
+    expect(beforeToolCall).toBeTruthy();
+
+    // Direct sessions_spawn attempt without any NativeSpawnIntent
+    const result = await beforeToolCall!(
+      { toolName: "sessions_spawn", params: { task: "do the delegated work", runtime: "subagent" } },
+      { sessionKey: key, agentId: "main" },
+    ) as { block?: boolean; blockReason?: string } | undefined;
+
+    expect(result?.block).toBe(true);
+    expect(result?.blockReason).toContain("no current pending native spawn intent");
+    // sessions_spawn must be recorded in blockedTools
+    expect(policyState.getState(key)?.blockedTools).toContain("sessions_spawn");
+
+    await waitForFireAndForget();
+    const events = readReplayEvents();
+    expect(events).toContainEqual(expect.objectContaining({
+      event: "sessions_spawn_intent_blocked",
+      toolName: "sessions_spawn",
+    }));
+    // Must NOT record a spawn_allowed event
+    expect(events).not.toContainEqual(expect.objectContaining({
+      event: "sessions_spawn_intent_allowed",
+    }));
+    policyState.clearState(key);
+    nativeSpawnIntentStore.clearForTests();
+  });
+
+  // ── Invariant 4: read-only version/release lookup stays main fast path ──
+  // A read-only lookup command (cat package.json | grep version) MUST NOT be classified as write_tool_detected.  It should
+  // stay on the main fast path under budgeted-main without triggering
+  // escalation to dispatch.  The authority comes from tool params and command
+  // structure, not from user-text keywords.
+  it("[invariant-4] read-only version/release lookup stays main fast path and is not write_tool_detected", async () => {
+    const handlers = new Map<string, Function>();
+    plugin.register({
+      on: (event, handler) => handlers.set(event, handler),
+      registerTool: () => {},
+      registerCommand: () => {},
+      logger: {},
+    });
+
+    const key = "agent:main:slack:channel:c0invariant4:thread:t-readonly-lookup";
+    const now = Date.now();
+
+    policyState.setState(key, {
+      prompt: "查一下当前项目用的 octoclaw 版本号",
+      decision: budgetedMainDecision(),
+      budgetedMain: budgetedMainState(now - 1_000),
+      budgeted_main: budgetedMainState(now - 1_000),
+      createdAt: now - 2_000,
+      updatedAt: now,
+    });
+
+    const beforeToolCall = handlers.get("before_tool_call");
+    expect(beforeToolCall).toBeTruthy();
+
+    const result = await beforeToolCall!(
+      {
+        toolName: "exec",
+        params: {
+          command: "cat package.json | grep version",
+        },
+      },
+      { sessionKey: key, sessionId: "session-invariant4-readonly", agentId: "main" },
+    ) as { block?: boolean; blockReason?: string } | undefined;
+
+    expect(result).toBeUndefined();
+    expect(policyState.getState(key)?.budgetedMain).toMatchObject({
+      readOnlyToolCount: 1,
+      toolCount: 1,
+      writeToolDetected: false,
+      longToolDetected: false,
+    });
+    expect(policyState.getState(key)?.decision?.route_decision).toMatchObject({ route: "reply" });
+
+    await waitForFireAndForget();
+    const events = readReplayEvents();
+    expect(events).not.toContainEqual(expect.objectContaining({
+      event: "budgeted_main_escalated",
+    }));
+    expect(events).not.toContainEqual(expect.objectContaining({
+      event: "tool_blocked_delegation_policy",
+      toolName: "exec",
+    }));
+    policyState.clearState(key);
+  });
+
+  // ── Invariant 4b: version-release lookup via npm view stays main fast path ──
+  // npm view / npm show are read-only lookups that must not
+  // trigger write_tool_detected or multi_step_tool_chain escalation.
+  it("[invariant-4b] read-only package registry lookup stays main fast path and is not write_tool_detected", async () => {
+    const handlers = new Map<string, Function>();
+    plugin.register({
+      on: (event, handler) => handlers.set(event, handler),
+      registerTool: () => {},
+      registerCommand: () => {},
+      logger: {},
+    });
+
+    const key = "agent:main:slack:channel:c0invariant4b:thread:t-npm-lookup";
+    const now = Date.now();
+
+    policyState.setState(key, {
+      prompt: "OctoClaw 2026.4.29 相比 2026.4.21 有什么变化？",
+      decision: budgetedMainDecision(),
+      budgetedMain: budgetedMainState(now - 500),
+      budgeted_main: budgetedMainState(now - 500),
+      createdAt: now - 1_500,
+      updatedAt: now,
+    });
+
+    const beforeToolCall = handlers.get("before_tool_call");
+    expect(beforeToolCall).toBeTruthy();
+
+    const result = await beforeToolCall!(
+      {
+        toolName: "exec",
+        params: {
+          command: "npm view octoclaw versions --json 2>/dev/null",
+        },
+      },
+      { sessionKey: key, sessionId: "session-invariant4b-npm", agentId: "main" },
+    ) as { block?: boolean; blockReason?: string } | undefined;
+
+    expect(result).toBeUndefined();
+    expect(policyState.getState(key)?.budgetedMain).toMatchObject({
+      writeToolDetected: false,
+      longToolDetected: false,
+    });
+    expect(policyState.getState(key)?.decision?.route_decision).toMatchObject({ route: "reply" });
+    policyState.clearState(key);
   });
 });

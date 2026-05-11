@@ -114,15 +114,13 @@ export function workflowEnforcementRule(
   routeHintTool: string,
 ): { block: boolean; delegateTool?: string; allowedTools: string[]; route?: string } {
   const route = String(asRecord(decision.route_decision).route ?? "").trim();
-  const routeDecision = asRecord(decision.route_decision);
   const toolPolicy = asRecord(decision.tool_policy);
   const workContract = asRecord(decision.work_contract);
   const delegateTool = String(toolPolicy.must_delegate_via ?? "").trim();
   const allowedTools = runnerWorkflowTools(decision, routeHintTool);
   const forbiddenTools = new Set(asStringArray(workContract.forbiddenTools ?? workContract.forbidden_tools));
-  const isDeterministicFallbackToDelegate = route === "delegate"
-    && (String(routeDecision.route_source ?? "").trim() === "fallback" || String(routeDecision.fallback_reason ?? "").includes("explicit_delegate"));
-  if (forbiddenTools.has(toolName) && !isDeterministicFallbackToDelegate) {
+  const isDispatchArbiterTool = toolName === "octoclaw_dispatch" || (delegateTool && toolName === delegateTool);
+  if (forbiddenTools.has(toolName) && !isDispatchArbiterTool) {
     return { block: true, route, delegateTool, allowedTools: [...allowedTools] };
   }
   const sealedContractRoute = String(workContract.route ?? workContract.route_decision ?? "").trim();

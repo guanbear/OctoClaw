@@ -1581,4 +1581,206 @@ describe("octoclaw_dispatch honesty", () => {
     expect(result.error).toBe("spawn_not_confirmed");
     expect(result.work_contract_id).toBe(contract.workContractId);
   });
+
+  // ── WP-A invariant 1: explicit delegate/model override after stale reply seal ──
+  // An explicit delegate request (forceRoute: "delegate" or model override) on a
+  // session with a stale reply seal MUST reach dispatch admission and succeed,
+  // even when WorkContract forbiddenTools lists octoclaw_dispatch.  The admission
+  // authority lives inside the dispatch tool, not in the outer before_tool_call
+  // hook.  Existing test "allows explicit model delegate dispatch to replace an
+  // unexecuted sealed reply route" covers model override; this target test
+  // verifies the full before_tool_call pass-through for stale reply seal with
+  // WorkContract forbiddenTools so that WP-B can centralize the pass logic.
+  // WP-B convergence: explicit forceRoute:"delegate" supersedes a stale reply WorkContract
+  // that was selected from state (not explicitly passed). evaluateDispatchAdmission detects
+  // the explicit delegate evidence and clears the work_contract_route_not_dispatchable error.
+  it("[target-WP-B] explicit delegate after stale reply seal reaches dispatch admission, not blocked by outer WorkContract forbiddenTools", async () => {
+    useTempWorkContractLedger();
+    const stateKey = "session-wp-b-invariant1-stale-seal";
+    const task = "委派子 agent 做一次完整的依赖审计";
+    const staleContract = seedWorkContract({
+      route: "reply",
+      sessionKey: stateKey,
+      userAsk: task,
+      intentClass: "fresh_live_lookup",
+    });
+    const routeSeal = seal({ route: "reply" });
+    const staleDecision = {
+      request: { session_key: stateKey },
+      routeSeal,
+      route_decision: {
+        route: "reply",
+        system_preferred_route: "reply",
+        worker_pool: "octoclaw-main",
+        task_class: "main_direct",
+        decision_bucket: "must_reply",
+      },
+      work_contract: {
+        workContractId: staleContract.workContractId,
+        route: "reply",
+        status: "sealed",
+        forbiddenTools: ["octoclaw_dispatch", "spawn"],
+      },
+      tool_policy: {
+        allow_direct_tools: true,
+        must_delegate_via: "",
+        allowed_control_tools: ["octoclaw_dispatch", "octoclaw_status"],
+      },
+      _decision_bucket: "must_reply",
+    };
+    policyState.set(stateKey, {
+      prompt: task,
+      decision: staleDecision,
+      routeSeal,
+      workContractId: staleContract.workContractId,
+      dispatchExecuted: false,
+      spawnExecuted: false,
+    });
+
+    const result = await executeDispatch({
+      task,
+      forceRoute: "delegate",
+      metadataJson: JSON.stringify({
+        turnId: "turn-wp-b-1",
+        threadBindingKey: "thread-wp-b-1",
+        session_key: stateKey,
+      }),
+    }, {
+      sessionKey: stateKey,
+      canonicalSessionKey: stateKey,
+      sessionId: "session-wp-b-invariant1-test",
+      turnId: "turn-wp-b-1",
+      threadBindingKey: "thread-wp-b-1",
+      helperInvoker: spawnedHelper(),
+    });
+
+    expect(result.ok, JSON.stringify(result)).toBe(true);
+    expect(result.route).toBe("delegate");
+    expect(result.seal_mismatch).not.toBe(true);
+    expect(String(result.work_contract_id)).not.toBe(staleContract.workContractId);
+    policyState.clear(stateKey);
+  });
+
+  // ── WP-A invariant 5: status/provenance follow-up cannot create new spawn ──
+  // When the decision metadata indicates status_or_provenance follow-up (via
+  // router_decision_v2.request_kind, execution coverage, or conversation control
+  // signals), the dispatch tool must NOT create a new delegated task or spawn.
+  // It should either return a reply fallback or a structured rejection — never
+  // a new NativeSpawnIntent.
+  it("[target-WP-A.5] status/provenance follow-up cannot create a new delegated task/spawn", async () => {
+    const stateKey = "session-wp-a-invariant5-status-followup";
+    const task = "刚才的子 agent 执行结果是什么？";
+    const decision = {
+      ...delegateDecision("delegate"),
+      is_new_work: false,
+      route_decision: {
+        ...delegateDecision("delegate").route_decision,
+        is_new_work: false,
+        expected_deliverable: task,
+      },
+      router_decision_v2: { request_kind: "status_or_provenance" },
+      _execution_coverage_packet: {
+        coverage: {
+          execution: {
+            supports_status_reply: true,
+          },
+        },
+      },
+    };
+    policyState.set(stateKey, {
+      prompt: task,
+      decision,
+      delegated: true,
+      dispatchExecuted: true,
+      spawnExecuted: true,
+    });
+
+    const result = await executeDispatch({
+      task,
+      policyJson: JSON.stringify(decision),
+      metadataJson: JSON.stringify({
+        session_key: stateKey,
+        conversation_control: { status_followup: true },
+      }),
+    }, {
+      sessionKey: stateKey,
+      canonicalSessionKey: stateKey,
+      sessionId: "session-wp-a-invariant5-test",
+      helperInvoker: successfulHelper(),
+    });
+
+    // Must NOT create a new delegated task
+    expect(result.ok).toBe(true);
+    expect(result.route).toBe("reply");
+    expect(result.dispatch_executed).toBe(false);
+    expect(result.spawn_executed).toBe(false);
+    expect(result.materialized).toBe(false);
+    // Must be a fallback or rejection, never a new spawn
+    expect(result.fallback_to_main_reply).toBe(true);
+    policyState.clear(stateKey);
+  });
+
+  // ── WP-A invariant 7: explicit invalid WorkContract id fails closed ──
+  // When octoclaw_dispatch is called with an explicit workContractId that does
+  // not exist in the ledger, the dispatch must fail closed: no new delegate, no
+  // spawn, no silent fallback to creating a fresh contract.  The failure must be
+  // structured and terminal, not retryable.
+  it("[target-WP-A.7] explicit invalid WorkContract id fails closed without silent contract creation", async () => {
+    useTempWorkContractLedger();
+    const stateKey = "session-wp-a-invariant7-invalid-wc";
+    const task = "Do a security audit of the auth module";
+    const invalidWcId = "wc-nonexistent-invalid-contract-id-99999";
+    const routeSeal = seal({ route: "delegate" });
+    const decision = {
+      ...delegateDecision("delegate"),
+      request: { session_key: stateKey },
+      routeSeal,
+      route_decision: {
+        ...delegateDecision("delegate").route_decision,
+        route: "delegate",
+        is_new_work: true,
+        expected_deliverable: task,
+      },
+      work_contract: {
+        workContractId: invalidWcId,
+        route: "delegate",
+        status: "sealed",
+      },
+    };
+    policyState.set(stateKey, {
+      prompt: task,
+      decision,
+      routeSeal,
+      workContractId: invalidWcId,
+      dispatchExecuted: false,
+      spawnExecuted: false,
+    });
+
+    const result = await executeDispatch({
+      task,
+      workContractId: invalidWcId,
+      metadataJson: JSON.stringify({
+        turnId: "turn-wp-a-7",
+        threadBindingKey: "thread-wp-a-7",
+        session_key: stateKey,
+      }),
+    }, {
+      sessionKey: stateKey,
+      canonicalSessionKey: stateKey,
+      sessionId: "session-wp-a-invariant7-test",
+      turnId: "turn-wp-a-7",
+      threadBindingKey: "thread-wp-a-7",
+      helperInvoker: successfulHelper(),
+    });
+
+    // Must fail closed — terminal and non-retryable
+    expect(result.ok).toBe(false);
+    expect(result.terminal).toBe(true);
+    expect(result.retryable).toBe(false);
+    expect(result.spawn_executed).toBe(false);
+    expect(result.dispatch_executed).toBe(false);
+    // The explicit invalid id was never created in the ledger
+    expect(loadWorkContract(invalidWcId)).toBeNull();
+    policyState.clear(stateKey);
+  });
 });

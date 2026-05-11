@@ -124,3 +124,68 @@ export function replySealDelegateDispatchAdmission(input: {
   }
   return { allowed: false, reason: "" };
 }
+
+export type DispatchAdmissionReason =
+  | "already_delegate"
+  | "budgeted_main_escalation"
+  | "explicit_delegate_request"
+  | "route_seal_match"
+  | "route_seal_supersede"
+  | "status_followup_no_new_spawn"
+  | "invalid_explicit_work_contract"
+  | "no_structured_evidence";
+
+export interface DispatchAdmissionInput {
+  resolvedRoute: string;
+  cachedRouteSeal: RouteSeal | null;
+  explicitWorkContractId: string;
+  requestedWorkContractId: string;
+  workContractRoute: string | null;
+  explicitDelegateRequest: ExplicitDelegateDispatchRequest;
+  budgetedMainEscalationEvidence: boolean;
+  statusFollowup: boolean;
+}
+
+export interface DispatchAdmissionDecision {
+  allowed: boolean;
+  reason: DispatchAdmissionReason;
+  supersedeStaleReplyWorkContract: boolean;
+}
+
+export function evaluateDispatchAdmission(input: DispatchAdmissionInput): DispatchAdmissionDecision {
+  if (input.statusFollowup) {
+    return { allowed: false, reason: "status_followup_no_new_spawn", supersedeStaleReplyWorkContract: false };
+  }
+
+  if (input.explicitWorkContractId) {
+    if (input.workContractRoute !== "delegate") {
+      return { allowed: false, reason: "invalid_explicit_work_contract", supersedeStaleReplyWorkContract: false };
+    }
+    return { allowed: true, reason: "already_delegate", supersedeStaleReplyWorkContract: false };
+  }
+
+  if (input.resolvedRoute !== "delegate") {
+    return { allowed: false, reason: "no_structured_evidence", supersedeStaleReplyWorkContract: false };
+  }
+
+  if (input.cachedRouteSeal?.route === "delegate") {
+    return { allowed: true, reason: "route_seal_match", supersedeStaleReplyWorkContract: false };
+  }
+
+  const staleReplyWorkContract = input.requestedWorkContractId && input.workContractRoute === "reply";
+  const hasStructuredEvidence = input.explicitDelegateRequest.requested || input.budgetedMainEscalationEvidence;
+
+  if (input.cachedRouteSeal?.route === "reply" && hasStructuredEvidence && !staleReplyWorkContract) {
+    return { allowed: true, reason: "route_seal_supersede", supersedeStaleReplyWorkContract: false };
+  }
+
+  if (staleReplyWorkContract && hasStructuredEvidence) {
+    return { allowed: true, reason: input.budgetedMainEscalationEvidence ? "budgeted_main_escalation" : "explicit_delegate_request", supersedeStaleReplyWorkContract: true };
+  }
+
+  if (hasStructuredEvidence) {
+    return { allowed: true, reason: input.budgetedMainEscalationEvidence ? "budgeted_main_escalation" : "explicit_delegate_request", supersedeStaleReplyWorkContract: false };
+  }
+
+  return { allowed: false, reason: "no_structured_evidence", supersedeStaleReplyWorkContract: false };
+}
