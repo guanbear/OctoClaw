@@ -326,17 +326,18 @@ function isBudgetedMainDispatchEscalationAllowed(input: {
 }): boolean {
   if (!input.hadCachedDecision || !input.routeSealState) return false;
   if (input.cachedRouteSeal.route !== "reply" || input.resolvedRoute !== "delegate") return false;
+  const state = asRecord(input.routeSealState);
+  const budgetedMain = asRecord(state.budgetedMain || state.budgeted_main);
   const routeDecision = asRecord(input.cachedDecision.route_decision);
-  const startupCostPolicy = asRecord(routeDecision.startup_cost_policy || input.cachedDecision._startup_cost_policy);
-  const decisionBucket = asString(
-    routeDecision.decision_bucket
-    || input.cachedDecision._decision_bucket
-    || startupCostPolicy.decision_bucket,
-  );
-  if (decisionBucket !== "budgeted_main_then_delegate") return false;
+  const reasonCodes = new Set([
+    ...stringArray(routeDecision.reason_codes),
+    ...stringArray(input.cachedDecision.reason_codes),
+  ]);
   return input.cachedDecision._budgeted_main_escalated === true
     || routeDecision.route_source === "budgeted_main_escalation"
-    || routeDecision.dispatch_required === true;
+    || asString(state.dispatchStatus || state.dispatch_status) === "budgeted_main_escalated"
+    || Boolean(budgetedMain.escalatedAt || budgetedMain.escalated_at)
+    || reasonCodes.has("budgeted_main_escalated");
 }
 
 function isExplicitDelegateDispatchOverride(input: {
@@ -376,18 +377,24 @@ function shouldPromoteBudgetedMainDispatch(input: {
     || input.decision._decision_bucket
     || startupCostPolicy.decision_bucket,
   );
-  if (decisionBucket !== "budgeted_main_then_delegate") return false;
 
   const state = asRecord(input.state);
   const budgetedMain = asRecord(state.budgetedMain || state.budgeted_main);
   const workContractView = asRecord(input.decision.work_contract);
+  const reasonCodes = new Set([
+    ...stringArray(routeDecision.reason_codes),
+    ...stringArray(input.decision.reason_codes),
+  ]);
   const alreadyEscalated = input.decision._budgeted_main_escalated === true
     || routeDecision.route_source === "budgeted_main_escalation"
     || routeDecision.dispatch_required === true
     || asString(state.dispatchStatus || state.dispatch_status) === "budgeted_main_escalated"
-    || Boolean(budgetedMain.escalatedAt || budgetedMain.escalated_at);
+    || Boolean(budgetedMain.escalatedAt || budgetedMain.escalated_at)
+    || reasonCodes.has("budgeted_main_escalated");
   const hasDelegateContract = input.workContract?.route === "delegate"
     || asString(workContractView.route) === "delegate";
+  if (alreadyEscalated) return true;
+  if (decisionBucket !== "budgeted_main_then_delegate") return false;
   return alreadyEscalated || hasDelegateContract;
 }
 

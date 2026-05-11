@@ -6,6 +6,7 @@ import {
 } from "./util/type-coercion.js";
 
 export const BUDGETED_MAIN_MAX_WALL_MS = 30_000;
+export const MAIN_FAST_PATH_READ_ONLY_TOOL_LIMIT = 2;
 
 export interface BudgetedMainState {
   active: boolean;
@@ -193,7 +194,6 @@ function commandLooksLongOrVerification(command: string): boolean {
 
 function hasUnsafeWriteRedirection(command: string): boolean {
   if (!command) return false;
-  if (/(?:^|\s)<<-?\s*\S+/u.test(command)) return true;
   const redirectionPattern = /(?:^|[\s;|&])((?:(?:\d+)?>{1,2})|&>{1,2})\s*("[^"]+"|'[^']+'|[^\s;|&]+)/gu;
   let match: RegExpExecArray | null;
   while ((match = redirectionPattern.exec(command)) !== null) {
@@ -285,14 +285,15 @@ function segmentLooksReadOnlyShell(segment: string): boolean {
   if (command === "crontab") return tokens.length >= 2 && tokens.slice(1).every((token) => token === "-l" || token === "-u");
   if (command === "launchctl") return ["list", "print", "print-disabled"].includes(asString(tokens[1]).toLowerCase());
   if (command === "npm" || command === "pnpm" || command === "yarn" || command === "bun") {
-    return ["view", "info", "show"].includes(asString(tokens[1]).toLowerCase());
+    return ["view", "info", "show", "search"].includes(asString(tokens[1]).toLowerCase());
   }
   if (command === "gh") {
     const subject = asString(tokens[1]).toLowerCase();
     const action = asString(tokens[2]).toLowerCase();
     return (subject === "release" && ["view", "list"].includes(action))
       || (subject === "repo" && action === "view")
-      || (subject === "pr" && ["view", "list", "checks"].includes(action));
+      || (subject === "pr" && ["view", "list", "checks"].includes(action))
+      || (subject === "search" && ["repos", "prs", "issues", "commits", "code"].includes(action));
   }
   if (command === "git") {
     const action = asString(tokens[1]).toLowerCase();
@@ -302,6 +303,10 @@ function segmentLooksReadOnlyShell(segment: string): boolean {
   }
   if (command === "openclaw") {
     return openclawLooksReadOnly(tokens);
+  }
+  if ((command === "python" || command === "python3") && tokens[1] === "-m" && asString(tokens[2]).toLowerCase() === "pip") {
+    const action = asString(tokens[3]).toLowerCase();
+    return action === "index" || action === "show" || action === "list";
   }
   return false;
 }
@@ -399,14 +404,14 @@ export function updateBudgetedMainToolState(
   if (!classification.counted) return state;
   const readOnlyToolCount = state.readOnlyToolCount + (classification.readOnly ? 1 : 0);
   const toolCount = state.toolCount + 1;
-  const secondReadOnlyRound = classification.readOnly && readOnlyToolCount > 1;
+  const readOnlyOverBudget = classification.readOnly && readOnlyToolCount > MAIN_FAST_PATH_READ_ONLY_TOOL_LIMIT;
   return {
     ...state,
     toolCount,
     readOnlyToolCount,
-    longToolDetected: state.longToolDetected || classification.longToolDetected || classification.multiStepToolDetected || classification.unknownToolRiskDetected || secondReadOnlyRound,
+    longToolDetected: state.longToolDetected || classification.longToolDetected || classification.multiStepToolDetected || classification.unknownToolRiskDetected || readOnlyOverBudget,
     writeToolDetected: state.writeToolDetected || classification.writeToolDetected,
-    reason: classification.escalationReason || (secondReadOnlyRound ? "multi_step_tool_chain" : state.reason),
+    reason: classification.escalationReason || (readOnlyOverBudget ? "multi_step_tool_chain" : state.reason),
   };
 }
 
@@ -415,7 +420,7 @@ export function budgetedMainToolEscalationReason(
   classification: BudgetedMainToolClassification,
 ): string {
   if (classification.escalationReason) return classification.escalationReason;
-  if (classification.readOnly && updatedState.readOnlyToolCount > 1) return "multi_step_tool_chain";
+  if (classification.readOnly && updatedState.readOnlyToolCount > MAIN_FAST_PATH_READ_ONLY_TOOL_LIMIT) return "multi_step_tool_chain";
   return "";
 }
 

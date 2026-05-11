@@ -79,6 +79,7 @@ import { buildExecutionCoverageLayer } from "./resolve/execution-coverage-preche
 import { buildMemoryCoverageLayer } from "./resolve/memory-coverage-precheck.js";
 import {
   BUDGETED_MAIN_MAX_WALL_MS,
+  MAIN_FAST_PATH_READ_ONLY_TOOL_LIMIT,
   buildBudgetedMainMetrics,
   buildBudgetedMainState,
   budgetedMainToolEscalationReason,
@@ -127,7 +128,7 @@ const OCTOCLAW_DELEGATION_SYSTEM_CONTEXT = [
   "When delegated work depends on local code, docs, or repo state, pass the smallest known anchors to octoclaw_dispatch as metadataJson.context_refs.",
   "Use this shape when anchors are known: {\"context_refs\":{\"primaryFiles\":[\"path\"],\"readScope\":[\"dir\"],\"sourcePolicy\":\"local refs first\",\"maxToolCalls\":4,\"workspaceMode\":\"read_only\"}}.",
   "When the user explicitly requests a persistent side effect and no narrower write target is known, pass {\"context_refs\":{\"requestedSideEffects\":true,\"workspaceMode\":\"write_allowed\"}}; do not rely on the child to infer write permission from wording.",
-  "If anchors are not already known, use at most one lightweight read-only lookup to find exact refs, or dispatch without refs and let the child report missing context; never fabricate refs just to fill the packet.",
+  "If anchors are not already known, use at most two lightweight read-only lookups to find exact refs, or dispatch without refs and let the child report missing context; never fabricate refs just to fill the packet.",
   "Do not emit user-visible coordinator chatter or ACK text such as '我来写'、'收到，我看一下'、'我先确认一下派发边界'. Runtime ACK handles acknowledgments as tracked deliverables.",
   "Before tool calls or route_hint, emit no user-visible text. User-visible output should only contain authoritative status receipt, final result, or clear failure.",
 ].join("\n");
@@ -226,7 +227,7 @@ const OCTOCLAW_ROUTE_HINT_SYSTEM_CONTEXT = [
   "Use octoclaw_route_hint to state only the two-class route intent: reply or delegate. Runtime derives must_reply, must_delegate, or budgeted_main_then_delegate from route plus cost signals.",
   "After route_hint merge: reply may answer directly; delegated routes must go through octoclaw_dispatch.",
   "",
-  "Handle directly for greetings, simple Q&A, clarifications, status/provenance follow-up, and one lightweight read-only lookup when it fits the budget.",
+  "Handle directly for greetings, simple Q&A, clarifications, status/provenance follow-up, and up to two lightweight read-only lookups when they fit the budget.",
   "Delegate only for explicit background/subagent/parallel work, code/file mutation, tests/builds, long commands, multi-step tools, review/validation, or work that cannot fit the budget.",
   "Bare model/tool names, fresh lookup, route_hint=delegate, and fast_first_response are advisory only and do not force delegate by themselves.",
 ].join("\n");
@@ -3780,7 +3781,7 @@ export const plugin = {
           "[OctoClaw budgeted main soft-budget notice]",
           `This budgeted main execution exceeded ${BUDGETED_MAIN_MAX_WALL_MS}ms before this prompt injection point.`,
           "If you already have enough information, produce the final answer now.",
-          "You may use at most one lightweight read-only tool if it is necessary to finish the answer.",
+          `You may use at most ${MAIN_FAST_PATH_READ_ONLY_TOOL_LIMIT} lightweight read-only tools if they are necessary to finish the answer.`,
           "If writing, long commands, multi-step tools, tests/build/review/validation, or more work is needed, call octoclaw_dispatch with the original task.",
           "Do not claim the task has started until sessions_spawn is accepted and octoclaw_dispatch_confirm succeeds.",
         ].join("\n"));
@@ -3788,9 +3789,9 @@ export const plugin = {
         prependSystem.push([
           "[OctoClaw budgeted main execution]",
           `This turn is decision_bucket=budgeted_main_then_delegate with maxWallMs=${BUDGETED_MAIN_MAX_WALL_MS}.`,
-          "Answer directly only if the task can be completed in the main agent with at most one lightweight read-only tool.",
+          `Answer directly only if the task can be completed in the main agent with at most ${MAIN_FAST_PATH_READ_ONLY_TOOL_LIMIT} lightweight read-only tools.`,
           "If writing, long commands, multi-step tools, tests/build/review/validation, or more work is needed, call octoclaw_dispatch.",
-          "If dispatching local code/docs/repo work, pass known exact anchors as metadataJson.context_refs; use at most one lightweight read-only lookup to find refs, and do not invent anchors.",
+          `If dispatching local code/docs/repo work, pass known exact anchors as metadataJson.context_refs; use at most ${MAIN_FAST_PATH_READ_ONLY_TOOL_LIMIT} lightweight read-only lookups to find refs, and do not invent anchors.`,
           "Do not claim the task has started until sessions_spawn is accepted and octoclaw_dispatch_confirm succeeds.",
         ].join("\n"));
       }

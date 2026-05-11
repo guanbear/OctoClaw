@@ -749,6 +749,62 @@ describe("octoclaw_dispatch honesty", () => {
     expect(result.execution_state).toBe("spawn_confirmed");
   });
 
+  it("allows must-reply budgeted main work to dispatch after runtime escalation", async () => {
+    const stateKey = "session-dispatch-honesty-must-reply-escalated";
+    const routeSeal = seal({ route: "reply" });
+    policyState.set(stateKey, {
+      prompt: "Check GitNexus wiki with the configured model",
+      decision: {
+        request: { session_key: stateKey },
+        routeSeal,
+        route_decision: {
+          route: "reply",
+          system_preferred_route: "reply",
+          worker_pool: "octoclaw-main",
+          task_class: "main_direct",
+          decision_bucket: "must_reply",
+        },
+        tool_policy: {
+          allow_direct_tools: true,
+          must_delegate_via: "",
+          allowed_control_tools: ["octoclaw_dispatch", "octoclaw_status"],
+        },
+        _decision_bucket: "must_reply",
+      },
+      routeSeal,
+      dispatchStatus: "budgeted_main_escalated",
+      dispatchExecuted: false,
+      spawnExecuted: false,
+      budgetedMain: {
+        active: false,
+        escalatedAt: Date.now(),
+        reason: "multi_step_tool_chain",
+      },
+    });
+
+    const result = await executeDispatch({
+      task: "Check GitNexus wiki with the configured model",
+      forceRoute: "delegate",
+      metadataJson: JSON.stringify({
+        turnId: "turn-1",
+        threadBindingKey: "thread-1",
+        session_key: stateKey,
+      }),
+    }, {
+      sessionKey: stateKey,
+      canonicalSessionKey: stateKey,
+      sessionId: "session-dispatch-honesty-must-reply-escalated-test",
+      turnId: "turn-1",
+      threadBindingKey: "thread-1",
+      helperInvoker: spawnedHelper(),
+    });
+
+    expect(result.ok, JSON.stringify(result)).toBe(true);
+    expect(result.route).toBe("delegate");
+    expect(result.seal_mismatch).not.toBe(true);
+    expect(result.execution_state).toBe("spawn_confirmed");
+  });
+
   it("allows explicit model delegate dispatch to replace an unexecuted sealed reply route", async () => {
     const stateKey = "session-dispatch-honesty-explicit-model-override";
     const routeSeal = seal({ route: "reply" });

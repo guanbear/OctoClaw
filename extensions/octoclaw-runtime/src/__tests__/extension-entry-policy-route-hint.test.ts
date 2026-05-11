@@ -12,7 +12,7 @@ import { resolvePolicyDecisionForContext } from "../resolve/policy-resolver.js";
 import { buildWorkContractFromPolicy, buildWorkDecisionSeal } from "../work-contract/builders.js";
 import { loadWorkContract, saveWorkContract } from "../work-contract/store.js";
 import { resetNeutralInboundAckDedupeForTests } from "../ack/ack-guard.js";
-import { BUDGETED_MAIN_MAX_WALL_MS } from "../budgeted-main.js";
+import { BUDGETED_MAIN_MAX_WALL_MS, MAIN_FAST_PATH_READ_ONLY_TOOL_LIMIT } from "../budgeted-main.js";
 
 const fs = fsSync as unknown as {
   mkdtempSync(pathname: string): string;
@@ -504,7 +504,7 @@ describe("budgeted_main_then_delegate runtime budget", () => {
 
     expect(projection?.prependSystemContext).toContain("budgeted main execution");
     expect(projection?.prependSystemContext).toContain("metadataJson.context_refs");
-    expect(projection?.prependSystemContext).toContain("one lightweight read-only lookup");
+    expect(projection?.prependSystemContext).toContain(`${MAIN_FAST_PATH_READ_ONLY_TOOL_LIMIT} lightweight read-only lookups`);
     expect(policyState.getState(key)?.budgetedMain).toMatchObject({
       active: true,
       reason: "budgeted_main_started",
@@ -720,7 +720,7 @@ describe("budgeted_main_then_delegate runtime budget", () => {
     ) as { prependSystemContext?: string } | undefined;
 
     expect(projection?.prependSystemContext).toContain("soft-budget notice");
-    expect(projection?.prependSystemContext).toContain("at most one lightweight read-only tool");
+    expect(projection?.prependSystemContext).toContain(`at most ${MAIN_FAST_PATH_READ_ONLY_TOOL_LIMIT} lightweight read-only tools`);
     expect(policyState.getState(key)?.decision?.route_decision).toMatchObject({
       route: "reply",
       decision_bucket: "budgeted_main_then_delegate",
@@ -735,7 +735,7 @@ describe("budgeted_main_then_delegate runtime budget", () => {
     policyState.clearState(key);
   });
 
-  it("allows one lightweight read-only tool after soft timeout without escalating", async () => {
+  it("allows two lightweight read-only tools after soft timeout without escalating", async () => {
     const handlers = new Map<string, Function>();
     plugin.register({
       on: (event, handler) => handlers.set(event, handler),
@@ -761,12 +761,17 @@ describe("budgeted_main_then_delegate runtime budget", () => {
 
     const beforeToolCall = handlers.get("before_tool_call");
     expect(beforeToolCall).toBeTruthy();
-    const result = await beforeToolCall!(
+    const firstResult = await beforeToolCall!(
       { toolName: "read", params: { path: "README.md" } },
       { sessionKey: key, sessionId: "session-budget-timeout-tool", agentId: "main" },
     ) as { block?: boolean; blockReason?: string } | undefined;
+    const secondResult = await beforeToolCall!(
+      { toolName: "web_fetch", params: { url: "https://example.com" } },
+      { sessionKey: key, sessionId: "session-budget-timeout-tool", agentId: "main" },
+    ) as { block?: boolean; blockReason?: string } | undefined;
 
-    expect(result).toBeUndefined();
+    expect(firstResult).toBeUndefined();
+    expect(secondResult).toBeUndefined();
     expect(policyState.getState(key)?.decision?.route_decision).toMatchObject({
       route: "reply",
       decision_bucket: "budgeted_main_then_delegate",
@@ -774,8 +779,8 @@ describe("budgeted_main_then_delegate runtime budget", () => {
     expect(policyState.getState(key)?.budgetedMain).toMatchObject({
       active: true,
       escalatedPending: true,
-      readOnlyToolCount: 1,
-      toolCount: 1,
+      readOnlyToolCount: MAIN_FAST_PATH_READ_ONLY_TOOL_LIMIT,
+      toolCount: MAIN_FAST_PATH_READ_ONLY_TOOL_LIMIT,
     });
     await waitForFireAndForget();
     const events = readReplayEvents();
@@ -899,6 +904,101 @@ describe("budgeted_main_then_delegate runtime budget", () => {
     policyState.clearState(key);
   });
 
+  it("treats registry and package search probes as read-only main fast-path work", async () => {
+    const handlers = new Map<string, Function>();
+    plugin.register({
+      on: (event, handler) => handlers.set(event, handler),
+      registerTool: () => {},
+      registerCommand: () => {},
+      logger: {},
+    });
+
+    const key = "agent:main:slack:channel:c0as4dappu3:thread:t-budget-search-probe";
+    const now = Date.now();
+    policyState.setState(key, {
+      decision: budgetedMainDecision(),
+      budgetedMain: budgetedMainState(now - 1_000),
+      budgeted_main: budgetedMainState(now - 1_000),
+      createdAt: now - 2_000,
+      updatedAt: now,
+    });
+
+    const beforeToolCall = handlers.get("before_tool_call");
+    expect(beforeToolCall).toBeTruthy();
+    const result = await beforeToolCall!(
+      {
+        toolName: "exec",
+        params: {
+          command: [
+            "npm search graphify --json 2>/dev/null || true",
+            "gh search repos graphify --json nameWithOwner,url 2>/dev/null || true",
+            "python3 -m pip index versions graphify 2>/dev/null || true",
+          ].join("\n"),
+        },
+      },
+      { sessionKey: key, sessionId: "session-budget-search-probe", agentId: "main" },
+    ) as { block?: boolean; blockReason?: string } | undefined;
+
+    expect(result).toBeUndefined();
+    expect(policyState.getState(key)?.budgetedMain).toMatchObject({
+      readOnlyToolCount: 1,
+      toolCount: 1,
+      writeToolDetected: false,
+      longToolDetected: false,
+    });
+    expect(policyState.getState(key)?.decision?.route_decision).toMatchObject({ route: "reply" });
+    await waitForFireAndForget();
+    expect(readReplayEvents()).not.toContainEqual(expect.objectContaining({
+      event: "budgeted_main_escalated",
+    }));
+    policyState.clearState(key);
+  });
+
+  it("does not classify shell heredocs as write redirections", async () => {
+    const handlers = new Map<string, Function>();
+    plugin.register({
+      on: (event, handler) => handlers.set(event, handler),
+      registerTool: () => {},
+      registerCommand: () => {},
+      logger: {},
+    });
+
+    const key = "agent:main:slack:channel:c0as4dappu3:thread:t-budget-heredoc-probe";
+    const now = Date.now();
+    policyState.setState(key, {
+      decision: budgetedMainDecision(),
+      budgetedMain: budgetedMainState(now - 1_000),
+      budgeted_main: budgetedMainState(now - 1_000),
+      createdAt: now - 2_000,
+      updatedAt: now,
+    });
+
+    const beforeToolCall = handlers.get("before_tool_call");
+    expect(beforeToolCall).toBeTruthy();
+    const result = await beforeToolCall!(
+      {
+        toolName: "exec",
+        params: {
+          command: [
+            "python3 - <<'PY'",
+            "print('graphify')",
+            "PY",
+          ].join("\n"),
+        },
+      },
+      { sessionKey: key, sessionId: "session-budget-heredoc-probe", agentId: "main" },
+    ) as { block?: boolean; blockReason?: string } | undefined;
+
+    expect(result?.block).toBe(true);
+    expect(result?.blockReason).toContain("multi_step_tool_chain");
+    expect(result?.blockReason).not.toContain("write_tool_detected");
+    expect(policyState.getState(key)?.budgetedMain).toMatchObject({
+      writeToolDetected: false,
+      longToolDetected: true,
+    });
+    policyState.clearState(key);
+  });
+
   it("keeps real shell writes blocked after allowing null redirections", async () => {
     const handlers = new Map<string, Function>();
     plugin.register({
@@ -971,7 +1071,7 @@ describe("budgeted_main_then_delegate runtime budget", () => {
     policyState.clearState(key);
   });
 
-  it("blocks a second real read-only tool after soft timeout and requires octoclaw_dispatch", async () => {
+  it("blocks a third real read-only tool after soft timeout and requires octoclaw_dispatch", async () => {
     const handlers = new Map<string, Function>();
     plugin.register({
       on: (event, handler) => handlers.set(event, handler),
@@ -986,10 +1086,10 @@ describe("budgeted_main_then_delegate runtime budget", () => {
       escalatedPending: true,
       escalated_pending: true,
       reason: "wall_time_over_budget",
-      readOnlyToolCount: 1,
-      read_only_tool_count: 1,
-      toolCount: 1,
-      tool_count: 1,
+      readOnlyToolCount: MAIN_FAST_PATH_READ_ONLY_TOOL_LIMIT,
+      read_only_tool_count: MAIN_FAST_PATH_READ_ONLY_TOOL_LIMIT,
+      toolCount: MAIN_FAST_PATH_READ_ONLY_TOOL_LIMIT,
+      tool_count: MAIN_FAST_PATH_READ_ONLY_TOOL_LIMIT,
     });
     policyState.setState(key, {
       decision: budgetedMainDecision(),
@@ -1341,7 +1441,7 @@ describe("budgeted_main_then_delegate runtime budget", () => {
     policyState.clearState(delegateKey);
   });
 
-  it("escalates must_reply main-lane work on write, long, or second ordinary tool use", async () => {
+  it("escalates must_reply main-lane work on write, long, or ordinary tool over-budget", async () => {
     const handlers = new Map<string, Function>();
     plugin.register({
       on: (event, handler) => handlers.set(event, handler),
@@ -1392,14 +1492,19 @@ describe("budgeted_main_then_delegate runtime budget", () => {
       { toolName: "web_fetch", params: { url: "https://example.com" } },
       { sessionKey: multiToolKey, sessionId: "session-must-reply-multi-tool", agentId: "main" },
     ) as { block?: boolean; blockReason?: string } | undefined;
+    const thirdReadResult = await beforeToolCall!(
+      { toolName: "read", params: { path: "package.json" } },
+      { sessionKey: multiToolKey, sessionId: "session-must-reply-multi-tool", agentId: "main" },
+    ) as { block?: boolean; blockReason?: string } | undefined;
 
     expect(writeResult?.block).toBe(true);
     expect(writeResult?.blockReason).toContain("write_tool_detected");
     expect(longResult?.block).toBe(true);
     expect(longResult?.blockReason).toContain("long_tool_detected");
     expect(firstReadResult).toBeUndefined();
-    expect(secondReadResult?.block).toBe(true);
-    expect(secondReadResult?.blockReason).toContain("multi_step_tool_chain");
+    expect(secondReadResult).toBeUndefined();
+    expect(thirdReadResult?.block).toBe(true);
+    expect(thirdReadResult?.blockReason).toContain("multi_step_tool_chain");
     await waitForFireAndForget();
     const events = readReplayEvents();
     expect(events).toContainEqual(expect.objectContaining({
