@@ -1,0 +1,47 @@
+{
+  "codingWorker": {
+    "score": 85,
+    "tier": "A",
+    "confidence": "medium",
+    "sources": [
+      {
+        "source": "pinchbench",
+        "score": 85,
+        "sampleCount": 12,
+        "fetchedAt": "2026-05-10T00:00:00.000Z"
+      }
+    ]
+  },
+  "agenticToolTask": {
+    "tier": "unknown",
+    "confidence": "unknown",
+    "sources": []
+  },
+  "researchLookup": {
+    "tier": "unknown",
+    "confidence": "unknown",
+    "sources": []
+  },
+  "dataLogAnalysis": {
+    "tier": "unknown",
+    "confidence": "unknown",
+    "sources": []
+  },
+  "mainReasoning": {
+    "score": 77,
+    "tier": "B",
+    "confidence": "low",
+    "sources": [
+      {
+        "source": "artificial_analysis",
+        "score": 77,
+        "fetchedAt": "2026-05-10T00:00:00.000Z"
+      }
+    ]
+  },
+  "defaultDelegate": {
+    "tier": "unknown",
+    "confidence": "unknown",
+    "sources": []
+  }
+}

@@ -1,0 +1,29 @@
+{
+  "event": "router_lite_recommendation",
+  "turnId": "turn_001",
+  "snapshotId": "model-intel:1746835200000",
+  "liveRoute": "delegate",
+  "actualModel": "cliproxyapi/gpt-5.5",
+  "recommendation": {
+    "recommendedModel": "cliproxyapi/gpt-5.5-mini",
+    "outputBudget": "medium",
+    "qualityFloor": "standard",
+    "eligibleModels": ["cliproxyapi/gpt-5.5-mini"],
+    "rejectedModels": [
+      { "model": "cliproxyapi/gpt-5.5", "reason": "cost_higher_than_alternative" }
+    ],
+    "reasonCodes": ["same_provider_cheaper", "quality_floor:standard", "stability:pass"],
+    "mode": "shadow",
+    "scoringMode": "cost_first",
+    "scenario": "codingWorker"
+  },
+  "estimatedCostDeltaUsd": -0.012,
+  "qualityGate": "pass",
+  "judge": {
+    "route": "delegate",
+    "confidence": 0.86,
+    "complexity": "normal",
+    "complexityConfidence": 0.81
+  },
+  "scenario": "codingWorker"
+}

@@ -7,6 +7,34 @@ export type RouterLiteEffectiveCostBand = "free_or_sunk" | "cheap" | "normal" | 
 export type RouterLitePlanType = "pay_as_you_go" | "subscription" | "free_quota" | "unknown";
 export type RouterLiteCapabilityEvidence = "declared" | "probed" | "observed" | "operator_override" | "heuristic";
 
+export type ScenarioAbilitySource =
+  | "pinchbench" | "aider" | "swe_bench" | "bfcl"
+  | "artificial_analysis" | "local_replay" | "operator_override";
+
+export type RouterLiteScoringMode = "cost_first" | "balanced" | "reliable_fast";
+
+export interface ScenarioAbilityScore {
+  score?: number;
+  tier: "S" | "A" | "B" | "C" | "unknown";
+  confidence: "high" | "medium" | "low" | "unknown";
+  sources: Array<{
+    source: ScenarioAbilitySource;
+    score?: number;
+    version?: string;
+    sampleCount?: number;
+    fetchedAt: string;
+  }>;
+}
+
+export interface ScenarioAbilityLite {
+  codingWorker: ScenarioAbilityScore;
+  agenticToolTask: ScenarioAbilityScore;
+  researchLookup: ScenarioAbilityScore;
+  dataLogAnalysis: ScenarioAbilityScore;
+  mainReasoning: ScenarioAbilityScore;
+  defaultDelegate: ScenarioAbilityScore;
+}
+
 export interface RouterLitePrice {
   inputUsdPerMTok?: number;
   outputUsdPerMTok?: number;
@@ -70,6 +98,8 @@ export interface ModelIntelLite {
   capability: RouterLiteCapability;
   health: RouterLiteHealth;
   plan: RouterLitePlan;
+  scenarioAbility?: ScenarioAbilityLite;
+  freshness?: string;
   sources: string[];
 }
 
@@ -138,6 +168,8 @@ export interface RouterLiteRecommendation {
   rejectedModels: Array<{ model: string; reason: string }>;
   reasonCodes: string[];
   mode: "shadow" | "live";
+  scoringMode?: RouterLiteScoringMode;
+  scenario?: string;
   ignoredReason?: "low_confidence" | "no_eligible_model" | "live_route_not_supported" | "not_configured";
 }
 
@@ -150,4 +182,11 @@ export interface RouterLiteShadowEvent {
   recommendation: RouterLiteRecommendation;
   estimatedCostDeltaUsd?: number;
   qualityGate: "unknown" | "pass" | "fail";
+  judge?: {
+    route: RouterLiteRoute;
+    confidence: number;
+    complexity: "simple" | "normal" | "complex" | "deep";
+    complexityConfidence: number;
+  };
+  scenario?: string;
 }
