@@ -47,6 +47,7 @@ function parseTime(value: unknown): number {
 
 function ensureDelegate(contract: WorkContract, nativeBinding: NativeBindingRef, intent: NativeSpawnIntent): NonNullable<WorkContract["delegate"]> {
   const previous = contract.delegate;
+  const selectedModel = asString(intent.sessionsSpawnArgs?.model);
   return {
     delegateTaskId: asString(intent.delegateTaskId || previous?.delegateTaskId || `delegate-task:${contract.workContractId}`),
     currentAttemptId: asString(intent.attemptId || previous?.currentAttemptId) || null,
@@ -54,13 +55,17 @@ function ensureDelegate(contract: WorkContract, nativeBinding: NativeBindingRef,
     coordinationMode: previous?.coordinationMode ?? "solo_worker",
     acceptanceCriteria: previous?.acceptanceCriteria ?? [],
     scope: previous?.scope ?? { read: [], write: [], workspaceMode: "read_only", scopeFingerprint: "" },
-    modelProfile: previous?.modelProfile ?? "",
+    modelProfile: selectedModel || previous?.modelProfile || "",
     nativeBinding,
     childSessions: previous?.childSessions ?? [],
     artifactRefs: previous?.artifactRefs ?? [],
     nextAction: previous?.nextAction ?? "wait",
     blocker: previous?.blocker,
   };
+}
+
+function intentModelProfile(intent: NativeSpawnIntent): string {
+  return asString(intent.sessionsSpawnArgs?.model);
 }
 
 function cloneWorkContract(contract: WorkContract): WorkContract {
@@ -250,8 +255,10 @@ function markPlannerAttemptInLedger(input: {
     delegate_task_id: delegateTaskId,
     spawn_intent_id: input.intent.spawnIntentId,
     dispatch_mode: input.intent.dispatchMode,
+    model: intentModelProfile(input.intent),
     planner_confirm: true,
   };
+  const modelProfile = intentModelProfile(input.intent);
   try {
     db.exec("BEGIN");
     const existing = db.prepare("SELECT attempt_id FROM task_attempts WHERE attempt_id = ?").get(attemptId);
@@ -262,9 +269,9 @@ function markPlannerAttemptInLedger(input: {
         `INSERT INTO task_attempts (
            attempt_id, work_contract_id, delegate_task_id, attempt_no,
            attempt_kind, status, native_flow_id, child_session_key, child_run_id,
-           started_at, updated_at, ended_at, terminal_outcome, error_message,
+           model_profile, started_at, updated_at, ended_at, terminal_outcome, error_message,
            attempt_json, revision
-         ) VALUES (?, ?, ?, ?, 'initial', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
+         ) VALUES (?, ?, ?, ?, 'initial', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
       ).run(
         attemptId,
         workContractId,
@@ -274,6 +281,7 @@ function markPlannerAttemptInLedger(input: {
         flowId || null,
         asString(input.childSessionKey) || null,
         asString(input.childRunId) || null,
+        modelProfile || null,
         input.status === "running" ? input.nowIso : null,
         input.nowIso,
         input.status === "failed" ? input.nowIso : null,
@@ -290,6 +298,7 @@ function markPlannerAttemptInLedger(input: {
              native_flow_id = COALESCE(NULLIF(native_flow_id, ''), ?),
              child_session_key = COALESCE(NULLIF(?, ''), child_session_key),
              child_run_id = COALESCE(NULLIF(?, ''), child_run_id),
+             model_profile = COALESCE(NULLIF(?, ''), model_profile),
              started_at = COALESCE(started_at, ?),
              updated_at = ?,
              revision = revision + 1
@@ -298,6 +307,7 @@ function markPlannerAttemptInLedger(input: {
         flowId,
         asString(input.childSessionKey),
         asString(input.childRunId),
+        modelProfile,
         input.nowIso,
         input.nowIso,
         attemptId,
@@ -466,12 +476,13 @@ async function maybeSendAcceptedAck(input: {
 
   try {
     const taskId = asString(input.intent.delegateTaskId) || input.workContractId;
+    const modelId = asString(input.confirmInput.modelId) || intentModelProfile(input.intent);
     const notification = await emitExecutionTransitionNotification({
       transitionKind: "spawn_started",
       projection: minimalProjection({
         taskId,
         workContractId: input.workContractId,
-        modelId: asString(input.confirmInput.modelId),
+        modelId,
         childSessionKey: input.childSessionKey,
         runId: input.runId,
         childRunId: input.childRunId,

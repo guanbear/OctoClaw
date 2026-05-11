@@ -408,6 +408,12 @@ describe("runtime ledger hot-path tool integration", () => {
       relation_to_recent_execution: "new_work",
       is_new_work: true,
       expected_deliverable: "concise implementation summary for runtime ledger ticket issuance",
+      conversation_control: {
+        intent_class: "delegated_work",
+        route_hint: "delegate",
+        explicit_delegate_request: true,
+        require_fresh_lookup: true,
+      },
     });
     const workContractId = String(decision.workContractId ?? "");
     expect(workContractId).not.toBe("");
@@ -421,6 +427,12 @@ describe("runtime ledger hot-path tool integration", () => {
         relation_to_recent_execution: "new_work",
         is_new_work: true,
         expected_deliverable: "concise implementation summary for runtime ledger ticket issuance",
+        conversation_control: {
+          intent_class: "delegated_work",
+          route_hint: "delegate",
+          explicit_delegate_request: true,
+          require_fresh_lookup: true,
+        },
       }),
     }, {
       helperInvoker: successfulHelper(),
@@ -774,6 +786,12 @@ describe("runtime ledger hot-path tool integration", () => {
       relation_to_recent_execution: "new_work",
       is_new_work: true,
       expected_deliverable: "summary of runtime ledger scheduler queue dispatch flow",
+      conversation_control: {
+        intent_class: "delegated_work",
+        route_hint: "delegate",
+        explicit_delegate_request: true,
+        require_fresh_lookup: true,
+      },
     });
     const workContractId = String(decision.workContractId ?? "");
     expect(workContractId).not.toBe("");
@@ -786,6 +804,12 @@ describe("runtime ledger hot-path tool integration", () => {
         relation_to_recent_execution: "new_work",
         is_new_work: true,
         expected_deliverable: "summary of runtime ledger scheduler queue dispatch flow",
+        conversation_control: {
+          intent_class: "delegated_work",
+          route_hint: "delegate",
+          explicit_delegate_request: true,
+          require_fresh_lookup: true,
+        },
       }),
     }, {
       helperInvoker: successfulHelper(),

@@ -1072,11 +1072,25 @@ describe("guardOutboundMessageForPolicyState", () => {
       buildWorkDecisionSeal("local_judge", "delegate", ["native_spawn_confirmed"]),
       { status: "sealed" },
     );
+    const intent = nativeSpawnIntentStore.create({
+      workContractId: contract.workContractId,
+      delegateTaskId: `delegate-task:${contract.workContractId}`,
+      attemptId: `delegate-task:${contract.workContractId}:attempt:1`,
+      sessionKey: parentKey,
+      sessionsSpawnArgs: {
+        task: "查证 OpenClaw release 变化",
+        label: "release research",
+        runtime: "subagent",
+        model: "gpt-5.5",
+        mode: "run",
+      },
+      ttlMs: 60_000,
+    });
     contract.nativeSpawnRefs = {
       openclawRunId: "run-native-announce",
       childSessionKey: childKey,
       requesterSessionKey: parentKey,
-      spawnIntentId: "nsp-native-announce",
+      spawnIntentId: intent.spawnIntentId,
       spawnBackend: "sessions_spawn_planner",
       spawnMode: "run",
     };
@@ -1088,6 +1102,16 @@ describe("guardOutboundMessageForPolicyState", () => {
       childSessionKey: childKey,
     };
     saveWorkContract(contract);
+    policyState.setState(parentKey, {
+      decision: {
+        route_decision: { route: "delegate" },
+        model_policy: { selected_model: "zhipu/GLM-5.1" },
+        work_contract: { workContractId: contract.workContractId, route: "delegate" },
+      },
+      workContractId: contract.workContractId,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    });
 
     const prompt = [
       `[Inter-session message] sourceSession=${childKey} sourceChannel=webchat sourceTool=subagent_announce isUser=false`,
@@ -1129,6 +1153,8 @@ describe("guardOutboundMessageForPolicyState", () => {
       expect(sentMessages[0]?.replyToMessageId).toBe("1777709667.918049");
       expect(sentMessages[0]?.message).toContain("已查证 GitHub releases 页面");
       expect(sentMessages[0]?.message).toContain("route=delegate");
+      expect(sentMessages[0]?.message).toContain("model=gpt-5.5");
+      expect(sentMessages[0]?.message).not.toContain("model=zhipu/GLM-5.1");
       expect(sentMessages[0]?.message).toContain("via=native_announce");
       expect(sentMessages[0]?.message).not.toContain("route=reply");
       expect(policyState.getState(parentKey)).toMatchObject({

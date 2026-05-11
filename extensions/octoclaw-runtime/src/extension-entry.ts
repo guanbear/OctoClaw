@@ -70,6 +70,7 @@ import { policyState, type PolicyStateEntry } from "./state/policy-state.js";
 import { getCommandRegistrations, getToolRegistrations } from "./tools/registration.js";
 import { buildNativeStatusOutput } from "./tools/runtime-status.js";
 import { evaluateNativeSessionsSendGate, evaluateNativeSpawnGate } from "./delegate/native-spawn-gate.js";
+import { nativeSpawnIntentStore } from "./delegate/native-spawn-intent-store.js";
 import { isPlannerAllowedForSession, resolveSpawnBackend, resolveSpeculativePreloadEnabled } from "./config/index.js";
 import { findWorkContractByNativeChildSessionKey, loadWorkContract, saveWorkContract, updateWorkContract } from "./work-contract/store.js";
 import { compactWorkContractView, type ContextCoverageSnapshot, type DelegateContract, type IntentClass, type WorkContract, type WorkDecisionSource } from "@octoclaw/contracts/work-contract";
@@ -1053,7 +1054,7 @@ function buildNativeAnnounceFinalMessage(input: {
     content,
     projection: {
       route: "delegate",
-      model: resolveDisplayModel(input.state, input.event, input.ctx),
+      model: resolveNativeAnnounceDisplayModel(input.contract, input.state, input.event, input.ctx),
       via: "native_announce",
       thread: Boolean(input.replyToMessageId || slackThreadFromSessionKey(input.sessionKey)),
       ...(footerDebugEnabled() ? {
@@ -1125,7 +1126,7 @@ export async function deliverNativeAnnounceCompletion(input: {
     deliveryProvenance: nativeAnnounceDeliveryProvenance(
       input.contract,
       input.completion,
-      resolveDisplayModel(state, event, ctx),
+      resolveNativeAnnounceDisplayModel(input.contract, state, event, ctx),
     ),
     footerMode: footerDebugEnabled() ? "debug" : "off",
   }));
@@ -1222,6 +1223,7 @@ function buildNativeAnnouncePolicyState(input: {
   const hookInterface = asRecord(decision.hook_interface);
   const beforeToolCall = asRecord(hookInterface.before_tool_call);
   const routeDecision = asRecord(decision.route_decision);
+  const modelPolicy = asRecord(decision.model_policy);
   const runtimeTruth = asRecord(decision.runtime_truth);
   const runtimeBinding = asRecord(runtimeTruth.binding);
   const runtimeEvidence = asRecord(runtimeTruth.evidence);
@@ -1229,6 +1231,7 @@ function buildNativeAnnouncePolicyState(input: {
   const childSessionKey = ids.childSessionKey || input.completion.sourceSessionKey;
   const runId = ids.runId || ids.childRunId;
   const isBlocked = input.blocker?.blocked === true;
+  const nativeModel = nativeSpawnIntentDisplayModel(input.contract);
   return {
     ...input.current,
     canonicalSessionKey: input.stateKey,
@@ -1243,6 +1246,13 @@ function buildNativeAnnouncePolicyState(input: {
           ? "delegated_completion_blocked"
           : stringValue(routeDecision.task_class) || "delegated_completion_delivery",
       },
+      model_policy: nativeModel
+        ? {
+            ...modelPolicy,
+            selected_model: nativeModel,
+            model: nativeModel,
+          }
+        : modelPolicy,
       work_contract: {
         ...workContractProjection,
         workContractId: input.contract.workContractId,
@@ -1802,6 +1812,37 @@ function resolveDisplayModel(state: UnknownRecord, event: UnknownRecord, ctx: Un
     state.model_profile,
     "direct_main",
   );
+}
+
+function displayModelOrEmpty(...values: unknown[]): string {
+  const model = firstDisplayModel(...values);
+  return model === "unknown" ? "" : model;
+}
+
+function nativeSpawnIntentDisplayModel(contract: WorkContract): string {
+  const spawnIntentId = contractNativeIds(contract).spawnIntentId;
+  if (!spawnIntentId) return "";
+  try {
+    const intent = nativeSpawnIntentStore.get(spawnIntentId);
+    const args = asRecord(intent?.sessionsSpawnArgs);
+    return displayModelOrEmpty(args.model, args.modelId, args.model_id);
+  } catch {
+    return "";
+  }
+}
+
+function resolveNativeAnnounceDisplayModel(
+  contract: WorkContract,
+  state: UnknownRecord,
+  event: UnknownRecord,
+  ctx: UnknownRecord,
+): string {
+  return displayModelOrEmpty(
+    nativeSpawnIntentDisplayModel(contract),
+    asRecord(contract.delegate).model,
+    asRecord(contract.delegate).modelProfile,
+    asRecord(contract.delegate).model_profile,
+  ) || resolveDisplayModel(state, event, ctx);
 }
 
 /** Extract route source label for footer: "judge(0.87)" / "rule" / "fallback" / "agent↑judge=delegate" */

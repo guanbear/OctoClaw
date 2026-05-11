@@ -346,6 +346,7 @@ describe("confirmNativeSpawn", () => {
     expect(updated?.status).toBe("sealed");
     expect(updated?.telemetry.dispatchExecuted).toBe(true);
     expect(updated?.telemetry.spawnExecuted).toBe(true);
+    expect(updated?.delegate?.modelProfile).toBe("zhipu/GLM-5.1");
     expect(updated?.delegate?.nativeBinding?.runId).toBe("run-confirmed");
     expect(updated?.delegate?.nativeBinding?.childSessionKey).toBe("child-session-confirmed");
   });
