@@ -83,9 +83,12 @@ export function decisionFromWorkContract(contract: WorkContract, baseDecision: U
   const routerDecision = asRecord(base.router_decision_v2);
   const request = asRecord(base.request);
   const route = contract.route;
+  const baseRouteSeal = asRecord(base.routeSeal);
+  const compatibleRouteSeal = asString(baseRouteSeal.route) === route ? base.routeSeal : undefined;
   return canonicalizeDecisionForPolicyState({
     ...base,
     route,
+    routeSeal: compatibleRouteSeal,
     workContractId: contract.workContractId,
     work_contract: compactWorkContractView(contract),
     request: {

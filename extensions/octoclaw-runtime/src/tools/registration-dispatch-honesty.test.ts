@@ -867,6 +867,66 @@ describe("octoclaw_dispatch honesty", () => {
     expect(result.run_id).toBe("run-spawned");
   });
 
+  it("selects a newer sealed delegate WorkContract when dispatch still sees an older reply seal", async () => {
+    useTempWorkContractLedger();
+    const stateKey = "session-latest-delegate-contract";
+    const task = "再试一次";
+    const routeSeal = seal({ route: "reply" });
+    const oldReply = seedWorkContract({
+      route: "reply",
+      sessionKey: stateKey,
+      userAsk: task,
+      intentClass: "execution_followup",
+    });
+    policyState.set(stateKey, {
+      prompt: task,
+      decision: {
+        request: { session_key: stateKey, metadata: {} },
+        routeSeal,
+        route_decision: {
+          route: "reply",
+          system_preferred_route: "reply",
+          dispatch_required: false,
+          decision_bucket: "must_reply",
+        },
+        tool_policy: { block_tool_patterns: ["octoclaw_dispatch", "spawn"] },
+        workContractId: oldReply.workContractId,
+        work_contract: { workContractId: oldReply.workContractId, route: "reply" },
+      },
+      routeSeal,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    const delegate = seedWorkContract({
+      route: "delegate",
+      sessionKey: stateKey,
+      userAsk: "启动 gpt-5.5 子 agent 修复 PR",
+      intentClass: "fresh_live_lookup",
+    });
+
+    const result = await executeDispatch({
+      task,
+      forceRoute: "delegate",
+      metadataJson: JSON.stringify({
+        turnId: "turn-1",
+        threadBindingKey: "thread-1",
+        session_key: stateKey,
+      }),
+    }, {
+      sessionKey: stateKey,
+      canonicalSessionKey: stateKey,
+      sessionId: "session-latest-delegate-contract",
+      turnId: "turn-1",
+      threadBindingKey: "thread-1",
+      helperInvoker: spawnedHelper(),
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.route).toBe("delegate");
+    expect(result.work_contract_id).toBe(delegate.workContractId);
+    expect(result.execution_state).toBe("spawn_confirmed");
+    expect(result.spawn_executed).toBe(true);
+  });
+
   it("includes terminal:true for terminal dispatch honesty failures", async () => {
     const stateKey = "session-dispatch-honesty-terminal";
     const routeSeal = seal({ route: "delegate" });

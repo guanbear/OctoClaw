@@ -41,7 +41,7 @@ import { createOpenClawDistTaskFlowPort } from "../ports/openclaw-dist-taskflow-
 import { checkTaskflowCapability } from "../ports/taskflow-port.js";
 import type { RouteSeal } from "@octoclaw/contracts/route-seal";
 import type { NativeBindingRef, NativeFlowStatus, WorkContract } from "@octoclaw/contracts/work-contract";
-import { loadWorkContract } from "../work-contract/store.js";
+import { listWorkContractsBySession, loadWorkContract } from "../work-contract/store.js";
 import { materializeWorkContractSuccess, materializeWorkContractFailure } from "../work-contract/materializer.js";
 import { markChildSessionPreferred, selectPreferredChildSession } from "../work-contract/continuity.js";
 import { emitExecutionTransitionNotification } from "../ack/execution-transition-notifier.js";
@@ -403,6 +403,61 @@ function validateDispatchWorkContract(contract: WorkContract | null, workContrac
     return { ok: false, route: contract.route, error: `work_contract_route_not_dispatchable:${workContractId}:${contract.route}` };
   }
   return { ok: true, contract };
+}
+
+function workContractTimeMs(contract: WorkContract): number {
+  const values = [contract.createdAt, contract.updatedAt].map((value) => Date.parse(asString(value)));
+  const finite = values.filter((value) => Number.isFinite(value));
+  return finite.length > 0 ? Math.max(...finite) : 0;
+}
+
+function policyStateTimeMs(state: UnknownRecord | null, decision: UnknownRecord): number {
+  const stateRecord = asRecord(state);
+  const routeSeal = asRecord(stateRecord.routeSeal || decision.routeSeal);
+  const workContract = asRecord(decision.work_contract);
+  const values = [
+    Number(stateRecord.updatedAt || 0),
+    Number(stateRecord.createdAt || 0),
+    Date.parse(asString(routeSeal.createdAt)),
+    Date.parse(asString(workContract.updatedAt || workContract.createdAt)),
+  ].filter((value) => Number.isFinite(value) && value > 0);
+  return values.length > 0 ? Math.max(...values) : 0;
+}
+
+function workContractHasNativeDispatchEvidence(contract: WorkContract): boolean {
+  const telemetry = asRecord(contract.telemetry);
+  const refs = asRecord(contract.nativeSpawnRefs);
+  const delegate = asRecord(contract.delegate);
+  const nativeBinding = asRecord(delegate.nativeBinding);
+  return telemetry.dispatchExecuted === true
+    || telemetry.spawnExecuted === true
+    || telemetry.resultMaterialized === true
+    || Boolean(asString(refs.openclawRunId || refs.childRunId || refs.childSessionKey || refs.spawnIntentId))
+    || Boolean(asString(nativeBinding.runId || nativeBinding.childRunId || nativeBinding.childSessionKey || nativeBinding.nativeTaskId));
+}
+
+function selectLatestSealedDelegateWorkContract(input: {
+  sessionKeys: string[];
+  newerThanMs: number;
+  excludedWorkContractIds?: string[];
+}): WorkContract | null {
+  const excluded = new Set((input.excludedWorkContractIds ?? []).map((value) => asString(value)).filter(Boolean));
+  const candidates: WorkContract[] = [];
+  const seen = new Set<string>();
+  for (const sessionKey of Array.from(new Set(input.sessionKeys.map((value) => asString(value)).filter(Boolean)))) {
+    for (const contract of listWorkContractsBySession(sessionKey)) {
+      if (!contract?.workContractId || seen.has(contract.workContractId)) continue;
+      seen.add(contract.workContractId);
+      if (excluded.has(contract.workContractId)) continue;
+      if (contract.route !== "delegate" || contract.status !== "sealed") continue;
+      if (workContractHasNativeDispatchEvidence(contract)) continue;
+      const contractTime = workContractTimeMs(contract);
+      if (input.newerThanMs > 0 && contractTime > 0 && contractTime <= input.newerThanMs) continue;
+      candidates.push(contract);
+    }
+  }
+  return candidates
+    .sort((left, right) => workContractTimeMs(right) - workContractTimeMs(left))[0] ?? null;
 }
 
 
@@ -1247,6 +1302,35 @@ export function getToolRegistrations(options: ToolRegistrationOptions = {}): Too
           "reply",
         );
         const isDelegatedRoute = resolvedRoute === "delegate";
+        if (!dispatchWorkContract && isDelegatedRoute) {
+          const fallbackContract = selectLatestSealedDelegateWorkContract({
+            sessionKeys: [
+              managedSessionKey,
+              stateKey,
+              asString(params.sessionKey),
+              asString(initialMetadata.session_key),
+              asString(asRecord(cachedDecision.request).session_key),
+              asString(ctx.canonicalSessionKey),
+              asString(ctx.sessionKey),
+            ],
+            newerThanMs: policyStateTimeMs(state, cachedDecision),
+            excludedWorkContractIds: [requestedWorkContractId],
+          });
+          if (fallbackContract) {
+            dispatchWorkContract = fallbackContract;
+            cachedDecision = decisionFromWorkContract(fallbackContract, cachedDecision);
+            hadCachedDecision = true;
+            workContractDispatchError = null;
+            await recordPolicyReplay("dispatch_latest_delegate_work_contract_selected", {
+              sessionKey: managedSessionKey,
+              sessionId: asString(ctx.sessionId),
+              route: resolvedRoute,
+              stateKey,
+              workContractId: fallbackContract.workContractId,
+              priorWorkContractId: requestedWorkContractId,
+            }, toolLogger(ctx), cachedDecision);
+          }
+        }
         const runtimeLedgerMode = resolveRuntimeLedgerMode();
         const recordDispatchTerminalFailure = async (errorMessage: string, options: { sealMismatch?: boolean; route?: string | null } = {}) => {
           await recordPolicyReplay("dispatch_terminal_failure", {
@@ -1275,7 +1359,7 @@ export function getToolRegistrations(options: ToolRegistrationOptions = {}): Too
             },
           });
         }
-        let routeSealState = selectRouteSealState(ctx, stateKey, state);
+        let routeSealState = dispatchWorkContract ? null : selectRouteSealState(ctx, stateKey, state);
         let cachedRouteSeal = validCachedRouteSeal(routeSealState, cachedDecision, initialMetadata);
         const explicitDelegateDispatchOverride = cachedRouteSeal?.route === "reply"
           && isExplicitDelegateDispatchOverride({
