@@ -2697,6 +2697,51 @@ async function escalateBudgetedMainForTool(input: {
   return { state: nextState, decision: escalatedDecision };
 }
 
+async function promoteBudgetedMainDispatch(input: {
+  stateKey: string;
+  ctx: UnknownRecord;
+  state: UnknownRecord;
+  decision: UnknownRecord;
+  task: string;
+  logger?: LoggerLike;
+}): Promise<{ state: PolicyStateEntry | null; decision: UnknownRecord; promoted: boolean }> {
+  if (!input.stateKey || !isBudgetedMainDecision(input.decision)) {
+    return { state: input.state as PolicyStateEntry | null, decision: input.decision, promoted: false };
+  }
+  if (stringValue(asRecord(input.decision.route_decision).route) === "delegate") {
+    return { state: input.state as PolicyStateEntry | null, decision: input.decision, promoted: false };
+  }
+  const stateForEscalation = {
+    ...input.state,
+    ...(input.task ? { prompt: input.task } : {}),
+  };
+  const now = Date.now();
+  const existingBudget = readBudgetedMainState(input.state);
+  const budgetState = existingBudget?.active && !existingBudget.completedAt && !existingBudget.escalatedAt
+    ? existingBudget
+    : {
+        ...buildBudgetedMainState({
+          now,
+          decision: input.decision,
+          visibleStartAt: budgetedMainVisibleStartAt(input.state, now),
+          budgetStartSource: "main_agent_called_dispatch",
+          workContractId: budgetedMainWorkContractId(input.state, input.decision),
+          spawnIntentId: budgetedMainSpawnIntentId(input.state),
+        }),
+        reason: "main_agent_called_dispatch",
+      };
+  const escalated = await escalateBudgetedMainForTool({
+    stateKey: input.stateKey,
+    ctx: input.ctx,
+    state: stateForEscalation,
+    decision: input.decision,
+    budgetState,
+    reason: "main_agent_called_dispatch",
+    logger: input.logger,
+  });
+  return { ...escalated, promoted: true };
+}
+
 function bindRouteHintPromptToCurrentContext(ctx: UnknownRecord, toolParams: UnknownRecord): void {
   const task = stringValue(toolParams.task);
   if (!task) return;
@@ -3964,6 +4009,18 @@ export const plugin = {
         if (taskAllowsDispatch) {
           stateKey = stringValue(taskPolicyContext.key) || stateKey;
           state = taskPolicyContext.state as PolicyStateEntry | null;
+        }
+        const promotedDispatch = await promoteBudgetedMainDispatch({
+          stateKey,
+          ctx,
+          state: asRecord(state),
+          decision: asRecord(state?.decision),
+          task: stringValue(toolParams.task),
+          logger: pi.logger,
+        });
+        if (promotedDispatch.promoted) {
+          state = promotedDispatch.state;
+          budgetDecision = promotedDispatch.decision;
         }
       }
       const decision = asRecord(state?.decision);

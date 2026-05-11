@@ -998,6 +998,110 @@ describe("budgeted_main_then_delegate runtime budget", () => {
     policyState.clearState(key);
   });
 
+  it("promotes budgeted-main dispatch past a sealed reply WorkContract", async () => {
+    const handlers = new Map<string, Function>();
+    plugin.register({
+      on: (event, handler) => handlers.set(event, handler),
+      registerTool: () => {},
+      registerCommand: () => {},
+      logger: {},
+    });
+
+    const key = "agent:main:slack:default:direct:u0al9t5u89z:budget-dispatch-write";
+    const now = Date.now();
+    const initialPrompt = "2-6的crontab 都注释掉吧";
+    const dispatchTask = "按用户要求，把 crontab 中之前清单里的 #2-#6 OctoClaw 旧任务注释掉，保留 #1 lume-update 不动。";
+    const initialReplyContract = buildWorkContractFromPolicy(
+      key,
+      initialPrompt,
+      "undetermined",
+      coverageSnapshot(),
+      buildWorkDecisionSeal("local_judge", "reply", ["budgeted_main_initial_reply"]),
+      {
+        reply: {
+          replyMode: "answer",
+          grounding: "none",
+          allowedTools: [],
+          forbiddenTools: ["octoclaw_dispatch", "spawn"],
+          evidenceRefs: [],
+        },
+      },
+    );
+    expect(saveWorkContract(initialReplyContract)).toBe(true);
+    policyState.setState(key, {
+      prompt: initialPrompt,
+      workContractId: initialReplyContract.workContractId,
+      work_contract_id: initialReplyContract.workContractId,
+      decision: {
+        ...budgetedMainDecision(),
+        workContractId: initialReplyContract.workContractId,
+        work_contract: {
+          workContractId: initialReplyContract.workContractId,
+          work_contract_id: initialReplyContract.workContractId,
+          route: "reply",
+          status: "sealed",
+          forbiddenTools: ["octoclaw_dispatch", "spawn"],
+        },
+      },
+      createdAt: now - 1_000,
+      updatedAt: now,
+    });
+
+    const beforeToolCall = handlers.get("before_tool_call");
+    expect(beforeToolCall).toBeTruthy();
+    const result = await beforeToolCall!(
+      {
+        toolName: "octoclaw_dispatch",
+        params: {
+          task: dispatchTask,
+          forceRoute: "delegate",
+          metadataJson: JSON.stringify({
+            context_refs: {
+              requestedSideEffects: true,
+              writeScope: ["user crontab only"],
+              workspaceMode: "write_allowed",
+            },
+          }),
+        },
+      },
+      { sessionKey: key, sessionId: key, agentId: "main" },
+    );
+
+    expect(result).toBeUndefined();
+    const escalatedState = policyState.getState(key);
+    expect(escalatedState?.decision?.route_decision).toMatchObject({
+      route: "delegate",
+      route_source: "budgeted_main_escalation",
+      is_new_work: true,
+    });
+    expect(escalatedState).toMatchObject({
+      dispatchStatus: "budgeted_main_escalated",
+      dispatchExecuted: false,
+      spawnExecuted: false,
+    });
+    const escalatedWorkContractId = String(escalatedState?.workContractId ?? "");
+    expect(escalatedWorkContractId).toBeTruthy();
+    expect(escalatedWorkContractId).not.toBe(initialReplyContract.workContractId);
+    expect(escalatedState?.decision?.work_contract).toMatchObject({
+      workContractId: escalatedWorkContractId,
+      route: "delegate",
+      status: "sealed",
+    });
+    expect(loadWorkContract(initialReplyContract.workContractId)?.route).toBe("reply");
+    expect(loadWorkContract(escalatedWorkContractId)).toMatchObject({
+      route: "delegate",
+      userAsk: dispatchTask,
+      sessionKey: key,
+    });
+    await waitForFireAndForget();
+    expect(readReplayEvents()).toContainEqual(expect.objectContaining({
+      event: "budgeted_main_escalated",
+      reason: "main_agent_called_dispatch",
+      workContractId: escalatedWorkContractId,
+    }));
+    policyState.clearState(key);
+  });
+
   it("immediately escalates write and verification tools without waiting for 30s", async () => {
     const handlers = new Map<string, Function>();
     plugin.register({
