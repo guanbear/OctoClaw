@@ -61,6 +61,10 @@ export interface BudgetedMainToolClassification {
   escalationReason: string;
 }
 
+function stringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.map((item) => asString(item)).filter(Boolean) : [];
+}
+
 export function decisionBucketForBudgetedMain(decision: UnknownRecord): string {
   const routeDecision = asRecord(decision.route_decision);
   const startupCostPolicy = asRecord(routeDecision.startup_cost_policy || decision._startup_cost_policy);
@@ -75,6 +79,30 @@ export function isBudgetedMainDecision(decision: UnknownRecord): boolean {
   const route = asString(asRecord(decision.route_decision).route, "reply");
   return decisionBucketForBudgetedMain(decision) === "budgeted_main_then_delegate"
     && route !== "delegate";
+}
+
+export function hasBudgetedMainEscalationEvidence(stateInput: unknown, decisionInput: unknown): boolean {
+  const state = asRecord(stateInput);
+  const explicitDecision = asRecord(decisionInput);
+  const stateDecision = asRecord(state.decision);
+  const decision = Object.keys(explicitDecision).length > 0 ? explicitDecision : stateDecision;
+  const routeDecision = asRecord(decision.route_decision);
+  const stateRouteDecision = asRecord(stateDecision.route_decision);
+  const budgetedMain = asRecord(state.budgetedMain || state.budgeted_main);
+  const reasonCodes = new Set([
+    ...stringArray(routeDecision.reason_codes),
+    ...stringArray(stateRouteDecision.reason_codes),
+    ...stringArray(decision.reason_codes),
+    ...stringArray(stateDecision.reason_codes),
+  ]);
+  return decision._budgeted_main_escalated === true
+    || stateDecision._budgeted_main_escalated === true
+    || state.budgeted_main_escalated === true
+    || asString(routeDecision.route_source) === "budgeted_main_escalation"
+    || asString(stateRouteDecision.route_source) === "budgeted_main_escalation"
+    || asString(state.dispatchStatus || state.dispatch_status) === "budgeted_main_escalated"
+    || Boolean(budgetedMain.escalatedAt || budgetedMain.escalated_at)
+    || reasonCodes.has("budgeted_main_escalated");
 }
 
 export function readBudgetedMainState(state: UnknownRecord): BudgetedMainState | null {

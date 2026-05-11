@@ -54,7 +54,7 @@ import {
   serializeSpeculativePreloadState,
   type SpeculativePreloadState,
 } from "../delegate/speculative-preload.js";
-import { escalateBudgetedMainDecision } from "../budgeted-main.js";
+import { escalateBudgetedMainDecision, hasBudgetedMainEscalationEvidence } from "../budgeted-main.js";
 import { getModelMap } from "../model-map.js";
 import { detectIMType } from "../im-status-renderer.js";
 import { buildDelegationTicketDryRun } from "../runtime-ledger/ticket-dry-run.js";
@@ -322,22 +322,11 @@ function isBudgetedMainDispatchEscalationAllowed(input: {
   cachedDecision: UnknownRecord;
   resolvedRoute: string;
   hadCachedDecision: boolean;
-  routeSealState: UnknownRecord | null;
+  routeSealStates: unknown[];
 }): boolean {
-  if (!input.hadCachedDecision || !input.routeSealState) return false;
+  if (!input.hadCachedDecision) return false;
   if (input.cachedRouteSeal.route !== "reply" || input.resolvedRoute !== "delegate") return false;
-  const state = asRecord(input.routeSealState);
-  const budgetedMain = asRecord(state.budgetedMain || state.budgeted_main);
-  const routeDecision = asRecord(input.cachedDecision.route_decision);
-  const reasonCodes = new Set([
-    ...stringArray(routeDecision.reason_codes),
-    ...stringArray(input.cachedDecision.reason_codes),
-  ]);
-  return input.cachedDecision._budgeted_main_escalated === true
-    || routeDecision.route_source === "budgeted_main_escalation"
-    || asString(state.dispatchStatus || state.dispatch_status) === "budgeted_main_escalated"
-    || Boolean(budgetedMain.escalatedAt || budgetedMain.escalated_at)
-    || reasonCodes.has("budgeted_main_escalated");
+  return input.routeSealStates.some((candidate) => hasBudgetedMainEscalationEvidence(candidate, input.cachedDecision));
 }
 
 function isExplicitDelegateDispatchOverride(input: {
@@ -379,18 +368,9 @@ function shouldPromoteBudgetedMainDispatch(input: {
   );
 
   const state = asRecord(input.state);
-  const budgetedMain = asRecord(state.budgetedMain || state.budgeted_main);
   const workContractView = asRecord(input.decision.work_contract);
-  const reasonCodes = new Set([
-    ...stringArray(routeDecision.reason_codes),
-    ...stringArray(input.decision.reason_codes),
-  ]);
-  const alreadyEscalated = input.decision._budgeted_main_escalated === true
-    || routeDecision.route_source === "budgeted_main_escalation"
-    || routeDecision.dispatch_required === true
-    || asString(state.dispatchStatus || state.dispatch_status) === "budgeted_main_escalated"
-    || Boolean(budgetedMain.escalatedAt || budgetedMain.escalated_at)
-    || reasonCodes.has("budgeted_main_escalated");
+  const alreadyEscalated = hasBudgetedMainEscalationEvidence(state, input.decision)
+    || routeDecision.dispatch_required === true;
   const hasDelegateContract = input.workContract?.route === "delegate"
     || asString(workContractView.route) === "delegate";
   if (alreadyEscalated) return true;
@@ -1433,7 +1413,15 @@ export function getToolRegistrations(options: ToolRegistrationOptions = {}): Too
               cachedDecision,
               resolvedRoute,
               hadCachedDecision,
-              routeSealState,
+              routeSealStates: [
+                routeSealState,
+                state,
+                policyState.get(managedSessionKey),
+                policyState.get(stateKey),
+                policyState.get(asString(ctx.canonicalSessionKey)),
+                policyState.get(asString(ctx.sessionKey)),
+                policyState.get(asString(initialMetadata.session_key)),
+              ],
             })
           : false;
         if (cachedRouteSeal && resolvedRoute !== cachedRouteSeal.route && !budgetedMainEscalationAllowed) {

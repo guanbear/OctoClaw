@@ -153,6 +153,33 @@ describe("execution transition notifier", () => {
     expect(fs.existsSync(path.join(tmpDir, ".octoclaw", "delivery-outbox.json"))).toBe(false);
   });
 
+  it("records notification send exceptions without leaking unhandled rejections", async () => {
+    const envModule = await import("../../resolve/env.js");
+    const replaySpy = vi.spyOn(await import("../../replay/replay.js"), "recordPolicyReplay").mockResolvedValue(undefined);
+    vi.spyOn(envModule, "runCommand").mockRejectedValue(new DOMException("This operation was aborted", "AbortError"));
+
+    const result = await emitExecutionTransitionNotification(notification({
+      transitionKind: "spawn_started",
+      projection: projection({
+        status: "running",
+        dispatchExecuted: true,
+        spawnExecuted: true,
+      }),
+    }));
+
+    expect(result).toEqual(expect.objectContaining({
+      sent: false,
+      skipped: false,
+      reason: "channel_message_failed",
+      ack_target_resolution_state: "resolved_send_failed",
+      ack_delivery_state: "failed",
+    }));
+    expect(findReplayPayload(replaySpy)).toEqual(expect.objectContaining({
+      sent: false,
+      reason: "channel_message_failed",
+    }));
+  });
+
   it("dedupes transition notification", async () => {
     await mockDelivery();
     const params = notification({ transitionKind: "result_ready" });

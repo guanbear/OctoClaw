@@ -805,6 +805,68 @@ describe("octoclaw_dispatch honesty", () => {
     expect(result.execution_state).toBe("spawn_confirmed");
   });
 
+  it("allows stale reply seal dispatch when an aliased state has budget escalation evidence", async () => {
+    const staleKey = "session-dispatch-honesty-stale-reply-seal";
+    const managedKey = "agent:main:slack:default:direct:u0al9t5u89z:thread:budget-escalated";
+    const routeSeal = seal({ route: "reply" });
+    const staleDecision = {
+      request: { session_key: managedKey },
+      routeSeal,
+      route_decision: {
+        route: "reply",
+        system_preferred_route: "reply",
+        worker_pool: "octoclaw-main",
+        task_class: "main_direct",
+        decision_bucket: "must_reply",
+      },
+      tool_policy: {
+        allow_direct_tools: true,
+        must_delegate_via: "",
+        allowed_control_tools: ["octoclaw_dispatch", "octoclaw_status"],
+      },
+      _decision_bucket: "must_reply",
+    };
+    policyState.set(staleKey, {
+      prompt: "Install graphify and analyze OctoClaw",
+      decision: staleDecision,
+      routeSeal,
+    });
+    policyState.set(managedKey, {
+      prompt: "Install graphify and analyze OctoClaw",
+      decision: staleDecision,
+      routeSeal,
+      dispatchStatus: "budgeted_main_escalated",
+      budgetedMain: {
+        active: false,
+        startedAt: Date.now() - 20_000,
+        escalatedAt: Date.now() - 1_000,
+        reason: "multi_step_tool_chain",
+      },
+    });
+
+    const result = await executeDispatch({
+      task: "Install graphify and analyze OctoClaw",
+      forceRoute: "delegate",
+      metadataJson: JSON.stringify({
+        turnId: "turn-1",
+        threadBindingKey: "thread-1",
+        session_key: staleKey,
+      }),
+    }, {
+      sessionKey: staleKey,
+      canonicalSessionKey: staleKey,
+      sessionId: "session-dispatch-honesty-stale-reply-seal-test",
+      turnId: "turn-1",
+      threadBindingKey: "thread-1",
+      helperInvoker: spawnedHelper(),
+    });
+
+    expect(result.ok, JSON.stringify(result)).toBe(true);
+    expect(result.route).toBe("delegate");
+    expect(result.seal_mismatch).not.toBe(true);
+    expect(result.execution_state).toBe("spawn_confirmed");
+  });
+
   it("allows explicit model delegate dispatch to replace an unexecuted sealed reply route", async () => {
     const stateKey = "session-dispatch-honesty-explicit-model-override";
     const routeSeal = seal({ route: "reply" });

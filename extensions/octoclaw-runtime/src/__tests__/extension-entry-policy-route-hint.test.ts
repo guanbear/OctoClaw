@@ -2617,6 +2617,53 @@ describe("before_tool_call route hint guard", () => {
     policyState.clearState(key);
   });
 
+  it("allows octoclaw_dispatch through a stale reply WorkContract after budget escalation", async () => {
+    const handlers = new Map<string, Function>();
+    plugin.register({
+      on: (event, handler) => handlers.set(event, handler),
+      registerTool: () => {},
+      registerCommand: () => {},
+      logger: {},
+    });
+
+    const key = "agent:main:slack:default:direct:u0al9t5u89z:work-contract-budget-escalated";
+    const now = Date.now();
+    policyState.setState(key, {
+      prompt: "安装 graphify，并用 graphify 分析 /Users/guanbear/workspace/OctoClaw",
+      decision: {
+        route_decision: { route: "reply", decision_bucket: "must_reply" },
+        work_contract: { route: "reply", forbiddenTools: ["octoclaw_dispatch"] },
+        hook_interface: { before_tool_call: { enabled: true, route_hint_required: false, route_hint_tool: "octoclaw_route_hint", delegation_enforcement: true } },
+        route_hint_policy: { required: false, submitted: false },
+        tool_policy: { allow_direct_tools: true },
+      },
+      dispatchStatus: "budgeted_main_escalated",
+      budgetedMain: budgetedMainState(now - 5_000, {
+        active: false,
+        escalatedAt: now - 1_000,
+        reason: "multi_step_tool_chain",
+      }),
+      blockedTools: [],
+      createdAt: now - 10_000,
+      updatedAt: now,
+    });
+
+    const beforeToolCall = handlers.get("before_tool_call");
+    expect(beforeToolCall).toBeTruthy();
+    const result = await beforeToolCall!(
+      { toolName: "octoclaw_dispatch", params: { task: "安装 graphify，并用 graphify 分析 /Users/guanbear/workspace/OctoClaw" } },
+      { sessionKey: key, agentId: "main" },
+    ) as { block?: boolean; blockReason?: string } | undefined;
+
+    expect(result).toBeUndefined();
+    expect(policyState.getState(key)?.blockedTools).toEqual([]);
+    expect(policyState.getState(key)?.decision?.route_decision).toMatchObject({
+      route: "delegate",
+      route_source: "budgeted_main_escalation",
+    });
+    policyState.clearState(key);
+  });
+
   it("binds octoclaw_route_hint task to the current Slack context before later tool calls", async () => {
     const handlers = new Map<string, Function>();
     plugin.register({

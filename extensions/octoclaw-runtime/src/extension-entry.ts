@@ -85,6 +85,7 @@ import {
   budgetedMainToolEscalationReason,
   classifyBudgetedMainTool,
   escalateBudgetedMainDecision,
+  hasBudgetedMainEscalationEvidence,
   isBudgetedMainDecision,
   readBudgetedMainState,
   serializeBudgetedMainState,
@@ -2747,7 +2748,8 @@ async function promoteBudgetedMainDispatch(input: {
   task: string;
   logger?: LoggerLike;
 }): Promise<{ state: PolicyStateEntry | null; decision: UnknownRecord; promoted: boolean }> {
-  if (!input.stateKey || !isBudgetedMainDecision(input.decision)) {
+  const alreadyEscalated = hasBudgetedMainEscalationEvidence(input.state, input.decision);
+  if (!input.stateKey || (!isBudgetedMainDecision(input.decision) && !alreadyEscalated)) {
     return { state: input.state as PolicyStateEntry | null, decision: input.decision, promoted: false };
   }
   if (stringValue(asRecord(input.decision.route_decision).route) === "delegate") {
@@ -2759,7 +2761,7 @@ async function promoteBudgetedMainDispatch(input: {
   };
   const now = Date.now();
   const existingBudget = readBudgetedMainState(input.state);
-  const budgetState = existingBudget?.active && !existingBudget.completedAt && !existingBudget.escalatedAt
+  const budgetState = existingBudget && !existingBudget.completedAt
     ? existingBudget
     : {
         ...buildBudgetedMainState({
@@ -4588,7 +4590,9 @@ export const plugin = {
       const routeDecision = asRecord(decision.route_decision);
       const isDeterministicFallbackToDelegate = stringValue(routeDecision.route) === "delegate"
         && (stringValue(routeDecision.route_source) === "fallback" || stringValue(routeDecision.fallback_reason).includes("explicit_delegate"));
-      if (forbiddenContractTools.has(toolName) && !isDeterministicFallbackToDelegate) {
+      const isBudgetedMainDispatch = toolName === "octoclaw_dispatch"
+        && hasBudgetedMainEscalationEvidence(asRecord(state), decision);
+      if (forbiddenContractTools.has(toolName) && !isDeterministicFallbackToDelegate && !isBudgetedMainDispatch) {
         updatePolicyState(stateKey, (current) => ({
           ...current,
           blockedTools: [...(Array.isArray(current.blockedTools) ? current.blockedTools.slice(-7) : []), toolName].filter(Boolean),

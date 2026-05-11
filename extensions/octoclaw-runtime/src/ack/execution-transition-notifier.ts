@@ -122,17 +122,30 @@ async function sendExecutionTransitionMessage(
   }
 
   const topLevelFallback = !asString(replyToMessageId) && !resolved.threadId;
-  const result = await sendIMMessage({
-    sessionKey,
-    message,
-    replyToMessageId: replyToMessageId || undefined,
-    timeoutMs: 5000,
-    cwd: asString(cwd) || resolveWorkspaceRoot(),
-    suppressProjectionFooter: true,
-    deliveryKind: transitionKind === "spawn_started" ? "accepted_ack" : "status_reply",
-    deliveryTargetSource: asString(replyToMessageId) ? "inbound_anchor" : "session_fallback",
-    footerMode: "off",
-  });
+  let result: Awaited<ReturnType<typeof sendIMMessage>>;
+  try {
+    result = await sendIMMessage({
+      sessionKey,
+      message,
+      replyToMessageId: replyToMessageId || undefined,
+      timeoutMs: 5000,
+      cwd: asString(cwd) || resolveWorkspaceRoot(),
+      suppressProjectionFooter: true,
+      deliveryKind: transitionKind === "spawn_started" ? "accepted_ack" : "status_reply",
+      deliveryTargetSource: asString(replyToMessageId) ? "inbound_anchor" : "session_fallback",
+      footerMode: "off",
+    });
+  } catch (error) {
+    return {
+      attempted: true,
+      delivered: false,
+      sent: false,
+      error: error instanceof Error ? error.message : String(error),
+      reason: "channel_message_failed",
+      target: resolved.target,
+      threadId: resolved.threadId,
+    };
+  }
   return {
     attempted: result.error !== "no_im_adapter",
     delivered: result.sent,
