@@ -47,6 +47,24 @@ judge result
 | 选模模式 | `cost_first / balanced / reliable_fast` | 不同成本/稳定/速度取舍 |
 | live gate | 配置开关 + nightly 指标 | 有证据后才小范围启用 |
 
+对应 OpenSpec 交付物：
+
+```text
+openspec/changes/autorouter-lite-model-intel-shadow/
+  proposal.md
+  design.md
+  tasks.md
+  specs/autorouter-lite/spec.md
+```
+
+给 OpenCode 做时只交付 A/B/C：
+
+- A：`model-intel snapshot`，只读事实面。
+- B：`config analyze proposal`，只读配置建议。
+- C：`shadow recommendation`，只写旁路事件，不改 live 选模。
+
+D：`gated live` 不交给第一轮 OpenCode 做。D 只有在 shadow 样本、质量、成本、失败率、延迟都达标后再单独开 spec。
+
 ---
 
 ## 3. Model Intel Schema
@@ -595,6 +613,15 @@ cost 10%
   - 为什么没有启用推荐？
   - 是能力不够、未配置、额度压力高，还是稳定性差？
 
+OpenCode 第一轮额外验收：
+
+- 所有远端数据源刷新都在 CLI/cron/nightly 路径，不进入 Slack 用户消息热路径。
+- 不新增关键词判路由、关键词判任务类型、关键词判模型能力。
+- 不恢复 judge 胖字段。
+- 不自动写 OpenClaw live config，不自动把 proposal 模型加到可用模型。
+- Shadow recommendation 即使出错，也不能影响现有 judge route、dispatch、footer、ACK。
+- 每个推荐事件都必须记录 `ignoredReason` 或 `selectedReason`，不能只给一个模型名。
+
 ---
 
 ## 16. 2026-05-10 实施细化：能力、价格、健康、套餐怎么持续更新
@@ -947,3 +974,92 @@ node scripts/router-lite-model-intel-prototype.mjs --format json
 - Aider/SWE-bench/LiveCodeBench/BFCL 仍要作为 `codingWorker` 和 `agenticToolTask` 的补充证据。
 - 本地 nightly/replay 是最终 live gate，特别是 first-token latency、output TPS、失败率、timeout、工具调用失败。
 - 没有场景证据的新模型只能进 proposal/shadow，不能进默认 live。
+
+## 17. 给 OpenCode 的执行边界
+
+这项任务适合交给 OpenCode 做，但必须按 OpenSpec 切片，不要让它自由发挥成一个新总控 router。
+
+### 17.1 只允许做的事情
+
+第一轮只做三件事：
+
+1. A：完善 `model-intel snapshot`。
+   - 汇总本机 OpenClaw 可见模型、config、provider catalog、usage/cost、已有本地 health/replay。
+   - 可选拉公开 OpenRouter/models.dev/PinchBench 等外部源，但必须缓存到 snapshot，不能在用户消息热路径拉。
+   - 每个字段必须有 `source/freshness/confidence`。
+2. B：完善 `model-config proposal`。
+   - 找同供应商、同 auth/profile、同 family 的 cheaper candidate。
+   - 输出 proposal-only 建议，说明 `why_not_live`。
+   - 不自动写 `~/.openclaw/openclaw.json`。
+3. C：新增 shadow recommendation。
+   - 在现有 judge route 和 runtime compact signals 之后旁路计算推荐。
+   - 写 `router-lite-shadow.jsonl`。
+   - 不改变当前 route、dispatch、spawn、ACK、footer。
+
+### 17.2 明确禁止
+
+- 禁止新建完整 AutoRouter 总控层。
+- 禁止替换现有 judge。
+- 禁止恢复 `role/workType/scope/tool_need_hint/duration_hint`。
+- 禁止关键词规则。
+- 禁止在用户消息热路径访问外网 catalog、价格 API、榜单。
+- 禁止把未配置模型用于 live。
+- 禁止把 `quotaPressure=unknown` 当低成本。
+- 禁止让便宜模型绕过 tool/structured/context/health gate。
+- 禁止为实现 AutoRouter 修改 WorkContract、native TaskFlow、planner confirm 语义。
+
+### 17.3 推荐实现顺序
+
+按这个顺序做，任何一步做大了都停：
+
+1. 补齐 contracts 和 fixture：snapshot/proposal/shadow event 类型、样例 JSON、schema 校验。
+2. 加 snapshot refresh 的来源合并和冲突记录，保持 CLI 可单独跑。
+3. 加 proposal analyzer，覆盖同供应商候选、套餐压力、缺 probe 证据。
+4. 加 shadow selector 纯函数，输入 judge 四字段、runtime signals、snapshot，输出推荐和 ignore reason。
+5. 把 shadow selector 接到只读旁路事件，不进入 live。
+6. 加 nightly/CLI 报告摘要，回答“节约多少、为什么没启用、缺什么证据”。
+
+### 17.4 需要保留的主 agent 纠偏空间
+
+AutoRouter Lite 不是 autopilot。它只能给 runtime 一个低风险的模型建议：
+
+- `route=reply` 的普通查询、状态查询、解释、短只读 lookup 不应因为成本优化被强制委派。
+- `route=delegate` 的长任务也必须先过能力和健康 gate，再考虑价格。
+- 主 agent 显式指定模型或用户显式指定模型时，AutoRouter 只能记录 shadow 对比，不应覆盖。
+- 如果 snapshot 过期、证据不足、quota unknown、模型 health unknown，默认保持现状。
+
+### 17.5 交给 OpenCode 的话术
+
+可以直接贴下面这段：
+
+```text
+ulw
+
+Task: Implement AutoRouter Lite A/B/C only, using the OpenSpec change `openspec/changes/autorouter-lite-model-intel-shadow/`.
+
+Read first:
+- docs/octoclaw-auto-router-lite-cost-model-design-2026-05-08.md
+- openspec/changes/autorouter-lite-model-intel-shadow/proposal.md
+- openspec/changes/autorouter-lite-model-intel-shadow/design.md
+- openspec/changes/autorouter-lite-model-intel-shadow/tasks.md
+- openspec/changes/autorouter-lite-model-intel-shadow/specs/autorouter-lite/spec.md
+
+Scope:
+- A: model-intel snapshot refresh.
+- B: model-config proposal analyze.
+- C: shadow recommendation event.
+
+Hard constraints:
+- Do not implement gated live routing.
+- Do not replace judge or restore old judge fields.
+- Do not add keyword routing or keyword model selection.
+- Do not fetch external catalogs/pricing in the Slack/user-message hot path.
+- Do not auto-write OpenClaw live config.
+- configured=false models are proposal/shadow only.
+- quotaPressure=unknown is not free.
+- Shadow failures must not affect route/dispatch/spawn/ACK/footer.
+
+Before editing: summarize a 5-bullet plan and the exact files you intend to touch.
+After editing: report changed files, tests run, and remaining risks.
+Do not commit until Codex reviews.
+```
