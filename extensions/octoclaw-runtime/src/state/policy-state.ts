@@ -126,10 +126,42 @@ function cloneEntry(entry: PolicyStateEntry): PolicyStateEntry {
   return { ...entry };
 }
 
+function extractDecisionRouteSeal(decision: Record<string, unknown>): RouteSeal | undefined {
+  const candidate = decision.routeSeal;
+  if (!isRecord(candidate)) {
+    return undefined;
+  }
+  return candidate as unknown as RouteSeal;
+}
+
+function extractDecisionWorkContractId(decision: Record<string, unknown>): string {
+  const direct = decision.workContractId;
+  if (typeof direct === "string" && direct.trim()) {
+    return direct.trim();
+  }
+  const embedded = decision.work_contract;
+  if (isRecord(embedded)) {
+    const embeddedId = embedded.workContractId ?? embedded.work_contract_id;
+    if (typeof embeddedId === "string" && embeddedId.trim()) {
+      return embeddedId.trim();
+    }
+  }
+  return "";
+}
+
 function normalizeEntry(entry: PolicyStateEntry): PolicyStateEntry {
   const next = { ...entry };
   if (isRecord(next.decision)) {
     next.decision = canonicalizeDecisionForPolicyState(next.decision);
+    const routeSeal = extractDecisionRouteSeal(next.decision);
+    if (routeSeal) {
+      next.routeSeal = routeSeal;
+    }
+    const workContractId = extractDecisionWorkContractId(next.decision);
+    if (workContractId) {
+      next.workContractId = workContractId;
+      next.work_contract_id = workContractId;
+    }
   }
   next.delegated = next.delegated === true;
   return next;

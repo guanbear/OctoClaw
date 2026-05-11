@@ -2,6 +2,7 @@ import fsSync from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { ROUTE_SEAL_SCHEMA_VERSION, type RouteSeal } from "@octoclaw/contracts/route-seal";
 import { POLICY_STATE_TTL_MS, PolicyStateStore } from "./policy-state.js";
 
 const fs = fsSync as unknown as {
@@ -11,6 +12,22 @@ const fs = fsSync as unknown as {
   writeFileSync(pathname: string, data: string, encoding: string): void;
 };
 const osModule = os as unknown as { tmpdir(): string };
+
+function seal(overrides: Partial<RouteSeal> = {}): RouteSeal {
+  return {
+    schemaVersion: ROUTE_SEAL_SCHEMA_VERSION,
+    requestId: "req-1",
+    turnId: "turn-1",
+    threadBindingKey: "thread-1",
+    route: "reply",
+    source: "local_judge",
+    reasonCodes: ["test"],
+    createdAt: "2026-05-11T00:00:00.000Z",
+    inputHash: "hash-1",
+    stateGeneration: 1,
+    ...overrides,
+  };
+}
 
 describe("policyState 4.4 cache boundary", () => {
   const tempDirs: string[] = [];
@@ -40,5 +57,36 @@ describe("policyState 4.4 cache boundary", () => {
     const restarted = new PolicyStateStore({ sessionStateFile: statePath });
 
     expect(restarted.get("session-1")).toBeUndefined();
+  });
+
+  it("keeps top-level route seal and WorkContract id aligned with the current decision", () => {
+    const store = new PolicyStateStore();
+    const key = "session-policy-state-current-decision";
+    const oldReplySeal = seal({ route: "reply", requestId: "req-reply" });
+    const currentDelegateSeal = seal({ route: "delegate", requestId: "req-delegate" });
+
+    store.set(key, {
+      prompt: "你再派gpt-5.5 修一下pr",
+      routeSeal: oldReplySeal,
+      workContractId: "wc-old-reply",
+      work_contract_id: "wc-old-reply",
+      decision: {
+        request: { session_key: key },
+        routeSeal: currentDelegateSeal,
+        workContractId: "wc-current-delegate",
+        work_contract: { workContractId: "wc-current-delegate", route: "delegate" },
+        route_decision: { route: "delegate" },
+      },
+    });
+
+    expect(store.get(key)).toMatchObject({
+      routeSeal: { route: "delegate", requestId: "req-delegate" },
+      workContractId: "wc-current-delegate",
+      work_contract_id: "wc-current-delegate",
+      decision: {
+        route_decision: { route: "delegate" },
+        workContractId: "wc-current-delegate",
+      },
+    });
   });
 });
