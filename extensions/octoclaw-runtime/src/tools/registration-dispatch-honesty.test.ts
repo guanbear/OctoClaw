@@ -919,6 +919,76 @@ describe("octoclaw_dispatch honesty", () => {
     expect(result.execution_state).toBe("spawn_confirmed");
   });
 
+  it("treats octoclaw_dispatch itself as the arbiter instead of terminally reusing a stale reply WorkContract", async () => {
+    useTempWorkContractLedger();
+    const stateKey = "session-dispatch-honesty-stale-reply-contract-arbiter";
+    const task = "安装 graphify，并用 graphify 分析 /Users/guanbear/workspace/OctoClaw";
+    const replyContract = seedWorkContract({
+      route: "reply",
+      sessionKey: stateKey,
+      userAsk: task,
+      intentClass: "delegated_work",
+    });
+    const routeSeal = seal({
+      route: "reply",
+      turnId: "turn-graphify",
+      threadBindingKey: "thread-graphify",
+    });
+    policyState.set(stateKey, {
+      prompt: task,
+      decision: {
+        request: { session_key: stateKey },
+        routeSeal,
+        workContractId: replyContract.workContractId,
+        work_contract: {
+          workContractId: replyContract.workContractId,
+          work_contract_id: replyContract.workContractId,
+          route: "reply",
+          status: "sealed",
+          forbiddenTools: ["octoclaw_dispatch", "spawn"],
+        },
+        route_decision: {
+          route: "reply",
+          system_preferred_route: "reply",
+          worker_pool: "octoclaw-main",
+          task_class: "main_direct",
+          decision_bucket: "must_reply",
+        },
+        tool_policy: {
+          allow_direct_tools: true,
+          block_tool_patterns: ["octoclaw_dispatch", "spawn"],
+        },
+      },
+      routeSeal,
+      workContractId: replyContract.workContractId,
+      work_contract_id: replyContract.workContractId,
+      dispatchExecuted: false,
+      spawnExecuted: false,
+    });
+
+    const result = await executeDispatch({
+      task,
+      metadataJson: JSON.stringify({
+        turnId: "turn-graphify",
+        threadBindingKey: "thread-graphify",
+        session_key: stateKey,
+      }),
+    }, {
+      sessionKey: stateKey,
+      canonicalSessionKey: stateKey,
+      sessionId: "session-dispatch-honesty-stale-reply-contract-arbiter-test",
+      turnId: "turn-graphify",
+      threadBindingKey: "thread-graphify",
+      helperInvoker: spawnedHelper(),
+    });
+
+    expect(result.ok, JSON.stringify(result)).toBe(true);
+    expect(result.route).toBe("delegate");
+    expect(result.seal_mismatch).not.toBe(true);
+    expect(result.execution_state).toBe("spawn_confirmed");
+    expect(result.work_contract_id).not.toBe(replyContract.workContractId);
+  });
+
   it("promotes budgeted-main dispatch when the delegated WorkContract is stored on state", async () => {
     const stateKey = "session-budgeted-main-state-contract";
     const routeSeal = seal({ route: "reply" });

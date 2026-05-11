@@ -2580,7 +2580,7 @@ describe("before_tool_call route hint guard", () => {
     policyState.clearState(delegateKey);
   });
 
-  it("records WorkContract-forbidden dispatch attempts as blocked tool evidence", async () => {
+  it("still blocks an explicit reply dispatch through a reply WorkContract", async () => {
     const handlers = new Map<string, Function>();
     plugin.register({
       on: (event, handler) => handlers.set(event, handler),
@@ -2607,13 +2607,49 @@ describe("before_tool_call route hint guard", () => {
     const beforeToolCall = handlers.get("before_tool_call");
     expect(beforeToolCall).toBeTruthy();
     const result = await beforeToolCall!(
-      { toolName: "octoclaw_dispatch", params: { task: "测试子 agent 派发耗时" } },
+      { toolName: "octoclaw_dispatch", params: { task: "测试子 agent 派发耗时", forceRoute: "reply" } },
       { sessionKey: key, agentId: "main" },
     ) as { block?: boolean; blockReason?: string } | undefined;
 
     expect(result?.block).toBe(true);
     expect(result?.blockReason).toContain("WorkContract forbids octoclaw_dispatch");
     expect(policyState.getState(key)?.blockedTools).toEqual(["sessions_spawn", "octoclaw_dispatch"]);
+    policyState.clearState(key);
+  });
+
+  it("allows octoclaw_dispatch through a stale reply WorkContract as the dispatch arbiter", async () => {
+    const handlers = new Map<string, Function>();
+    plugin.register({
+      on: (event, handler) => handlers.set(event, handler),
+      registerTool: () => {},
+      registerCommand: () => {},
+      logger: {},
+    });
+
+    const key = "agent:main:slack:default:direct:u0al9t5u89z:work-contract-reply-dispatch-arbiter";
+    policyState.setState(key, {
+      prompt: "安装 graphify，并用 graphify 分析 /Users/guanbear/workspace/OctoClaw",
+      decision: {
+        route_decision: { route: "reply" },
+        work_contract: { route: "reply", forbiddenTools: ["octoclaw_dispatch"] },
+        hook_interface: { before_tool_call: { enabled: true, route_hint_required: false, route_hint_tool: "octoclaw_route_hint", delegation_enforcement: true } },
+        route_hint_policy: { required: false, submitted: false },
+        tool_policy: { allow_direct_tools: true },
+      },
+      blockedTools: ["sessions_spawn"],
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    });
+
+    const beforeToolCall = handlers.get("before_tool_call");
+    expect(beforeToolCall).toBeTruthy();
+    const result = await beforeToolCall!(
+      { toolName: "octoclaw_dispatch", params: { task: "安装 graphify，并用 graphify 分析 /Users/guanbear/workspace/OctoClaw" } },
+      { sessionKey: key, agentId: "main" },
+    ) as { block?: boolean; blockReason?: string } | undefined;
+
+    expect(result).toBeUndefined();
+    expect(policyState.getState(key)?.blockedTools).toEqual(["sessions_spawn"]);
     policyState.clearState(key);
   });
 

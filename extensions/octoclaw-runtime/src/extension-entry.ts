@@ -92,6 +92,7 @@ import {
   updateBudgetedMainToolState,
   type BudgetedMainState,
 } from "./budgeted-main.js";
+import { explicitDelegateDispatchRequest } from "./dispatch-admission.js";
 import {
   buildSpeculativePreloadHint,
   buildSpeculativePreloadLabel,
@@ -4592,7 +4593,14 @@ export const plugin = {
         && (stringValue(routeDecision.route_source) === "fallback" || stringValue(routeDecision.fallback_reason).includes("explicit_delegate"));
       const isBudgetedMainDispatch = toolName === "octoclaw_dispatch"
         && hasBudgetedMainEscalationEvidence(asRecord(state), decision);
-      if (forbiddenContractTools.has(toolName) && !isDeterministicFallbackToDelegate && !isBudgetedMainDispatch) {
+      const isExplicitDelegateDispatch = toolName === "octoclaw_dispatch"
+        && explicitDelegateDispatchRequest({
+          params: toolParams,
+          metadata,
+          cachedDecision: decision,
+          dispatchCallImpliesDelegateObjection: true,
+        }).requested;
+      if (forbiddenContractTools.has(toolName) && !isDeterministicFallbackToDelegate && !isBudgetedMainDispatch && !isExplicitDelegateDispatch) {
         updatePolicyState(stateKey, (current) => ({
           ...current,
           blockedTools: [...(Array.isArray(current.blockedTools) ? current.blockedTools.slice(-7) : []), toolName].filter(Boolean),
@@ -4613,6 +4621,15 @@ export const plugin = {
           block: true,
           blockReason: `OctoClaw WorkContract forbids ${toolName} for this turn.`,
         };
+      }
+      if (isExplicitDelegateDispatch) {
+        updatePolicyState(stateKey, (current) => ({
+          ...current,
+          delegated: true,
+          delegationTool: toolName,
+        }));
+        updateAckTrackingState(stateKey, { delegated_running: true, tool_active: false });
+        return;
       }
       const blockedPatterns = Array.isArray(toolPolicy.block_tool_patterns)
         ? toolPolicy.block_tool_patterns.map((item) => stringValue(item)).filter(Boolean)
