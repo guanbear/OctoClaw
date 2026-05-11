@@ -56,6 +56,7 @@ export interface BudgetedMainToolClassification {
   longToolDetected: boolean;
   writeToolDetected: boolean;
   multiStepToolDetected: boolean;
+  unknownToolRiskDetected: boolean;
   escalationReason: string;
 }
 
@@ -190,16 +191,132 @@ function commandLooksLongOrVerification(command: string): boolean {
     || /\b(?:build|test|typecheck|lint|validate|validation|review|deploy)\b/iu.test(command);
 }
 
+function hasUnsafeWriteRedirection(command: string): boolean {
+  if (!command) return false;
+  if (/(?:^|\s)<<-?\s*\S+/u.test(command)) return true;
+  const redirectionPattern = /(?:^|[\s;|&])((?:(?:\d+)?>{1,2})|&>{1,2})\s*("[^"]+"|'[^']+'|[^\s;|&]+)/gu;
+  let match: RegExpExecArray | null;
+  while ((match = redirectionPattern.exec(command)) !== null) {
+    const rawTarget = asString(match[2]).replace(/^["']|["']$/gu, "");
+    if (rawTarget === "/dev/null" || rawTarget === "&1" || rawTarget === "&2") continue;
+    return true;
+  }
+  return false;
+}
+
 function commandLooksMutation(command: string): boolean {
   if (!command) return false;
   return /(?:^|\s)(?:rm|mv|cp|mkdir|touch|chmod|chown|git\s+(?:commit|merge|rebase|push|pull|checkout|switch|reset)|npm\s+install|pnpm\s+(?:add|install)|yarn\s+add|bun\s+add)\b/iu.test(command)
-    || />{1,2}\s*\S+/u.test(command)
+    || /\b(?:gh\s+(?:release|pr)\s+(?:create|edit|delete|close|reopen|merge)|openclaw\s+(?:update|upgrade|install|uninstall|deploy|restart))\b/iu.test(command)
+    || /\b(?:find)\b[\s\S]*\s-(?:delete|exec|execdir|ok|okdir)\b/iu.test(command)
+    || hasUnsafeWriteRedirection(command)
     || /\b(?:sed|perl)\s+-i\b/iu.test(command);
 }
 
 function commandLooksMultiStep(command: string): boolean {
   if (!command) return false;
   return /\n|&&|\|\||;\s*\S|\|\s*\S/iu.test(command);
+}
+
+function stripSafeShellRedirections(segment: string): string {
+  return segment.replace(/(?:^|\s)((?:(?:\d+)?>{1,2})|&>{1,2})\s*(?:\/dev\/null|&[12])(?=\s|$)/gu, " ");
+}
+
+function stripShellGrouping(segment: string): string {
+  let text = segment.trim();
+  while (text.startsWith("(")) text = text.slice(1).trim();
+  while (text.endsWith(")")) text = text.slice(0, -1).trim();
+  return text;
+}
+
+function shellWords(segment: string): string[] {
+  return stripShellGrouping(stripSafeShellRedirections(segment))
+    .split(/\s+/u)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function tokenHas(tokens: string[], value: string): boolean {
+  return tokens.some((token) => token.toLowerCase() === value);
+}
+
+function tokenStartsWith(tokens: string[], value: string): boolean {
+  return tokens.some((token) => token.toLowerCase().startsWith(value));
+}
+
+function curlLooksReadOnly(tokens: string[]): boolean {
+  for (let i = 1; i < tokens.length; i += 1) {
+    const token = tokens[i].toLowerCase();
+    if (["-o", "--output", "-t", "--upload-file", "-f", "--form", "--form-string", "--data", "--data-raw", "--data-binary", "--json"].includes(token)) return false;
+    if (token.startsWith("-o") && token.length > 2) return false;
+    if (["-x", "--request"].includes(token)) {
+      const method = asString(tokens[i + 1]).toUpperCase();
+      if (method && method !== "GET" && method !== "HEAD") return false;
+    }
+    if (token.startsWith("-x") && token.length > 2) {
+      const method = token.slice(2).toUpperCase();
+      if (method !== "GET" && method !== "HEAD") return false;
+    }
+  }
+  return true;
+}
+
+function openclawLooksReadOnly(tokens: string[]): boolean {
+  const action = asString(tokens[1]).toLowerCase();
+  const detail = asString(tokens[2]).toLowerCase();
+  if (!action || ["--version", "-v", "version", "status", "models", "tasks"].includes(action)) return true;
+  if (action === "config") return !detail || ["get", "list", "show"].includes(detail);
+  if (action === "plugins") return !detail || ["list", "show", "status"].includes(detail);
+  if (action === "directory") return !detail || ["get", "list", "show", "pwd"].includes(detail);
+  return false;
+}
+
+function segmentLooksReadOnlyShell(segment: string): boolean {
+  const tokens = shellWords(segment);
+  if (tokens.length === 0) return true;
+  while (/^[A-Za-z_][A-Za-z0-9_]*=/u.test(tokens[0])) tokens.shift();
+  if (tokens.length === 0) return true;
+  const command = tokens[0].toLowerCase();
+  if (command === "set") return tokens.every((token, index) => index === 0 || /^[-+A-Za-z0-9_]+$/u.test(token));
+  if (["true", "false", ":", "printf", "echo", "pwd", "date", "which", "type", "command", "ls", "cat", "head", "tail", "wc", "sort", "uniq", "cut", "tr", "jq", "awk", "grep", "egrep", "fgrep", "rg"].includes(command)) return true;
+  if (command === "sed") return !tokens.some((token) => token === "-i" || token.startsWith("-i") || token === "--in-place" || token.startsWith("--in-place="));
+  if (command === "find") return !tokens.some((token) => ["-delete", "-exec", "-execdir", "-ok", "-okdir"].includes(token.toLowerCase()));
+  if (command === "curl") return curlLooksReadOnly(tokens);
+  if (command === "crontab") return tokens.length >= 2 && tokens.slice(1).every((token) => token === "-l" || token === "-u");
+  if (command === "launchctl") return ["list", "print", "print-disabled"].includes(asString(tokens[1]).toLowerCase());
+  if (command === "npm" || command === "pnpm" || command === "yarn" || command === "bun") {
+    return ["view", "info", "show"].includes(asString(tokens[1]).toLowerCase());
+  }
+  if (command === "gh") {
+    const subject = asString(tokens[1]).toLowerCase();
+    const action = asString(tokens[2]).toLowerCase();
+    return (subject === "release" && ["view", "list"].includes(action))
+      || (subject === "repo" && action === "view")
+      || (subject === "pr" && ["view", "list", "checks"].includes(action));
+  }
+  if (command === "git") {
+    const action = asString(tokens[1]).toLowerCase();
+    return ["status", "log", "show", "diff", "rev-parse", "remote", "branch", "describe"].includes(action)
+      && !tokenHas(tokens, "--set-upstream")
+      && !tokenStartsWith(tokens, "--set-upstream=");
+  }
+  if (command === "openclaw") {
+    return openclawLooksReadOnly(tokens);
+  }
+  return false;
+}
+
+function commandLooksReadOnlyShellChain(command: string): boolean {
+  if (!command) return false;
+  if (hasUnsafeWriteRedirection(command) || /[`$]\(/u.test(command)) return false;
+  if (commandLooksMutation(command) || commandLooksLongOrVerification(command)) return false;
+  const segments = command
+    .replace(/\\\n/gu, " ")
+    .split(/(?:\n|&&|\|\||;|\|)/u)
+    .map((segment) => segment.trim())
+    .filter(Boolean);
+  if (segments.length === 0 || segments.length > 16) return false;
+  return segments.every(segmentLooksReadOnlyShell);
 }
 
 export function classifyBudgetedMainTool(toolNameInput: unknown, paramsInput: unknown): BudgetedMainToolClassification {
@@ -218,6 +335,7 @@ export function classifyBudgetedMainTool(toolNameInput: unknown, paramsInput: un
       longToolDetected: false,
       writeToolDetected: false,
       multiStepToolDetected: false,
+      unknownToolRiskDetected: false,
       escalationReason: "",
     };
   }
@@ -231,25 +349,36 @@ export function classifyBudgetedMainTool(toolNameInput: unknown, paramsInput: un
       longToolDetected: false,
       writeToolDetected: false,
       multiStepToolDetected: false,
+      unknownToolRiskDetected: false,
       escalationReason: "",
     };
   }
 
   const command = commandText(params);
+  const shellLikeTool = ["exec", "shell", "bash", "process"].includes(toolName) || Boolean(command);
+  const readOnlyShellChain = commandLooksReadOnlyShellChain(command);
   const writeToolDetected = explicitWriteSignal(params)
     || /(?:write|edit|patch|apply_patch|delete|remove|rename|move|create|save)/iu.test(toolName)
     || commandLooksMutation(command);
-  const longToolDetected = commandLooksLongOrVerification(command)
-    || /(?:test|build|lint|typecheck|review|validate|deploy)/iu.test(toolName);
-  const multiStepToolDetected = commandLooksMultiStep(command);
-  const readOnly = !writeToolDetected && !longToolDetected && !multiStepToolDetected;
+  const longToolDetected = !readOnlyShellChain && (commandLooksLongOrVerification(command)
+    || /(?:test|build|lint|typecheck|review|validate|deploy)/iu.test(toolName));
+  const multiStepToolDetected = !readOnlyShellChain && commandLooksMultiStep(command);
+  const unknownToolRiskDetected = shellLikeTool
+    && Boolean(command)
+    && !readOnlyShellChain
+    && !writeToolDetected
+    && !longToolDetected
+    && !multiStepToolDetected;
+  const readOnly = readOnlyShellChain || (!writeToolDetected && !longToolDetected && !multiStepToolDetected && !unknownToolRiskDetected);
   const escalationReason = writeToolDetected
     ? "write_tool_detected"
     : longToolDetected
       ? "long_tool_detected"
       : multiStepToolDetected
         ? "multi_step_tool_chain"
-        : "";
+        : unknownToolRiskDetected
+          ? "tool_risk_unknown"
+          : "";
   return {
     toolName,
     counted: true,
@@ -258,6 +387,7 @@ export function classifyBudgetedMainTool(toolNameInput: unknown, paramsInput: un
     longToolDetected,
     writeToolDetected,
     multiStepToolDetected,
+    unknownToolRiskDetected,
     escalationReason,
   };
 }
@@ -274,7 +404,7 @@ export function updateBudgetedMainToolState(
     ...state,
     toolCount,
     readOnlyToolCount,
-    longToolDetected: state.longToolDetected || classification.longToolDetected || classification.multiStepToolDetected || secondReadOnlyRound,
+    longToolDetected: state.longToolDetected || classification.longToolDetected || classification.multiStepToolDetected || classification.unknownToolRiskDetected || secondReadOnlyRound,
     writeToolDetected: state.writeToolDetected || classification.writeToolDetected,
     reason: classification.escalationReason || (secondReadOnlyRound ? "multi_step_tool_chain" : state.reason),
   };

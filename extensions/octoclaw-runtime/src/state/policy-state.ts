@@ -187,6 +187,46 @@ function extractDecisionRoute(entry: PolicyStateEntry): string {
   return typeof route === "string" ? route.trim() : "";
 }
 
+function recordValue(value: unknown): Record<string, unknown> {
+  return isRecord(value) ? value : {};
+}
+
+function stringValue(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function entryRouteSource(entry: PolicyStateEntry): string {
+  const routeDecision = recordValue(recordValue(entry.decision).route_decision);
+  return stringValue(routeDecision.route_source);
+}
+
+function entryBudgetedMainEscalated(entry: PolicyStateEntry): boolean {
+  const budgetedMain = recordValue(entry.budgetedMain || entry.budgeted_main);
+  return stringValue(entry.dispatchStatus || entry.dispatch_status) === "budgeted_main_escalated"
+    || Boolean(budgetedMain.escalatedAt || budgetedMain.escalated_at)
+    || entryRouteSource(entry) === "budgeted_main_escalation";
+}
+
+function entryLooksTerminal(entry: PolicyStateEntry): boolean {
+  const terminalStatuses = new Set(["completed", "failed", "timed_out", "timeout", "cancelled", "canceled", "blocked"]);
+  const decision = recordValue(entry.decision);
+  const workContract = recordValue(decision.work_contract);
+  const latestStatus = recordValue(entry.latestStatus);
+  const statuses = [
+    entry.deliveryStatus,
+    entry.delivery_status,
+    entry.dispatchStatus,
+    entry.dispatch_status,
+    workContract.status,
+    latestStatus.status,
+  ].map((value) => stringValue(value).toLowerCase()).filter(Boolean);
+  return entry.resultMaterialized === true
+    || entry.result_materialized === true
+    || entry.nativeAnnounceDelivered === true
+    || entry.native_announce_delivered === true
+    || statuses.some((status) => terminalStatuses.has(status));
+}
+
 
 export function promptTokenScore(prompt: string, candidatePrompt: string): number {
   const query = String(prompt || "").trim().toLowerCase();
@@ -344,6 +384,9 @@ export class PolicyStateStore {
       if (!isDelegatedRoute(route)) {
         continue;
       }
+      if (entryLooksTerminal(entry)) {
+        continue;
+      }
 
       const updatedAt = entryTimestamp(entry);
       if (!updatedAt || now - updatedAt > maxAgeMs) {
@@ -396,6 +439,14 @@ export class PolicyStateStore {
   getDispatchPolicyContext(ctx: Record<string, unknown>, prompt = ""): { key: string; state: PolicyStateEntry | null } {
     const direct = this.resolveForContext(ctx);
     if (direct.state && (!prompt || promptsEquivalent(prompt, extractPrompt(direct.state)))) {
+      return direct;
+    }
+    if (
+      direct.state
+      && !entryLooksTerminal(direct.state)
+      && isDelegatedRoute(extractDecisionRoute(direct.state))
+      && entryBudgetedMainEscalated(direct.state)
+    ) {
       return direct;
     }
 

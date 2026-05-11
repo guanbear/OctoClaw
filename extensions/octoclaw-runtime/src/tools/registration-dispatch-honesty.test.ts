@@ -1156,6 +1156,90 @@ describe("octoclaw_dispatch honesty", () => {
     expect(String(nonSealed.error)).toContain("work_contract_not_sealed");
   });
 
+  it("does not reuse a recent completed delegate contract for a new budgeted-main dispatch", async () => {
+    useTempWorkContractLedger();
+    const currentKey = "agent:main:slack:default:direct:u0al9t5u89z:thread:1778473972.757179";
+    const staleKey = "agent:main:slack:default:direct:u0al9t5u89z:thread:1778474413.935219";
+    const staleContract = seedWorkContract({
+      sessionKey: staleKey,
+      userAsk: "再试下crontab修改",
+      status: "completed",
+    });
+    const currentContract = seedWorkContract({
+      sessionKey: currentKey,
+      userAsk: "2-6的crontab 都注释掉吧",
+      status: "sealed",
+    });
+    const currentSeal = seal({
+      turnId: "turn-current-crontab",
+      threadBindingKey: currentKey,
+      route: "reply",
+    });
+    const now = Date.now();
+    policyState.set(staleKey, {
+      prompt: "再试下crontab修改",
+      decision: {
+        ...delegateDecision("delegate"),
+        request: { session_key: staleKey },
+        workContractId: staleContract.workContractId,
+        work_contract: {
+          workContractId: staleContract.workContractId,
+          route: "delegate",
+          status: "completed",
+        },
+      },
+      workContractId: staleContract.workContractId,
+      work_contract_id: staleContract.workContractId,
+      resultMaterialized: true,
+      result_materialized: true,
+      nativeAnnounceDelivered: true,
+      native_announce_delivered: true,
+      createdAt: now,
+      updatedAt: now,
+    });
+    policyState.set(currentKey, {
+      prompt: "2-6的crontab 都注释掉吧",
+      decision: {
+        ...budgetedMainEscalatedDecision(currentSeal, currentKey),
+        workContractId: currentContract.workContractId,
+        work_contract: {
+          workContractId: currentContract.workContractId,
+          route: "delegate",
+          status: "sealed",
+        },
+      },
+      workContractId: currentContract.workContractId,
+      work_contract_id: currentContract.workContractId,
+      dispatchStatus: "budgeted_main_escalated",
+      dispatchExecuted: false,
+      spawnExecuted: false,
+      createdAt: now - 1_000,
+      updatedAt: now - 1_000,
+    });
+
+    const result = await executeDispatch({
+      task: "在当前 Mac 上把用户 crontab 的第 2-6 行注释掉，并验证 crontab -l 输出。",
+      forceRoute: "delegate",
+      continuationMode: "new_attempt",
+      metadataJson: JSON.stringify({
+        turnId: "turn-current-crontab",
+        threadBindingKey: currentKey,
+        context_refs: {
+          requestedSideEffects: true,
+          workspaceMode: "write_allowed",
+        },
+      }),
+    }, {
+      sessionKey: currentKey,
+      sessionId: "session-current-crontab",
+      helperInvoker: spawnedHelper(),
+    });
+
+    expect(result.ok, JSON.stringify(result)).toBe(true);
+    expect(result.work_contract_id).toBe(currentContract.workContractId);
+    expect(String(result.work_contract_id)).not.toBe(staleContract.workContractId);
+  });
+
   it("keeps legacy policyJson compatibility without a WorkContract id", async () => {
     const ledgerPath = useTempWorkContractLedger();
     const result = await executeDispatch({

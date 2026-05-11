@@ -838,6 +838,139 @@ describe("budgeted_main_then_delegate runtime budget", () => {
     policyState.clearState(key);
   });
 
+  it("allows a structured read-only shell probe chain with null redirections", async () => {
+    const handlers = new Map<string, Function>();
+    plugin.register({
+      on: (event, handler) => handlers.set(event, handler),
+      registerTool: () => {},
+      registerCommand: () => {},
+      logger: {},
+    });
+
+    const key = "agent:main:slack:channel:c0as4dappu3:thread:t-budget-release-probe";
+    const now = Date.now();
+    const pendingBudget = budgetedMainState(now - BUDGETED_MAIN_MAX_WALL_MS - 1_000, {
+      escalatedPending: true,
+      escalated_pending: true,
+      reason: "wall_time_over_budget",
+    });
+    policyState.setState(key, {
+      decision: budgetedMainDecision(),
+      budgetedMain: pendingBudget,
+      budgeted_main: pendingBudget,
+      createdAt: now - 35_000,
+      updatedAt: now,
+    });
+
+    const beforeToolCall = handlers.get("before_tool_call");
+    expect(beforeToolCall).toBeTruthy();
+    const result = await beforeToolCall!(
+      {
+        toolName: "exec",
+        params: {
+          command: [
+            "set -euo pipefail",
+            "printf 'github latest release: '",
+            "gh release view --repo openclaw/openclaw --json tagName,name,publishedAt,isLatest --jq '{tagName,name,publishedAt,isLatest}' 2>/dev/null || true",
+            "printf '\\nnpm latest: '",
+            "npm view openclaw version 2>/dev/null || true",
+            "printf '\\nlocal: '",
+            "(openclaw --version 2>/dev/null || true)",
+          ].join("\n"),
+        },
+      },
+      { sessionKey: key, sessionId: "session-budget-release-probe", agentId: "main" },
+    ) as { block?: boolean; blockReason?: string } | undefined;
+
+    expect(result).toBeUndefined();
+    expect(policyState.getState(key)?.budgetedMain).toMatchObject({
+      active: true,
+      escalatedPending: true,
+      readOnlyToolCount: 1,
+      toolCount: 1,
+      writeToolDetected: false,
+      longToolDetected: false,
+    });
+    expect(policyState.getState(key)?.decision?.route_decision).toMatchObject({ route: "reply" });
+    await waitForFireAndForget();
+    expect(readReplayEvents()).not.toContainEqual(expect.objectContaining({
+      event: "budgeted_main_escalated",
+    }));
+    policyState.clearState(key);
+  });
+
+  it("keeps real shell writes blocked after allowing null redirections", async () => {
+    const handlers = new Map<string, Function>();
+    plugin.register({
+      on: (event, handler) => handlers.set(event, handler),
+      registerTool: () => {},
+      registerCommand: () => {},
+      logger: {},
+    });
+
+    const key = "agent:main:slack:channel:c0as4dappu3:thread:t-budget-real-redirection";
+    const now = Date.now();
+    policyState.setState(key, {
+      decision: budgetedMainDecision(),
+      budgetedMain: budgetedMainState(now - 1_000),
+      budgeted_main: budgetedMainState(now - 1_000),
+      createdAt: now - 2_000,
+      updatedAt: now,
+    });
+
+    const beforeToolCall = handlers.get("before_tool_call");
+    expect(beforeToolCall).toBeTruthy();
+    const result = await beforeToolCall!(
+      { toolName: "exec", params: { command: "printf x > /tmp/octoclaw-budget-test.txt" } },
+      { sessionKey: key, sessionId: "session-budget-real-redirection", agentId: "main" },
+    ) as { block?: boolean; blockReason?: string } | undefined;
+
+    expect(result?.block).toBe(true);
+    expect(result?.blockReason).toContain("write_tool_detected");
+    await waitForFireAndForget();
+    expect(readReplayEvents()).toContainEqual(expect.objectContaining({
+      event: "budgeted_main_escalated",
+      reason: "write_tool_detected",
+    }));
+    policyState.clearState(key);
+  });
+
+  it("does not treat mutating openclaw subcommands as read-only probes", async () => {
+    const handlers = new Map<string, Function>();
+    plugin.register({
+      on: (event, handler) => handlers.set(event, handler),
+      registerTool: () => {},
+      registerCommand: () => {},
+      logger: {},
+    });
+
+    const key = "agent:main:slack:channel:c0as4dappu3:thread:t-budget-openclaw-config-set";
+    const now = Date.now();
+    policyState.setState(key, {
+      decision: budgetedMainDecision(),
+      budgetedMain: budgetedMainState(now - 1_000),
+      budgeted_main: budgetedMainState(now - 1_000),
+      createdAt: now - 2_000,
+      updatedAt: now,
+    });
+
+    const beforeToolCall = handlers.get("before_tool_call");
+    expect(beforeToolCall).toBeTruthy();
+    const result = await beforeToolCall!(
+      { toolName: "exec", params: { command: "openclaw config set foo bar" } },
+      { sessionKey: key, sessionId: "session-budget-openclaw-config-set", agentId: "main" },
+    ) as { block?: boolean; blockReason?: string } | undefined;
+
+    expect(result?.block).toBe(true);
+    expect(result?.blockReason).toContain("tool_risk_unknown");
+    expect(policyState.getState(key)?.budgetedMain).toMatchObject({
+      readOnlyToolCount: 0,
+      toolCount: 1,
+      longToolDetected: true,
+    });
+    policyState.clearState(key);
+  });
+
   it("blocks a second real read-only tool after soft timeout and requires octoclaw_dispatch", async () => {
     const handlers = new Map<string, Function>();
     plugin.register({
