@@ -98,6 +98,24 @@ function budgetedMainDecision(route = "reply"): Record<string, unknown> {
   };
 }
 
+function mustReplyDecision(): Record<string, unknown> {
+  return {
+    runtime_switches: { replay_logging_enabled: true },
+    route_decision: { route: "reply", decision_bucket: "must_reply" },
+    hook_interface: {
+      before_prompt_build: { enabled: true },
+      before_tool_call: {
+        enabled: true,
+        route_hint_required: false,
+        route_hint_tool: "octoclaw_route_hint",
+        delegation_enforcement: true,
+      },
+    },
+    route_hint_policy: { required: false, submitted: false },
+    tool_policy: { allow_direct_tools: true },
+  };
+}
+
 
 function budgetedMainState(startedAt: number, extra: Record<string, unknown> = {}): Record<string, unknown> {
   return {
@@ -1050,12 +1068,7 @@ describe("budgeted_main_then_delegate runtime budget", () => {
     const now = Date.now();
     const replyKey = "agent:main:slack:channel:c0as4dappu3:thread:t-budget-must-reply";
     policyState.setState(replyKey, {
-      decision: {
-        route_decision: { route: "reply", decision_bucket: "must_reply" },
-        hook_interface: { before_tool_call: { enabled: true, route_hint_required: false, route_hint_tool: "octoclaw_route_hint" } },
-        route_hint_policy: { required: false, submitted: false },
-        tool_policy: { allow_direct_tools: true },
-      },
+      decision: mustReplyDecision(),
       createdAt: now,
       updatedAt: now,
     });
@@ -1089,6 +1102,141 @@ describe("budgeted_main_then_delegate runtime budget", () => {
     }));
     policyState.clearState(replyKey);
     policyState.clearState(delegateKey);
+  });
+
+  it("escalates must_reply main-lane work on write, long, or second ordinary tool use", async () => {
+    const handlers = new Map<string, Function>();
+    plugin.register({
+      on: (event, handler) => handlers.set(event, handler),
+      registerTool: () => {},
+      registerCommand: () => {},
+      logger: {},
+    });
+
+    const beforeToolCall = handlers.get("before_tool_call");
+    expect(beforeToolCall).toBeTruthy();
+    const now = Date.now();
+    const writeKey = "agent:main:slack:channel:c0as4dappu3:thread:t-must-reply-write";
+    policyState.setState(writeKey, {
+      prompt: "修一下测试",
+      decision: mustReplyDecision(),
+      createdAt: now,
+      updatedAt: now,
+    });
+    const writeResult = await beforeToolCall!(
+      { toolName: "write", params: { path: "docs/example.md", content: "x" } },
+      { sessionKey: writeKey, sessionId: "session-must-reply-write", agentId: "main" },
+    ) as { block?: boolean; blockReason?: string } | undefined;
+
+    const longKey = "agent:main:slack:channel:c0as4dappu3:thread:t-must-reply-long";
+    policyState.setState(longKey, {
+      prompt: "跑一下测试",
+      decision: mustReplyDecision(),
+      createdAt: now,
+      updatedAt: now,
+    });
+    const longResult = await beforeToolCall!(
+      { toolName: "exec", params: { command: "pnpm test" } },
+      { sessionKey: longKey, sessionId: "session-must-reply-long", agentId: "main" },
+    ) as { block?: boolean; blockReason?: string } | undefined;
+
+    const multiToolKey = "agent:main:slack:channel:c0as4dappu3:thread:t-must-reply-multi-tool";
+    policyState.setState(multiToolKey, {
+      prompt: "看一下文件状态",
+      decision: mustReplyDecision(),
+      createdAt: now,
+      updatedAt: now,
+    });
+    const firstReadResult = await beforeToolCall!(
+      { toolName: "read", params: { path: "README.md" } },
+      { sessionKey: multiToolKey, sessionId: "session-must-reply-multi-tool", agentId: "main" },
+    ) as { block?: boolean; blockReason?: string } | undefined;
+    const secondReadResult = await beforeToolCall!(
+      { toolName: "web_fetch", params: { url: "https://example.com" } },
+      { sessionKey: multiToolKey, sessionId: "session-must-reply-multi-tool", agentId: "main" },
+    ) as { block?: boolean; blockReason?: string } | undefined;
+
+    expect(writeResult?.block).toBe(true);
+    expect(writeResult?.blockReason).toContain("write_tool_detected");
+    expect(longResult?.block).toBe(true);
+    expect(longResult?.blockReason).toContain("long_tool_detected");
+    expect(firstReadResult).toBeUndefined();
+    expect(secondReadResult?.block).toBe(true);
+    expect(secondReadResult?.blockReason).toContain("multi_step_tool_chain");
+    await waitForFireAndForget();
+    const events = readReplayEvents();
+    expect(events).toContainEqual(expect.objectContaining({
+      event: "budgeted_main_escalated",
+      stateKey: writeKey,
+      reason: "write_tool_detected",
+      decision_bucket: "must_reply",
+    }));
+    expect(events).toContainEqual(expect.objectContaining({
+      event: "budgeted_main_escalated",
+      stateKey: longKey,
+      reason: "long_tool_detected",
+      decision_bucket: "must_reply",
+    }));
+    expect(events).toContainEqual(expect.objectContaining({
+      event: "budgeted_main_escalated",
+      stateKey: multiToolKey,
+      reason: "multi_step_tool_chain",
+      decision_bucket: "must_reply",
+    }));
+
+    policyState.clearState(writeKey);
+    policyState.clearState(longKey);
+    policyState.clearState(multiToolKey);
+  });
+
+  it("syncs reply policy state to session aliases so tool guards see the current turn", async () => {
+    const handlers = new Map<string, Function>();
+    plugin.register({
+      on: (event, handler) => handlers.set(event, handler),
+      registerTool: () => {},
+      registerCommand: () => {},
+      logger: {},
+    });
+
+    const beforePromptBuild = handlers.get("before_prompt_build");
+    const beforeToolCall = handlers.get("before_tool_call");
+    expect(beforePromptBuild).toBeTruthy();
+    expect(beforeToolCall).toBeTruthy();
+    const key = "agent:main:slack:channel:c0as4dappu3:thread:t-must-reply-alias";
+    const alias = "native-session-must-reply-alias";
+    const prompt = "1和2";
+    const now = Date.now();
+    policyState.setState(key, {
+      prompt,
+      decision: mustReplyDecision(),
+      createdAt: now - 1_000,
+      updatedAt: now,
+    });
+
+    await beforePromptBuild!(
+      { prompt },
+      { sessionKey: key, sessionId: alias, agentId: "main", channelId: "slack", cwd: tempWorkspace },
+    );
+    expect(policyState.getState(alias)?.decision?.route_decision).toMatchObject({
+      route: "reply",
+      decision_bucket: "must_reply",
+    });
+
+    const firstReadResult = await beforeToolCall!(
+      { toolName: "read", params: { path: "README.md" } },
+      { sessionId: alias, agentId: "main" },
+    ) as { block?: boolean; blockReason?: string } | undefined;
+    const writeResult = await beforeToolCall!(
+      { toolName: "write", params: { path: "docs/example.md", content: "x" } },
+      { sessionId: alias, agentId: "main" },
+    ) as { block?: boolean; blockReason?: string } | undefined;
+
+    expect(firstReadResult).toBeUndefined();
+    expect(writeResult?.block).toBe(true);
+    expect(writeResult?.blockReason).toContain("write_tool_detected");
+
+    policyState.clearState(key);
+    policyState.clearState(alias);
   });
 });
 

@@ -66,6 +66,7 @@ export interface PolicyStateEntry {
   pendingDeliveryRunnerJobId?: string;
   deliveryObserved?: boolean;
   canonicalSessionKey?: string;
+  canonical_session_key?: string;
   sessionBoundary?: { status: string; reason: string };
   workContractId?: string;
   work_contract_id?: string;

@@ -2067,7 +2067,16 @@ function getPolicyStateForContext(ctx: UnknownRecord): { key: string; state: Pol
       best = { key, state, updatedAt };
     }
   }
-  if (best) return { key: best.key, state: best.state };
+  if (best) {
+    const canonicalKey = stringValue(best.state.canonicalSessionKey || best.state.canonical_session_key);
+    if (canonicalKey && canonicalKey !== best.key) {
+      const canonicalState = policyState.get(canonicalKey);
+      if (canonicalState) {
+        return { key: canonicalKey, state: canonicalState };
+      }
+    }
+    return { key: best.key, state: best.state };
+  }
   const resolved = policyState.resolveForContext(ctx);
   return {
     key: stringValue(resolved.key),
@@ -2083,6 +2092,36 @@ function updatePolicyState(stateKey: string, mutator: (current: PolicyStateEntry
   policyState.update(key, (current) => mutator(current));
 }
 
+function policyStateAliasKeys(stateKey: string, ctx: UnknownRecord, state: UnknownRecord): string[] {
+  return Array.from(new Set([
+    stringValue(stateKey),
+    stringValue(state.canonicalSessionKey || state.canonical_session_key),
+    stringValue(state.ackGuardKey || state.ack_guard_key),
+    stringValue(ctx.sessionKey || ctx.session_key),
+    stringValue(ctx.canonicalSessionKey || ctx.canonical_session_key),
+    stringValue(ctx.sessionId || ctx.session_id),
+  ].filter(Boolean)));
+}
+
+function syncPolicyStateAliases(stateKey: string, ctx: UnknownRecord, state: UnknownRecord): PolicyStateEntry | null {
+  const key = stringValue(stateKey);
+  if (!key) return null;
+  const canonicalSessionKey = stringValue(state.canonicalSessionKey || state.canonical_session_key || key);
+  const next = {
+    ...state,
+    canonicalSessionKey,
+    canonical_session_key: canonicalSessionKey,
+  } as PolicyStateEntry;
+  let selected: PolicyStateEntry | null = null;
+  for (const aliasKey of policyStateAliasKeys(key, ctx, next as UnknownRecord)) {
+    policyState.set(aliasKey, next);
+    if (!selected || aliasKey === key) {
+      selected = policyState.get(aliasKey) ?? next;
+    }
+  }
+  return selected;
+}
+
 function stateWorkContractId(state: unknown): string {
   const record = asRecord(state);
   const decision = asRecord(record.decision);
@@ -2093,14 +2132,7 @@ function stateWorkContractId(state: unknown): string {
 }
 
 function budgetedMainStateKeys(stateKey: string, ctx: UnknownRecord, state: UnknownRecord): string[] {
-  return Array.from(new Set([
-    stringValue(stateKey),
-    stringValue(state.canonicalSessionKey || state.canonical_session_key),
-    stringValue(state.ackGuardKey || state.ack_guard_key),
-    stringValue(ctx.sessionKey || ctx.session_key),
-    stringValue(ctx.canonicalSessionKey || ctx.canonical_session_key),
-    stringValue(ctx.sessionId || ctx.session_id),
-  ].filter(Boolean)));
+  return policyStateAliasKeys(stateKey, ctx, state);
 }
 
 function budgetedMainWorkContractId(state: UnknownRecord, decision: UnknownRecord): string {
@@ -2297,12 +2329,15 @@ function updateBudgetedMainForContext(input: {
 }): PolicyStateEntry | null {
   let selected: PolicyStateEntry | null = null;
   const serialized = serializeBudgetedMainState(input.budgetState);
+  const canonicalSessionKey = stringValue(input.state.canonicalSessionKey || input.state.canonical_session_key || input.stateKey);
   for (const key of budgetedMainStateKeys(input.stateKey, input.ctx, input.state)) {
     updatePolicyState(key, (current) => {
       const next = {
         ...(current ?? {}),
         ...(input.extra ?? {}),
         ...(input.decision ? { decision: input.decision } : {}),
+        canonicalSessionKey,
+        canonical_session_key: canonicalSessionKey,
         budgetedMain: serialized,
         budgeted_main: serialized,
       } as PolicyStateEntry;
@@ -3548,6 +3583,7 @@ export const plugin = {
       if (effectiveState) {
         applyReactionAckState(effectiveState, preSessionKey);
         effectiveState.ackGuardKey = preSessionKey || "";
+        effectiveState.ack_guard_key = preSessionKey || "";
         effectiveState.deliveryTarget = immutableDeliveryTarget;
         effectiveState.delivery_target = immutableDeliveryTarget;
         effectiveState.inboundObservedAt = Number(effectiveState.inboundObservedAt || effectiveState.inbound_observed_at || 0) || Date.now();
@@ -3555,6 +3591,10 @@ export const plugin = {
         if (inboundMessageTs) {
           effectiveState.inboundMessageTs = inboundMessageTs;
           effectiveState.replyToMessageId = inboundMessageTs;
+        }
+        const syncedState = syncPolicyStateAliases(stateKey, ctx, asRecord(effectiveState));
+        if (syncedState) {
+          effectiveState = syncedState;
         }
       }
 
@@ -3855,6 +3895,7 @@ export const plugin = {
         };
       }
       let budgetDecision = asRecord(state?.decision);
+      let budgetedMainHandledTool = false;
       const budgetState = readBudgetedMainState(asRecord(state));
       if (budgetState?.active && !budgetState.completedAt && !budgetState.escalatedAt) {
         const classification = classifyBudgetedMainTool(toolName, toolParams);
@@ -3875,6 +3916,7 @@ export const plugin = {
           state = escalated.state as PolicyStateEntry | null;
           budgetDecision = escalated.decision;
         } else if (classification.counted) {
+          budgetedMainHandledTool = true;
           const updatedBudget = updateBudgetedMainToolState(budgetState, classification);
           const escalationReason = budgetedMainToolEscalationReason(updatedBudget, classification);
           if (escalationReason) {
@@ -4241,6 +4283,77 @@ export const plugin = {
         && toolName
         && !toolName.startsWith("octoclaw_")
       ) {
+        const classification = classifyBudgetedMainTool(toolName, toolParams);
+        if (!budgetedMainHandledTool && classification.counted) {
+          const now = Date.now();
+          const stateRecord = asRecord(state);
+          const existingBudget = readBudgetedMainState(stateRecord);
+          const startedBudget = existingBudget?.active && !existingBudget.completedAt && !existingBudget.escalatedAt
+            ? existingBudget
+            : {
+                ...buildBudgetedMainState({
+                  now,
+                  decision,
+                  visibleStartAt: budgetedMainVisibleStartAt(stateRecord, now),
+                  budgetStartSource: "main_reply_tool_guard",
+                  workContractId: budgetedMainWorkContractId(stateRecord, decision),
+                  spawnIntentId: budgetedMainSpawnIntentId(stateRecord),
+                }),
+                reason: "main_reply_tool_observed",
+                decisionBucket: stringValue(asRecord(decision.route_decision).decision_bucket || decision._decision_bucket || "main_reply_tool_guard"),
+              };
+          const updatedBudget = updateBudgetedMainToolState(startedBudget, classification);
+          const escalationReason = budgetedMainToolEscalationReason(updatedBudget, classification);
+          if (escalationReason) {
+            const escalated = await escalateBudgetedMainForTool({
+              stateKey,
+              ctx,
+              state: stateRecord,
+              decision,
+              budgetState: updatedBudget,
+              reason: escalationReason,
+              logger: pi.logger,
+            });
+            state = escalated.state as PolicyStateEntry | null;
+            updatePolicyState(stateKey, (current) => ({
+              ...current,
+              blockedTools: [...(Array.isArray(current.blockedTools) ? current.blockedTools.slice(-7) : []), toolName].filter(Boolean),
+            }));
+            return {
+              block: true,
+              blockReason: `OctoClaw main reply tool budget escalated (${escalationReason}). Call octoclaw_dispatch with the original task; do not continue ordinary tool execution in the main agent.`,
+            };
+          }
+          state = updateBudgetedMainForContext({
+            stateKey,
+            ctx,
+            state: stateRecord,
+            budgetState: updatedBudget,
+          }) as PolicyStateEntry | null;
+          scheduleBudgetedMainTimeout({
+            stateKey,
+            ctx,
+            state: stateRecord,
+            decision,
+            budgetState: updatedBudget,
+            logger: pi.logger,
+          });
+          void recordPolicyReplay(
+            "main_reply_tool_guard_observed",
+            {
+              sessionKey: stateKey || "",
+              sessionId: stringValue(ctx.sessionId),
+              route: stringValue(asRecord(decision.route_decision).route),
+              decision_bucket: updatedBudget.decisionBucket,
+              toolName,
+              toolCount: updatedBudget.toolCount,
+              readOnlyToolCount: updatedBudget.readOnlyToolCount,
+              budgetStartSource: updatedBudget.budgetStartSource,
+            },
+            pi.logger,
+            decision,
+          ).catch(() => {});
+        }
         updateAckTrackingState(stateKey, { tool_active: true });
         const latencyAck = await maybeSendLatencyAck(decision, metadata, stateKey, asRecord(state), ctx, pi.logger ?? {}, toolName);
         updatePolicyState(stateKey, (current) => ({
