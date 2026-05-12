@@ -2,6 +2,8 @@ import fsSync from "node:fs";
 import { resolveTaskStatePath } from "../resolve/env.js";
 import { asBooleanStrict, asString, isRecord, type UnknownRecord } from "../util/type-coercion.js";
 import { emitExecutionTransitionNotification } from "./execution-transition-notifier.js";
+import { reduceCanonicalStatus, type LifecycleReconcileInput } from "../runtime-ledger/lifecycle-reconciler.js";
+import type { NativeLifecycleStatus } from "../runtime-ledger/lifecycle-reconciler.js";
 
 interface FsSyncLike {
   readFileSync(pathname: string, encoding: string): string;
@@ -22,6 +24,13 @@ interface TaskStateTask extends UnknownRecord {
 
 interface TaskStateFile extends UnknownRecord {
   tasks?: unknown;
+}
+
+interface NativeTaskState {
+  sessionKey: string;
+  flowId: string;
+  found: boolean;
+  currentState: string;
 }
 
 const fsSyncLike = fsSync as unknown as FsSyncLike;
@@ -93,29 +102,26 @@ function buildMinimalProjectionFromTaskState(
 }
 
 async function watchdogTransitionStaleTask(taskId: string, task: TaskStateTask, newStatus: string, sink: AckLogger): Promise<boolean> {
-  const sessionKey = asString((task as UnknownRecord).session_key);
-  const flowId = asString((task as UnknownRecord).flow_id);
-  if (!sessionKey || !flowId) {
-    sink.debug?.(`octoclaw watchdog: skip transition task=${taskId} missing session_key or flow_id`);
-    return false;
-  }
   try {
-    const { invokeNativeHelper } = await import("../adapter/native-helper.js");
-    const result = invokeNativeHelper({ action: "read-task", args: { session_key: sessionKey, flow_id: flowId, task_id: taskId } });
-    if (!result?.found) {
+    const nativeState = await readNativeTaskState(taskId, task, sink);
+    if (!nativeState.sessionKey || !nativeState.flowId) {
+      sink.debug?.(`octoclaw watchdog: skip transition task=${taskId} missing session_key or flow_id`);
+      return false;
+    }
+    if (!nativeState.found) {
       sink.debug?.(`octoclaw watchdog: skip transition task=${taskId} not found in runtime`);
       return false;
     }
-    const taskRead = result as unknown as { task?: { state?: string; status?: string } };
-    const currentState = asString(taskRead.task?.state || taskRead.task?.status);
+    const { invokeNativeHelper } = await import("../adapter/native-helper.js");
+    const currentState = nativeState.currentState;
     if (currentState === "completed" || currentState === "failed" || currentState === "timed_out") {
       return false;
     }
     const failResult = invokeNativeHelper({
       action: "fail-flow" as const,
       args: {
-        session_key: sessionKey,
-        flow_id: flowId,
+        session_key: nativeState.sessionKey,
+        flow_id: nativeState.flowId,
         blocked_task_id: taskId,
         blocked_summary: `watchdog timeout: task ${taskId} stuck in ${currentState} after threshold`,
       },
@@ -141,8 +147,8 @@ async function watchdogTransitionStaleTask(taskId: string, task: TaskStateTask, 
           projection: buildMinimalProjectionFromTaskState(task, newStatus),
           attemptId: taskId,
           workContractId: "",
-          sessionKey,
-          stateKey: sessionKey,
+          sessionKey: nativeState.sessionKey,
+          stateKey: nativeState.sessionKey,
         });
       } catch (_) {}
       return true;
@@ -153,6 +159,36 @@ async function watchdogTransitionStaleTask(taskId: string, task: TaskStateTask, 
     sink.debug?.(`octoclaw watchdog: error transitioning task=${taskId}: ${String(err)}`);
     return false;
   }
+}
+
+async function readNativeTaskState(taskId: string, task: TaskStateTask, sink: AckLogger): Promise<NativeTaskState> {
+  const sessionKey = asString((task as UnknownRecord).session_key);
+  const flowId = asString((task as UnknownRecord).flow_id);
+  if (!sessionKey || !flowId) return { sessionKey, flowId, found: false, currentState: "" };
+  try {
+    const { invokeNativeHelper } = await import("../adapter/native-helper.js");
+    const result = invokeNativeHelper({ action: "read-task", args: { session_key: sessionKey, flow_id: flowId, task_id: taskId } });
+    if (!result?.found) return { sessionKey, flowId, found: false, currentState: "" };
+    const taskRead = result as unknown as { task?: { state?: string; status?: string } };
+    return {
+      sessionKey,
+      flowId,
+      found: true,
+      currentState: asString(taskRead.task?.state || taskRead.task?.status).toLowerCase(),
+    };
+  } catch (err) {
+    sink.debug?.(`octoclaw watchdog: native read failed task=${taskId}: ${String(err)}`);
+    return { sessionKey, flowId, found: false, currentState: "" };
+  }
+}
+
+function nativeLifecycleStatus(state: NativeTaskState): NativeLifecycleStatus {
+  if (!state.found) return "missing";
+  if (["completed", "done", "succeeded", "success"].includes(state.currentState)) return "completed";
+  if (["failed", "error", "errored"].includes(state.currentState)) return "failed";
+  if (["timed_out", "timeout", "expired"].includes(state.currentState)) return "timed_out";
+  if (["running", "in_progress", "active", "executing", "started", "dispatched"].includes(state.currentState)) return "running";
+  return "missing";
 }
 
 function updateTaskStateCache(taskId: string, patch: Record<string, unknown>): void {
@@ -226,29 +262,50 @@ export async function watchdogTick(logger: unknown): Promise<void> {
       }
       if ((status === "running" || status === "dispatched") && ageMin > STUCK_THRESHOLD_MIN) {
         stuckCount += 1;
-        sink.debug?.(`octoclaw watchdog: runner_stuck task=${taskId} status=${status} age_min=${ageMin.toFixed(1)}`);
+        const nativeState = await readNativeTaskState(taskId, task, sink);
+        const expectedDeadline = new Date(updatedAt + STUCK_THRESHOLD_MIN * 60_000).toISOString();
+        const hardDeadline = new Date(updatedAt + STALE_QUEUED_THRESHOLD_MIN * 60_000).toISOString();
+        const reconcilerInput: LifecycleReconcileInput = {
+          currentStatus: status,
+          nativeStatus: nativeLifecycleStatus(nativeState),
+          hasCompletionReceipt: false,
+          hasArtifactRef: false,
+          hasReportPath: false,
+          hasResultSummary: false,
+          hasDeliveryAck: false,
+          expectedAt: expectedDeadline,
+          hardTimeoutAt: hardDeadline,
+          lastHeartbeatAt: null,
+          lastProgressAt: null,
+          now: new Date().toISOString(),
+        };
+        const reconcileResult = reduceCanonicalStatus(reconcilerInput);
+        const watchdogStatus = reconcileResult.status;
+        sink.debug?.(`octoclaw watchdog: runner_stuck task=${taskId} status=${status} native=${nativeState.currentState || "missing"} age_min=${ageMin.toFixed(1)} reducer=${watchdogStatus}`);
         try {
           const sessionKey = asString((task as UnknownRecord).session_key);
           updateTaskStateCache(taskId, {
             latestAnomalyNotice: {
               kind: "heartbeat_stale",
-              severity: "warning",
+              severity: watchdogStatus === "timed_out" ? "error" : "warning",
               taskId,
-              message: `Task stuck in ${status} for ${ageMin.toFixed(0)} minutes exceeds ${STUCK_THRESHOLD_MIN} minute threshold`,
+              message: `Task ${status} for ${ageMin.toFixed(0)}min, reducer status: ${watchdogStatus} (${reconcileResult.reason})`,
               createdAt: new Date().toISOString(),
             },
           });
           void emitExecutionTransitionNotification({
-            transitionKind: "heartbeat_stale",
-            projection: buildMinimalProjectionFromTaskState(task, status),
+            transitionKind: watchdogStatus === "timed_out" ? "timed_out" : "heartbeat_stale",
+            projection: buildMinimalProjectionFromTaskState(task, watchdogStatus),
             attemptId: taskId,
             workContractId: "",
             sessionKey,
             stateKey: sessionKey,
           });
         } catch (_) {}
-        const transitioned = await watchdogTransitionStaleTask(taskId, task, "timed_out", sink);
-        if (transitioned) transitionedCount += 1;
+        if (watchdogStatus === "timed_out") {
+          const transitioned = await watchdogTransitionStaleTask(taskId, task, "timed_out", sink);
+          if (transitioned) transitionedCount += 1;
+        }
       }
     }
 

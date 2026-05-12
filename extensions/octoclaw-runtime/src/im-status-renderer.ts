@@ -49,10 +49,14 @@ const STATUS_EMOJI: Record<string, string> = {
   failed:           "❌",
   timed_out:        "⏱️",
   running:          "⚙️",
+  running_slow:     "⚠️",
+  stalled:          "⏸️",
   queued:           "⏳",
   materializing:    "🔄",
   registered:       "📋",
   deliverable_ready:"📬",
+  degraded:         "⚠️",
+  lost:             "❓",
   canceled:         "🚫",
   blocked:          "🔒",
 };
@@ -72,7 +76,7 @@ function slackTaskBlock(task: StatusTaskSummary): string {
   const header = `${emoji} *${task.status}* · ${cleanTitle}${complexity}${modelPart}${elapsed}`;
 
   const timeLine = (() => {
-    const isActive = ["running", "queued", "materializing", "registered", "blocked"].includes(task.status);
+    const isActive = ["running", "running_slow", "stalled", "queued", "materializing", "registered", "blocked"].includes(task.status);
     if (isActive && task.startedAtDisplay) return `\n> ⏱ ${task.startedAtDisplay}`;
     if (isActive && task.delegatedAt) return `\n> ⏱ 委派：${task.delegatedAt}`;
     if (task.completedAtDisplay) return `\n> ⏱ 完成：${task.completedAtDisplay}`;

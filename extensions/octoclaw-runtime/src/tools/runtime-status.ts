@@ -4,6 +4,10 @@ import { readTaskStateDocumentDetailed, readTaskStateRecords, type TaskStateReco
 import { recordPolicyReplay } from "../replay/replay.js";
 import { resolveRuntimeLedgerMode } from "../runtime-ledger/shadow.js";
 import { rebuildTaskStateProjection } from "../runtime-ledger/projection-rebuild.js";
+import {
+  reduceCanonicalStatus,
+  type NativeLifecycleStatus,
+} from "../runtime-ledger/lifecycle-reconciler.js";
 import { createOctoClawRuntimePlugin } from "../plugin.js";
 import { projectNativeStatus, type NativeStatusProjection, type NativeStatusProjectorInput } from "../state/native-status-projector.js";
 import { buildSlackStatusOutput, type StatusTaskSummary } from "../im-status-renderer.js";
@@ -182,6 +186,7 @@ function sortTaskStateRecords(tasks: RuntimeTaskStateRecord[]): RuntimeTaskState
 }
 
 const STATUS_STALE_AFTER_MS = 5 * 60 * 1000;
+const STATUS_HARD_TIMEOUT_AFTER_MS = 90 * 60 * 1000;
 // timed_out/blocked tasks stay visible for 30 min (was 1h — most aren't worth seeing after half an hour)
 const STATUS_PANEL_STALE_VISIBLE_MS = 30 * 60 * 1000;
 // completed/failed/canceled stay visible for 4h (was 24h — don't need yesterday's tasks cluttering the panel)
@@ -597,36 +602,235 @@ function runtimeTaskModel(record: RuntimeTaskStateRecord, runtimeTruth: UnknownR
   );
 }
 
-function projectRuntimeStatus(record: RuntimeTaskStateRecord, nowMs = Date.now()): { status: string; reason: string } {
+function timestampIso(value: unknown): string | null {
+  if (typeof value === "number" && Number.isFinite(value)) return new Date(value).toISOString();
+  const text = asString(value);
+  if (!text) return null;
+  const numeric = Number(text);
+  if (Number.isFinite(numeric) && numeric > 0) return new Date(numeric).toISOString();
+  return timestampMs(text) === null ? null : text;
+}
+
+function firstTimestampIso(...values: unknown[]): string | null {
+  for (const value of values) {
+    const iso = timestampIso(value);
+    if (iso) return iso;
+  }
+  return null;
+}
+
+function timestampPlusIso(value: unknown, deltaMs: number): string | null {
+  const ms = timestampMs(value);
+  return ms === null ? null : new Date(ms + deltaMs).toISOString();
+}
+
+function lifecycleStatusFromNativeProjection(
+  nativeProjection: NativeStatusProjection | undefined,
+  terminalStatus: string,
+  rawStatus: string,
+): NativeLifecycleStatus {
+  if (terminalStatus === "completed") return "completed";
+  if (terminalStatus === "failed") return "failed";
+  if (terminalStatus === "timed_out") return "timed_out";
+  if (nativeProjection?.status === "completed") return "completed";
+  if (nativeProjection?.status === "failed") return "failed";
+  if (nativeProjection?.status === "timed_out") return "timed_out";
+  if (nativeProjection?.status === "running") return "running";
+  if (nativeProjection?.reason === "native_registry_unavailable") return "unavailable";
+  if (nativeProjection?.status === "lost" || nativeProjection?.status === "unknown" || nativeProjection?.status === "degraded") return "missing";
+  if (["running", "in_progress", "active", "executing", "started"].includes(rawStatus)) return "running";
+  if (["completed", "done", "succeeded", "success"].includes(rawStatus)) return "completed";
+  if (["failed", "error", "errored"].includes(rawStatus)) return "failed";
+  if (["timed_out", "timeout", "expired"].includes(rawStatus)) return "timed_out";
+  return "missing";
+}
+
+function runtimeResultEvidence(record: RuntimeTaskStateRecord, evidence: ReturnType<typeof runtimeStatusEvidence>): {
+  hasCompletionReceipt: boolean;
+  hasArtifactRef: boolean;
+  hasReportPath: boolean;
+  hasResultSummary: boolean;
+  hasDeliveryAck: boolean;
+} {
+  const artifacts = asRecord(record.artifacts);
+  const runtimeTruth = asRecord(artifacts.runtime_truth);
+  const delivery = asRecord(runtimeTruth.delivery || runtimeTruth.resultDelivery || record.delivery);
+  const completion = asRecord(record.completion);
+  const completionBinding = asRecord(record.completionBinding || record.completion_binding);
+  const workContract = workContractRecord(record);
+  const delegate = asRecord(workContract.delegate);
+  const telemetry = asRecord(workContract.telemetry);
+  const compactPacket = asRecord(record.compact_parent_packet);
+  const artifactRefs = [
+    ...(Array.isArray(record.artifact_refs) ? record.artifact_refs : []),
+    ...(Array.isArray(compactPacket.artifactRefIds) ? compactPacket.artifactRefIds : []),
+    ...(Array.isArray(delegate.artifactRefs) ? delegate.artifactRefs : []),
+    ...(Array.isArray(completion.artifacts) ? completion.artifacts : []),
+  ].map(String).filter(Boolean);
+  const completionVerdict = asString(record.completionVerdict || record.completion_verdict || completionBinding.verdict).toLowerCase();
+  const deliveryStatus = asString(
+    record.delivery_status
+      || delivery.status
+      || delivery.deliveryStatus
+      || runtimeTruth.deliveryStatus
+      || telemetry.deliveryStatus
+      || telemetry.delivery_status,
+  ).toLowerCase();
+  return {
+    hasCompletionReceipt: Boolean(Object.keys(completion).length > 0 || ["matched", "success", "valid"].includes(completionVerdict)),
+    hasArtifactRef: evidence.resultMaterialized || artifactRefs.length > 0,
+    hasReportPath: Boolean(optionalString(
+      record.report_path,
+      artifacts.report_path,
+      artifacts.result_path,
+      artifacts.output_path,
+      delivery.artifact_path,
+      delivery.result_path,
+      compactPacket.resultLocation,
+    )),
+    hasResultSummary: Boolean(optionalString(
+      record.resultSummary,
+      record.result_summary,
+      completion.summary,
+      completion.resultSummary,
+      completion.result_summary,
+      runtimeTruth.resultSummary,
+      runtimeTruth.result_summary,
+      delivery.summary,
+      compactPacket.summary,
+    )),
+    hasDeliveryAck: ["delivered", "acknowledged", "acked", "sent"].includes(deliveryStatus),
+  };
+}
+
+function runtimeLifecycleDeadlines(record: RuntimeTaskStateRecord, nativeStatus: NativeLifecycleStatus): {
+  expectedAt: string | null;
+  hardTimeoutAt: string | null;
+  lastHeartbeatAt: string | null;
+  lastProgressAt: string | null;
+} {
+  const artifacts = asRecord(record.artifacts);
+  const runtimeTruth = asRecord(artifacts.runtime_truth);
+  const metadata = asRecord(record.metadata);
+  const workContract = workContractRecord(record);
+  const telemetry = asRecord(workContract.telemetry);
+  const activeUpdatedAt = firstTimestamp(record.updated_at, record.started_at, record.spawned_at, record.created_at);
+  const fallbackDeadline = timestampPlusIso(activeUpdatedAt, STATUS_STALE_AFTER_MS);
+  const fallbackHardDeadline = timestampPlusIso(activeUpdatedAt, STATUS_HARD_TIMEOUT_AFTER_MS);
+  const expectedAt = firstTimestampIso(
+    record.expectedAt,
+    record.expected_at,
+    metadata.expectedAt,
+    metadata.expected_at,
+    runtimeTruth.expectedAt,
+    runtimeTruth.expected_at,
+    telemetry.expectedAt,
+    telemetry.expected_at,
+  ) ?? fallbackDeadline;
+  const explicitHardTimeoutAt = firstTimestampIso(
+    record.hardTimeoutAt,
+    record.hard_timeout_at,
+    record.timeoutAt,
+    record.timeout_at,
+    metadata.hardTimeoutAt,
+    metadata.hard_timeout_at,
+    metadata.timeoutAt,
+    metadata.timeout_at,
+    runtimeTruth.hardTimeoutAt,
+    runtimeTruth.hard_timeout_at,
+    runtimeTruth.timeoutAt,
+    runtimeTruth.timeout_at,
+    telemetry.hardTimeoutAt,
+    telemetry.hard_timeout_at,
+  );
+  return {
+    expectedAt,
+    hardTimeoutAt: explicitHardTimeoutAt ?? (nativeStatus === "running" ? null : fallbackHardDeadline),
+    lastHeartbeatAt: firstTimestampIso(
+      record.lastHeartbeatAt,
+      record.last_heartbeat_at,
+      record.heartbeatAt,
+      record.heartbeat_at,
+      runtimeTruth.lastHeartbeatAt,
+      runtimeTruth.last_heartbeat_at,
+      telemetry.lastHeartbeatAt,
+      telemetry.last_heartbeat_at,
+    ),
+    lastProgressAt: firstTimestampIso(
+      record.lastProgressAt,
+      record.last_progress_at,
+      runtimeTruth.lastProgressAt,
+      runtimeTruth.last_progress_at,
+      telemetry.lastProgressAt,
+      telemetry.last_progress_at,
+    ),
+  };
+}
+
+function projectRuntimeStatus(record: RuntimeTaskStateRecord, nowMs = Date.now(), nativeProjection?: NativeStatusProjection): { status: string; reason: string } {
   const rawStatus = asString(record.status, "unknown");
+  const normalizedRawStatus = rawStatus.toLowerCase();
   const route = runtimeTaskRoute(record);
   const evidence = runtimeStatusEvidence(record);
-  const terminalStatus = ["failed", "completed", "done", "succeeded", "cancelled", "canceled", "blocked", "timed_out"].includes(rawStatus)
-    ? rawStatus === "done" || rawStatus === "succeeded" ? "completed" : rawStatus === "cancelled" ? "canceled" : rawStatus
+  const terminalStatus = ["failed", "completed", "done", "succeeded", "cancelled", "canceled", "blocked", "timed_out"].includes(normalizedRawStatus)
+    ? normalizedRawStatus === "done" || normalizedRawStatus === "succeeded" ? "completed" : normalizedRawStatus === "cancelled" ? "canceled" : normalizedRawStatus
     : "";
-  const updatedMs = timestampMs(record.updated_at || record.started_at || record.spawned_at);
-  const isStale = updatedMs !== null && nowMs - updatedMs >= STATUS_STALE_AFTER_MS;
-  if ((rawStatus === "running" || rawStatus === "queued" || rawStatus === "materializing") && isStale) {
-    return { status: "timed_out", reason: `stale_status_no_progress>${formatElapsed(STATUS_STALE_AFTER_MS)}` };
+  const resultEvidence = runtimeResultEvidence(record, evidence);
+  const completionStatus = asString(asRecord(record.completion).status).toLowerCase();
+
+  const reconcileResult = asRecord(record.lifecycle_reconcile_result);
+  const rawStatusIsTerminal = Boolean(terminalStatus || normalizedRawStatus === "deliverable_ready");
+  if (!rawStatusIsTerminal && typeof reconcileResult.status === "string") {
+    const canonicalStatuses = new Set(["queued", "running", "running_slow", "stalled", "timed_out", "failed", "degraded", "completed"]);
+    if (canonicalStatuses.has(reconcileResult.status)) {
+      return { status: reconcileResult.status, reason: asString(reconcileResult.reason, "lifecycle_reducer") };
+    }
   }
+  if (["failure", "failed", "error"].includes(completionStatus)) return { status: "failed", reason: "failure_receipt" };
+  if (["timed_out", "timeout", "expired"].includes(completionStatus)) return { status: "timed_out", reason: "timeout_receipt" };
 
   if (route === "delegate") {
     if (!evidence.hasDispatchEvidence) return { status: "registered", reason: "no_dispatch_evidence" };
     if (!evidence.hasSpawnEvidence && !["failed", "canceled", "blocked", "timed_out"].includes(terminalStatus)) {
       return { status: "queued", reason: "dispatch_materialized_but_no_spawn_evidence" };
     }
-    if (terminalStatus === "completed" && !evidence.resultMaterialized) {
-      return { status: "deliverable_ready", reason: "terminal_completed_without_result_materialized" };
+    if (normalizedRawStatus === "deliverable_ready") {
+      return Object.values(resultEvidence).some(Boolean)
+        ? { status: "deliverable_ready", reason: "final_result_exists_delivery_pending" }
+        : { status: "degraded", reason: "completed_without_result" };
     }
   }
 
-  if (terminalStatus) {
+  if (nativeProjection?.status === "degraded" && nativeProjection.reason === "native_registry_unavailable" && !terminalStatus) {
+    return { status: "degraded", reason: nativeProjection.reason };
+  }
+  if (nativeProjection?.status === "canceled" && !terminalStatus) {
+    return { status: "canceled", reason: nativeProjection.reason };
+  }
+
+  if (terminalStatus && !["completed", "failed", "timed_out"].includes(terminalStatus)) {
     return { status: terminalStatus, reason: "terminal_or_explicit_status" };
   }
 
-  if (rawStatus === "running") return { status: "running", reason: "fresh_running_with_required_evidence" };
-  if (rawStatus === "queued" || rawStatus === "planned") return { status: "queued", reason: "queued_or_planned" };
-  return { status: rawStatus || "unknown", reason: "raw_status_projection" };
+  const nativeStatus = lifecycleStatusFromNativeProjection(nativeProjection, terminalStatus, normalizedRawStatus);
+  const deadlines = runtimeLifecycleDeadlines(record, nativeStatus);
+  const reconciled = reduceCanonicalStatus({
+    currentStatus: terminalStatus || rawStatus,
+    nativeStatus,
+    ...resultEvidence,
+    expectedAt: deadlines.expectedAt,
+    hardTimeoutAt: deadlines.hardTimeoutAt,
+    lastHeartbeatAt: deadlines.lastHeartbeatAt,
+    lastProgressAt: deadlines.lastProgressAt,
+    tmuxEvidence: null,
+    now: new Date(nowMs).toISOString(),
+  });
+
+  if (nativeProjection?.status === "lost" && !terminalStatus && reconciled.status !== "timed_out") {
+    return { status: "lost", reason: nativeProjection.reason };
+  }
+  if (reconciled.reason === "no_dispatch_evidence" && rawStatus) return { status: rawStatus, reason: "raw_status_projection" };
+  return { status: reconciled.status, reason: reconciled.reason };
 }
 
 function statusPanelRelevantMs(task: RuntimeStatusTaskView): number | null {
@@ -666,7 +870,7 @@ export function buildRuntimeStatusTaskView(record: RuntimeTaskStateRecord, nowMs
   const startMs = timestampMs(startedAt || delegatedAt);
   const endMs = timestampMs(completedAt) ?? nowMs;
   const elapsedMs = startMs === null ? null : Math.max(0, endMs - startMs);
-  const fallbackProjection = projectRuntimeStatus(record, nowMs);
+  const fallbackProjection = projectRuntimeStatus(record, nowMs, nativeProjection);
   const fallbackTerminal = ["completed", "failed", "canceled"].includes(fallbackProjection.status);
   const nativeProjectionAuthoritative = Boolean(nativeProjection && (
     ["run", "flow", "latest"].includes(nativeProjection.source)
@@ -677,9 +881,7 @@ export function buildRuntimeStatusTaskView(record: RuntimeTaskStateRecord, nowMs
       || nativeProjection.reason === "task_state_cache_degraded"
     ))
   ));
-  const projected = nativeProjectionAuthoritative && nativeProjection
-    ? { status: nativeProjection.status, reason: nativeProjection.reason }
-    : fallbackProjection;
+  const projected = fallbackProjection;
   const workerPool = optionalString(record.worker_pool, binding.workerPool, delegateAttempt.workerPool) ?? "unknown";
   const artifactRefs = Array.isArray(record.artifact_refs) ? record.artifact_refs.map(String).filter(Boolean) : [];
   const compactPacket = asRecord(record.compact_parent_packet);
@@ -950,9 +1152,9 @@ export async function buildNativeStatusOutput(format: string, imType: string = "
 
   // Sort by importance: active first, then recent terminal
   const STATUS_PRIORITY: Record<string, number> = {
-    running: 0, materializing: 1, queued: 2, blocked: 3,
-    timed_out: 4, lost: 5, degraded: 6, failed: 7, deliverable_ready: 8,
-    completed: 9, canceled: 10, registered: 11,
+    running: 0, running_slow: 0, stalled: 1, materializing: 2, queued: 3, blocked: 4,
+    timed_out: 5, lost: 6, degraded: 7, failed: 8, deliverable_ready: 9,
+    completed: 10, canceled: 11, registered: 12,
   };
   const sortedVisibleTasks = [...visibleTasks].sort((a, b) => {
     const pa = STATUS_PRIORITY[a.status] ?? 5;
