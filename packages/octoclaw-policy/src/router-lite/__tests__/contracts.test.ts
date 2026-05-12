@@ -1,9 +1,14 @@
 import { describe, expect, it } from "vitest";
+import edgeCaseModels from "./fixtures/edge-case-models.json" with { type: "json" };
+import priceConflictSnapshot from "./fixtures/price-conflict-snapshot.json" with { type: "json" };
 import scenarioAbilityBasic from "./fixtures/scenario-ability-basic.json" with { type: "json" };
 import shadowEventFull from "./fixtures/shadow-event-full.json" with { type: "json" };
 import snapshotWithScenarios from "./fixtures/snapshot-with-scenarios.json" with { type: "json" };
 import type {
+  ModelIntelLite,
   ScenarioAbilityLite,
+  RouterLiteRecommendation,
+  RouterLiteRequest,
   RouterLiteScoringMode,
   RouterLiteShadowEvent,
   ModelIntelSnapshot,
@@ -92,5 +97,106 @@ describe("router-lite contracts: snapshot with scenarios", () => {
     const snapshot = snapshotWithScenarios as ModelIntelSnapshot;
     const model = snapshot.models[0];
     expect(model.freshness).toBe("2026-05-10T00:00:00.000Z");
+  });
+});
+
+describe("router-lite contracts: source evidence requirements", () => {
+  it("ModelIntelLite with no capability sources has unknown confidence", () => {
+    const model = edgeCaseModels.noSources as ModelIntelLite;
+    expect(model.capability.sources).toEqual([]);
+    expect(model.capability.confidence).toBe("unknown");
+    expect(model.capability.confidence).not.toBe("high");
+  });
+
+  it("Price conflict marker is preserved when sources disagree", () => {
+    const snapshot = priceConflictSnapshot as ModelIntelSnapshot;
+    const model = snapshot.models[0];
+    expect(model.marketPrice.conflict).toBe(true);
+    expect(model.marketPrice.sources).toEqual(["openclaw_config", "openrouter"]);
+    expect(["low", "medium"]).toContain(model.marketPrice.confidence);
+    expect(model.marketPrice.confidence).not.toBe("high");
+  });
+
+  it("Edge case: unknown quota model does not get free_or_sunk band", () => {
+    const model = edgeCaseModels.unknownQuota as ModelIntelLite;
+    expect(model.plan.quotaPressure).toBe("unknown");
+    expect(model.plan.effectiveCostBand).toBe("unknown");
+    expect(model.plan.effectiveCostBand).not.toBe("free_or_sunk");
+  });
+
+  it("Edge case: cooldown model still marked available", () => {
+    const model = edgeCaseModels.cooldown as ModelIntelLite;
+    expect(model.health.available).toBe("yes");
+    expect(model.health.cooldown).toBe(true);
+  });
+
+  it("Edge case: stale evidence model has low confidence", () => {
+    const model = edgeCaseModels.staleEvidence as ModelIntelLite;
+    expect(model.freshness).toBe("2026-03-01T00:00:00.000Z");
+    expect(model.capability.confidence).toBe("low");
+  });
+
+  it("Edge case: heuristic-only evidence is not declared/probed/observed", () => {
+    const model = edgeCaseModels.staleEvidence as ModelIntelLite;
+    expect(model.capability.evidence).toEqual(["heuristic"]);
+    expect(model.capability.evidence).not.toContain("declared");
+    expect(model.capability.evidence).not.toContain("probed");
+    expect(model.capability.evidence).not.toContain("observed");
+  });
+
+  it("RouterLiteRecommendation ignoredReason accepts all new variants", () => {
+    const recommendations: RouterLiteRecommendation[] = [
+      {
+        outputBudget: "short",
+        qualityFloor: "unknown",
+        eligibleModels: [],
+        rejectedModels: [],
+        reasonCodes: [],
+        mode: "shadow",
+        ignoredReason: "status_or_provenance_request",
+      },
+      {
+        outputBudget: "short",
+        qualityFloor: "unknown",
+        eligibleModels: [],
+        rejectedModels: [],
+        reasonCodes: [],
+        mode: "shadow",
+        ignoredReason: "stale_evidence",
+      },
+      {
+        outputBudget: "short",
+        qualityFloor: "unknown",
+        eligibleModels: [],
+        rejectedModels: [],
+        reasonCodes: [],
+        mode: "shadow",
+        ignoredReason: "explicit_override",
+      },
+    ];
+    expect(recommendations.map((recommendation) => recommendation.ignoredReason)).toEqual([
+      "status_or_provenance_request",
+      "stale_evidence",
+      "explicit_override",
+    ]);
+  });
+
+  it("RouterLiteRequest runtime has needsStructuredOutput field", () => {
+    const request: RouterLiteRequest = {
+      sessionKey: "session_001",
+      turnId: "turn_001",
+      liveRoute: "delegate",
+      judge: {
+        route: "delegate",
+        confidence: 0.8,
+        complexity: "normal",
+        complexityConfidence: 0.75,
+      },
+      runtime: {
+        needsStructuredOutput: true,
+      },
+      snapshotId: "model-intel:1746835200000",
+    };
+    expect(request.runtime.needsStructuredOutput).toBe(true);
   });
 });

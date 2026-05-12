@@ -9,7 +9,11 @@ import type {
   RouterLiteHealth,
   RouterLitePlan,
   RouterLitePrice,
+  RouterLiteQuotaPressure,
   RouterLiteTriState,
+  ScenarioAbilityLite,
+  ScenarioAbilityScore,
+  ScenarioAbilitySource,
 } from "./contracts.js";
 
 type JsonRecord = Record<string, unknown>;
@@ -21,6 +25,7 @@ export interface BuildModelIntelSnapshotInput {
   legacyCatalog?: unknown;
   usageStatus?: unknown;
   usageCost?: unknown;
+  scenarioData?: unknown;
 }
 
 interface PartialModelIntel {
@@ -35,6 +40,8 @@ interface PartialModelIntel {
   capability?: Partial<RouterLiteCapability>;
   health?: Partial<RouterLiteHealth>;
   plan?: Partial<RouterLitePlan>;
+  scenarioAbility?: ScenarioAbilityLite;
+  freshness?: string;
   sources: string[];
 }
 
@@ -130,6 +137,115 @@ function maxConfidence(values: Array<RouterLiteConfidence | undefined>, fallback
   );
 }
 
+function emptyScenarioAbility(): ScenarioAbilityLite {
+  const empty: ScenarioAbilityScore = { tier: "unknown", confidence: "unknown", sources: [] };
+  return {
+    codingWorker: { ...empty },
+    agenticToolTask: { ...empty },
+    researchLookup: { ...empty },
+    dataLogAnalysis: { ...empty },
+    mainReasoning: { ...empty },
+    defaultDelegate: { ...empty },
+  };
+}
+
+function scenarioAbilityKeys(): Array<keyof ScenarioAbilityLite> {
+  return [
+    "codingWorker",
+    "agenticToolTask",
+    "researchLookup",
+    "dataLogAnalysis",
+    "mainReasoning",
+    "defaultDelegate",
+  ];
+}
+
+function isScenarioAbilityTier(value: unknown): value is ScenarioAbilityScore["tier"] {
+  return value === "S" || value === "A" || value === "B" || value === "C" || value === "unknown";
+}
+
+function isScenarioAbilityConfidence(value: unknown): value is ScenarioAbilityScore["confidence"] {
+  return value === "high" || value === "medium" || value === "low" || value === "unknown";
+}
+
+function tierFromCodingTier(tier: RouterLiteCodingTier | undefined): ScenarioAbilityScore["tier"] {
+  switch (tier) {
+    case "frontier": return "S";
+    case "strong": return "A";
+    case "standard": return "B";
+    case "mini": return "C";
+    default: return "unknown";
+  }
+}
+
+function scenarioAbilitySourceFromCapabilitySource(source: string): ScenarioAbilitySource | undefined {
+  switch (source) {
+    case "operator_override": return "operator_override";
+    case "local_replay": return "local_replay";
+    case "artificial_analysis": return "artificial_analysis";
+    case "pinchbench": return "pinchbench";
+    case "aider": return "aider";
+    case "swe_bench": return "swe_bench";
+    case "bfcl": return "bfcl";
+    default: return undefined;
+  }
+}
+
+function inferScenarioAbility(model: PartialModelIntel, fetchedAt = model.freshness ?? new Date().toISOString()): ScenarioAbilityLite {
+  const tier = tierFromCodingTier(model.capability?.codingTier ?? inferCodingTier(model.modelKey));
+  const sources = unique(model.capability?.sources ?? [])
+    .map((source) => scenarioAbilitySourceFromCapabilitySource(source))
+    .filter((source): source is ScenarioAbilitySource => Boolean(source))
+    .map((source) => ({ source, fetchedAt }));
+  const confidence = sources.length > 0 ? model.capability?.confidence ?? "unknown" : "low";
+  const score: ScenarioAbilityScore = { tier, confidence, sources };
+  return {
+    codingWorker: { ...score, sources: [...sources] },
+    agenticToolTask: { ...score, sources: [...sources] },
+    researchLookup: { ...score, sources: [...sources] },
+    dataLogAnalysis: { ...score, sources: [...sources] },
+    mainReasoning: { ...score, sources: [...sources] },
+    defaultDelegate: { ...score, sources: [...sources] },
+  };
+}
+
+function parseScenarioData(scenarioData: unknown): Map<string, ScenarioAbilityLite> {
+  const result = new Map<string, ScenarioAbilityLite>();
+  if (!isRecord(scenarioData)) return result;
+  for (const [key, value] of Object.entries(scenarioData)) {
+    if (isRecord(value)) {
+      const hasScenarioField = scenarioAbilityKeys().some((field) => isRecord(asRecord(value)[field]));
+      if (hasScenarioField) {
+        result.set(key, value as unknown as ScenarioAbilityLite);
+      }
+    }
+  }
+  return result;
+}
+
+function mergeScenarioAbility(base: ScenarioAbilityLite, incoming?: Partial<ScenarioAbilityLite>): ScenarioAbilityLite {
+  if (!incoming) return base;
+  const result: ScenarioAbilityLite = { ...base };
+  for (const field of scenarioAbilityKeys()) {
+    const inc = incoming[field];
+    if (inc && isRecord(inc)) {
+      const incScore = inc as unknown as ScenarioAbilityScore;
+      result[field] = {
+        score: incScore.score ?? base[field].score,
+        tier: isScenarioAbilityTier(incScore.tier) && incScore.tier !== "unknown" ? incScore.tier : base[field].tier,
+        confidence: isScenarioAbilityConfidence(incScore.confidence)
+          ? maxConfidence([base[field].confidence, incScore.confidence], base[field].confidence)
+          : base[field].confidence,
+        sources: unique([
+          ...base[field].sources.map((source) => JSON.stringify(source)),
+          ...(Array.isArray(incScore.sources) ? incScore.sources.map((source) => JSON.stringify(source)) : []),
+        ]).map((source) => JSON.parse(source) as ScenarioAbilityScore["sources"][number]),
+      };
+    }
+  }
+  return result;
+}
+
 function inferCodingTier(modelKey: string, rawHint?: unknown): RouterLiteCodingTier {
   const hint = asString(rawHint).toLowerCase();
   const text = `${modelKey} ${hint}`.toLowerCase();
@@ -140,8 +256,17 @@ function inferCodingTier(modelKey: string, rawHint?: unknown): RouterLiteCodingT
   return "unknown";
 }
 
+function pricesConflict(a: number | undefined, b: number | undefined): boolean {
+  if (a === undefined || b === undefined || (a === 0 && b === 0)) return false;
+  const max = Math.max(Math.abs(a), Math.abs(b));
+  return max > 0 && Math.abs(a - b) / max > 0.2;
+}
+
 function mergePrice(base: RouterLitePrice, incoming?: Partial<RouterLitePrice>): RouterLitePrice {
   if (!incoming) return base;
+  const inputConflict = pricesConflict(base.inputUsdPerMTok, incoming.inputUsdPerMTok);
+  const outputConflict = pricesConflict(base.outputUsdPerMTok, incoming.outputUsdPerMTok);
+  const conflict = incoming.conflict === true || base.conflict === true || inputConflict || outputConflict;
   return {
     inputUsdPerMTok: incoming.inputUsdPerMTok ?? base.inputUsdPerMTok,
     outputUsdPerMTok: incoming.outputUsdPerMTok ?? base.outputUsdPerMTok,
@@ -150,10 +275,10 @@ function mergePrice(base: RouterLitePrice, incoming?: Partial<RouterLitePrice>):
     blendedUsdPerMTok: incoming.blendedUsdPerMTok ?? base.blendedUsdPerMTok,
     ratioBaselineModel: incoming.ratioBaselineModel ?? base.ratioBaselineModel,
     ratioToBaseline: incoming.ratioToBaseline ?? base.ratioToBaseline,
-    conflict: incoming.conflict ?? base.conflict,
-    confidence: maxConfidence([base.confidence, incoming.confidence], "unknown"),
+    conflict: conflict || undefined,
+    confidence: conflict ? "low" : maxConfidence([base.confidence, incoming.confidence], "unknown"),
     sources: unique([...base.sources, ...(incoming.sources ?? [])]),
-    missingCostReason: incoming.missingCostReason ?? base.missingCostReason,
+    missingCostReason: incoming.missingCostReason ?? (incoming.sources && incoming.sources.length > 0 ? undefined : base.missingCostReason),
   };
 }
 
@@ -202,6 +327,16 @@ function mergePlan(base: RouterLitePlan, incoming?: Partial<RouterLitePlan>): Ro
   };
 }
 
+function mostRecentTimestamp(a?: string, b?: string): string | undefined {
+  if (!a) return b;
+  if (!b) return a;
+  const aTime = Date.parse(a);
+  const bTime = Date.parse(b);
+  if (!Number.isFinite(aTime)) return b;
+  if (!Number.isFinite(bTime)) return a;
+  return bTime > aTime ? b : a;
+}
+
 function emptyModel(partial: PartialModelIntel): ModelIntelLite {
   return {
     provider: partial.provider,
@@ -240,6 +375,8 @@ function emptyModel(partial: PartialModelIntel): ModelIntelLite {
       effectiveCostBand: "unknown",
       sources: [],
     },
+    scenarioAbility: emptyScenarioAbility(),
+    freshness: partial.freshness,
     sources: unique(partial.sources),
   };
 }
@@ -260,6 +397,8 @@ function mergeModel(base: ModelIntelLite | undefined, incoming: PartialModelInte
     capability: mergeCapability(next.capability, incoming.capability),
     health: mergeHealth(next.health, incoming.health),
     plan: mergePlan(next.plan, incoming.plan),
+    scenarioAbility: mergeScenarioAbility(next.scenarioAbility ?? emptyScenarioAbility(), incoming.scenarioAbility),
+    freshness: mostRecentTimestamp(next.freshness, incoming.freshness),
     sources: unique([...next.sources, ...incoming.sources]),
   };
 }
@@ -364,6 +503,21 @@ function effectiveCostBandFromPrice(input?: number, output?: number): RouterLite
   return "expensive";
 }
 
+function quotaPressure(value: unknown): RouterLiteQuotaPressure | undefined {
+  if (value === "low" || value === "medium" || value === "high" || value === "unknown") return value;
+  return undefined;
+}
+
+function planType(value: unknown): RouterLitePlan["type"] | undefined {
+  if (value === "pay_as_you_go" || value === "subscription" || value === "free_quota" || value === "unknown") return value;
+  return undefined;
+}
+
+function effectiveCostBand(value: unknown): RouterLiteEffectiveCostBand | undefined {
+  if (value === "free_or_sunk" || value === "cheap" || value === "normal" || value === "expensive" || value === "unknown") return value;
+  return undefined;
+}
+
 function modelsFromLegacyCatalog(catalog: unknown): PartialModelIntel[] {
   const rawModels = asRecord(catalog).models;
   if (!Array.isArray(rawModels)) return [];
@@ -420,29 +574,93 @@ function modelsFromLegacyCatalog(catalog: unknown): PartialModelIntel[] {
   return models;
 }
 
+function modelSignalEntries(input: unknown): Map<string, JsonRecord> {
+  const result = new Map<string, JsonRecord>();
+  const root = asRecord(input);
+  const rawModels = root.models ?? root.modelStatus ?? root.modelCosts ?? root.providers;
+
+  if (Array.isArray(rawModels)) {
+    for (const item of rawModels) {
+      const record = asRecord(item);
+      const key = asString(record.modelKey ?? record.key ?? record.id ?? record.model);
+      if (key) result.set(key, record);
+    }
+    return result;
+  }
+
+  if (isRecord(rawModels)) {
+    for (const [key, value] of Object.entries(rawModels)) {
+      if (isRecord(value)) result.set(key, value);
+    }
+    return result;
+  }
+
+  for (const [key, value] of Object.entries(root)) {
+    if (isRecord(value)) result.set(key, value);
+  }
+
+  return result;
+}
+
+function findModelSignal(map: Map<string, JsonRecord>, model: ModelIntelLite): JsonRecord {
+  return asRecord(map.get(model.modelKey) ?? map.get(model.model));
+}
+
+function healthFromUsageStatus(status: JsonRecord): Partial<RouterLiteHealth> | undefined {
+  if (Object.keys(status).length === 0) return undefined;
+  return {
+    available: triState(status.available),
+    cooldown: asBoolean(status.cooldown),
+    quotaPressure: quotaPressure(status.quotaPressure ?? status.quota_pressure),
+    p50FirstTokenMs: asNumber(status.p50FirstTokenMs ?? status.p50_first_token_ms ?? status.firstTokenP50Ms),
+    p95FirstTokenMs: asNumber(status.p95FirstTokenMs ?? status.p95_first_token_ms ?? status.firstTokenP95Ms),
+    p50OutputTokensPerSecond: asNumber(status.p50OutputTokensPerSecond ?? status.p50_output_tokens_per_second ?? status.outputTpsP50),
+    p50LatencyMs: asNumber(status.p50LatencyMs ?? status.p50_latency_ms),
+    p95LatencyMs: asNumber(status.p95LatencyMs ?? status.p95_latency_ms),
+    recentFailureRate: asNumber(status.recentFailureRate ?? status.recent_failure_rate),
+    toolCallFailureRate: asNumber(status.toolCallFailureRate ?? status.tool_call_failure_rate),
+    timeoutRate: asNumber(status.timeoutRate ?? status.timeout_rate),
+    sources: ["openclaw_usage_status"],
+  };
+}
+
+function planFromUsage(status: JsonRecord, cost: JsonRecord): Partial<RouterLitePlan> | undefined {
+  if (Object.keys(status).length === 0 && Object.keys(cost).length === 0) return undefined;
+  const plan = asRecord(cost.plan ?? status.plan);
+  return {
+    type: planType(plan.type ?? cost.planType ?? cost.plan_type ?? status.planType ?? status.plan_type),
+    quotaPressure: quotaPressure(
+      plan.quotaPressure ?? plan.quota_pressure
+        ?? cost.quotaPressure ?? cost.quota_pressure
+        ?? status.quotaPressure ?? status.quota_pressure,
+    ),
+    effectiveCostBand: effectiveCostBand(
+      plan.effectiveCostBand ?? plan.effective_cost_band
+        ?? cost.effectiveCostBand ?? cost.effective_cost_band,
+    ),
+    resetAt: asString(plan.resetAt ?? plan.reset_at ?? cost.resetAt ?? cost.reset_at) || undefined,
+    sources: [
+      ...(Object.keys(status).length > 0 ? ["openclaw_usage_status"] : []),
+      ...(Object.keys(cost).length > 0 ? ["openclaw_usage_cost"] : []),
+    ],
+  };
+}
+
 function addUsageSignals(models: ModelIntelLite[], usageStatus: unknown, usageCost: unknown): ModelIntelLite[] {
-  const usageStatusPresent = isRecord(usageStatus);
-  const usageCostPresent = isRecord(usageCost);
-  return models.map((model) => ({
-    ...model,
-    health: {
-      ...model.health,
-      quotaPressure: model.health.quotaPressure,
-      sources: unique([
-        ...model.health.sources,
-        ...(usageStatusPresent ? ["openclaw_usage_status"] : []),
-        ...(usageCostPresent ? ["openclaw_usage_cost"] : []),
-      ]),
-    },
-    plan: {
-      ...model.plan,
-      quotaPressure: model.plan.quotaPressure,
-      sources: unique([
-        ...model.plan.sources,
-        ...(usageStatusPresent ? ["openclaw_usage_status"] : []),
-      ]),
-    },
-  }));
+  const statusByModel = modelSignalEntries(usageStatus);
+  const costByModel = modelSignalEntries(usageCost);
+  return models.map((model) => {
+    const status = findModelSignal(statusByModel, model);
+    const cost = findModelSignal(costByModel, model);
+    const usagePrice = priceFromCost(asRecord(cost.marketPrice ?? cost.apiPrice ?? cost.price), "openclaw_usage_cost");
+
+    return {
+      ...model,
+      marketPrice: mergePrice(model.marketPrice, usagePrice),
+      health: mergeHealth(model.health, healthFromUsageStatus(status)),
+      plan: mergePlan(model.plan, planFromUsage(status, cost)),
+    };
+  });
 }
 
 function normalizeModelName(value: string): string {
@@ -479,6 +697,7 @@ function addPriceRatios(models: ModelIntelLite[], baselineModel = "glm-5.1"): Mo
 
 export function buildModelIntelSnapshot(input: BuildModelIntelSnapshotInput): ModelIntelSnapshot {
   const generatedAt = input.generatedAt ?? new Date().toISOString();
+  const scenarioData = parseScenarioData(input.scenarioData);
   const partials: PartialModelIntel[] = [
     ...(Array.isArray(asRecord(input.openClawModelsList).models)
       ? (asRecord(input.openClawModelsList).models as unknown[]).flatMap((item) => {
@@ -492,7 +711,11 @@ export function buildModelIntelSnapshot(input: BuildModelIntelSnapshotInput): Mo
 
   const merged = new Map<string, ModelIntelLite>();
   for (const partial of partials) {
-    merged.set(partial.modelKey, mergeModel(merged.get(partial.modelKey), partial));
+    const enrichedPartial = { ...partial, freshness: partial.freshness ?? generatedAt };
+    merged.set(partial.modelKey, mergeModel(merged.get(partial.modelKey), {
+      ...enrichedPartial,
+      scenarioAbility: partial.scenarioAbility ?? (scenarioData.size > 0 ? scenarioData.get(partial.modelKey) : undefined) ?? inferScenarioAbility(enrichedPartial, generatedAt),
+    }));
   }
   const models = addPriceRatios(addUsageSignals(
     Array.from(merged.values()).map((model) => ({
@@ -505,6 +728,8 @@ export function buildModelIntelSnapshot(input: BuildModelIntelSnapshotInput): Mo
         ...model.capability,
         confidence: model.capability.evidence.includes("declared") ? maxConfidence([model.capability.confidence, "medium"], "low") : model.capability.confidence,
       },
+      scenarioAbility: model.scenarioAbility ?? (scenarioData.size > 0 ? scenarioData.get(model.modelKey) : undefined) ?? inferScenarioAbility(model, model.freshness ?? generatedAt),
+      freshness: mostRecentTimestamp(model.freshness, generatedAt) ?? generatedAt,
     })),
     input.usageStatus,
     input.usageCost,
@@ -520,6 +745,7 @@ export function buildModelIntelSnapshot(input: BuildModelIntelSnapshotInput): Mo
       sourceStatus("legacy_model_catalog", input.legacyCatalog),
       sourceStatus("openclaw_usage_status", input.usageStatus),
       sourceStatus("openclaw_usage_cost", input.usageCost),
+      sourceStatus("scenario_data", input.scenarioData),
     ],
     models,
   };

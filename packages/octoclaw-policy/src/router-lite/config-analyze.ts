@@ -4,6 +4,8 @@ import type {
   ModelIntelLite,
   ModelIntelSnapshot,
   RouterLiteCodingTier,
+  ScenarioAbilityLite,
+  ScenarioAbilityScore,
 } from "./contracts.js";
 
 const TIER_RANK: Record<RouterLiteCodingTier, number> = {
@@ -13,6 +15,23 @@ const TIER_RANK: Record<RouterLiteCodingTier, number> = {
   frontier: 4,
   unknown: 0,
 };
+
+const SCENARIO_TIER_RANK: Record<ScenarioAbilityScore["tier"], number> = {
+  S: 4,
+  A: 3,
+  B: 2,
+  C: 1,
+  unknown: 0,
+};
+
+const SCENARIO_KEYS = [
+  "codingWorker",
+  "agenticToolTask",
+  "researchLookup",
+  "dataLogAnalysis",
+  "mainReasoning",
+  "defaultDelegate",
+] as const satisfies ReadonlyArray<keyof ScenarioAbilityLite>;
 
 function priceScore(model: ModelIntelLite): number {
   const input = model.marketPrice.inputUsdPerMTok;
@@ -26,6 +45,54 @@ function hasReliableCapability(model: ModelIntelLite): boolean {
     || model.capability.evidence.includes("probed")
     || model.capability.evidence.includes("observed")
     || model.capability.evidence.includes("operator_override");
+}
+
+function hasStrongScenarioAbility(score: ScenarioAbilityScore | undefined): boolean {
+  return score !== undefined
+    && (score.tier === "S" || score.tier === "A")
+    && (score.confidence === "high" || score.confidence === "medium");
+}
+
+function hasSufficientScenarioAbility(score: ScenarioAbilityScore | undefined): boolean {
+  return score !== undefined && SCENARIO_TIER_RANK[score.tier] >= SCENARIO_TIER_RANK.B;
+}
+
+function scenarioPriorityScore(model: ModelIntelLite): number {
+  return SCENARIO_TIER_RANK[model.scenarioAbility?.codingWorker.tier ?? "unknown"];
+}
+
+function hasMissingScenarioEvidence(score: ScenarioAbilityScore): boolean {
+  return score.tier === "unknown" || score.confidence === "unknown" || score.confidence === "low";
+}
+
+function scenarioContext(model: ModelIntelLite): string {
+  const codingWorker = model.scenarioAbility?.codingWorker;
+  if (codingWorker === undefined) return "";
+  return `; codingWorker tier is ${codingWorker.tier} with ${codingWorker.confidence} confidence`;
+}
+
+function configuredFalseWhyNotLive(model: ModelIntelLite): string {
+  return `configured=false — candidate not in local OpenClaw config; live routing would require explicit operator enable${scenarioContext(model)}`;
+}
+
+function scenarioReason(model: ModelIntelLite): string {
+  const codingWorker = model.scenarioAbility?.codingWorker;
+  if (codingWorker === undefined) return "same_provider_lower_cost_candidate_found";
+  return `Same-provider cheaper candidate with codingWorker tier ${codingWorker.tier}`;
+}
+
+function candidateScenarioBelowFloor(strongModel: ModelIntelLite | undefined, candidate: ModelIntelLite): boolean {
+  return strongModel?.scenarioAbility !== undefined
+    && candidate.scenarioAbility !== undefined
+    && (candidate.scenarioAbility.codingWorker.tier === "C" || candidate.scenarioAbility.codingWorker.tier === "unknown");
+}
+
+function candidatePriority(strongModel: ModelIntelLite | undefined, candidate: ModelIntelLite): ModelConfigProposalItem["priority"] {
+  if (hasStrongScenarioAbility(strongModel?.scenarioAbility?.codingWorker)
+    && hasSufficientScenarioAbility(candidate.scenarioAbility?.codingWorker)) {
+    return "high";
+  }
+  return "medium";
 }
 
 function makeProposalId(provider: string, action: string, modelKey = ""): string {
@@ -53,23 +120,45 @@ function analyzeProvider(provider: string, models: ModelIntelLite[]): ModelConfi
   const cheapCandidates = proposalOnly
     .filter((model) => model.capability.codingTier === "mini" || model.capability.codingTier === "standard")
     .filter((model) => cheapestConfiguredStrong ? priceScore(model) < priceScore(cheapestConfiguredStrong) : true)
-    .sort((a, b) => priceScore(a) - priceScore(b));
+    .sort((a, b) => scenarioPriorityScore(b) - scenarioPriorityScore(a) || priceScore(a) - priceScore(b));
 
   if (configured.length > 0 && configuredStrongestRank >= TIER_RANK.strong && !hasConfiguredCheapLane && cheapCandidates.length > 0) {
     const candidate = cheapCandidates[0];
+    const reasonParts = [scenarioReason(candidate)];
+    if (candidateScenarioBelowFloor(cheapestConfiguredStrong, candidate)) reasonParts.push("candidate_scenario_below_floor");
     proposals.push({
       id: makeProposalId(provider, "add_configured_model", candidate.modelKey),
       provider,
       candidateModel: candidate.modelKey,
-      priority: "medium",
+      priority: candidatePriority(cheapestConfiguredStrong, candidate),
       action: "add_configured_model",
-      reason: "same_provider_lower_cost_candidate_found",
+      reason: reasonParts.join("; "),
       expectedUse: "low-risk delegated work, short replies, or fallback lanes after probes pass",
       risk: hasReliableCapability(candidate) ? "requires auth/config and live gate; current candidate is proposal-only" : "capability is heuristic/catalog-only and requires probes before shadow",
       requiredAuth: `configure ${provider} model credentials/profile if not already available`,
-      whyNotLive: "configured=false candidates are proposal-only; no live routing change is allowed",
+      whyNotLive: configuredFalseWhyNotLive(candidate),
       sources: candidate.sources,
     });
+  }
+
+  if (configured.some((model) => model.scenarioAbility !== undefined)) {
+    for (const scenario of SCENARIO_KEYS) {
+      const hasCoverage = configured.some((model) => hasSufficientScenarioAbility(model.scenarioAbility?.[scenario]));
+      if (!hasCoverage) {
+        proposals.push({
+          id: makeProposalId(provider, "scenario_lane_gap", scenario),
+          provider,
+          priority: "medium",
+          action: "add_compatibility_probe",
+          reason: `scenario_lane_gap:${scenario}; No configured model covers ${scenario} with sufficient ability`,
+          expectedUse: `${scenario} tasks`,
+          risk: "medium — untested model for this scenario",
+          requiredAuth: "configured model access for scenario probes or operator-approved model enablement",
+          whyNotLive: `scenario_coverage_gap=${scenario} — no configured model has tier B or better; live promotion risks task failure`,
+          sources: uniqueSource(configured),
+        });
+      }
+    }
   }
 
   if (configured.length > 0 && configuredStrongestRank >= TIER_RANK.strong && !hasConfiguredCheapLane && cheapCandidates.length === 0) {
@@ -99,7 +188,7 @@ function analyzeProvider(provider: string, models: ModelIntelLite[]): ModelConfi
         expectedUse: "avoid treating subscriptions or unknown quota as free in cost-first mode",
         risk: "operator override must be kept fresh; unknown remains safest default",
         requiredAuth: "provider usage API or manual plan/quota override",
-        whyNotLive: "unknown quota is not a free signal",
+        whyNotLive: "quota_pressure=unknown — plan/quota evidence missing; cannot estimate cost impact for live promotion",
         sources: model.plan.sources.length > 0 ? model.plan.sources : model.sources,
       });
     }
@@ -114,8 +203,38 @@ function analyzeProvider(provider: string, models: ModelIntelLite[]): ModelConfi
         expectedUse: "decide whether this configured model can safely handle delegated tool-using work",
         risk: "cheap smoke probes only; do not infer from model name alone",
         requiredAuth: "configured model access",
-        whyNotLive: "unknown tool/structured support cannot satisfy tool-required tasks",
+        whyNotLive: "tool_or_structured_capability=unknown — tool_use or structured_output status not confirmed; live promotion risks task failure",
         sources: model.capability.sources,
+      });
+    }
+    if (model.scenarioAbility !== undefined && hasMissingScenarioEvidence(model.scenarioAbility.codingWorker)) {
+      proposals.push({
+        id: makeProposalId(provider, "add_compatibility_probe", `${model.modelKey}:coding-worker-scenario`),
+        provider,
+        candidateModel: model.modelKey,
+        priority: "low",
+        action: "add_compatibility_probe",
+        reason: "coding_worker_scenario_evidence_missing",
+        expectedUse: "validate whether this configured model can handle coding-worker delegated tasks",
+        risk: "scenario probe only; no live routing changes until evidence improves",
+        requiredAuth: "configured model access",
+        whyNotLive: "scenario evidence is missing for coding_worker",
+        sources: model.scenarioAbility.codingWorker.sources.map((source) => source.source),
+      });
+    }
+    if (model.scenarioAbility !== undefined && hasMissingScenarioEvidence(model.scenarioAbility.agenticToolTask)) {
+      proposals.push({
+        id: makeProposalId(provider, "add_compatibility_probe", `${model.modelKey}:agentic-tool-task-scenario`),
+        provider,
+        candidateModel: model.modelKey,
+        priority: "low",
+        action: "add_compatibility_probe",
+        reason: "agentic_tool_scenario_evidence_missing",
+        expectedUse: "validate whether this configured model can handle agentic tool-task delegation",
+        risk: "scenario probe only; no live routing changes until evidence improves",
+        requiredAuth: "configured model access",
+        whyNotLive: "scenario evidence is missing for agentic_tool_task",
+        sources: model.scenarioAbility.agenticToolTask.sources.map((source) => source.source),
       });
     }
   }

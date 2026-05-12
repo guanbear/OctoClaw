@@ -1,0 +1,53 @@
+{
+  "schemaVersion": "octoclaw.router_lite.model_intel_snapshot/v1",
+  "snapshotId": "model-intel:price-conflict:1746835200000",
+  "generatedAt": "2026-05-10T00:00:00.000Z",
+  "sourceStatus": [
+    { "source": "openclaw_config", "status": "ok" },
+    { "source": "openrouter", "status": "ok", "detail": "inputUsdPerMTok=0.25 disagrees with openclaw_config inputUsdPerMTok=0.50" }
+  ],
+  "models": [
+    {
+      "provider": "cliproxyapi",
+      "model": "price-conflict-model",
+      "modelKey": "cliproxyapi/price-conflict-model",
+      "configured": true,
+      "available": "yes",
+      "proposalOnly": false,
+      "tags": ["configured", "price_conflict"],
+      "marketPrice": {
+        "inputUsdPerMTok": 0.5,
+        "outputUsdPerMTok": 2,
+        "confidence": "medium",
+        "sources": ["openclaw_config", "openrouter"],
+        "conflict": true,
+        "missingCostReason": "openclaw_config inputUsdPerMTok=0.50; openrouter inputUsdPerMTok=0.25"
+      },
+      "capability": {
+        "contextWindow": 128000,
+        "input": ["text"],
+        "toolUse": "yes",
+        "structuredOutput": "yes",
+        "reasoning": "unknown",
+        "promptCache": "unknown",
+        "codingTier": "standard",
+        "confidence": "medium",
+        "evidence": ["declared"],
+        "sources": ["openclaw_models_list"]
+      },
+      "health": {
+        "available": "yes",
+        "cooldown": false,
+        "quotaPressure": "unknown",
+        "sources": ["openclaw_models_list"]
+      },
+      "plan": {
+        "type": "pay_as_you_go",
+        "quotaPressure": "unknown",
+        "effectiveCostBand": "normal",
+        "sources": ["openclaw_config"]
+      },
+      "sources": ["openclaw_models_list", "openclaw_config", "openrouter"]
+    }
+  ]
+}

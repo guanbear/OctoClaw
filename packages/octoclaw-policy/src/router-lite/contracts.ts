@@ -6,6 +6,13 @@ export type RouterLiteQuotaPressure = "low" | "medium" | "high" | "unknown";
 export type RouterLiteEffectiveCostBand = "free_or_sunk" | "cheap" | "normal" | "expensive" | "unknown";
 export type RouterLitePlanType = "pay_as_you_go" | "subscription" | "free_quota" | "unknown";
 export type RouterLiteCapabilityEvidence = "declared" | "probed" | "observed" | "operator_override" | "heuristic";
+export type RouterLiteScenario =
+  | "codingWorker"
+  | "agenticToolTask"
+  | "researchLookup"
+  | "dataLogAnalysis"
+  | "mainReasoning"
+  | "defaultDelegate";
 
 export type ScenarioAbilitySource =
   | "pinchbench" | "aider" | "swe_bench" | "bfcl"
@@ -153,9 +160,12 @@ export interface RouterLiteRequest {
     contextTokens?: number;
     needsTools?: boolean;
     needsReasoning?: boolean;
+    needsStructuredOutput?: boolean;
     minContextTokens?: number;
     statusOrProvenanceRequest?: boolean;
     sessionControlRequest?: boolean;
+    explicitOverride?: string;
+    scenario?: RouterLiteScenario;
   };
   snapshotId: string;
 }
@@ -169,8 +179,8 @@ export interface RouterLiteRecommendation {
   reasonCodes: string[];
   mode: "shadow" | "live";
   scoringMode?: RouterLiteScoringMode;
-  scenario?: string;
-  ignoredReason?: "low_confidence" | "no_eligible_model" | "live_route_not_supported" | "not_configured";
+  scenario?: RouterLiteScenario;
+  ignoredReason?: "low_confidence" | "no_eligible_model" | "live_route_not_supported" | "not_configured" | "status_or_provenance_request" | "stale_evidence" | "explicit_override";
 }
 
 export interface RouterLiteShadowEvent {
@@ -188,5 +198,5 @@ export interface RouterLiteShadowEvent {
     complexity: "simple" | "normal" | "complex" | "deep";
     complexityConfidence: number;
   };
-  scenario?: string;
+  scenario?: RouterLiteScenario;
 }

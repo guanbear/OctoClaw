@@ -1,0 +1,200 @@
+{
+  "unknownQuota": {
+    "provider": "cliproxyapi",
+    "model": "unknown-quota-model",
+    "modelKey": "cliproxyapi/unknown-quota-model",
+    "configured": true,
+    "available": "yes",
+    "proposalOnly": false,
+    "tags": ["configured"],
+    "marketPrice": {
+      "inputUsdPerMTok": 1,
+      "outputUsdPerMTok": 3,
+      "confidence": "medium",
+      "sources": ["openclaw_config"]
+    },
+    "capability": {
+      "contextWindow": 128000,
+      "input": ["text"],
+      "toolUse": "yes",
+      "structuredOutput": "unknown",
+      "reasoning": "unknown",
+      "promptCache": "unknown",
+      "codingTier": "standard",
+      "confidence": "medium",
+      "evidence": ["declared"],
+      "sources": ["openclaw_models_list"]
+    },
+    "health": {
+      "available": "yes",
+      "cooldown": false,
+      "quotaPressure": "unknown",
+      "sources": ["openclaw_models_list"]
+    },
+    "plan": {
+      "type": "unknown",
+      "quotaPressure": "unknown",
+      "effectiveCostBand": "unknown",
+      "sources": []
+    },
+    "sources": ["openclaw_models_list", "openclaw_config"]
+  },
+  "highQuota": {
+    "provider": "cliproxyapi",
+    "model": "high-quota-model",
+    "modelKey": "cliproxyapi/high-quota-model",
+    "configured": true,
+    "available": "yes",
+    "proposalOnly": false,
+    "tags": ["configured", "quota_pressure"],
+    "marketPrice": {
+      "inputUsdPerMTok": 2,
+      "outputUsdPerMTok": 8,
+      "confidence": "medium",
+      "sources": ["openclaw_config"]
+    },
+    "capability": {
+      "contextWindow": 200000,
+      "input": ["text"],
+      "toolUse": "yes",
+      "structuredOutput": "yes",
+      "reasoning": "yes",
+      "promptCache": "unknown",
+      "codingTier": "strong",
+      "confidence": "medium",
+      "evidence": ["declared"],
+      "sources": ["openclaw_models_list"]
+    },
+    "health": {
+      "available": "yes",
+      "cooldown": false,
+      "quotaPressure": "high",
+      "sources": ["operator_status"]
+    },
+    "plan": {
+      "type": "subscription",
+      "quotaPressure": "high",
+      "effectiveCostBand": "expensive",
+      "sources": ["operator_status"]
+    },
+    "sources": ["openclaw_models_list", "openclaw_config", "operator_status"]
+  },
+  "cooldown": {
+    "provider": "cliproxyapi",
+    "model": "cooldown-model",
+    "modelKey": "cliproxyapi/cooldown-model",
+    "configured": true,
+    "available": "yes",
+    "proposalOnly": false,
+    "tags": ["configured", "cooldown"],
+    "marketPrice": {
+      "inputUsdPerMTok": 0.8,
+      "outputUsdPerMTok": 2.4,
+      "confidence": "medium",
+      "sources": ["openclaw_config"]
+    },
+    "capability": {
+      "contextWindow": 128000,
+      "input": ["text"],
+      "toolUse": "yes",
+      "structuredOutput": "yes",
+      "reasoning": "unknown",
+      "promptCache": "unknown",
+      "codingTier": "standard",
+      "confidence": "medium",
+      "evidence": ["declared"],
+      "sources": ["openclaw_models_list"]
+    },
+    "health": {
+      "available": "yes",
+      "cooldown": true,
+      "quotaPressure": "medium",
+      "sources": ["operator_status"]
+    },
+    "plan": {
+      "type": "pay_as_you_go",
+      "quotaPressure": "medium",
+      "effectiveCostBand": "normal",
+      "sources": ["openclaw_config"]
+    },
+    "sources": ["openclaw_models_list", "openclaw_config", "operator_status"]
+  },
+  "staleEvidence": {
+    "provider": "cliproxyapi",
+    "model": "stale-evidence-model",
+    "modelKey": "cliproxyapi/stale-evidence-model",
+    "configured": true,
+    "available": "unknown",
+    "proposalOnly": false,
+    "tags": ["configured", "stale_evidence"],
+    "freshness": "2026-03-01T00:00:00.000Z",
+    "marketPrice": {
+      "inputUsdPerMTok": 1.5,
+      "outputUsdPerMTok": 4.5,
+      "confidence": "low",
+      "sources": ["heuristic_estimate"]
+    },
+    "capability": {
+      "contextWindow": 64000,
+      "input": ["text"],
+      "toolUse": "unknown",
+      "structuredOutput": "unknown",
+      "reasoning": "unknown",
+      "promptCache": "unknown",
+      "codingTier": "unknown",
+      "confidence": "low",
+      "evidence": ["heuristic"],
+      "sources": ["heuristic_estimate"]
+    },
+    "health": {
+      "available": "unknown",
+      "cooldown": false,
+      "quotaPressure": "unknown",
+      "sources": ["heuristic_estimate"]
+    },
+    "plan": {
+      "type": "unknown",
+      "quotaPressure": "unknown",
+      "effectiveCostBand": "unknown",
+      "sources": []
+    },
+    "sources": ["heuristic_estimate"]
+  },
+  "noSources": {
+    "provider": "cliproxyapi",
+    "model": "no-sources-model",
+    "modelKey": "cliproxyapi/no-sources-model",
+    "configured": false,
+    "available": "unknown",
+    "proposalOnly": true,
+    "tags": ["proposal_only"],
+    "marketPrice": {
+      "confidence": "unknown",
+      "sources": []
+    },
+    "capability": {
+      "input": ["text"],
+      "toolUse": "unknown",
+      "structuredOutput": "unknown",
+      "reasoning": "unknown",
+      "promptCache": "unknown",
+      "codingTier": "unknown",
+      "confidence": "unknown",
+      "evidence": [],
+      "sources": []
+    },
+    "health": {
+      "available": "unknown",
+      "cooldown": false,
+      "quotaPressure": "unknown",
+      "sources": []
+    },
+    "plan": {
+      "type": "unknown",
+      "quotaPressure": "unknown",
+      "effectiveCostBand": "unknown",
+      "sources": []
+    },
+    "sources": []
+  }
+}
