@@ -18,5 +18,7 @@ dist/
 
 # Generated runtime docs or snapshots
 runner-results/
-.sisyphus/*.local.md
-.sisyphus/ralph-loop.local.md
+.graphify/
+.graphifyignore
+.sisyphus/
+graphify-out/

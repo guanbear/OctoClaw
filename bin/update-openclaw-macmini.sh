@@ -2,9 +2,9 @@
 
 set -euo pipefail
 
-REPO_ROOT_DEFAULT="/Users/guanbear/.openclaw/workspace/openclaw/repos/octoclaw"
+REPO_ROOT_DEFAULT="/Users/guanbear/workspace/OctoClaw"
 OPENCLAW_HOME_DEFAULT="/Users/guanbear/.openclaw"
-BRANCH_DEFAULT="release/0.3.0-ts-rebuild"
+BRANCH_DEFAULT="v0.5.0"
 PATH_PREFIX_DEFAULT="/Users/guanbear/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
 
 repo_root="${OPENCLAW_REPO_ROOT:-$REPO_ROOT_DEFAULT}"
@@ -134,7 +134,7 @@ fi
 
 printf '\n==> Deploy and restart\n'
 deploy_args=(
-  tools/install/dist/index.js
+  tools/octoclawctl/dist/cli.js
   deploy
   --skip-build
   --openclaw-home "$openclaw_home"
@@ -148,4 +148,4 @@ fi
 node "${deploy_args[@]}"
 
 printf '\n==> Managed status\n'
-node tools/manage/dist/index.js status --openclaw-home "$openclaw_home"
+node tools/octoclawctl/dist/cli.js status --openclaw-home "$openclaw_home" --format compact
