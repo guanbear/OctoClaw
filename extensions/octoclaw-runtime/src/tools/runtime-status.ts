@@ -6,10 +6,12 @@ import { resolveRuntimeLedgerMode } from "../runtime-ledger/shadow.js";
 import { rebuildTaskStateProjection } from "../runtime-ledger/projection-rebuild.js";
 import {
   reduceCanonicalStatus,
+  type LifecycleReconcileInput,
   type NativeLifecycleStatus,
 } from "../runtime-ledger/lifecycle-reconciler.js";
 import { createOctoClawRuntimePlugin } from "../plugin.js";
 import { projectNativeStatus, type NativeStatusProjection, type NativeStatusProjectorInput } from "../state/native-status-projector.js";
+import { captureTmuxEvidence, isTmuxEvidenceEnabled, type TmuxEvidenceSnapshot, type TmuxPaneMapping } from "../runtime-ledger/tmux-evidence.js";
 import { buildSlackStatusOutput, type StatusTaskSummary } from "../im-status-renderer.js";
 import { normalizeLiveRoute } from "../resolve/route-helpers.js";
 import { firstDisplayModel } from "../model-display.js";
@@ -767,6 +769,62 @@ function runtimeLifecycleDeadlines(record: RuntimeTaskStateRecord, nativeStatus:
   };
 }
 
+function tmuxPaneMappingFromRecord(record: RuntimeTaskStateRecord): TmuxPaneMapping | null {
+  const artifacts = asRecord(record.artifacts);
+  const runtimeTruth = asRecord(artifacts.runtime_truth);
+  const runtimeEvidence = asRecord(runtimeTruth.evidence);
+  const metadata = asRecord(record.metadata);
+  const contract = workContractRecord(record);
+  const telemetry = asRecord(contract.telemetry);
+  const nestedCandidates = [
+    asRecord(record.tmux),
+    asRecord(record.tmux_evidence),
+    asRecord(record.tmuxEvidence),
+    asRecord(metadata.tmux),
+    asRecord(metadata.tmux_evidence),
+    asRecord(runtimeTruth.tmux),
+    asRecord(runtimeTruth.tmux_evidence),
+    asRecord(runtimeEvidence.tmux),
+    asRecord(telemetry.tmux),
+    asRecord(telemetry.tmux_evidence),
+  ];
+
+  const directSession = optionalString(record.tmuxSession, record.tmux_session, record.tmuxTarget, record.tmux_target);
+  const directWindow = optionalString(record.tmuxWindow, record.tmux_window);
+  const directPane = optionalString(record.tmuxPane, record.tmux_pane, record.tmuxPaneId, record.tmux_pane_id);
+  if (directSession || directPane) {
+    return { session: directSession, window: directWindow, pane: directPane };
+  }
+
+  for (const candidate of nestedCandidates) {
+    const session = optionalString(candidate.session, candidate.sessionName, candidate.session_name, candidate.tmuxSession, candidate.tmux_session, candidate.target);
+    const window = optionalString(candidate.window, candidate.windowName, candidate.window_name, candidate.tmuxWindow, candidate.tmux_window);
+    const pane = optionalString(candidate.pane, candidate.paneId, candidate.pane_id, candidate.tmuxPane, candidate.tmux_pane, candidate.tmuxPaneId, candidate.tmux_pane_id);
+    if (session || pane) {
+      return { session, window, pane };
+    }
+  }
+
+  return null;
+}
+
+function reducerTmuxEvidence(snapshot: TmuxEvidenceSnapshot | null): LifecycleReconcileInput["tmuxEvidence"] {
+  if (!snapshot) return null;
+  return {
+    enabled: snapshot.enabled,
+    available: snapshot.available,
+    alive: snapshot.alive,
+    outputChangedSinceLastCheck: snapshot.outputChangedSinceLastCheck === true,
+    lastOutputAt: snapshot.lastOutputAt ?? null,
+  };
+}
+
+function runtimeTmuxEvidence(record: RuntimeTaskStateRecord): LifecycleReconcileInput["tmuxEvidence"] {
+  if (!isTmuxEvidenceEnabled()) return null;
+  const mapping = tmuxPaneMappingFromRecord(record);
+  return mapping ? reducerTmuxEvidence(captureTmuxEvidence(mapping)) : null;
+}
+
 function projectRuntimeStatus(record: RuntimeTaskStateRecord, nowMs = Date.now(), nativeProjection?: NativeStatusProjection): { status: string; reason: string } {
   const rawStatus = asString(record.status, "unknown");
   const normalizedRawStatus = rawStatus.toLowerCase();
@@ -822,7 +880,7 @@ function projectRuntimeStatus(record: RuntimeTaskStateRecord, nowMs = Date.now()
     hardTimeoutAt: deadlines.hardTimeoutAt,
     lastHeartbeatAt: deadlines.lastHeartbeatAt,
     lastProgressAt: deadlines.lastProgressAt,
-    tmuxEvidence: null,
+    tmuxEvidence: runtimeTmuxEvidence(record),
     now: new Date(nowMs).toISOString(),
   });
 

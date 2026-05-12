@@ -1,4 +1,12 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const captureTmuxEvidenceMock = vi.hoisted(() => vi.fn());
+
+vi.mock("../runtime-ledger/tmux-evidence.js", () => ({
+  captureTmuxEvidence: captureTmuxEvidenceMock,
+  isTmuxEvidenceEnabled: () => true,
+}));
+
 import type { NativeStatusProjection } from "../state/native-status-projector.js";
 import { buildRuntimeStatusTaskView, type RuntimeTaskStateRecord } from "./runtime-status.js";
 
@@ -37,6 +45,10 @@ function task(overrides: Partial<RuntimeTaskStateRecord> = {}): RuntimeTaskState
 }
 
 describe("runtime status lifecycle projection", () => {
+  beforeEach(() => {
+    captureTmuxEvidenceMock.mockReset();
+  });
+
   it("marks native completed without result evidence as degraded", () => {
     const view = buildRuntimeStatusTaskView(task({ status: "completed" }), nowMs, native("completed"));
 
@@ -77,6 +89,43 @@ describe("runtime status lifecycle projection", () => {
 
     expect(view.status).toBe("running_slow");
     expect(view.statusReason).toBe("expected_deadline_passed_live_output");
+  });
+
+  it("uses tmux pane evidence when a task records a tmux mapping", () => {
+    captureTmuxEvidenceMock.mockReturnValue({
+      enabled: true,
+      available: true,
+      alive: true,
+      session: "octo",
+      pane: "%1",
+      outputChangedSinceLastCheck: true,
+      capturedAt: "2026-05-12T12:10:00.000Z",
+    });
+
+    const view = buildRuntimeStatusTaskView(
+      task({
+        artifacts: {
+          runtime_truth: {
+            tmux: {
+              session: "octo",
+              pane: "%1",
+            },
+          },
+        },
+      }),
+      nowMs,
+      native("running"),
+    );
+
+    expect(captureTmuxEvidenceMock).toHaveBeenCalledWith(expect.objectContaining({ session: "octo", pane: "%1" }));
+    expect(view.status).toBe("running_slow");
+    expect(view.statusReason).toBe("expected_deadline_passed_live_output");
+  });
+
+  it("does not query tmux when no pane mapping exists", () => {
+    buildRuntimeStatusTaskView(task(), nowMs, native("running"));
+
+    expect(captureTmuxEvidenceMock).not.toHaveBeenCalled();
   });
 
   it("keeps native registry missing visible as lost before hard timeout", () => {
