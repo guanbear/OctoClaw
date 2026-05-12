@@ -92,6 +92,79 @@ export interface RuntimeStatusTaskView {
   resultLocation: string;
 }
 
+function deliveryEvidence(record: RuntimeTaskStateRecord): UnknownRecord {
+  const delivery = asRecord(record.delivery);
+  const workContract = workContractRecord(record);
+  const telemetry = asRecord(workContract.telemetry);
+  const artifacts = asRecord(record.artifacts);
+  const runtimeTruth = asRecord(artifacts.runtime_truth);
+  const runtimeDelivery = asRecord(runtimeTruth.delivery || runtimeTruth.resultDelivery);
+  return {
+    ...runtimeDelivery,
+    ...delivery,
+    resultHash: optionalString(
+      record.nativeAnnounceResultHash,
+      record.native_announce_result_hash,
+      delivery.resultHash,
+      delivery.result_hash,
+      runtimeDelivery.resultHash,
+      runtimeDelivery.result_hash,
+      telemetry.nativeAnnounceResultHash,
+      telemetry.native_announce_result_hash,
+    ),
+    messageId: optionalString(
+      delivery.messageId,
+      delivery.message_id,
+      runtimeDelivery.messageId,
+      runtimeDelivery.message_id,
+      telemetry.deliveryMessageId,
+      telemetry.delivery_message_id,
+    ),
+    replyToMessageId: optionalString(
+      delivery.replyToMessageId,
+      delivery.reply_to_message_id,
+      runtimeDelivery.replyToMessageId,
+      runtimeDelivery.reply_to_message_id,
+      telemetry.deliveryReplyToMessageId,
+      telemetry.delivery_reply_to_message_id,
+    ),
+    sessionKey: optionalString(
+      delivery.sessionKey,
+      delivery.session_key,
+      runtimeDelivery.sessionKey,
+      runtimeDelivery.session_key,
+      telemetry.deliverySessionKey,
+      telemetry.delivery_session_key,
+    ),
+    transport: optionalString(
+      delivery.transport,
+      delivery.deliveryTransport,
+      delivery.delivery_transport,
+      runtimeDelivery.transport,
+      runtimeDelivery.deliveryTransport,
+      runtimeDelivery.delivery_transport,
+      telemetry.deliveryTransport,
+      telemetry.delivery_transport,
+    ),
+    targetSource: optionalString(
+      delivery.targetSource,
+      delivery.target_source,
+      runtimeDelivery.targetSource,
+      runtimeDelivery.target_source,
+      telemetry.deliveryTargetSource,
+      telemetry.delivery_target_source,
+    ),
+    deliveredAt: optionalString(
+      delivery.deliveredAt,
+      delivery.delivered_at,
+      runtimeDelivery.deliveredAt,
+      runtimeDelivery.delivered_at,
+      telemetry.nativeAnnounceDeliveredAt,
+      telemetry.native_announce_delivered_at,
+    ),
+  };
+}
+
 export function dedupeTaskStateRecords(tasks: RuntimeTaskStateRecord[]): RuntimeTaskStateRecord[] {
   const seen = new Set<string>();
   const deduped: RuntimeTaskStateRecord[] = [];
@@ -663,6 +736,7 @@ function runtimeResultEvidence(record: RuntimeTaskStateRecord, evidence: ReturnT
   const delegate = asRecord(workContract.delegate);
   const telemetry = asRecord(workContract.telemetry);
   const compactPacket = asRecord(record.compact_parent_packet);
+  const deliveryEvidenceRecord = deliveryEvidence(record);
   const artifactRefs = [
     ...(Array.isArray(record.artifact_refs) ? record.artifact_refs : []),
     ...(Array.isArray(compactPacket.artifactRefIds) ? compactPacket.artifactRefIds : []),
@@ -701,7 +775,8 @@ function runtimeResultEvidence(record: RuntimeTaskStateRecord, evidence: ReturnT
       delivery.summary,
       compactPacket.summary,
     )),
-    hasDeliveryAck: ["delivered", "acknowledged", "acked", "sent"].includes(deliveryStatus),
+    hasDeliveryAck: ["delivered", "acknowledged", "acked", "sent"].includes(deliveryStatus)
+      || Boolean(optionalString(deliveryEvidenceRecord.messageId, deliveryEvidenceRecord.resultHash)),
   };
 }
 
@@ -944,11 +1019,17 @@ export function buildRuntimeStatusTaskView(record: RuntimeTaskStateRecord, nowMs
   const artifactRefs = Array.isArray(record.artifact_refs) ? record.artifact_refs.map(String).filter(Boolean) : [];
   const compactPacket = asRecord(record.compact_parent_packet);
   const compactArtifactRefs = Array.isArray(compactPacket.artifactRefIds) ? compactPacket.artifactRefIds.map(String).filter(Boolean) : [];
+  const delivery = deliveryEvidence(record);
+  const deliveryRef = optionalString(
+    delivery.messageId ? `delivered:${delivery.messageId}` : undefined,
+    delivery.resultHash ? `result_hash:${delivery.resultHash}` : undefined,
+  );
   const resultLocation = optionalString(
     record.report_path,
     artifacts.report_path,
     artifacts.result_path,
     artifacts.output_path,
+    deliveryRef,
     artifactRefs.length > 0 ? `artifact_refs=${artifactRefs.join(",")}` : undefined,
     compactArtifactRefs.length > 0 ? `artifact_refs=${compactArtifactRefs.join(",")}` : undefined,
   ) ?? "none";
@@ -1106,7 +1187,8 @@ export function taskStateRecordMatchesId(record: RuntimeTaskStateRecord, rawTask
   if (!taskId) return false;
   const aliases = new Set<string>();
   collectIdentityAliases(record, aliases);
-  return aliases.has(taskId);
+  const canMatchPrefix = taskId.length >= 7;
+  return [...aliases].some((alias) => alias === taskId || (canMatchPrefix && alias.startsWith(taskId)));
 }
 
 export async function buildNativeTaskActionPayload(rawText: string, format: "text" | "json"): Promise<{ summary: string; payload: UnknownRecord }> {
@@ -1147,6 +1229,8 @@ export async function buildNativeTaskActionPayload(rawText: string, format: "tex
   const replayEvents = await readRuntimeReplayTimeline(asString(record.id));
   const artifacts = asRecord(record.artifacts);
   const projected = projectRuntimeStatus(record);
+  const taskView = buildRuntimeStatusTaskView(record);
+  const delivery = deliveryEvidence(record);
   const payload: UnknownRecord = {
     mode: "native_runtime",
     action: normalizedAction,
@@ -1166,6 +1250,8 @@ export async function buildNativeTaskActionPayload(rawText: string, format: "tex
     timeline: buildTaskActionTimeline(record, liveRead ?? {}, replayEvents),
     artifacts,
     reportPath: asString(record.report_path || artifacts.report_path),
+    resultLocation: taskView.resultLocation,
+    delivery,
     found: true,
     format,
   };
@@ -1187,6 +1273,8 @@ export async function buildNativeTaskActionPayload(rawText: string, format: "tex
         `Status: ${asString(payload.status) || "unknown"}`,
         asString(payload.progress) ? `Progress: ${asString(payload.progress)}` : "",
         asString(payload.flowId) ? `Flow: ${asString(payload.flowId)}` : "",
+        asString(payload.resultLocation) && asString(payload.resultLocation) !== "none" ? `Result: ${asString(payload.resultLocation)}` : "",
+        asString(delivery.status) && asString(delivery.status) !== "none" ? `Delivery: ${asString(delivery.status)}` : "",
         Array.isArray(payload.timeline) && payload.timeline.length > 0
           ? `Timeline:\n${(payload.timeline as UnknownRecord[]).map((event) => `- ${asString(event.eventAt)} ${asString(event.eventType)}: ${asString(event.summary)}`).join("\n")}`
           : "",

@@ -2,7 +2,8 @@ import fsSync from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { buildPromptContextProjection, extractInboundMessageTimestamp, parseOctoClawStatusFastPathCommand, resolveDelegationCapability, resolveReactionAckConfig } from "../extension-entry.js";
+import { buildPromptContextProjection, extractInboundMessageTimestamp, parseOctoClawStatusFastPathCommand, parseOctoClawTaskActionFastPathCommand, resolveDelegationCapability, resolveReactionAckConfig } from "../extension-entry.js";
+import { extractPromptText } from "../extension-entry-helpers.js";
 import { nativeSpawnIntentStore } from "../delegate/native-spawn-intent-store.js";
 import { policyState } from "../state/policy-state.js";
 import { envOverrides } from "../resolve/env.js";
@@ -138,6 +139,38 @@ describe("parseOctoClawStatusFastPathCommand", () => {
     expect(parseOctoClawStatusFastPathCommand("八爪鱼状态怎么样")).toBeNull();
     expect(parseOctoClawStatusFastPathCommand("看下 octoclaw status")).toBeNull();
     expect(parseOctoClawStatusFastPathCommand("状态面板发我一下")).toBeNull();
+  });
+});
+
+describe("parseOctoClawTaskActionFastPathCommand", () => {
+  it("accepts exact details commands with full or short work contract ids", () => {
+    expect(parseOctoClawTaskActionFastPathCommand("查看任务 wc=wc-cd096 详情")).toEqual({
+      action: "details",
+      taskId: "wc-cd096",
+      trigger: "查看任务",
+    });
+    expect(parseOctoClawTaskActionFastPathCommand("任务详情 wc-cd096bf3039cf9f0")).toEqual({
+      action: "details",
+      taskId: "wc-cd096bf3039cf9f0",
+      trigger: "任务详情",
+    });
+    expect(parseOctoClawTaskActionFastPathCommand("octoclaw details wc-cd096")).toEqual({
+      action: "details",
+      taskId: "wc-cd096",
+      trigger: "octoclaw details",
+    });
+  });
+
+  it("does not catch broader natural-language details questions", () => {
+    expect(parseOctoClawTaskActionFastPathCommand("看下 wc-cd096 怎么回事")).toBeNull();
+    expect(parseOctoClawTaskActionFastPathCommand("查看任务详情")).toBeNull();
+  });
+});
+
+describe("extractPromptText", () => {
+  it("reads before_dispatch content/body fields before falling back to messages", () => {
+    expect(extractPromptText({ content: "状态面板" })).toBe("状态面板");
+    expect(extractPromptText({ body: [{ type: "text", text: "查看任务 wc=wc-cd096 详情" }] })).toBe("查看任务 wc=wc-cd096 详情");
   });
 });
 

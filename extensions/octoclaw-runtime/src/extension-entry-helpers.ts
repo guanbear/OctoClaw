@@ -92,6 +92,12 @@ export function extractPromptText(event: UnknownRecord): string {
   if (prompt) {
     return normalizeInboundPrompt(prompt) || prompt;
   }
+  for (const key of ["content", "body", "text"] as const) {
+    const text = extractMessageText(event[key]);
+    if (text) {
+      return normalizeInboundPrompt(text) || text;
+    }
+  }
   const messages = Array.isArray(event.messages) ? event.messages : [];
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];

@@ -575,7 +575,7 @@ describe("neutral Slack ACK hook dedupe", () => {
     expect(neutralAckEvents.some((entry) => entry.sent === false && entry.reason === "reply_streaming" && entry.fallback_stage === "text_after_reaction_failed")).toBe(true);
   });
 
-  it("handles explicit OctoClaw status commands in before_dispatch without model dispatch", async () => {
+  it("handles explicit OctoClaw status commands from before_dispatch content without model dispatch", async () => {
     process.env.OCTOCLAW_RUNTIME_LEDGER = "off";
     const handlers = new Map<string, Function>();
     const adapter: IMAdapter = {
@@ -598,7 +598,7 @@ describe("neutral Slack ACK hook dedupe", () => {
     const beforeDispatch = handlers.get("before_dispatch");
     expect(beforeDispatch).toBeTruthy();
     const result = await beforeDispatch!(
-      { prompt: "八爪鱼状态", message_ts: "1777770000.888888" },
+      { content: "八爪鱼状态", message_ts: "1777770000.888888" },
       {
         sessionKey: "agent:main:slack:channel:c0statusfastpath:thread:1777770000.888888",
         sessionId: "status-fast-path-session",
@@ -612,12 +612,85 @@ describe("neutral Slack ACK hook dedupe", () => {
     expect(result).toMatchObject({ handled: true });
     expect(result.text).toContain("八爪鱼状态");
     expect(result.text).toContain("暂无任务");
+    const neutralAckEvents = readReplayEvents().filter((entry) => entry.event === "neutral_inbound_ack");
+    expect(neutralAckEvents).toHaveLength(0);
     const statusEvents = readReplayEvents().filter((entry) => entry.event === "status_fast_path_handled");
     expect(statusEvents).toHaveLength(1);
     expect(statusEvents[0]).toMatchObject({
       trigger: "八爪鱼状态",
       format: "anchors",
       imType: "slack",
+      handled: true,
+    });
+  });
+
+  it("handles exact task details commands before neutral ack or model dispatch", async () => {
+    process.env.OCTOCLAW_RUNTIME_LEDGER = "off";
+    const taskStatePath = path.join(tempWorkspace, "tmp", "octopus", "task-state.json");
+    fsSync.mkdirSync(path.dirname(taskStatePath), { recursive: true });
+    fsSync.writeFileSync(taskStatePath, JSON.stringify({
+      schemaVersion: "octoclaw.task_state.v1",
+      updatedAt: "2026-05-12T08:17:00.000Z",
+      tasks: [{
+        id: "wc-cd096bf3039cf9f0",
+        workContractId: "wc-cd096bf3039cf9f0",
+        work_contract_id: "wc-cd096bf3039cf9f0",
+        route: "delegate",
+        status: "completed",
+        summary: "Readonly watchdog summary completed",
+        dispatchExecuted: true,
+        dispatch_executed: true,
+        spawnExecuted: true,
+        spawn_executed: true,
+        resultMaterialized: true,
+        result_materialized: true,
+        delivery_status: "delivered",
+        delivery: {
+          status: "delivered",
+          resultHash: "f1c04ee36a4f1a42",
+          messageId: "1778573724.032469",
+        },
+        updated_at: "2026-05-12T08:16:00.000Z",
+        completed_at: "2026-05-12T08:16:00.000Z",
+      }],
+    }, null, 2));
+
+    const handlers = new Map<string, Function>();
+    plugin.register({
+      pluginConfig: { ackReactionEmoji: "eyes" },
+      on: (event, handler) => handlers.set(event, handler),
+      registerTool: () => {},
+      registerCommand: () => {},
+      logger: {},
+    });
+
+    const beforeDispatch = handlers.get("before_dispatch");
+    expect(beforeDispatch).toBeTruthy();
+    const result = await beforeDispatch!(
+      { content: "查看任务 wc=wc-cd096 详情", message_ts: "1777770000.999999" },
+      {
+        sessionKey: "agent:main:slack:channel:c0taskdetails:thread:1777770000.999999",
+        sessionId: "task-details-fast-path-session",
+        agentId: "main",
+        channelId: "slack",
+        cwd: tempWorkspace,
+      },
+    );
+    await waitForFireAndForget();
+
+    expect(result).toMatchObject({ handled: true });
+    expect(result.text).toContain("Task: wc-cd096bf3039cf9f0");
+    expect(result.text).toContain("Status: completed");
+    expect(result.text).toContain("Delivery: delivered");
+    const neutralAckEvents = readReplayEvents().filter((entry) => entry.event === "neutral_inbound_ack");
+    expect(neutralAckEvents).toHaveLength(0);
+    const taskEvents = readReplayEvents().filter((entry) => entry.event === "task_action_fast_path_handled");
+    expect(taskEvents).toHaveLength(1);
+    expect(taskEvents[0]).toMatchObject({
+      action: "details",
+      taskId: "wc-cd096",
+      resolvedTaskId: "wc-cd096bf3039cf9f0",
+      found: true,
       handled: true,
     });
   });

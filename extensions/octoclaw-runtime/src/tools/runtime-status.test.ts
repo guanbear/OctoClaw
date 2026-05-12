@@ -73,6 +73,27 @@ describe("runtime status lifecycle projection", () => {
     expect(view.resultLocation).toBe("/tmp/wc-runtime-status-report.md");
   });
 
+  it("uses native announce delivery evidence as completed result evidence", () => {
+    const view = buildRuntimeStatusTaskView(
+      task({
+        status: "completed",
+        completed_at: "2026-05-12T12:09:00.000Z",
+        delivery_status: "delivered",
+        delivery: {
+          status: "delivered",
+          resultHash: "f1c04ee36a4f1a42",
+          messageId: "1778573724.032469",
+        },
+      }),
+      nowMs,
+      native("completed"),
+    );
+
+    expect(view.status).toBe("completed");
+    expect(view.statusReason).toBe("completed_with_result");
+    expect(view.resultLocation).toBe("delivered:1778573724.032469");
+  });
+
   it("marks a native-running task past expected deadline without progress as stalled", () => {
     const view = buildRuntimeStatusTaskView(task(), nowMs, native("running"));
 

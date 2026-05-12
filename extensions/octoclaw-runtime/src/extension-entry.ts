@@ -68,7 +68,7 @@ import {
 import { recordAckReplay, recordPolicyReplay } from "./replay/replay.js";
 import { policyState, type PolicyStateEntry } from "./state/policy-state.js";
 import { getCommandRegistrations, getToolRegistrations } from "./tools/registration.js";
-import { buildNativeStatusOutput } from "./tools/runtime-status.js";
+import { buildNativeStatusOutput, buildNativeTaskActionPayload } from "./tools/runtime-status.js";
 import { evaluateNativeSessionsSendGate, evaluateNativeSpawnGate } from "./delegate/native-spawn-gate.js";
 import { nativeSpawnIntentStore } from "./delegate/native-spawn-intent-store.js";
 import { isPlannerAllowedForSession, resolveSpawnBackend, resolveSpeculativePreloadEnabled } from "./config/index.js";
@@ -252,6 +252,12 @@ export type OctoClawStatusFastPathCommand = {
   trigger: string;
 };
 
+export type OctoClawTaskActionFastPathCommand = {
+  action: "details";
+  taskId: string;
+  trigger: string;
+};
+
 function normalizeStatusFastPathPrompt(prompt: string): string {
   return stringValue(prompt)
     .replace(/^\s*(?:<@[^>]+>\s*)+/u, "")
@@ -268,6 +274,81 @@ export function parseOctoClawStatusFastPathCommand(prompt: string): OctoClawStat
     trigger: stringValue(match[1]).toLowerCase().replace(/\s+/gu, " "),
     format: (stringValue(match[2]) || "anchors").toLowerCase() as OctoClawStatusFastPathCommand["format"],
   };
+}
+
+export function parseOctoClawTaskActionFastPathCommand(prompt: string): OctoClawTaskActionFastPathCommand | null {
+  const normalized = normalizeStatusFastPathPrompt(prompt);
+  if (!normalized) return null;
+  for (const pattern of [
+    /^(查看任务)\s+(?:wc\s*=\s*)?(wc-[a-z0-9][a-z0-9-]*)\s+详情$/iu,
+    /^(任务详情)\s+(?:wc\s*=\s*)?(wc-[a-z0-9][a-z0-9-]*)$/iu,
+    /^(octoclaw\s+(?:task\s+)?details|\/octotask\s+(?:details|detail|view)|details)\s+(?:wc\s*=\s*)?(wc-[a-z0-9][a-z0-9-]*)$/iu,
+  ]) {
+    const match = normalized.match(pattern);
+    if (!match) continue;
+    return {
+      action: "details",
+      taskId: stringValue(match[2]),
+      trigger: stringValue(match[1]).toLowerCase().replace(/\s+/gu, " "),
+    };
+  }
+  return null;
+}
+
+async function handleOctoClawControlPlaneFastPath(input: {
+  prompt: string;
+  mergedCtx: UnknownRecord;
+  eventRecord: UnknownRecord;
+  ctxRecord: UnknownRecord;
+  stateKey: string;
+  logger?: LoggerLike;
+}): Promise<{ handled: true; text: string } | null> {
+  const statusCommand = parseOctoClawStatusFastPathCommand(input.prompt);
+  if (statusCommand) {
+    const sessionKey = stringValue(input.mergedCtx.sessionKey || input.eventRecord.sessionKey || input.stateKey);
+    const imType = sessionKey ? detectIMType(sessionKey) : "plain";
+    const startedAt = Date.now();
+    const text = await buildNativeStatusOutput(statusCommand.format, imType, input.mergedCtx);
+    void recordPolicyReplay(
+      "status_fast_path_handled",
+      {
+        sessionKey: sessionKey || stringValue(input.ctxRecord.sessionKey),
+        sessionId: stringValue(input.mergedCtx.sessionId || input.eventRecord.sessionId),
+        stateKey: input.stateKey,
+        trigger: statusCommand.trigger,
+        format: statusCommand.format,
+        imType,
+        elapsedMs: Date.now() - startedAt,
+        handled: true,
+      },
+      input.logger,
+      null,
+    ).catch(() => {});
+    return { handled: true, text };
+  }
+
+  const taskCommand = parseOctoClawTaskActionFastPathCommand(input.prompt);
+  if (!taskCommand) return null;
+  const startedAt = Date.now();
+  const { summary, payload } = await buildNativeTaskActionPayload(`${taskCommand.action} ${taskCommand.taskId}`, "text");
+  void recordPolicyReplay(
+    "task_action_fast_path_handled",
+    {
+      sessionKey: stringValue(input.mergedCtx.sessionKey || input.eventRecord.sessionKey || input.stateKey),
+      sessionId: stringValue(input.mergedCtx.sessionId || input.eventRecord.sessionId),
+      stateKey: input.stateKey,
+      trigger: taskCommand.trigger,
+      action: taskCommand.action,
+      taskId: taskCommand.taskId,
+      resolvedTaskId: stringValue(payload.taskId),
+      found: payload.found === true,
+      elapsedMs: Date.now() - startedAt,
+      handled: true,
+    },
+    input.logger,
+    null,
+  ).catch(() => {});
+  return { handled: true, text: summary };
 }
 
 function runTaskStateRetention(logger?: LoggerLike): void {
@@ -1152,6 +1233,7 @@ function markNativeAnnounceCompletionOnContract(
   delivered: boolean,
   nowIso: string,
   blocker?: NativeAnnounceBlocker | null,
+  delivery?: Partial<SendIMResult> & { sessionKey?: string; replyToMessageId?: string },
 ): WorkContract | null {
   return updateWorkContract(workContractId, (contract) => {
     const ids = contractNativeIds(contract);
@@ -1176,6 +1258,25 @@ function markNativeAnnounceCompletionOnContract(
     const deliveryStatus = isBlocked ? "blocked" : delivered ? "delivered" : (
       nativeAnnounceDeliveryAlreadySent(contract) ? "delivered" : "pending"
     );
+    const telemetryRecord = asRecord(contract.telemetry);
+    const telemetry = {
+      ...contract.telemetry,
+      dispatchExecuted: true,
+      spawnExecuted: true,
+      resultMaterialized: true,
+      deliveryStatus,
+      nativeAnnounceResultHash: completion.resultHash,
+      nativeAnnounceDeliveredAt: delivered ? nowIso : telemetryRecord.nativeAnnounceDeliveredAt,
+      nativeAnnounceBlockedHash: isBlocked ? completion.resultHash : telemetryRecord.nativeAnnounceBlockedHash,
+      deliveryMessageId: stringValue(delivery?.messageId) || stringValue(telemetryRecord.deliveryMessageId),
+      deliverySessionKey: stringValue(delivery?.sessionKey) || stringValue(telemetryRecord.deliverySessionKey),
+      deliveryReplyToMessageId: stringValue(delivery?.replyToMessageId) || stringValue(telemetryRecord.deliveryReplyToMessageId),
+      deliveryTransport: stringValue(delivery?.transport) || stringValue(telemetryRecord.deliveryTransport),
+      deliveryTargetSource: stringValue(delivery?.targetSource) || stringValue(telemetryRecord.deliveryTargetSource),
+      deliveryFooterSource: stringValue(delivery?.footerSource) || stringValue(telemetryRecord.deliveryFooterSource),
+      childSessionKey: childSessionKey || contract.telemetry.childSessionKey,
+      childRunId: ids.childRunId || contract.telemetry.childRunId,
+    } as WorkContract["telemetry"];
     return {
       ...contract,
       status: isBlocked ? "blocked" as const : "completed" as const,
@@ -1185,15 +1286,7 @@ function markNativeAnnounceCompletionOnContract(
         preferredChildSessionKey: childSessionKey || contract.continuity.preferredChildSessionKey,
         preferredRunId: ids.runId || contract.continuity.preferredRunId,
       },
-      telemetry: {
-        ...contract.telemetry,
-        dispatchExecuted: true,
-        spawnExecuted: true,
-        resultMaterialized: true,
-        deliveryStatus,
-        childSessionKey: childSessionKey || contract.telemetry.childSessionKey,
-        childRunId: ids.childRunId || contract.telemetry.childRunId,
-      },
+      telemetry,
       mainContext: {
         ...contract.mainContext,
         statusLine: isBlocked
@@ -1558,6 +1651,7 @@ async function handleNativeAnnounceCompletion(input: {
     delivered,
     nowIso,
     blocker,
+    directDelivery,
   ) ?? matchedContract;
   applyNativeAnnounceCompletionState({
     ctx: input.ctx,
@@ -1700,6 +1794,8 @@ async function handleNativeSubagentEndedCompletion(input: {
     completion,
     delivered,
     nowIso,
+    null,
+    directDelivery,
   ) ?? matchedContract;
   applyNativeAnnounceCompletionState({
     ctx: stateCtx,
@@ -3309,6 +3405,15 @@ export const plugin = {
         pi.logger,
         null,
       ).catch(() => {});
+      const controlPlaneResult = await handleOctoClawControlPlaneFastPath({
+        prompt,
+        mergedCtx,
+        eventRecord,
+        ctxRecord,
+        stateKey,
+        logger: pi.logger,
+      });
+      if (controlPlaneResult) return controlPlaneResult;
       void maybeSendNeutralInboundAckForContext("before_dispatch", event, ctx, prompt, {
         stateKey,
         inboundMessageTs: anchor.ts,
@@ -3316,29 +3421,6 @@ export const plugin = {
       }).catch((error) => {
         pi.logger?.warn?.(`octoclaw neutral inbound ACK failed: ${String(error)}`);
       });
-      const statusCommand = parseOctoClawStatusFastPathCommand(prompt);
-      if (statusCommand) {
-        const sessionKey = stringValue(mergedCtx.sessionKey || eventRecord.sessionKey || stateKey);
-        const imType = sessionKey ? detectIMType(sessionKey) : "plain";
-        const startedAt = Date.now();
-        const text = await buildNativeStatusOutput(statusCommand.format, imType, mergedCtx);
-        void recordPolicyReplay(
-          "status_fast_path_handled",
-          {
-            sessionKey: sessionKey || stringValue(ctxRecord.sessionKey),
-            sessionId: stringValue(mergedCtx.sessionId || eventRecord.sessionId),
-            stateKey,
-            trigger: statusCommand.trigger,
-            format: statusCommand.format,
-            imType,
-            elapsedMs: Date.now() - startedAt,
-            handled: true,
-          },
-          pi.logger,
-          null,
-        ).catch(() => {});
-        return { handled: true, text };
-      }
     }, 260);
 
     registerLifecycleHook("subagent_ended", async (event, ctx) => {
