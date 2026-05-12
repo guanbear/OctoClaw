@@ -2,11 +2,11 @@
 
 ## 项目结构
 
-- **代码仓库**: `/Users/guanbear/OctoClaw` (开发目录)
-- **部署仓库**: `/Users/guanbear/.openclaw/workspace/openclaw/repos/octoclaw` (git clone)
+- **代码/部署仓库（canonical）**: `/Users/guanbear/workspace/OctoClaw`
+- **兼容旧路径**: `/Users/guanbear/OctoClaw`、`/Users/guanbear/octoclaw_stable`、`/Users/guanbear/repos/octoclaw`、`/Users/guanbear/.openclaw/workspace/openclaw/repos/octoclaw` 均应为指向 canonical 仓库的 symlink
 - **OpenClaw Home**: `/Users/guanbear/.openclaw`
 - **Extension 部署目录**: `/Users/guanbear/.openclaw/extensions/octoclaw-runtime/`
-- **octoclawctl**: `/Users/guanbear/.openclaw/workspace/openclaw/repos/octoclaw/tools/octoclawctl/dist/cli.js`
+- **octoclawctl**: `/Users/guanbear/workspace/OctoClaw/tools/octoclawctl/dist/cli.js`
 
 ## 架构
 
@@ -22,14 +22,14 @@ monorepo，用 pnpm workspace，TypeScript，vitest 测试，node:sqlite (不用
 ## 部署流程
 
 ```bash
-# 1. 在开发仓库 commit & push
-cd /Users/guanbear/OctoClaw
+# 1. 在 canonical 仓库 commit & push
+cd /Users/guanbear/workspace/OctoClaw
 git add -A && git commit -m "..." && git push
 
-# 2. 在部署仓库 pull
-cd /Users/guanbear/.openclaw/workspace/openclaw/repos/octoclaw
+# 2. 更新 canonical 仓库
+cd /Users/guanbear/workspace/OctoClaw
 git stash  # 如果有本地修改
-git pull --ff-only origin refactor/0.4.0-stable
+git pull --ff-only origin v0.5.0
 
 # 3. Install + Build
 pnpm install
@@ -37,16 +37,16 @@ pnpm -r run build
 
 # 4. Deploy
 node tools/octoclawctl/dist/cli.js deploy --skip-build --restart \
-  --octoclaw-root /Users/guanbear/.openclaw/workspace/openclaw/repos/octoclaw \
+  --octoclaw-root /Users/guanbear/workspace/OctoClaw \
   --openclaw-home /Users/guanbear/.openclaw
 ```
 
 或者用一键脚本（需指定分支）：
 ```bash
 bash bin/update-openclaw-macmini.sh \
-  --repo-root /Users/guanbear/.openclaw/workspace/openclaw/repos/octoclaw \
+  --repo-root /Users/guanbear/workspace/OctoClaw \
   --openclaw-home /Users/guanbear/.openclaw \
-  --branch refactor/0.4.0-stable
+  --branch v0.5.0
 ```
 
 ## 关键环境变量

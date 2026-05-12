@@ -383,8 +383,8 @@ CREATE INDEX idx_resource_locks_expires ON resource_locks(expires_at);
 Resource key examples:
 
 ```text
-workspace:/Users/guanbear/octoclaw_stable
-repo:/Users/guanbear/octoclaw_stable
+workspace:/Users/guanbear/workspace/OctoClaw
+repo:/Users/guanbear/workspace/OctoClaw
 file:extensions/octoclaw-runtime/src/tools/registration.ts
 im-thread:slack:D0AR3GTPYQL:1777592404.273209
 native-session:agent:main:subagent:...
