@@ -20,6 +20,20 @@ import {
   WATCHDOG_INTERVAL_MS,
 } from "./ack/ack-guard.js";
 import { sendDelegateWithoutDispatchNotice } from "./ack/ack-delegate-without-dispatch.js";
+import {
+  LATENCY_ACK_DELAY_MS,
+  pendingLatencyAckTimers,
+  pendingNeutralInboundAckTimers,
+  pendingNeutralInboundAckTextFallbackTimers,
+  pendingBudgetedMainTimers,
+  lastGroundedPromptByStateKey,
+  configuredNeutralAckDelayMs,
+  configuredNeutralAckTextFallbackDelayMs,
+  neutralAckTimerKey,
+  neutralAckTextFallbackTimerKey,
+  cancelNeutralAckTimersByCandidates,
+  type CanceledNeutralAckTimer,
+} from "./ack/ack-scheduler.js";
 import { sendIMMessage, type SendIMResult } from "./im/send.js";
 import { sendRouteCommitAck } from "./ack/ack-route-commit.js";
 import { fetchLatestUserMessageTsForSessionKey } from "./im/slack-thread-anchor.js";
@@ -152,77 +166,7 @@ function resolveSlimMainContextEnabled(pluginConfig?: UnknownRecord): boolean {
   return true;
 }
 
-const LATENCY_ACK_DELAY_MS = 3500;
-const pendingLatencyAckTimers = new Map<string, ReturnType<typeof setTimeout>>();
-const pendingNeutralInboundAckTimers = new Map<string, ReturnType<typeof setTimeout>>();
-const pendingNeutralInboundAckTextFallbackTimers = new Map<string, ReturnType<typeof setTimeout>>();
-const pendingBudgetedMainTimers = new Map<string, ReturnType<typeof setTimeout>>();
-const lastGroundedPromptByStateKey = new Map<string, string>();
 
-function configuredNeutralAckDelayMs(hookName: string, preferReaction: boolean): number {
-  const raw = Number(process.env.OCTOCLAW_NEUTRAL_ACK_DELAY_MS);
-  if (Number.isFinite(raw) && raw >= 0) return raw;
-  if (preferReaction) return 0;
-  const slowTextRaw = Number(process.env.OCTOCLAW_TEXT_ACK_DELAY_MS);
-  if (Number.isFinite(slowTextRaw) && slowTextRaw >= 0) return slowTextRaw;
-  return hookName === "before_prompt_build" ? 800 : 2_500;
-}
-
-function configuredNeutralAckTextFallbackDelayMs(): number {
-  const raw = Number(process.env.OCTOCLAW_NEUTRAL_ACK_TEXT_FALLBACK_DELAY_MS);
-  if (Number.isFinite(raw) && raw >= 0) return raw;
-  return 6_500;
-}
-
-function neutralAckTimerKey(sessionKey: string, replyToMessageId: string): string {
-  return `${sessionKey}::${replyToMessageId}`;
-}
-
-function neutralAckTextFallbackTimerKey(sessionKey: string, replyToMessageId: string): string {
-  return `${sessionKey}::${replyToMessageId}::text-fallback`;
-}
-
-interface CanceledNeutralAckTimer {
-  sessionKey: string;
-  replyToMessageId: string;
-  fallbackStage?: string;
-}
-
-function parseNeutralAckTimerKey(key: string): CanceledNeutralAckTimer | null {
-  const suffix = "::text-fallback";
-  const normalizedKey = key.endsWith(suffix) ? key.slice(0, -suffix.length) : key;
-  const separatorIndex = normalizedKey.lastIndexOf("::");
-  if (separatorIndex <= 0) return null;
-  const sessionKey = normalizedKey.slice(0, separatorIndex);
-  const replyToMessageId = normalizedKey.slice(separatorIndex + 2);
-  if (!sessionKey || !replyToMessageId) return null;
-  return {
-    sessionKey,
-    replyToMessageId,
-    ...(key.endsWith(suffix) ? { fallbackStage: "text_after_reaction_failed" } : {}),
-  };
-}
-
-function cancelNeutralAckTimersByCandidates(sessionKeys: string[], replyToMessageIds: string[]): CanceledNeutralAckTimer[] {
-  const normalizedSessionKeys = Array.from(new Set(sessionKeys.map((value) => stringValue(value)).filter(Boolean)));
-  if (normalizedSessionKeys.length === 0) return [];
-  const normalizedReplyIds = new Set(replyToMessageIds.map((value) => stringValue(value)).filter(Boolean));
-  const canceled: CanceledNeutralAckTimer[] = [];
-  const cancelFromMap = (timers: Map<string, ReturnType<typeof setTimeout>>): void => {
-    for (const [key, timer] of Array.from(timers.entries())) {
-      const parsed = parseNeutralAckTimerKey(key);
-      if (!parsed) continue;
-      if (!normalizedSessionKeys.includes(parsed.sessionKey)) continue;
-      if (normalizedReplyIds.size > 0 && !normalizedReplyIds.has(parsed.replyToMessageId)) continue;
-      clearTimeout(timer);
-      timers.delete(key);
-      canceled.push(parsed);
-    }
-  };
-  cancelFromMap(pendingNeutralInboundAckTimers);
-  cancelFromMap(pendingNeutralInboundAckTextFallbackTimers);
-  return canceled;
-}
 
 const OCTOCLAW_ROUTE_HINT_SYSTEM_CONTEXT = [
   "Use octoclaw_route_hint only as an internal control-plane action when runtime policy requires it; never introduce it with user-visible text.",
