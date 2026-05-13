@@ -287,66 +287,231 @@ octoclawctl router judge config          # 查看 / 修改 judge 配置
 
 ## 5. Decision Layer
 
-### 5.1 能力快照（Capability Snapshot）
+### 5.1 能力数据来源（总览）
 
-**打包策略**：
+能力数据分三层，**三层都是必需的**：
 
-| 来源 | 优先级 | 刷新方式 |
-|---|---|---|
-| **公开榜单 snapshot** | 最高（V1 主力） | 打包在项目里，每次发版更新；可手动刷 |
-| **Provider Catalog** | 高 | OpenClaw config 变化时自动触发 |
-| **OpenRouter API** | 中 | 每 12h 后台刷新 |
-| **models.dev** | 中 | 每周 |
-| **本地 replay** | 个性化加分 | 实时累积，V1 optional |
-| **用户 override** | 永远最高 | 即时 |
+| 层 | 作用 | 存放位置 | 新鲜度 |
+|---|---|---|---|
+| **Packaged seed**（发版时打包的快照） | 用户装完立刻可用，不依赖任何远端 | `packages/octoclaw-router/src/data/leaderboard-snapshot.json` | 发版时刻 |
+| **Background refresh**（后台定期刷新） | 保持在用版本的数据不过期 | `~/.octoclaw/router/leaderboard-snapshot.json` | 每周一次 |
+| **Event-driven refresh**（事件触发） | 配置变化 / 新 provider / unknown model 时立刻补 | 同上 | 实时 |
 
-**V1 不依赖本地 replay**。OctoClaw 要给别人用，用户默认没有高质量本地数据。所有决策的基础用外部公开数据 + 打包榜单。
+**发版时打包的快照** ≠ **唯一获取途径**。发版打包是"默认值"——保证用户装完即可用、离线也能跑。正常使用中，后台 worker 每周 pull 一次最新快照到本地缓存（通过 GitHub Release artifact，独立于 OctoClaw 版本号），本地缓存优先级高于打包的 seed。
 
-### 5.2 榜单数据格式
+用户可随时：
 
-打包在 `packages/octoclaw-router/src/data/leaderboard-snapshot.json`：
+```bash
+octoclawctl router capability refresh           # 立即刷新，不等周计划
+octoclawctl router capability snapshot show     # 查看当前用的是打包 seed 还是缓存 + 版本时间
+```
+
+**借鉴的开源项目（不是抄代码，是学设计）**：
+
+| 项目 | 借鉴点 | 不借鉴 |
+|------|--------|--------|
+| [LiteLLM `model_prices_and_context_window.json`](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window_backup.json) | 单 JSON + 社区 PR 维护的 registry 思路；可直接作为 fallback source 拉 | 运行时代理层（不需要） |
+| [models.dev](https://models.dev) | provider/model ID 标准化、静态 registry 的形态 | 网页 UI |
+| [OpenRouter `/api/v1/models`](https://openrouter.ai/api/v1/models) | 免费元数据 API（实时 price + context + tool use） | 代理转发（我们直连 provider） |
+| [RouteLLM (lm-sys)](https://github.com/lm-sys/RouteLLM) | "quality 分 + cost 的双目标优化" + preferred/fallback pool 结构 | 训练分类器部分（依赖大量本地 preference data，V1 不现实） |
+| [Continue.dev model catalog](https://github.com/continuedev/continue) | dev-time model catalog 的目录结构 | IDE 集成层 |
+
+核心思路是：**合成质量分 + 多源兜底**。不引入任何训练依赖，也不复用它们的运行时组件。
+
+### 5.2 数据源清单（V1 使用）
+
+**榜单（quality signals）**：
+
+| 数据源 | 覆盖 scenario | 获取方式 | 上游更新频率 | 授权 |
+|---|---|---|---|---|
+| **Artificial Analysis** | 通用 + 价格 + 速度 | 公开 API `/api/v2/data/llms/models`（可选），兜底爬结构化页 | 每周 | 免费商用 |
+| **Aider Leaderboard** | coding_worker | `Aider-AI/aider` 仓库 `aider/website/_data/*.yml` | 每 2-4 周 | Apache-2.0 |
+| **LiveCodeBench** | coding_worker | `LiveCodeBench/LiveCodeBench` 仓库 leaderboard.json | 每周 | MIT |
+| **BFCL**（Berkeley Function Calling Leaderboard） | agentic / tool use | `ShishirPatil/gorilla` 仓库 `berkeley-function-call-leaderboard/result/` | 每月 | Apache-2.0 |
+| **SWE-bench Verified** | coding_worker（深度） | `princeton-nlp/SWE-bench` 仓库 leaderboard JSON | 不定期 | MIT |
+| **LMArena Leaderboard** | research / 综合 | `lmsys/chatbot-arena-leaderboard` HF Space JSON | 近实时 | 公开 |
+
+**元数据（capability metadata）**：
+
+| 数据源 | 覆盖 | 获取方式 | 为什么用 |
+|---|---|---|---|
+| **OpenRouter `/api/v1/models`** | 300+ 模型的 price / context / tool use / cache | HTTPS REST，免 API key 即可拉 catalog | 实时、覆盖最广、稳定 |
+| **LiteLLM `model_prices_and_context_window.json`** | 社区维护的 price + context 注册表 | GitHub raw JSON | 更新比 OpenRouter 快几天，作为交叉核验 |
+| **models.dev** | provider/model ID 标准化 registry | GitHub raw JSON | 统一别名解析（例如 `gpt-5.5` 在不同 provider 的正式名） |
+| **Provider 官方 catalog** | 权威 price / quota / plan | OpenClaw 已配置的 provider SDK | 作为 source-of-truth，覆盖前三者 |
+
+**V1 不用**：
+- Hugging Face Model Card（解析成本高，V2 再看）
+- 单厂商自述 benchmark（偏向性太强）
+- 第三方付费 API（会引入依赖 + 成本）
+- 用户本地 replay（V1 只作为个性化加分；开源项目不能依赖用户有好数据）
+
+### 5.3 刷新机制（什么时候拉 + 怎么不靠发新版）
+
+**刷新不依赖发版**。发版只是 "seed"，保证装完立刻可用。刷新有三条独立路径：
+
+**1. 启动时（immediate）**：
+- 读 `~/.octoclaw/router/leaderboard-snapshot.json`（用户本地缓存，后台 worker 维护）
+- 不存在 / schemaVersion 不对 → fallback 到 `packages/octoclaw-router/src/data/leaderboard-snapshot.json`（打包 seed）
+- 两者都挂 → emit degraded warning，仍可运行（用 tier 默认值 + quality_floor + user override）
+
+**2. 后台 worker（scheduled）**：
+- 每周一 02:00 本地时间拉 **榜单 snapshot**
+  - 从 `github.com/<org>/octoclaw` GitHub Release 的 `leaderboard-snapshot.json` artifact 拉
+  - 这个 artifact 由仓库的 weekly CI job 自动生成（见 §5.6），**不需要发新版**
+- 每 12 小时拉 **元数据**（OpenRouter catalog + models.dev + LiteLLM 单 JSON）
+- 任何一步失败 → 保留上次成功的缓存，写 warning log，不阻塞用户
+
+**3. 事件驱动（on-change）**：
+- OpenClaw config `~/.openclaw/openclaw.json` mtime 变化 → 触发**部分刷新**（只拉变化的 provider / model 元数据）
+- 路由时发现 unknown model → 尝试补查 OpenRouter / models.dev；补不到 → 标 `tier=unknown` 进 dispreferred 池
+- 用户手动 `octoclawctl router capability refresh` → 全量刷
+
+**不在热路径拉远端**。所有热路径（judge + decision）只读本地缓存，保证毫秒级。
+
+### 5.4 权重与合成（score fusion）
+
+一个模型在一个 scenario 下的 score 由多个 source 合成：
+
+```
+score(model, scenario) =
+  Σ (source_weight × normalized_source_score)
+  / Σ source_weight
+
+source_weight = base_weight
+              × freshness_factor
+              × source_health
+```
+
+**base_weight**（各 source 在该 scenario 下的权威度，总和归一化为 1.0）：
+
+| scenario | Aider | LiveCodeBench | SWE-bench | BFCL | AA | LMArena |
+|----------|-------|---------------|-----------|------|------|---------|
+| coding_worker | 0.35 | 0.30 | 0.20 | — | 0.15 | — |
+| research | — | — | — | — | 0.40 | 0.60 |
+| agentic | 0.20 | — | — | 0.50 | 0.30 | — |
+
+这些数不是拍脑袋——是按"这个 source 在这个 scenario 下是不是 gold standard"给的。值写在 `packages/octoclaw-router/src/data/source-weights.json`，可以 hotfix 改而不用动代码。
+
+**freshness_factor**：
+
+| 上次抓取到现在 | factor |
+|----------------|--------|
+| < 30 天 | 1.0 |
+| 30-90 天 | 0.7 |
+| 90-180 天 | 0.4 |
+| > 180 天 | 0.15（几乎无视，但仍参与合成以防所有 source 都过期） |
+
+**source_health**：
+
+- 最近 4 次 worker 抓取的成功率（0.0-1.0）
+- 连续 4 次失败 → 0.0，标红通知
+- 恢复后重新累积，不会永久拉黑
+
+**confidence 字段的来源**：
+
+```
+confidence = if   Σ (base_weight × freshness_factor) >= 0.7  →  "high"
+             elif >= 0.4                                      →  "medium"
+             else                                             →  "low"
+```
+
+这个机制天然解决"数据源挂了怎么办"：挂了的 source `source_health = 0`，自动从合成里剔除，confidence 降级，用户看得到。
+
+### 5.5 Snapshot 数据格式
+
+本地缓存和打包 seed 用同一套 schema：
 
 ```json
 {
   "snapshotVersion": "2026-05-13",
+  "schemaVersion": 1,
+  "generatedAt": "2026-05-13T10:00:00Z",
   "sources": [
-    "pinchbench@2026-05-01",
-    "aider@2026-05-10",
-    "bfcl@2026-04-30",
-    "artificial_analysis@2026-05-12"
+    { "name": "artificial_analysis",    "fetchedAt": "2026-05-13T01:02:00Z", "ok": true },
+    { "name": "aider",                  "fetchedAt": "2026-05-13T01:02:10Z", "ok": true },
+    { "name": "livecodebench",          "fetchedAt": "2026-05-13T01:02:20Z", "ok": true },
+    { "name": "bfcl",                   "fetchedAt": "2026-05-13T01:02:30Z", "ok": true },
+    { "name": "swebench_verified",      "fetchedAt": "2026-05-12T03:00:00Z", "ok": true, "stale": true },
+    { "name": "lmarena",                "fetchedAt": "2026-05-13T01:02:40Z", "ok": false, "error": "http_503" }
   ],
   "models": {
     "openai/gpt-5.5": {
       "tier": "frontier",
       "scores": {
-        "coding_worker": { "score": 87, "confidence": "high" },
-        "research": { "score": 91, "confidence": "high" },
-        "agentic": { "score": 89, "confidence": "medium" }
+        "coding_worker": { "score": 87, "confidence": "high",   "basis": ["aider","livecodebench"] },
+        "research":      { "score": 91, "confidence": "high",   "basis": ["artificial_analysis","lmarena"] },
+        "agentic":       { "score": 89, "confidence": "medium", "basis": ["bfcl"] }
       },
       "last_verified": "2026-05-12"
-    },
-    "zhipu/glm-5.1": { ... }
+    }
   }
 }
 ```
 
+**每条 score 记录它是从哪些 source 合成的**。这样某个数据源挂了的时候，可以降级对应 score 的 confidence，而不是整条记录都失效。
+
 V1 内部使用时：`complexity=deep` → 看各 frontier 模型 → 再按 cost / plan / health 排序。scenario 分数**内部备用，V1 不通过 judge 决定**。
 
-### 5.3 榜单更新触发
+### 5.6 数据源本身变化 / 上游挂了 / 格式漂移
 
-**主动触发**（必需）：
-- OpenClaw 配置变化（`~/.openclaw/openclaw.json` mtime 变化）→ 自动 refresh
-- 发现 unknown model（不在 snapshot）→ 查 OpenRouter / models.dev 补充
-- 用户新加 provider → 向导引导补充
+**三类上游变化的处理**：
 
-**被动刷新**：
-- 每 12h 后台拉 OpenRouter API
-- 每周拉一次榜单 snapshot（从 GitHub Release）
-- 用户手动 `octoclawctl router capability refresh`
+1. **上游临时不可用**（HTTP 5xx / 超时）
+   - 当次 worker 跑失败，保留当前缓存
+   - 连续失败 3 周 → 在 `octoclawctl router capability snapshot show` 里标红，但不阻塞路由
+   - 决策继续跑，用上次成功的数据；该 source 的 `source_health` 降为 0，合成时被自动剔除
 
-**不在热路径拉远端**。用户消息热路径只读本地 cached snapshot。
+2. **上游数据格式变化**（JSON schema 漂移）
+   - 每个 source 有独立的 `parseLeaderboard()` 函数，用 Zod schema 校验
+   - 校验失败 → 标该 source 为 `ok: false, error: "schema_mismatch"`
+   - 其他 source 合成的 score 继续用，不受影响（这就是多 source 合成的价值）
+   - 仓库维护者收到 CI 告警 → 修 parser → merge 后，下一次 worker 周期自动恢复；**用户无需升级**
 
-### 5.4 Cost / Plan / Quota
+3. **上游 URL / API 改了**（整个数据源搬家）
+   - worker 连不上 → 标 `error: "connection_refused"`，触发 1 次警告通知
+   - 配置里预留 `sourceOverrides`，用户可以临时 override 单个 source 的 URL：
+     ```json
+     { "router": { "sourceOverrides": { "aider": { "url": "https://new.url/data.json" } } } }
+     ```
+   - 长期解决由维护者改 GitHub Release artifact 里的默认 URL；用户端下一次周更自动生效
+
+**兜底链**（当所有榜单都挂）：
+
+```
+best-effort leaderboard  →  packaged seed  →  tier 默认值
+                                              + quality_floor
+                                              + user override
+```
+
+最差情况下路由仍能跑，只是 capability_score 退化成 "frontier / strong / mid 三档默认值"。用户如果配了 override，override 永远生效。
+
+### 5.7 谁维护这些数据源（CI 周更 + 不靠发版）
+
+刷新**不靠发版**。两个机制分开：
+
+**发版时的 seed**：`packages/octoclaw-router/src/data/leaderboard-snapshot.json`
+- 装完立刻可用，离线也能跑
+- 发版时 freeze，发版后不再改
+- 只是保底，正常使用中会被 worker 覆盖
+
+**CI 周更 artifact**（真正的刷新通道）：
+- 仓库 `.github/workflows/refresh-leaderboard.yml` 每周一 01:00 UTC 跑
+- 跑 `scripts/refresh-leaderboard-snapshot.mjs`，拉各 source → 合成 → 输出 `leaderboard-snapshot.json`
+- 以 `leaderboard-snapshot` tag 的 GitHub Release artifact 形式发布（和 OctoClaw 版本独立）
+- 用户端 worker 每周一 02:00 本地时间拉这个 artifact，直接写到 `~/.octoclaw/router/`
+- **用户不用升级 OctoClaw，榜单就自动更新**
+
+**维护者负担**：
+- 监控 CI 告警邮件（parser 挂了 / 某 source 挂了）
+- 合 parser 的修复 PR
+- 审查数据 diff（防止上游出脏数据传染用户），正常情况是点 approve 就行
+
+**用户负担**：零。最多偶尔 `octoclawctl router capability refresh` 主动拉一次。
+
+**本地 replay**（用户自己的数据）**V1 不进合成**，只作为单用户的个性化加分项，保证开源后不同用户的行为可预测。
+
+### 5.8 Cost / Plan / Quota
 
 **硬能力数据**（从 catalog / OpenRouter 读）：
 - `inputUsdPerMTok`, `outputUsdPerMTok`, `cacheReadUsdPerMTok`, `cacheWriteUsdPerMTok`
@@ -370,7 +535,7 @@ interface PlanInfo {
 - `configured = false` 的模型**永远不进 live**
 - Plan 余额 < 10% → 自动切走 + 发轻量提示
 
-### 5.5 稳定性 / 健康（Realtime）
+### 5.9 稳定性 / 健康（Realtime）
 
 **实时更新**（不缓存）：
 
@@ -395,7 +560,7 @@ interface HealthSignals {
 
 **切走目标**（你的明确要求）：**同等能力的其他 provider 优先**，其次降级到便宜模型。
 
-### 5.6 打分算法（Scoring Engine）
+### 5.10 打分算法（Scoring Engine）
 
 V1 只有一种模式（balanced，默认）：
 
@@ -436,7 +601,7 @@ model_score(task, model) =
 
 **用户 override 优先于所有打分**。
 
-### 5.7 Shadow 和自动推广
+### 5.11 Shadow 和自动推广
 
 **Shadow 流程**（所有候选模型从这里开始）：
 
@@ -473,7 +638,7 @@ for each (model, complexity_tier) candidate in shadow:
 - 最大一天只推广 1 个（model, complexity_tier）组合
 - 推广失败后 30 天内不能再尝试同组合
 
-### 5.8 推荐错误的处理
+### 5.12 推荐错误的处理
 
 委派失败或用户返工信号：
 
@@ -490,7 +655,7 @@ for each (model, complexity_tier) candidate in shadow:
 
 **不互动询问**（Q11 否决了 D 选项）。用户随时通过 CLI override（Q9）。
 
-### 5.9 Nightly Review（可选）
+### 5.13 Nightly Review（可选）
 
 **V1 只提供轻量模式**（零 LLM 消耗）：
 - 统计：失败率、成本对比、延迟分布、ignored_reason 计数
