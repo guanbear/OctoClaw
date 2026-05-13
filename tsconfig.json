@@ -5,6 +5,9 @@
       "path": "packages/octoclaw-contracts"
     },
     {
+      "path": "packages/octoclaw-router"
+    },
+    {
       "path": "packages/octoclaw-policy"
     },
     {

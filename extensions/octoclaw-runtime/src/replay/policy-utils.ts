@@ -245,7 +245,6 @@ export function compactDelegatePolicyPrompt(decision: Record<string, unknown>): 
     `decision_bucket=${String(routeDecision.decision_bucket ?? "")}`,
     `route_confidence=${String(routeDecision.route_confidence ?? canonicalDecision.route_confidence ?? "")}`,
     `complexity=${String(routeDecision.complexity ?? canonicalDecision.complexity ?? "")}`,
-    `complexity_confidence=${String(routeDecision.complexity_confidence ?? canonicalDecision.complexity_confidence ?? "")}`,
     `worker_pool=${String(routeDecision.worker_pool ?? "")}`,
     `task_class=${String(routeDecision.task_class ?? "")}`,
     `must_delegate_via=${String(toolPolicy.must_delegate_via ?? "")}`,

@@ -1,5 +1,5 @@
-import { selectShadowRecommendation, writeShadowEvent } from "@octoclaw/policy/router-lite";
-import type { RouterLiteShadowEvent, ModelIntelSnapshot } from "@octoclaw/policy/router-lite";
+import { selectShadowRecommendation, writeShadowEvent } from "@octoclaw/router/decision";
+import type { RouterLiteShadowEvent, ModelIntelSnapshot } from "@octoclaw/router/decision";
 import { loadRouterLiteSnapshot, resolveShadowEventPath } from "./snapshot-loader.js";
 import { buildRouterLiteRequest, extractJudgeSignals, buildRuntimeSignalsFromDecision, resolveActualModel } from "./request-builder.js";
 import type { RouterLiteRuntimeSignals } from "./request-builder.js";

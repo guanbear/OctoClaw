@@ -46,8 +46,6 @@ import {
   coerceJudgeRole,
   coerceQualityBar,
   coerceRouteConfidence,
-  coerceStartupDecisionBucket,
-  coerceUnitConfidence,
   extractPromptText,
   hardDelegateReasonsAllowFollowupOverride,
   isDegradedDelegateJudgeResult,
@@ -1056,12 +1054,11 @@ export async function resolveStatelessPolicyDecision(task: string, options: Unkn
   let judgeShadowLog: UnknownRecord | null = null;
   let judgeBudgetBand: string | null = null;
   let judgeRole: PolicyRole | undefined;
-  let judgeComplexityBand: "simple" | "normal" | "deep" | undefined;
+  let judgeComplexityBand: "simple" | "normal" | "complex" | "deep" | undefined;
   let judgeExpectedDurationBand: "instant" | "short" | "medium" | "long" | undefined;
   let judgeQualityBar: "standard" | "high" | "critical" | undefined;
   let judgeRiskFlags: string[] = [];
   let judgeRouteConfidence: number | undefined;
-  let judgeComplexityConfidence: number | undefined;
   let delegateReasonCodes: string[] = [];
   let deterministicFallbackApplied = false;
   let degradedFallbackApplied = false;
@@ -1120,12 +1117,10 @@ export async function resolveStatelessPolicyDecision(task: string, options: Unkn
       const degradedDelegateJudge = isDegradedDelegateJudgeResult(judgeResult);
       const judgeLatencyMs = Date.now() - judgeStart;
       if (process.env.OCTOCLAW_JUDGE_DEBUG) {
-        console.log(`[octoclaw-judge] judge done: ${judgeLatencyMs}ms result=${judgeResult ? `route=${judgeResult.route} conf=${judgeResult.confidence} ack="${judgeResult.ackText?.slice(0, 30)}"` : "null(timeout)"}`);
+        console.log(`[octoclaw-judge] judge done: ${judgeLatencyMs}ms result=${judgeResult ? `route=${judgeResult.route} conf=${judgeResult.confidence}` : "null(timeout)"}`);
       }
 
-      judgeAckText = judgeConfig.judgeAckEnabled
-        ? (isActionableJudgeResult(judgeResult, judgeConfig.minConfidence) ? (judgeResult?.ackText ?? null) : null)
-        : null;
+      judgeAckText = null;
       judgeShadowLog = {
         judge_latency_ms: judgeLatencyMs,
         judge_timeout: judgeResult === null,
@@ -1134,7 +1129,7 @@ export async function resolveStatelessPolicyDecision(task: string, options: Unkn
         judge_confidence: judgeResult?.confidence ?? null,
         final_judge_route: judgeResult?.route ?? null,
         final_judge_confidence: judgeResult?.confidence ?? null,
-        judge_abstain: Boolean(judgeResult?.abstainReason),
+        judge_abstain: false,
         judge_ack_text: judgeAckText,
         rule_route: decision.route,
         judge_override: false,
@@ -1144,17 +1139,14 @@ export async function resolveStatelessPolicyDecision(task: string, options: Unkn
       };
 
       const actionableJudgeResult = isActionableJudgeResult(judgeResult, judgeConfig.minConfidence);
-      if (judgeResult && !judgeResult.abstainReason) {
+      if (judgeResult) {
         metadata._judge_min_confidence = judgeConfig.minConfidence;
         metadata._judge_confidence = judgeResult.confidence;
-        metadata._judge_route_confidence = coerceRouteConfidence(judgeResult.routeConfidence ?? judgeResult.confidence);
-        const judgeDecisionBucket = coerceStartupDecisionBucket(judgeResult.decisionBucket ?? judgeResult.decision_bucket);
+        metadata._judge_route_confidence = coerceRouteConfidence(judgeResult.confidence);
+        const judgeDecisionBucket = null;
         if (judgeDecisionBucket) metadata._judge_decision_bucket = judgeDecisionBucket;
-        if (judgeResult.scope) metadata._judge_scope = judgeResult.scope;
-        if (typeof judgeResult.evidenceRequired === "boolean") metadata._judge_evidence_required = judgeResult.evidenceRequired;
         if (judgeResult.route === "reply" || actionableJudgeResult) metadata._judge_route_intent = judgeResult.route;
         metadata._judge_actionable_route = actionableJudgeResult;
-        if (actionableJudgeResult && judgeResult.hardDelegateSignal === true) metadata._judge_hard_delegate_signal = true;
         judgeShadowLog.judge_decision_bucket_telemetry = judgeDecisionBucket || null;
       }
 
@@ -1222,15 +1214,14 @@ export async function resolveStatelessPolicyDecision(task: string, options: Unkn
             judgeSucceeded = true;
           }
         }
-        judgeBudgetBand = judgeResult.budgetBand ?? null;
+        judgeBudgetBand = null;
         judgeRole = undefined;
-        judgeComplexityBand = coerceComplexityBand(judgeResult.complexity ?? judgeResult.complexityBand);
-        judgeComplexityConfidence = coerceUnitConfidence(judgeResult.complexityConfidence ?? judgeResult.complexity_confidence);
-        judgeExpectedDurationBand = coerceExpectedDurationBand(judgeResult.expectedDurationBand);
-        judgeQualityBar = coerceQualityBar(judgeResult.qualityBar);
-        judgeRiskFlags = asStringArray(judgeResult.riskFlags);
-        judgeRouteConfidence = coerceRouteConfidence(judgeResult.routeConfidence ?? judgeResult.confidence);
-        delegateReasonCodes = coerceDelegateReasonCodes(judgeResult.delegateReasonCodes);
+        judgeComplexityBand = coerceComplexityBand(judgeResult.complexity);
+        judgeExpectedDurationBand = undefined;
+        judgeQualityBar = undefined;
+        judgeRiskFlags = [];
+        judgeRouteConfidence = coerceRouteConfidence(judgeResult.confidence);
+        delegateReasonCodes = [];
 
         // ── Validator default rules (spec §11) ──
         // Legacy judge metadata is telemetry only; route correction stays deterministic.
@@ -1388,7 +1379,6 @@ export async function resolveStatelessPolicyDecision(task: string, options: Unkn
       fallback_reason: judgeShadowLog?.fallback_reason ?? null,
       final_judge_source: deterministicRuleApplied ? "policy_rule" : (degradedFallbackApplied ? "judge_degraded_fallback" : (deterministicFallbackApplied ? "timeout_fallback" : (judgeSucceeded ? "local" : (judgeShadowLog?.judge_timeout ? "timeout" : "no_judge")))),
       complexity_band: judgeComplexityBand,
-      complexity_confidence: judgeComplexityConfidence,
       expected_duration_band: judgeExpectedDurationBand,
       quality_bar: judgeQualityBar,
       risk_flags: judgeRiskFlags,
@@ -1424,7 +1414,6 @@ export async function resolveStatelessPolicyDecision(task: string, options: Unkn
     _judge_role: judgeRole,
     _judge_budget_band: judgeBudgetBand,
     _judge_complexity_band: judgeComplexityBand,
-    _judge_complexity_confidence: judgeComplexityConfidence,
     _judge_expected_duration_band: judgeExpectedDurationBand,
     _judge_quality_bar: judgeQualityBar,
     _judge_risk_flags: judgeRiskFlags,

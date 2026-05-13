@@ -1,7 +1,7 @@
 import fsSync from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import type { ModelIntelSnapshot } from "@octoclaw/policy/router-lite";
+import type { ModelIntelSnapshot } from "@octoclaw/router/decision";
 
 const DEFAULT_SNAPSHOT_PATH_ENV = "OCTOCLAW_ROUTER_SNAPSHOT_PATH";
 const SNAPSHOT_CACHE_TTL_MS = 60_000;

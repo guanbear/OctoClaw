@@ -57,7 +57,8 @@
   },
   "dependencies": {
     "@octoclaw/contracts": "workspace:*",
-    "@octoclaw/policy": "workspace:*"
+    "@octoclaw/policy": "workspace:*",
+    "@octoclaw/router": "workspace:*"
   },
   "scripts": {
     "build": "tsc --build",

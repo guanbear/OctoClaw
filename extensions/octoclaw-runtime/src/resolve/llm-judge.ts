@@ -3,17 +3,15 @@ import {
   JUDGE_FAST_DEFAULTS,
   isActionableJudgeResult,
   isValidJudgeOutput,
-  validateJudgeOutputDetailed,
   type JudgeFastConfig,
   type JudgeInput,
   type JudgeOutput,
-} from "@octoclaw/policy/judge-schema";
-import type { JudgeContextPacket } from "@octoclaw/policy/judge";
+} from "@octoclaw/router/judge-schema";
+import type { JudgeContextPacket } from "@octoclaw/router/judge-schema";
 import {
   buildJudgeSystemPrompt,
   buildJudgeUserPrompt,
-} from "@octoclaw/policy/judge-prompt";
-import { asStringArrayOptional } from "../util/type-coercion.js";
+} from "@octoclaw/router/judge-prompt";
 import { buildJudgeContextPacket } from "./judge-context-packet.js";
 
 export { isValidJudgeOutput, isActionableJudgeResult };
@@ -42,69 +40,13 @@ function classifyJudgeError(error: unknown): JudgeFailureClass {
 }
 
 function coerceJudgeOutput(parsed: Record<string, unknown>): JudgeOutput {
-  const ackTextRaw = parsed.ackText ?? parsed.ack_text ?? null;
-  const output: JudgeOutput = {
+  return {
     route: parsed.route as JudgeOutput["route"],
     confidence: typeof parsed.confidence === "number" && parsed.confidence > 0
       ? parsed.confidence
-      : typeof parsed.routeConfidence === "number" && parsed.routeConfidence > 0
-        ? parsed.routeConfidence
-        : 0,
-    abstainReason: (parsed.abstainReason ?? parsed.abstain_reason ?? null) as string | null,
-    ackText: typeof ackTextRaw === "string" ? ackTextRaw : null,
-    is_followup_to_recent_execution: typeof (parsed.is_followup_to_recent_execution ?? parsed.isFollowupToRecentExecution) === "boolean"
-      ? (parsed.is_followup_to_recent_execution ?? parsed.isFollowupToRecentExecution) as boolean
-      : undefined,
-    is_new_work: typeof (parsed.is_new_work ?? parsed.isNewWork) === "boolean"
-      ? (parsed.is_new_work ?? parsed.isNewWork) as boolean
-      : undefined,
-    expected_deliverable: typeof (parsed.expected_deliverable ?? parsed.expectedDeliverable) === "string"
-      ? String(parsed.expected_deliverable ?? parsed.expectedDeliverable).trim() || null
-      : null,
-    replyMode: (parsed.replyMode ?? parsed.reply_mode ?? null) as JudgeOutput["replyMode"],
-    delegateRole: (parsed.delegateRole ?? parsed.delegate_role ?? null) as JudgeOutput["delegateRole"],
-    coordinationModeHint: (parsed.coordinationModeHint ?? parsed.coordination_mode_hint ?? null) as JudgeOutput["coordinationModeHint"],
-    complexity: (parsed.complexity ?? parsed.complexityBand ?? parsed.complexity_band ?? null) as JudgeOutput["complexity"],
-    complexityConfidence: typeof (parsed.complexityConfidence ?? parsed.complexity_confidence) === "number"
-      ? (parsed.complexityConfidence ?? parsed.complexity_confidence) as number
-      : undefined,
-    complexity_confidence: typeof (parsed.complexity_confidence ?? parsed.complexityConfidence) === "number"
-      ? (parsed.complexity_confidence ?? parsed.complexityConfidence) as number
-      : undefined,
-    scope: (parsed.scope ?? null) as JudgeOutput["scope"],
-    toolNeedHint: (parsed.toolNeedHint ?? parsed.tool_need_hint ?? null) as JudgeOutput["toolNeedHint"],
-    durationHint: (parsed.durationHint ?? parsed.duration_hint ?? null) as JudgeOutput["durationHint"],
-    decisionBucket: (parsed.decisionBucket ?? parsed.decision_bucket) as JudgeOutput["decisionBucket"],
-    startupCostPolicy: (parsed.startupCostPolicy ?? parsed.startup_cost_policy ?? null) as JudgeOutput["startupCostPolicy"],
-    hardDelegateSignal: typeof (parsed.hardDelegateSignal ?? parsed.hard_delegate_signal) === "boolean"
-      ? (parsed.hardDelegateSignal ?? parsed.hard_delegate_signal) as boolean
-      : undefined,
-    role: (parsed.role ?? null) as JudgeOutput["role"],
-    complexityBand: (parsed.complexityBand ?? parsed.complexity_band) as JudgeOutput["complexityBand"],
-    expectedDurationBand: (parsed.expectedDurationBand ?? parsed.expected_duration_band) as JudgeOutput["expectedDurationBand"],
-    qualityBar: (parsed.qualityBar ?? parsed.quality_bar) as JudgeOutput["qualityBar"],
-    riskFlags: asStringArrayOptional(parsed.riskFlags ?? parsed.risk_flags),
-    delegateReasonCodes: asStringArrayOptional(parsed.delegateReasonCodes ?? parsed.delegate_reason_codes) as JudgeOutput["delegateReasonCodes"],
-    routeConfidence: typeof (parsed.routeConfidence ?? parsed.route_confidence) === "number"
-      ? (parsed.routeConfidence ?? parsed.route_confidence) as number
-      : undefined,
-    requestKind: (parsed.requestKind ?? parsed.request_kind) as string | undefined,
-    target: parsed.target as string | undefined,
-    budgetBand: (parsed.budgetBand ?? parsed.budget_band) as JudgeOutput["budgetBand"],
-    reasonCodes: (parsed.reasonCodes ?? parsed.reason_codes) as string[] | undefined,
-    evidenceRequired: (parsed.evidenceRequired ?? parsed.evidence_required) as boolean | undefined,
-    ackRequired: (parsed.ackRequired ?? parsed.ack_required) as boolean | undefined,
+      : 0,
+    complexity: parsed.complexity as JudgeOutput["complexity"],
   };
-
-  const validation = validateJudgeOutputDetailed(output);
-  if (validation.degraded) {
-    Object.assign(output, {
-      judge_schema_degraded: true,
-      degraded_reasons: validation.degradedReasons,
-    });
-  }
-
-  return output;
 }
 
 export function resolveJudgeConfig(raw: Record<string, unknown>): JudgeConfig | null {
@@ -398,7 +340,7 @@ export async function callLlmJudge(
       buildJudgeSystemPrompt(),
       buildJudgeUserPrompt(input),
       controller.signal,
-      192,
+      96,
     );
     if (process.env.OCTOCLAW_JUDGE_DEBUG) {
       console.log(`[octoclaw-judge] raw response length=${raw.length} preview="${raw.slice(0, 200)}"`);

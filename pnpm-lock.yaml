@@ -23,6 +23,9 @@ importers:
       '@octoclaw/policy':
         specifier: workspace:*
         version: link:../../packages/octoclaw-policy
+      '@octoclaw/router':
+        specifier: workspace:*
+        version: link:../../packages/octoclaw-router
 
   extensions/octoclaw-status-surface:
     dependencies:
@@ -36,6 +39,15 @@ importers:
   packages/octoclaw-contracts: {}
 
   packages/octoclaw-policy:
+    dependencies:
+      '@octoclaw/contracts':
+        specifier: workspace:*
+        version: link:../octoclaw-contracts
+      '@octoclaw/router':
+        specifier: workspace:*
+        version: link:../octoclaw-router
+
+  packages/octoclaw-router:
     dependencies:
       '@octoclaw/contracts':
         specifier: workspace:*

@@ -1,4 +1,4 @@
-import type { RouterLiteRequest, RouterLiteRoute, RouterLiteScenario } from "@octoclaw/policy/router-lite";
+import type { RouterLiteRequest, RouterLiteRoute, RouterLiteScenario } from "@octoclaw/router/decision";
 import { asRecord, asString } from "../util/type-coercion.js";
 
 type UnknownRecord = Record<string, unknown>;
@@ -20,7 +20,6 @@ interface JudgeSignals {
   route?: string;
   confidence?: number;
   complexity?: string;
-  complexityConfidence?: number;
 }
 
 export interface BuildRouterLiteRequestInput {
@@ -48,7 +47,6 @@ export function buildRouterLiteRequest(input: BuildRouterLiteRequestInput): Rout
     if (!judge.route || !VALID_ROUTES.has(judge.route)) return null;
     if (typeof judge.confidence !== "number" || !Number.isFinite(judge.confidence)) return null;
     if (!judge.complexity || !VALID_COMPLEXITIES.has(judge.complexity)) return null;
-    if (typeof judge.complexityConfidence !== "number" || !Number.isFinite(judge.complexityConfidence)) return null;
 
     return {
       sessionKey: input.sessionKey,
@@ -59,7 +57,6 @@ export function buildRouterLiteRequest(input: BuildRouterLiteRequestInput): Rout
         route: judge.route as RouterLiteRoute,
         confidence: judge.confidence,
         complexity: judge.complexity as "simple" | "normal" | "complex" | "deep",
-        complexityConfidence: judge.complexityConfidence,
       },
       runtime: {
         channel: input.runtimeSignals.channel,
@@ -92,16 +89,14 @@ export function extractJudgeSignals(decision: UnknownRecord, judgeResult?: Unkno
     const route = asString(routeDecision.route || decision.route);
     const confidence = Number(routeDecision.confidence ?? decision.confidence);
     const complexity = asString(routeDecision.complexity ?? decision.complexity);
-    const complexityConfidence = Number(routeDecision.complexity_confidence ?? decision.complexityConfidence);
     if (!route) return null;
-    return { route, confidence, complexity, complexityConfidence };
+    return { route, confidence, complexity };
   }
 
   return {
     route: asString(judge.route),
     confidence: Number(judge.confidence),
     complexity: asString(judge.complexity),
-    complexityConfidence: Number(judge.complexity_confidence ?? judge.complexityConfidence),
   };
 }
 

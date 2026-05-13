@@ -115,8 +115,7 @@ export const VALIDATOR_DEFAULT_RULES = [
 export const JudgeOutputSchema = {
   route: "reply | delegate (REQUIRED)",
   confidence: "0.0-1.0 float (REQUIRED, your certainty about this routing decision)",
-  complexity: "simple | normal | deep (REQUIRED, model/cost complexity only; must not change route)",
-  complexity_confidence: "0.0-1.0 float (REQUIRED, your certainty about complexity)",
+  complexity: "simple | normal | complex | deep (REQUIRED, model/cost complexity only; must not change route)",
 } as const;
 
 export const AckWriterOutputSchema = {

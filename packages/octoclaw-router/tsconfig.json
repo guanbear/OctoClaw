@@ -7,7 +7,6 @@
   },
   "include": ["src", "src/**/*.json"],
   "references": [
-    { "path": "../octoclaw-contracts" },
-    { "path": "../octoclaw-router" }
+    { "path": "../octoclaw-contracts" }
   ]
 }

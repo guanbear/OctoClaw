@@ -7,7 +7,7 @@ function makeRequest(overrides?: Partial<RouterLiteRequest>): RouterLiteRequest 
     sessionKey: "test-session",
     turnId: "turn-001",
     liveRoute: "delegate",
-    judge: { route: "delegate", confidence: 0.9, complexity: "normal", complexityConfidence: 0.85 },
+    judge: { route: "delegate", confidence: 0.9, complexity: "normal" },
     runtime: {},
     snapshotId: "snap-001",
     ...overrides,
@@ -172,7 +172,7 @@ describe("router-lite shadow selector", () => {
 
   it("rejects models below the quality floor", () => {
     const recommendation = selectShadowRecommendation(
-      makeRequest({ judge: { route: "delegate", confidence: 0.9, complexity: "complex", complexityConfidence: 0.85 } }),
+      makeRequest({ judge: { route: "delegate", confidence: 0.9, complexity: "complex" } }),
       makeSnapshot([makeModel({ capability: { ...makeModel().capability, codingTier: "mini" } })]),
     );
 
@@ -370,7 +370,7 @@ describe("router-lite shadow selector", () => {
 
   it("does not recommend a different model when judge confidence is low", () => {
     const recommendation = selectShadowRecommendation(
-      makeRequest({ judge: { route: "delegate", confidence: 0.4, complexity: "normal", complexityConfidence: 0.85 } }),
+      makeRequest({ judge: { route: "delegate", confidence: 0.4, complexity: "normal" } }),
       makeSnapshot([makeModel()]),
     );
 

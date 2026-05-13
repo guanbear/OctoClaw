@@ -324,9 +324,9 @@ export function coerceQualityBar(value: unknown): "standard" | "high" | "critica
   return normalized === "standard" || normalized === "high" || normalized === "critical" ? normalized : undefined;
 }
 
-export function coerceComplexityBand(value: unknown): "simple" | "normal" | "deep" | undefined {
+export function coerceComplexityBand(value: unknown): "simple" | "normal" | "complex" | "deep" | undefined {
   const normalized = asString(value);
-  return normalized === "simple" || normalized === "normal" || normalized === "deep" ? normalized : undefined;
+  return normalized === "simple" || normalized === "normal" || normalized === "complex" || normalized === "deep" ? normalized : undefined;
 }
 
 export function coerceExpectedDurationBand(value: unknown): "instant" | "short" | "medium" | "long" | undefined {

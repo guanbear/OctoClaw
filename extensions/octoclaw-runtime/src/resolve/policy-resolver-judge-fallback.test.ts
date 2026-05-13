@@ -32,29 +32,6 @@ function judgeResponse(route: "reply" | "delegate", confidence = 0.82): Response
           route,
           confidence,
           complexity: route === "delegate" ? "normal" : "simple",
-          complexity_confidence: 0.74,
-          abstain_reason: null,
-          ack_text: "收到",
-          decision_bucket: route === "delegate" ? "must_delegate" : "must_reply",
-          startup_cost_policy: {
-            main_fast_path_allowed: route !== "delegate",
-            max_wall_ms: route === "delegate" ? 0 : 20_000,
-            max_tool_calls: route === "delegate" ? 0 : 1,
-            escalation_triggers: ["write_or_mutation_needed"],
-          },
-          hard_delegate_signal: route === "delegate",
-          is_followup_to_recent_execution: false,
-          is_new_work: route === "delegate",
-          expected_deliverable: route === "delegate" ? "delegated deliverable" : null,
-          ...(route === "delegate" ? {
-            scope: "local",
-            tool_need_hint: "required",
-            duration_hint: "medium",
-          } : {
-            scope: "local",
-            tool_need_hint: "none",
-            duration_hint: "short",
-          }),
         }),
       },
     }],
@@ -68,8 +45,6 @@ function minimalJudgeResponse(route: "reply" | "delegate", confidence = 0.82): R
         content: JSON.stringify({
           route,
           confidence,
-          abstain_reason: null,
-          ack_text: "收到",
         }),
       },
     }],
@@ -77,28 +52,17 @@ function minimalJudgeResponse(route: "reply" | "delegate", confidence = 0.82): R
 }
 
 function judgeSignalResponse(payload: Record<string, unknown>): Response {
+  const route = payload.route === "delegate" ? "delegate" : "reply";
+  const confidence = typeof payload.confidence === "number" ? payload.confidence : 0.86;
+  const complexity = typeof payload.complexity === "string" ? payload.complexity : route === "delegate" ? "normal" : "simple";
+
   return jsonResponse({
     choices: [{
       message: {
         content: JSON.stringify({
-          route: "reply",
-          confidence: 0.86,
-          complexity: "simple",
-          complexity_confidence: 0.74,
-          abstain_reason: null,
-          ack_text: "收到",
-          is_followup_to_recent_execution: false,
-          is_new_work: false,
-          expected_deliverable: null,
-          reply_mode: "answer",
-          delegate_role: null,
-          coordination_mode_hint: "solo_worker",
-          scope: "local",
-          tool_need_hint: "none",
-          duration_hint: "short",
-          evidence_required: false,
-          reason_codes: [],
-          ...payload,
+          route,
+          confidence,
+          complexity,
         }),
       },
     }],
@@ -701,7 +665,7 @@ describe("execution coverage override intent guard", () => {
     });
   });
 
-  it("derives budgeted bucket from reply cost signals without trusting judge decision_bucket", async () => {
+  it("derives budgeted bucket from runtime cost signals without trusting judge extra fields", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(judgeSignalResponse({
       scope: "remote",
       tool_need_hint: "maybe",
@@ -714,6 +678,11 @@ describe("execution coverage override intent guard", () => {
       {
         metadata: {
           _judgeFastConfig: localJudgeConfig,
+          conversation_control: {
+            source: "explicit_conversation_control",
+            intent_class: "fresh_live_lookup",
+            require_fresh_lookup: true,
+          },
         },
       },
     );
@@ -726,13 +695,11 @@ describe("execution coverage override intent guard", () => {
     expect(routeDecisionOf(decision).reason_codes as string[]).toEqual(
       expect.arrayContaining([
         "startup_cost_derived_from_route_cost_signals",
-        "judge_cost_scope:remote",
-        "judge_evidence_required",
       ]),
     );
   });
 
-  it("ignores judge decision_bucket telemetry for high-confidence simple replies", async () => {
+  it("does not accept judge decision_bucket telemetry in high-confidence simple replies", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(judgeSignalResponse({
       decision_bucket: "budgeted_main_then_delegate",
       startup_cost_policy: { main_fast_path_allowed: true, max_wall_ms: 30_000 },
@@ -753,8 +720,8 @@ describe("execution coverage override intent guard", () => {
       decision_bucket: "must_reply",
       hard_delegate_signal: false,
     });
-    expect(routeDecisionOf(decision).reason_codes as string[]).toEqual(
-      expect.arrayContaining(["judge_decision_bucket_telemetry:budgeted_main_then_delegate"]),
+    expect(routeDecisionOf(decision).reason_codes as string[]).not.toContain(
+      "judge_decision_bucket_telemetry:budgeted_main_then_delegate",
     );
   });
 
@@ -844,7 +811,7 @@ describe("execution coverage override intent guard", () => {
     });
   });
 
-  it("does not let legacy judge tool_need_hint override an active reply route", async () => {
+  it("rejects legacy judge tool_need_hint instead of letting it override reply", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
       jsonResponse({
         choices: [{
@@ -853,7 +820,6 @@ describe("execution coverage override intent guard", () => {
               route: "reply",
               confidence: 0.85,
               complexity: "simple",
-              complexity_confidence: 0.74,
               abstain_reason: null,
               ack_text: "收到",
               tool_need_hint: "required",
@@ -878,7 +844,8 @@ describe("execution coverage override intent guard", () => {
 
     expect(routeDecisionOf(decision)).toMatchObject({
       route: "reply",
-      route_source: "judge",
+      route_source: "rule",
+      final_judge_source: "timeout",
       hard_delegate_signal: false,
     });
     expect((decision._judge_shadow_log as Record<string, unknown>).validator_override_reasons ?? [])
@@ -894,7 +861,6 @@ describe("execution coverage override intent guard", () => {
               route: "reply",
               confidence: 0.85,
               complexity: "simple",
-              complexity_confidence: 0.74,
               abstain_reason: null,
               ack_text: "收到",
               tool_need_hint: "required",
@@ -984,7 +950,6 @@ describe("execution coverage override intent guard", () => {
               route: "reply",
               confidence: 0.85,
               complexity: "simple",
-              complexity_confidence: 0.74,
               abstain_reason: null,
               ack_text: "收到",
               duration_hint: "long",

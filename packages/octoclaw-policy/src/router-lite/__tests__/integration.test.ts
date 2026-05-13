@@ -42,7 +42,7 @@ function makeRequest(overrides?: Partial<RouterLiteRequest>): RouterLiteRequest 
     sessionKey: "integration-session",
     turnId: "turn-int-001",
     liveRoute: "delegate",
-    judge: { route: "delegate", confidence: 0.9, complexity: "normal", complexityConfidence: 0.85 },
+    judge: { route: "delegate", confidence: 0.9, complexity: "normal" },
     runtime: { needsTools: true },
     snapshotId: "snap-int-001",
     ...overrides,

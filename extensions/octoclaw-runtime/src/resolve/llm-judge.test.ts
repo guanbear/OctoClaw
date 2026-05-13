@@ -42,23 +42,6 @@ describe("llm judge single-judge mode", () => {
             route: "delegate",
             confidence: 0.84,
             complexity: "normal",
-            complexity_confidence: 0.74,
-            abstain_reason: null,
-            ack_text: "收到",
-            decision_bucket: "must_delegate",
-            startup_cost_policy: {
-              main_fast_path_allowed: false,
-              max_wall_ms: 0,
-              max_tool_calls: 0,
-              escalation_triggers: ["write_or_mutation_needed"],
-            },
-            hard_delegate_signal: true,
-            is_followup_to_recent_execution: false,
-            is_new_work: true,
-            expected_deliverable: "script fix",
-            scope: "local",
-            tool_need_hint: "required",
-            duration_hint: "medium",
           }),
         },
       }],
@@ -73,7 +56,7 @@ describe("llm judge single-judge mode", () => {
     expect(routeDecisionOf(decision).route).toBe("delegate");
     expect((decision.route_decision as Record<string, unknown>).route_confidence).toBe(0.84);
     expect((decision.route_decision as Record<string, unknown>).complexity_band).toBe("normal");
-    expect((decision.route_decision as Record<string, unknown>).complexity_confidence).toBe(0.74);
+    expect(decision.route_decision as Record<string, unknown>).not.toHaveProperty("complexity_confidence");
     expect(decision._judge_route).toBe("delegate");
     const shadowLog = decision._judge_shadow_log as Record<string, unknown>;
     expect(shadowLog.final_judge_route).toBe("delegate");
@@ -87,23 +70,6 @@ describe("llm judge single-judge mode", () => {
             route: "delegate",
             confidence: 0.84,
             complexity: "normal",
-            complexity_confidence: 0.74,
-            abstain_reason: null,
-            ack_text: "收到",
-            decision_bucket: "must_delegate",
-            startup_cost_policy: {
-              main_fast_path_allowed: false,
-              max_wall_ms: 0,
-              max_tool_calls: 0,
-              escalation_triggers: ["write_or_mutation_needed"],
-            },
-            hard_delegate_signal: true,
-            is_followup_to_recent_execution: false,
-            is_new_work: true,
-            expected_deliverable: "script fix",
-            scope: "local",
-            tool_need_hint: "required",
-            duration_hint: "medium",
           }),
         },
       }],
@@ -129,18 +95,6 @@ describe("llm judge single-judge mode", () => {
           route: "reply",
           confidence: 0.86,
           complexity: "simple",
-          complexity_confidence: 0.9,
-          is_followup_to_recent_execution: false,
-          is_new_work: false,
-          expected_deliverable: null,
-          reply_mode: "answer",
-          delegate_role: null,
-          coordination_mode_hint: "solo_worker",
-          scope: "unknown",
-          tool_need_hint: "none",
-          duration_hint: "short",
-          evidence_required: false,
-          reason_codes: ["simple_reply"],
         }),
       },
       prompt_eval_count: 280,
@@ -166,7 +120,7 @@ describe("llm judge single-judge mode", () => {
     expect(request.format).toBe("json");
     expect(request.options).toEqual({
       temperature: 0,
-      num_predict: 192,
+      num_predict: 96,
     });
   });
 

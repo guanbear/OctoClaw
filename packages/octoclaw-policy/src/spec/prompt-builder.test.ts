@@ -9,9 +9,10 @@ describe("local judge prompt", () => {
     expect(prompt.length).toBeLessThan(4200);
     expect(prompt).toContain("Return exactly one JSON object");
     expect(prompt).toContain("Top-level route is only reply or delegate");
-    expect(prompt).toContain("Required fields: route, confidence, complexity, complexity_confidence");
-    expect(prompt).toContain("Do not output role, workType, scope, tool_need_hint, duration_hint");
-    expect(prompt).toContain("complexity is model/cost complexity only");
+    expect(prompt).toContain("Required fields: route, confidence, complexity");
+    expect(prompt).toContain("Do not output scenario, complexity_confidence");
+    expect(prompt).toContain("role, workType, scope, tool_need_hint, duration_hint");
+    expect(prompt).toContain("complexity is simple, normal, complex, or deep");
     expect(prompt).toContain("Runtime maps route and runtime facts");
     expect(prompt).toContain("must_reply");
     expect(prompt).toContain("must_delegate");

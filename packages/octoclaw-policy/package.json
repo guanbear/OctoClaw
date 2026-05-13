@@ -21,7 +21,8 @@
     "./router-lite": { "types": "./dist/router-lite/index.d.ts", "default": "./dist/router-lite/index.js" }
   },
   "dependencies": {
-    "@octoclaw/contracts": "workspace:*"
+    "@octoclaw/contracts": "workspace:*",
+    "@octoclaw/router": "workspace:*"
   },
   "scripts": {
     "build": "tsc --build",

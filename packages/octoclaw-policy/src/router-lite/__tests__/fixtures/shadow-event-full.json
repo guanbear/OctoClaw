@@ -22,8 +22,7 @@
   "judge": {
     "route": "delegate",
     "confidence": 0.86,
-    "complexity": "normal",
-    "complexityConfidence": 0.81
+    "complexity": "normal"
   },
   "scenario": "codingWorker"
 }

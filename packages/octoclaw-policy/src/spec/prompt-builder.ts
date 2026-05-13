@@ -21,11 +21,10 @@ function renderOutputContract(): string {
     "## Output contract",
     "- Return exactly one JSON object. No prose, markdown, code, commands, or execution.",
     "- Top-level route is only reply or delegate. Do not choose SR-P1 buckets directly.",
-    "- Required fields: route, confidence, complexity, complexity_confidence.",
-    "- Do not output role, workType, scope, tool_need_hint, duration_hint, reason_codes, is_new_work, expected_deliverable, or startup buckets.",
+    "- Required fields: route, confidence, complexity.",
+    "- Do not output scenario, complexity_confidence, complexityConfidence, reasoning, thought, role, workType, scope, tool_need_hint, duration_hint, reason_codes, is_new_work, expected_deliverable, or startup buckets.",
     "- confidence is 0..1 and only describes route certainty.",
-    "- complexity_confidence is 0..1 and only describes complexity certainty.",
-    "- complexity is model/cost complexity only. It must not override or imply route.",
+    "- complexity is simple, normal, complex, or deep. It is model/cost complexity only and must not override or imply route.",
     renderPolicyLabels(),
   ].join("\n");
 }

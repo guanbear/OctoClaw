@@ -1071,7 +1071,6 @@ describe("regression round 4: execution coverage projections", () => {
         decision_bucket: "must_delegate",
         route_confidence: 0.91,
         complexity: "medium",
-        complexity_confidence: 0.82,
         worker_pool: "octoclaw-code",
         task_class: "code",
       },

@@ -69,7 +69,7 @@ describe("router-lite contracts: shadow event enhancement", () => {
     expect(event.judge?.route).toBe("delegate");
     expect(event.judge?.confidence).toBe(0.86);
     expect(event.judge?.complexity).toBe("normal");
-    expect(event.judge?.complexityConfidence).toBe(0.81);
+    expect(event.judge).not.toHaveProperty("complexityConfidence");
   });
 
   it("RouterLiteShadowEvent fixture has scenario", () => {
@@ -190,7 +190,6 @@ describe("router-lite contracts: source evidence requirements", () => {
         route: "delegate",
         confidence: 0.8,
         complexity: "normal",
-        complexityConfidence: 0.75,
       },
       runtime: {
         needsStructuredOutput: true,
