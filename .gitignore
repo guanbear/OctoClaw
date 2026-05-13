@@ -3,6 +3,10 @@
 *.log
 *.pid
 
+# Accidental literal-variable folders from shell expansions
+/${WORKSPACE}/
+/${HOME}/
+
 # Python
 __pycache__/
 *.pyc

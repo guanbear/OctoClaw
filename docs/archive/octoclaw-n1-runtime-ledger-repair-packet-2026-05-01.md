@@ -1,0 +1,383 @@
+# OctoClaw N1 Runtime Ledger Repair Packet
+
+Date: 2026-05-01
+Branch: `refactor/0.4.0-stable`
+Status: implementation repair packet for external AI
+Related:
+
+- `docs/octoclaw-ts-rebuild-design-v2.md`
+- `docs/octoclaw-n1-runtime-ledger-implementation-plan-2026-05-01.md`
+- `docs/octoclaw-judge-dispatch-complexity-improvement-2026-05-01.md`
+- `docs/octoclaw-state-convergence-4-4-design.md`
+
+---
+
+## 1. Scope
+
+N1 的目标不是“模块存在”或“单测通过”，而是让委派从 policy suggestion 变成可恢复、可审计、可拒绝误触发的 runtime path。
+
+外部 AI 修复时不要只做 isolated module tests。必须证明真实 hot path：
+
+```text
+conversation grounding
+  -> policy resolver
+  -> WorkContract / ticket
+  -> scheduler queue / lease
+  -> native materialization / child spawn
+  -> completion binding
+  -> status projection / recovery
+```
+
+符合文档验收。
+
+---
+
+## 2. P1 Repair Items
+
+### P1-1: `resume_preferred` must truly reuse child session
+
+Files:
+
+- `extensions/octoclaw-runtime/src/tools/registration.ts`
+- `extensions/octoclaw-runtime/src/work-contract/continuity.ts`
+- related tests under `extensions/octoclaw-runtime/src/tools/` and `extensions/octoclaw-runtime/src/work-contract/`
+
+Current issue:
+
+`octoclaw_dispatch` writes the preferred child session into metadata when `continuationMode=resume_preferred`, but `trySpawnSubagentRuntime` still calls `buildChildSessionKey()`, which generates a fresh `randomUUID()` child session every time.
+
+Required implementation:
+
+1. Add an explicit preferred child session input to `trySpawnSubagentRuntime`.
+2. Resolve spawn session key in this order:
+   - explicit preferred child session key from `selectPreferredChildSession`;
+   - `metadata.childSessionKey` / `metadata.child_session_key`;
+   - compatible WorkContract continuity preferred child session;
+   - new generated child session only when no compatible preferred session exists.
+3. Pass the resolved key into `runtime.run({ sessionKey })`.
+4. Mark session reuse evidence in runtime truth / task-state projection.
+5. Reject or retire preferred session only when the session is missing, retired, scope-incompatible, or belongs to another delegate task.
+
+Acceptance tests:
+
+- `resume_preferred` uses the existing child session key, not a new UUID.
+- retired or scope-incompatible preferred sessions create a new key and record the reason.
+- completion binding uses the same child session key that `runtime.run` used.
+
+---
+
+### P1-2: scheduler queue / lease must be wired into live dispatch
+
+Files:
+
+- `extensions/octoclaw-runtime/src/tools/registration.ts`
+- `extensions/octoclaw-runtime/src/runtime-ledger/scheduler.ts`
+- `extensions/octoclaw-runtime/src/runtime-ledger/ticket-enforcement.ts`
+- `extensions/octoclaw-runtime/src/runtime-ledger/native-reconcile.ts`
+
+Current issue:
+
+`admitDelegationTicketForDispatch` can create `scheduler_queue` rows, but live `octoclaw_dispatch` still proceeds directly to payload materialization and `trySpawnSubagentRuntime`. The scheduler functions are exported and unit-tested, but not used to control the hot path.
+
+Required implementation:
+
+1. After ticket admission, promote the admitted queue row through scheduler:
+   - `promoteToQueued`;
+   - `tryAcquireLease`;
+   - native materialization / child spawn;
+   - `materializeNativeIds`;
+   - terminal `releaseOrComplete` from finalizer/recovery.
+2. Independent tasks may run concurrently up to capacity.
+3. Shared write scope or explicit dependency must produce `queued_after` / `blocked_by`, not silent skip.
+4. Main turn lock must not block independent spawn materialization. If a lock/capacity/backend prevents spawn, status must be explicit `queued` or `blocked`.
+5. If `OCTOCLAW_SCHEDULER_ENABLED` remains gated, docs and status must say this is staged fallback; do not claim N1 scheduler hot path complete.
+
+Acceptance tests:
+
+- two independent delegated tasks can both become running/spawning under available capacity;
+- conflicting write scopes serialize with explicit blocked/queued state;
+- busy main session does not produce `no_dispatch_evidence` for an independent task;
+- a queued/blocked task does not report `spawn_confirmed=true`.
+
+---
+
+### P1-3: follow-up dispatch safety uses light judge signal plus runtime hard gate
+
+Files:
+
+- `extensions/octoclaw-runtime/src/conversation-grounding.ts`
+- `extensions/octoclaw-runtime/src/resolve/policy-resolver.ts`
+- `extensions/octoclaw-runtime/src/runtime-ledger/ticket-dry-run.ts`
+- `extensions/octoclaw-runtime/src/runtime-ledger/ticket-enforcement.ts`
+- `extensions/octoclaw-runtime/src/tools/registration.ts`
+
+Current issue:
+
+The existing protection works only after a turn is already labeled `execution_followup` / `status_or_provenance`. If a short natural-language follow-up is not labeled, judge may still propose `delegate`. Do not fix this by adding more phrases such as "为啥没派发成功" or "why no spawn"; that becomes an unbounded keyword wall.
+
+Required implementation:
+
+1. Judge may emit only light semantic signals for this problem:
+   - `is_followup_to_recent_execution: boolean`;
+   - `is_new_work: boolean`;
+   - `expected_deliverable: string | null`.
+2. These fields are advisory. Runtime dispatch authorization remains the source of truth.
+3. Ordinary dispatch may proceed only when the ticket dry-run/admission has:
+   - `ticket_decision=ticket_would_issue`;
+   - non-empty `expected_deliverable`;
+   - explicit new-work evidence such as `is_new_work=true`.
+4. If judge marks `is_followup_to_recent_execution=true`, ticket dry-run must return `ticket_not_issued` / `not_new_work`.
+5. If judge misses the follow-up but the current session/thread has a recent delegated execution and this turn has no `expected_deliverable`, dispatch must still be rejected.
+6. `route=delegate` by itself never authorizes dispatch.
+7. Do not implement a large taxonomy such as status/failure/provenance/amendment classes for N1. Amendment/retry/cancel can be promoted later through explicit task actions.
+
+Acceptance tests:
+
+- "为啥没派发成功呢", "刚才那个为什么没有 spawn", "no_dispatch_evidence 是啥意思", and "现在什么状态" do not create WorkContract / ticket / scheduler queue / attempt / spawn when they lack `expected_deliverable`;
+- if judge returns `is_followup_to_recent_execution=true`, ticket dry-run returns `ticket_not_issued`;
+- if judge returns `route=delegate` but omits `expected_deliverable`, dispatch is rejected;
+- new independent work with `is_new_work=true` and non-empty `expected_deliverable` can still issue a ticket and dispatch.
+
+---
+
+### P1-4: `retry` / `stop` / `approve` / `reject` must not be fake actions
+
+Files:
+
+- `extensions/octoclaw-runtime/src/tools/registration.ts`
+- `extensions/octoclaw-runtime/src/core/delegate/index.ts`
+- `extensions/octoclaw-runtime/src/work-contract/store.ts`
+- `extensions/octoclaw-runtime/src/runtime-ledger/*`
+
+Current issue:
+
+`octoclaw_task_action` exposes `retry`, `stop`, `approve`, and `reject`, but `executeTaskAnchorCommand` currently returns read-only detail/queue payloads. The action enum promises side effects that are not performed.
+
+Required implementation:
+
+1. Implement `retry` at minimum:
+   - find WorkContract / delegate task;
+   - create a new attempt under the same `delegateTaskId`;
+   - write task-state projection, runtime ledger attempt, replay event, and status timeline;
+   - reuse preferred child session when compatible, otherwise record session retirement / respawn.
+2. Define `stop`, `approve`, and `reject`:
+   - either implement real state transitions;
+   - or temporarily remove/hide them from tool enum and docs until implemented.
+3. Status and timeline must distinguish original failed attempt from retried attempt.
+
+Acceptance tests:
+
+- `octoclaw_task_action retry <task>` creates attempt_no + 1 under same delegate task;
+- retry persists to ledger and task-state;
+- stop/approve/reject cannot return a success-looking read-only payload if no mutation occurred.
+
+---
+
+### P1-5: corrupt `task-state.json` must not become empty truth
+
+Files:
+
+- `extensions/octoclaw-runtime/src/state/task-state-store.ts`
+- `extensions/octoclaw-runtime/src/runtime-ledger/projection-rebuild.ts`
+- operator/status recovery tests
+
+Current issue:
+
+`readTaskStateDocument` catches all errors and returns empty tasks. JSON parse failure, IO failure, and missing file are treated the same. A later write can silently overwrite a corrupt projection with an empty one.
+
+Required implementation:
+
+1. Distinguish:
+   - missing file (`ENOENT`);
+   - JSON parse error;
+   - schema mismatch;
+   - IO/read error.
+2. Missing file may return an empty projection.
+3. Parse error must quarantine or preserve the original file and emit a recovery signal.
+4. IO error must fail closed for writes that would replace durable projection.
+5. If runtime ledger is available, operator/status should offer rebuild from ledger + OpenClaw bridge/API native lifecycle snapshot + replay; direct native SQLite reads are diagnostic hooks only.
+
+Acceptance tests:
+
+- invalid JSON is not overwritten by empty tasks;
+- IO error does not silently produce an empty durable document;
+- projection rebuild can restore `task-state.json` from ledger rows.
+
+---
+
+## 2.5 P1 Implementation Status (2026-05-01)
+
+| Item | Status | Notes |
+|------|--------|-------|
+| P1-1 | ✅ completed | `trySpawnSubagentRuntime` resolves preferred → metadata → new UUID; `sessionReused`/`sessionReuseReason` in spawn evidence |
+| P1-2 | ✅ completed | Scheduler gating in enforce mode: `tryAcquireLease` before spawn, `releaseOrComplete` on terminal; ticket auth via `admitDelegationTicketForDispatch` |
+| P1-3 | ⚠️ needs follow-up | Replace metadata-only relation gating with light judge signals (`is_followup_to_recent_execution`, `is_new_work`, `expected_deliverable`) plus runtime ticket hard gate |
+| P1-4 | ✅ completed | Real retry creates `task_attempts` row with `attempt_kind=retry`, new `scheduler_queue` entry, new delegation ticket; stop/approve/reject hidden |
+| P1-5 | ✅ completed | `readTaskStateDocumentDetailed()` returns typed status; `writeTaskStateDocumentSafe()` quarantines corrupt files with `.corrupt` suffix |
+| NEW: WorkContract store ledger migration | ✅ completed | `loadWorkContract()` falls back to ledger in enforce mode; `loadWorkContractFromLedger()` exported; `listWorkContractsBySession()` also falls back |
+| NEW: Crash recovery operator tool | ✅ completed | `octoclaw_crash_recovery` tool registered; guarded by runtime ledger mode check |
+
+P1-3 should not grow into a full follow-up taxonomy. The required N1 fix is the simpler hard gate: no ordinary dispatch without a ticket candidate and a non-empty expected deliverable, especially after recent delegated execution.
+
+---
+
+## 3. P2 Repair Items
+
+### P2-1: N1 docs must not overclaim deferred tables
+
+Files:
+
+- `docs/octoclaw-judge-dispatch-complexity-improvement-2026-05-01.md`
+- `docs/octoclaw-n1-runtime-ledger-implementation-plan-2026-05-01.md`
+- `docs/octoclaw-ts-rebuild-design-v2.md`
+
+Canonical N1-MVP tables:
+
+- `work_contracts`
+- `delegation_tickets`
+- `task_attempts`
+- `scheduler_queue`
+- `completion_bindings`
+- `runtime_events`
+
+Deferred / fallback:
+
+- `delivery_outbox`: existing JSON/adapter path until retry/dedup requires promotion.
+- `amendments`: attempt rows plus existing retry/amendment model until explicit protocol promotion.
+- `resource_locks`: inline `scheduler_queue.resource_keys_json` + `blocked_by` until independent lock table is justified.
+
+Docs must use this same wording everywhere.
+
+Current status: ✅ completed. Active docs now consistently list only the six canonical N1-MVP runtime ledger tables (`work_contracts`, `delegation_tickets`, `task_attempts`, `scheduler_queue`, `completion_bindings`, `runtime_events`). `delivery_outbox`, `amendments`, and `resource_locks` are explicitly deferred and must not be read as part of the current production schema.
+
+---
+
+### P2-2: operator diagnostics tests and implementation must be stable
+
+Files:
+
+- `extensions/octoclaw-runtime/src/runtime-ledger/operator-diagnostics.ts`
+- `extensions/octoclaw-runtime/src/runtime-ledger/__tests__/operator-diagnostics.test.ts`
+
+Current issue:
+
+Focused tests showed `operator-diagnostics.test.ts` failing on health counts and orphan listing. Fix using realistic temp SQLite fixtures rather than mocks that do not match `openRuntimeLedger` / migration behavior.
+
+Acceptance tests:
+
+- health report opens a real temp ledger and returns counts;
+- orphan completion listing returns completion summaries;
+- stale lease release delegates to scheduler and reports requeued count.
+
+Current status: ✅ completed. Operator diagnostics tests pass 8/8 against realistic temp SQLite ledger fixtures that exercise `openRuntimeLedger` / migration behavior; no mock-only pass is claimed.
+
+---
+
+### P2-3: judge validator must match policy spec
+
+Files:
+
+- `packages/octoclaw-policy/src/judge/judge-schema.ts`
+- runtime validator call sites
+- policy spec tests
+
+Current issue:
+
+Hot-path validator is weaker than policy spec. Minimal `{ route: "delegate", confidence: 0.7 }` can pass even if scope/tool/duration/reason fields are missing.
+
+Required implementation:
+
+1. Decide required fields for hot path.
+2. If a field is optional for backwards compatibility, record explicit degraded/fallback reason.
+3. Do not silently invent strong defaults that make low-information judge output look authoritative.
+
+Acceptance tests:
+
+- missing required judge fields either reject or mark degraded;
+- degraded judge output cannot bypass runtime ticket/new-work checks.
+
+Current status: ✅ completed. The runtime validator now preserves backwards compatibility by allowing weak judge output only in an explicit degraded mode: missing policy-spec fields are annotated as degraded/fallback evidence, and degraded judge output cannot bypass ticket/new-work runtime checks.
+
+---
+
+### P2-4: ACK text ACK0 policy must be aligned
+
+Files:
+
+- `extensions/octoclaw-runtime/src/ack/ack-decision.ts`
+- `docs/octoclaw-judge-ack-policy-spec-2026-04-21.md`
+- ACK tests
+
+Current issue:
+
+Policy spec and implementation previously disagreed about text ACK0. Product direction is now settled:
+
+- reaction ACK0 is primary at `reaction_ack_ms=300` when the channel supports reactions;
+- after reaction ACK0 is sent or attempted, runtime does not send a text ACK0 fallback;
+- channels without reaction support may send gated text ACK0 at `text_ack0_ms=2500`;
+- delegate route does not send reply-style ACK0;
+- text ACK0 is active for non-reaction channels, not disabled or deferred.
+
+Current status: ✅ completed. ACK policy spec matches implementation, and ACK tests pass 174/174.
+
+---
+
+## 4. Do Not Do
+
+Do not:
+
+- add a larger keyword list as the P1-3 fix;
+- create a second routing system parallel to `reply | delegate`;
+- let judge output directly authorize dispatch;
+- treat WorkContract seal as dispatch evidence;
+- treat TaskFlow creation as spawn evidence;
+- expose side-effect actions that only return read-only payloads;
+- claim scheduler/concurrency complete while live dispatch bypasses scheduler lease.
+
+---
+
+## 5. Verification Command Set
+
+At minimum run:
+
+```bash
+COREPACK_HOME=/private/tmp/octoclaw-corepack corepack pnpm exec vitest run \
+  extensions/octoclaw-runtime/src/conversation-grounding.test.ts \
+  extensions/octoclaw-runtime/src/resolve/policy-resolver-judge-fallback.test.ts \
+  extensions/octoclaw-runtime/src/runtime-ledger/__tests__/ticket-dry-run.test.ts \
+  extensions/octoclaw-runtime/src/runtime-ledger/__tests__/ticket-enforcement.test.ts \
+  extensions/octoclaw-runtime/src/runtime-ledger/__tests__/scheduler.test.ts \
+  extensions/octoclaw-runtime/src/runtime-ledger/__tests__/operator-diagnostics.test.ts \
+  extensions/octoclaw-runtime/src/tools/registration-dispatch-honesty.test.ts \
+  extensions/octoclaw-runtime/src/work-contract/store.test.ts
+```
+
+Also run:
+
+```bash
+git diff --check
+```
+
+Passing tests are not enough if the implementation only tests isolated modules. Add hot-path tests that call the registered `octoclaw_dispatch` / `octoclaw_task_action` tools and prove the runtime behavior matches this packet.
+
+---
+
+## 6. P2 Implementation Status (2026-05-01)
+
+| Item | Status | Notes |
+|------|--------|-------|
+| P2-1 | ✅ completed | Active docs consistently list only six N1-MVP canonical tables; `delivery_outbox`, `amendments`, and `resource_locks` are clearly deferred |
+| P2-2 | ✅ completed | Operator diagnostics tests pass 8/8 with real temp SQLite ledger fixtures |
+| P2-3 | ✅ completed | Judge validator degradation mode implemented: weak outputs are explicitly marked degraded/fallback and cannot bypass runtime ticket/new-work checks |
+| P2-4 | ✅ completed | ACK policy aligned: reaction ACK0 primary, no text fallback after reaction sent/attempted, gated text ACK0 active for non-reaction channels; ACK tests pass 174/174 |
+
+### Verification Results
+
+```
+Verification command set (§5): 138/138 pass
+Full runtime test suite: 910/912 (2 pre-existing failures in delegate-packets.test.ts)
+Runtime ledger tests: 146/146 pass
+ACK tests: 174/174 pass
+Operator diagnostics tests: 8/8 pass with real temp SQLite ledger fixtures
+TypeScript: clean (0 errors)
+```
