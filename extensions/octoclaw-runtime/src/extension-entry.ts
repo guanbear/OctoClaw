@@ -2,26 +2,16 @@ import { createHash } from "node:crypto";
 import fsSync from "node:fs";
 import path from "node:path";
 import {
-  buildConversationGrounding,
-  buildDirectLookupGuard,
-} from "./conversation-grounding.js";
-import {
-  cancelAckGuard,
   cancelAckGuardForState,
   getAckTrackingState,
-  maybeSendLatencyAck,
-  notifyUserMessage,
   sendNeutralInboundAck,
-  startAckGuard,
   type NeutralInboundAckResult,
-  updateAckGuardDecision,
   updateAckTrackingState,
   watchdogTick,
   WATCHDOG_INTERVAL_MS,
 } from "./ack/ack-guard.js";
 import { sendDelegateWithoutDispatchNotice } from "./ack/ack-delegate-without-dispatch.js";
 import {
-  LATENCY_ACK_DELAY_MS,
   pendingLatencyAckTimers,
   pendingNeutralInboundAckTimers,
   pendingNeutralInboundAckTextFallbackTimers,
@@ -35,26 +25,23 @@ import {
   type CanceledNeutralAckTimer,
 } from "./ack/ack-scheduler.js";
 import { sendIMMessage, type SendIMResult } from "./im/send.js";
-import { sendRouteCommitAck } from "./ack/ack-route-commit.js";
 import { fetchLatestUserMessageTsForSessionKey } from "./im/slack-thread-anchor.js";
 import { renderIMProjectionFooter } from "./im/projection-footer.js";
 import type { IMProjectionFooter } from "./im/adapter.js";
 import { hasProjectionFooter } from "./projection-footer-sanitizer.js";
 import {
   buildPolicyMetadata,
-  detectSessionBoundary,
   isManagedAgentContext,
   resolveAckDeliverySessionKey,
   resolvePolicyStateKey,
   resolvePolicyStateKeys,
 } from "./resolve/session.js";
-import { checkActiveTaskRecovery, resolvePolicyDecisionForContext } from "./resolve/policy-resolver.js";
-import { envOverrides, resolveMainAgentSessionsPath, resolveReplayLogPath, resolveTaskStatePath, resolveWorkspaceRoot, stableId } from "./resolve/env.js";
+import { resolvePolicyDecisionForContext } from "./resolve/policy-resolver.js";
+import { envOverrides, resolveMainAgentSessionsPath, resolveWorkspaceRoot, stableId } from "./resolve/env.js";
 import {
   DEFAULT_TASK_STATE_RETENTION_MIN_RUN_INTERVAL_MS,
   pruneTaskStateCache,
 } from "./state/task-state-retention.js";
-import { buildLiveJudgeContextPacket } from "./resolve/llm-judge.js";
 import { initNativeHelperBridge } from "./adapter/native-helper.js";
 import { buildTurnExecutionReceipt, type TurnExecutionReceipt } from "./receipt.js";
 import { firstDisplayModel } from "./model-display.js";
@@ -64,49 +51,30 @@ import {
   replaceAssistantMessageText,
 } from "./replay/message-guard.js";
 import {
-  compactDelegatePolicyPrompt,
-  compactPolicyPrompt,
-  isControlObserverDecision,
   isDelegatedRoute,
-  isSessionControlDecision,
-  matchesBlockedPattern,
-  observerControlTools,
-  preHintAllowedTools,
-  routeHintPromptRequired,
-  routeHintRequired,
-  sessionControlTools,
   shouldRetainPolicyStateOnAgentEnd,
-  stringifyParamsForPolicy,
-  workflowEnforcementRule,
 } from "./replay/policy-utils.js";
-import { recordAckReplay, recordPolicyReplay } from "./replay/replay.js";
+import { recordPolicyReplay } from "./replay/replay.js";
 import { policyState, type PolicyStateEntry } from "./state/policy-state.js";
 import { getCommandRegistrations, getToolRegistrations } from "./tools/registration.js";
 import { buildNativeStatusOutput, buildNativeTaskActionPayload } from "./tools/runtime-status.js";
-import { evaluateNativeSessionsSendGate, evaluateNativeSpawnGate } from "./delegate/native-spawn-gate.js";
 import { nativeSpawnIntentStore } from "./delegate/native-spawn-intent-store.js";
-import { isPlannerAllowedForSession, resolveSpawnBackend, resolveSpeculativePreloadEnabled } from "./config/index.js";
+import { resolveSpawnBackend, resolveSpeculativePreloadEnabled } from "./config/index.js";
 import { findWorkContractByNativeChildSessionKey, loadWorkContract, saveWorkContract, updateWorkContract } from "./work-contract/store.js";
 import { compactWorkContractView, type ContextCoverageSnapshot, type DelegateContract, type IntentClass, type WorkContract, type WorkDecisionSource } from "@octoclaw/contracts/work-contract";
 import { buildWorkContractFromPolicy, buildWorkDecisionSeal } from "./work-contract/builders.js";
 import { buildExecutionCoverageLayer } from "./resolve/execution-coverage-precheck.js";
 import { buildMemoryCoverageLayer } from "./resolve/memory-coverage-precheck.js";
 import {
-  BUDGETED_MAIN_MAX_WALL_MS,
-  MAIN_FAST_PATH_READ_ONLY_TOOL_LIMIT,
   buildBudgetedMainMetrics,
   buildBudgetedMainState,
-  budgetedMainToolEscalationReason,
-  classifyBudgetedMainTool,
   escalateBudgetedMainDecision,
   hasBudgetedMainEscalationEvidence,
   isBudgetedMainDecision,
   readBudgetedMainState,
   serializeBudgetedMainState,
-  updateBudgetedMainToolState,
   type BudgetedMainState,
 } from "./budgeted-main.js";
-import { explicitDelegateDispatchRequest } from "./dispatch-admission.js";
 import {
   buildSpeculativePreloadHint,
   buildSpeculativePreloadLabel,
@@ -127,8 +95,10 @@ export { extractInboundMessageTimestamp, extractInboundMessageTimestampWithSourc
 export type { InboundMessageTimestampSource } from "./inbound-timestamps.js";
 import { extractInboundMessageTimestamp, extractInboundMessageTimestampWithSource, findInboundMessageTimestamp, resolveSlackMessageReceivedSessionKey, SLACK_MESSAGE_TS_PATTERN, type InboundMessageTimestampSource } from "./inbound-timestamps.js";
 import { detectIMType } from "./im-status-renderer.js";
+import { makeBeforePromptBuildHook } from "./hooks/before-prompt-build.js";
+import { makeBeforeToolCallHook } from "./hooks/before-tool-call.js";
 
-type NativeAnnounceSendMessage = (params: {
+export type NativeAnnounceSendMessage = (params: {
   sessionKey: string;
   message: string;
   replyToMessageId?: string;
@@ -136,7 +106,7 @@ type NativeAnnounceSendMessage = (params: {
 }) => Promise<SendIMResult>;
 
 
-const OCTOCLAW_DELEGATION_SYSTEM_CONTEXT = [
+export const OCTOCLAW_DELEGATION_SYSTEM_CONTEXT = [
   "OctoClaw runtime policy is authoritative for this run.",
   "When route is delegated, the main agent is a coordinator and must use OctoClaw control tools instead of doing the work directly.",
   "Do not hand-write session or subagent spawning commands.",
@@ -149,7 +119,7 @@ const OCTOCLAW_DELEGATION_SYSTEM_CONTEXT = [
   "Before tool calls or route_hint, emit no user-visible text. User-visible output should only contain authoritative status receipt, final result, or clear failure.",
 ].join("\n");
 
-const OCTOCLAW_DELEGATION_SLIM_SYSTEM_CONTEXT = [
+export const OCTOCLAW_DELEGATION_SLIM_SYSTEM_CONTEXT = [
   "OctoClaw delegated-route context: before native spawn, answer directly only if this turn can be fully resolved now without background work.",
   "If delegation is still needed, use octoclaw_dispatch; do not hand-write sessions_spawn args or bypass the returned planner intent.",
   "Pass only already-known local anchors as metadataJson.context_refs; if anchors are unknown, dispatch without fabricated refs and let the child return a blocked worker result packet.",
@@ -157,7 +127,7 @@ const OCTOCLAW_DELEGATION_SLIM_SYSTEM_CONTEXT = [
   "Emit no user-visible ACK/coordinator text before accepted native run evidence and OctoClaw confirm exist.",
 ].join("\n");
 
-function resolveSlimMainContextEnabled(pluginConfig?: UnknownRecord): boolean {
+export function resolveSlimMainContextEnabled(pluginConfig?: UnknownRecord): boolean {
   const env = stringValue(process.env.OCTOCLAW_SLIM_MAIN_CONTEXT).toLowerCase();
   if (env === "0" || env === "false" || env === "off") return false;
   const configured = pluginConfig?.slimMainContext ?? pluginConfig?.slim_main_context;
@@ -168,7 +138,7 @@ function resolveSlimMainContextEnabled(pluginConfig?: UnknownRecord): boolean {
 
 
 
-const OCTOCLAW_ROUTE_HINT_SYSTEM_CONTEXT = [
+export const OCTOCLAW_ROUTE_HINT_SYSTEM_CONTEXT = [
   "Use octoclaw_route_hint only as an internal control-plane action when runtime policy requires it; never introduce it with user-visible text.",
   "Use octoclaw_route_hint to state only the two-class route intent: reply or delegate. Runtime derives must_reply, must_delegate, or budgeted_main_then_delegate from route plus cost signals.",
   "After route_hint merge: reply may answer directly; delegated routes must go through octoclaw_dispatch.",
@@ -178,12 +148,12 @@ const OCTOCLAW_ROUTE_HINT_SYSTEM_CONTEXT = [
   "Bare model/tool names, fresh lookup, route_hint=delegate, and fast_first_response are advisory only and do not force delegate by themselves.",
 ].join("\n");
 
-const OCTOCLAW_TASK_ACTION_SYSTEM_CONTEXT = [
+export const OCTOCLAW_TASK_ACTION_SYSTEM_CONTEXT = [
   "When the user asks for task progress or acts on an OctoClaw task anchor, prefer the octoclaw_task_action tool.",
   "Use it for commands like: details <task_id>, queue, artifacts <task_id>, stop <task_id>, retry <task_id>, approve <task_id>, reject <task_id>.",
 ].join("\n");
 
-const OCTOCLAW_PRE_DELEGATION_CONFIRM_CONTEXT = [
+export const OCTOCLAW_PRE_DELEGATION_CONFIRM_CONTEXT = [
   "This task requires review before dispatch. Proceed directly with octoclaw_dispatch — do not echo reasoning about task boundaries or delegation strategy to the user.",
 ].join("\n");
 
@@ -815,7 +785,7 @@ interface NativeAnnounceBlocker {
   reason: string;
 }
 
-const NATIVE_ANNOUNCE_BLOCKED_TOOLS = new Set([
+export const NATIVE_ANNOUNCE_BLOCKED_TOOLS = new Set([
   "octoclaw_dispatch",
   "octoclaw_dispatch_confirm",
   "sessions_spawn",
@@ -1033,7 +1003,7 @@ function nativeAnnounceDirectDeliveryEnabled(pluginConfig: UnknownRecord | undef
   return !["0", "false", "off", "no"].includes(raw);
 }
 
-function nativeAnnounceSendOverride(pluginConfig: UnknownRecord | undefined): NativeAnnounceSendMessage | undefined {
+export function nativeAnnounceSendOverride(pluginConfig: UnknownRecord | undefined): NativeAnnounceSendMessage | undefined {
   const candidate = pluginConfig?.nativeAnnounceSendMessageForTests;
   return typeof candidate === "function" ? candidate as NativeAnnounceSendMessage : undefined;
 }
@@ -1384,7 +1354,7 @@ function buildNativeAnnouncePolicyState(input: {
   } as PolicyStateEntry;
 }
 
-function isNativeAnnounceDeliveryState(state: unknown): boolean {
+export function isNativeAnnounceDeliveryState(state: unknown): boolean {
   const record = asRecord(state);
   const dispatchStatus = stringValue(record.dispatchStatus || record.dispatch_status);
   return record.nativeAnnounceCompletionPending === true
@@ -1396,7 +1366,7 @@ function isNativeAnnounceDeliveryState(state: unknown): boolean {
     || Boolean(stringValue(record.nativeAnnounceResultHash || record.native_announce_result_hash));
 }
 
-function isNativeAnnounceBlockedState(state: unknown): boolean {
+export function isNativeAnnounceBlockedState(state: unknown): boolean {
   const record = asRecord(state);
   return record.nativeAnnounceBlocked === true || record.native_announce_blocked === true;
 }
@@ -1526,7 +1496,7 @@ function unmatchedNativeAnnounceProjection(): { prependSystemContext?: string; p
   }) ?? {};
 }
 
-async function handleNativeAnnounceCompletion(input: {
+export async function handleNativeAnnounceCompletion(input: {
   event: UnknownRecord;
   ctx: UnknownRecord;
   prompt: string;
@@ -1937,7 +1907,7 @@ function internalAckProjectionSuppressed(): boolean {
   return ["1", "true", "on", "yes"].includes(raw);
 }
 
-function buildImmutableDeliveryTarget(sessionKey: string, replyToMessageId: string): UnknownRecord {
+export function buildImmutableDeliveryTarget(sessionKey: string, replyToMessageId: string): UnknownRecord {
   const normalizedSessionKey = stringValue(sessionKey);
   const normalizedReplyTo = stringValue(replyToMessageId);
   const isSlack = normalizedSessionKey.toLowerCase().includes(":slack:") || normalizedSessionKey.toLowerCase().startsWith("slack:");
@@ -1954,7 +1924,7 @@ function buildImmutableDeliveryTarget(sessionKey: string, replyToMessageId: stri
   };
 }
 
-function deliveryTargetReplyTo(state: UnknownRecord | null | undefined): string {
+export function deliveryTargetReplyTo(state: UnknownRecord | null | undefined): string {
   const target = asRecord(state?.deliveryTarget || state?.delivery_target);
   return stringValue(target.replyToMessageId || target.reply_to_message_id || target.threadTs || target.thread_ts);
 }
@@ -2099,7 +2069,7 @@ export function guardOutboundMessageForPolicyState(event: UnknownRecord, ctx: Un
 }
 
 
-function buildRecentExecutionFacts(receipts: TurnExecutionReceipt[]): string {
+export function buildRecentExecutionFacts(receipts: TurnExecutionReceipt[]): string {
   if (receipts.length === 0) return "";
   const lines = receipts.map((r, i) => {
     const parts = [`Turn ${i + 1}: route=${r.route}`];
@@ -2120,7 +2090,7 @@ function buildRecentExecutionFacts(receipts: TurnExecutionReceipt[]): string {
   return `[RecentExecutionFacts]\n${lines.join("\n")}\n[/RecentExecutionFacts]`;
 }
 
-function collectRecentExecutionReceipts(currentSessionKey: string | null = null, limit = 3): TurnExecutionReceipt[] {
+export function collectRecentExecutionReceipts(currentSessionKey: string | null = null, limit = 3): TurnExecutionReceipt[] {
   return policyState.entries()
     .map(({ state, key }) => ({ state, key }))
     .filter(({ state }) => {
@@ -2140,7 +2110,7 @@ function collectRecentExecutionReceipts(currentSessionKey: string | null = null,
 }
 
 
-function getPolicyStateForContext(ctx: UnknownRecord): { key: string; state: PolicyStateEntry | null } {
+export function getPolicyStateForContext(ctx: UnknownRecord): { key: string; state: PolicyStateEntry | null } {
   const keys = resolvePolicyStateKeys(ctx);
   let best: { key: string; state: PolicyStateEntry; updatedAt: number } | null = null;
   for (const key of keys) {
@@ -2168,7 +2138,7 @@ function getPolicyStateForContext(ctx: UnknownRecord): { key: string; state: Pol
   };
 }
 
-function updatePolicyState(stateKey: string, mutator: (current: PolicyStateEntry) => PolicyStateEntry): void {
+export function updatePolicyState(stateKey: string, mutator: (current: PolicyStateEntry) => PolicyStateEntry): void {
   const key = stringValue(stateKey);
   if (!key) {
     return;
@@ -2187,7 +2157,7 @@ function policyStateAliasKeys(stateKey: string, ctx: UnknownRecord, state: Unkno
   ].filter(Boolean)));
 }
 
-function syncPolicyStateAliases(stateKey: string, ctx: UnknownRecord, state: UnknownRecord): PolicyStateEntry | null {
+export function syncPolicyStateAliases(stateKey: string, ctx: UnknownRecord, state: UnknownRecord): PolicyStateEntry | null {
   const key = stringValue(stateKey);
   if (!key) return null;
   const canonicalSessionKey = stringValue(state.canonicalSessionKey || state.canonical_session_key || key);
@@ -2206,7 +2176,7 @@ function syncPolicyStateAliases(stateKey: string, ctx: UnknownRecord, state: Unk
   return selected;
 }
 
-function stateWorkContractId(state: unknown): string {
+export function stateWorkContractId(state: unknown): string {
   const record = asRecord(state);
   const decision = asRecord(record.decision);
   const workContract = asRecord(decision.work_contract);
@@ -2219,18 +2189,18 @@ function budgetedMainStateKeys(stateKey: string, ctx: UnknownRecord, state: Unkn
   return policyStateAliasKeys(stateKey, ctx, state);
 }
 
-function budgetedMainWorkContractId(state: UnknownRecord, decision: UnknownRecord): string {
+export function budgetedMainWorkContractId(state: UnknownRecord, decision: UnknownRecord): string {
   const workContract = asRecord(decision.work_contract);
   return stringValue(state.workContractId || state.work_contract_id)
     || stringValue(workContract.workContractId || workContract.work_contract_id)
     || stringValue(decision.workContractId || decision.work_contract_id);
 }
 
-function budgetedMainSpawnIntentId(state: UnknownRecord): string {
+export function budgetedMainSpawnIntentId(state: UnknownRecord): string {
   return stringValue(state.spawnIntentId || state.spawn_intent_id);
 }
 
-function budgetedMainVisibleStartAt(state: UnknownRecord, now: number): number {
+export function budgetedMainVisibleStartAt(state: UnknownRecord, now: number): number {
   const candidate = Number(state.inboundObservedAt || state.inbound_observed_at || state.createdAt || 0);
   return Number.isFinite(candidate) && candidate > 0 ? candidate : now;
 }
@@ -2403,7 +2373,7 @@ function attachBudgetedMainDelegateWorkContract(input: {
   };
 }
 
-function updateBudgetedMainForContext(input: {
+export function updateBudgetedMainForContext(input: {
   stateKey: string;
   ctx: UnknownRecord;
   state: UnknownRecord;
@@ -2432,7 +2402,7 @@ function updateBudgetedMainForContext(input: {
   return selected;
 }
 
-async function recordBudgetedMainEvent(input: {
+export async function recordBudgetedMainEvent(input: {
   event: string;
   stateKey: string;
   ctx: UnknownRecord;
@@ -2471,7 +2441,7 @@ function clearBudgetedMainTimer(stateKey: string): void {
   pendingBudgetedMainTimers.delete(stateKey);
 }
 
-function scheduleBudgetedMainTimeout(input: {
+export function scheduleBudgetedMainTimeout(input: {
   stateKey: string;
   ctx: UnknownRecord;
   state: UnknownRecord;
@@ -2525,7 +2495,7 @@ function scheduleBudgetedMainTimeout(input: {
   pendingBudgetedMainTimers.set(input.stateKey, timer);
 }
 
-function maybeStartBudgetedMain(input: {
+export function maybeStartBudgetedMain(input: {
   stateKey: string;
   ctx: UnknownRecord;
   state: UnknownRecord;
@@ -2577,7 +2547,7 @@ function maybeStartBudgetedMain(input: {
   });
 }
 
-function maybeInjectSpeculativePreload(input: {
+export function maybeInjectSpeculativePreload(input: {
   stateKey: string;
   ctx: UnknownRecord;
   state: UnknownRecord;
@@ -2719,7 +2689,7 @@ function completeBudgetedMainIfActive(input: {
   }).catch(() => {});
 }
 
-async function escalateBudgetedMainForTool(input: {
+export async function escalateBudgetedMainForTool(input: {
   stateKey: string;
   ctx: UnknownRecord;
   state: UnknownRecord;
@@ -2781,7 +2751,7 @@ async function escalateBudgetedMainForTool(input: {
   return { state: nextState, decision: escalatedDecision };
 }
 
-async function promoteBudgetedMainDispatch(input: {
+export async function promoteBudgetedMainDispatch(input: {
   stateKey: string;
   ctx: UnknownRecord;
   state: UnknownRecord;
@@ -2827,7 +2797,7 @@ async function promoteBudgetedMainDispatch(input: {
   return { ...escalated, promoted: true };
 }
 
-function bindRouteHintPromptToCurrentContext(ctx: UnknownRecord, toolParams: UnknownRecord): void {
+export function bindRouteHintPromptToCurrentContext(ctx: UnknownRecord, toolParams: UnknownRecord): void {
   const task = stringValue(toolParams.task);
   if (!task) return;
   const keys = resolvePolicyStateKeys(ctx).filter(Boolean);
@@ -3468,1308 +3438,21 @@ export const plugin = {
       return { modelOverride };
     });
 
-    registerLifecycleHook("before_prompt_build", async (event, ctx) => {
-      if (!isManagedAgentContext(ctx)) return;
-      const hookStartedAt = Date.now();
-      const prompt = extractPromptText(event);
+    registerLifecycleHook("before_prompt_build", makeBeforePromptBuildHook({
+      pi,
+      judgeFastRaw,
+      delegationEnabled,
+      buildReactionAckState,
+      applyReactionAckState,
+      maybeSendNeutralInboundAckForContext,
+      currentPluginConfig,
+    }));
 
-      const preStateKey = resolvePolicyStateKey(ctx);
-      const nativeAnnounceHandled = await handleNativeAnnounceCompletion({
-        event,
-        ctx,
-        prompt,
-        pluginConfig: pi.pluginConfig,
-        logger: pi.logger,
-        cwd: stringValue(ctx.cwd) || process.cwd(),
-        sendMessage: nativeAnnounceSendOverride(pi.pluginConfig),
-      });
-      if (nativeAnnounceHandled) return nativeAnnounceHandled.projection;
-      void recordPolicyReplay(
-        "before_prompt_build_started",
-        {
-          sessionKey: preStateKey || stringValue(ctx.sessionKey),
-          sessionId: stringValue(ctx.sessionId),
-          stateKey: preStateKey,
-          elapsedMs: Date.now() - hookStartedAt,
-        },
-        pi.logger,
-        null,
-      ).catch(() => {});
-      const preMetadata = buildPolicyMetadata(ctx, { stateKey: preStateKey });
-      const sessionKeys = resolvePolicyStateKeys(ctx);
-      preMetadata.judge_replay_log_path = resolveReplayLogPath();
-      preMetadata.judge_task_state_path = resolveTaskStatePath();
-      preMetadata.judge_session_keys = sessionKeys;
-      preMetadata.recent_execution_facts = buildRecentExecutionFacts(collectRecentExecutionReceipts(preStateKey));
-      preMetadata.judge_context_packet = buildLiveJudgeContextPacket({
-        prompt,
-        metadata: preMetadata,
-      });
-      preMetadata._judgeFastConfig = judgeFastRaw;
-      preMetadata._delegationEnabled = delegationEnabled;
-      const preSessionKey = resolveAckDeliverySessionKey(preMetadata, preStateKey, asRecord(getPolicyStateForContext(ctx).state), ctx);
 
-      if (preSessionKey) {
-        notifyUserMessage(preSessionKey, preStateKey);
-      }
-
-      const inboundAnchor = extractInboundMessageTimestampWithSource(
-        ctx,
-        event,
-        [prompt, extractPromptText(asRecord(event))].filter(Boolean).join("\n"),
-      );
-      let inboundMessageTs = inboundAnchor.ts;
-      let inboundMessageTsSource: InboundMessageTimestampSource = inboundAnchor.source;
-
-      // Route C: ctx.channelId is the channel TYPE ("slack"), not the channel ID.
-      // For Slack DMs, derive the real DM channel ID from the session key user ID
-      // via conversations.open, then query conversations.history for the latest ts.
-      if (!inboundMessageTs) {
-        const sessionKey = stringValue(ctx.sessionKey);
-        if (/(?:^|:)slack:/u.test(sessionKey) && sessionKey.includes(":direct:")) {
-          inboundMessageTs = await fetchLatestUserMessageTsForSessionKey(sessionKey);
-          inboundMessageTsSource = inboundMessageTs ? "fallback_history" : "none";
-          if (inboundMessageTs && process.env.OCTOCLAW_ACK_DEBUG) {
-            console.error(`[ack-dbg] thread anchor from Route C: sessionKey=${sessionKey.substring(0,60)} ts=${inboundMessageTs}`);
-          }
-        }
-      }
-
-      const existingPreState = asRecord(getPolicyStateForContext(ctx).state);
-      const existingDeliveryReplyTo = deliveryTargetReplyTo(existingPreState);
-      if (existingDeliveryReplyTo) {
-        inboundMessageTs = existingDeliveryReplyTo;
-        inboundMessageTsSource = "ctx";
-      }
-      void recordPolicyReplay(
-        "before_prompt_build_observed",
-        {
-          sessionKey: preSessionKey || stringValue(ctx.sessionKey),
-          sessionId: stringValue(ctx.sessionId),
-          stateKey: preStateKey,
-          inboundMessageTs,
-          anchor_source: inboundMessageTsSource,
-        },
-        pi.logger,
-        null,
-      ).catch(() => {});
-      const immutableDeliveryTarget = buildImmutableDeliveryTarget(preSessionKey || stringValue(ctx.sessionKey), inboundMessageTs);
-      void maybeSendNeutralInboundAckForContext("before_prompt_build", event, ctx, prompt, {
-        stateKey: preStateKey,
-        sessionKey: preSessionKey,
-        inboundMessageTs,
-        inboundMessageTsSource,
-      }).catch((error) => {
-        pi.logger?.warn?.(`octoclaw neutral inbound ACK failed: ${String(error)}`);
-      });
-
-      if (process.env.OCTOCLAW_ACK_DEBUG) {
-        // Log what we extracted so we can debug thread anchor issues
-        const ctxKeys = Object.keys(ctx).join(",");
-        console.error(`[ack-dbg] inboundMessageTs=${inboundMessageTs || "(empty)"} sessionKey=${stringValue(ctx.sessionKey).substring(0,50)} ctxKeys=${ctxKeys.substring(0,120)}`);
-      }
-
-      // When judgeAckEnabled=false: start latency timer BEFORE judge (fast ACK).
-      // When judgeAckEnabled=true: ALSO start latency timer BEFORE judge so ACK0 fires at 5s from message arrival.
-      // Judge ack_text can override the message if it returns before deadline.
-      const pendingDecision: { value: UnknownRecord | null } = { value: null };
-
-      const startLatencyAckTimer = (timerStateKey: string) => {
-        const existingTimer = pendingLatencyAckTimers.get(timerStateKey);
-        if (existingTimer) clearTimeout(existingTimer);
-        const timer = setTimeout(async () => {
-          pendingLatencyAckTimers.delete(timerStateKey);
-          const currentDecision = pendingDecision.value ?? {};
-          const latencyMetadata = buildPolicyMetadata(ctx, { stateKey: timerStateKey });
-          if (inboundMessageTs && !stringValue(latencyMetadata.message_id)) {
-            latencyMetadata.message_id = inboundMessageTs;
-          }
-          const latencyResult = await maybeSendLatencyAck(currentDecision, latencyMetadata, timerStateKey, asRecord(getPolicyStateForContext(ctx).state), ctx, pi.logger ?? {}, "direct_lookup");
-          if (latencyResult?.sent) {
-            cancelAckGuard(preSessionKey);
-          }
-        }, LATENCY_ACK_DELAY_MS);
-        pendingLatencyAckTimers.set(timerStateKey, timer);
-      };
-
-      if (preSessionKey) {
-        if (process.env.OCTOCLAW_ACK_DEBUG) {
-          console.error(`[ack-dbg] preSessionKey=${preSessionKey.substring(0,40)} inboundMessageTs=${inboundMessageTs || "(empty)"}`);
-        }
-        startAckGuard(preSessionKey, stringValue(ctx.cwd) || process.cwd(), {
-          stateKey: preStateKey,
-          decision: {},
-          state: buildReactionAckState(preSessionKey),
-          replyToMessageId: inboundMessageTs,
-        });
-      }
-      const preliminaryState = getPolicyStateForContext(ctx).state;
-      if (preliminaryState) {
-        applyReactionAckState(preliminaryState, preSessionKey);
-        preliminaryState.ackGuardKey = preSessionKey || "";
-        preliminaryState.deliveryTarget = immutableDeliveryTarget;
-        preliminaryState.delivery_target = immutableDeliveryTarget;
-        if (inboundMessageTs) {
-          preliminaryState.inboundMessageTs = inboundMessageTs;
-          preliminaryState.replyToMessageId = inboundMessageTs;
-        }
-      }
-
-      startLatencyAckTimer(preStateKey);
-
-      const policyResolveStartedAt = Date.now();
-      void recordPolicyReplay(
-        "policy_resolve_started",
-        {
-          sessionKey: preSessionKey || stringValue(ctx.sessionKey),
-          sessionId: stringValue(ctx.sessionId),
-          stateKey: preStateKey,
-          elapsedMs: policyResolveStartedAt - hookStartedAt,
-          anchor_source: inboundMessageTsSource,
-        },
-        pi.logger,
-        null,
-      ).catch(() => {});
-      const resolved = await resolvePolicyDecisionForContext(
-        prompt,
-        ctx,
-        process.cwd(),
-        pi.logger,
-      ).catch((judgeErr: unknown) => {
-        if (pi.logger?.warn) {
-          pi.logger.warn(`octoclaw judge failed: ${String(judgeErr)}`);
-        }
-        return null;
-      });
-      const resolvedDecisionForTiming = asRecord(resolved?.decision);
-      void recordPolicyReplay(
-        "policy_resolve_completed",
-        {
-          sessionKey: preSessionKey || stringValue(ctx.sessionKey),
-          sessionId: stringValue(ctx.sessionId),
-          stateKey: stringValue(resolved?.stateKey || preStateKey),
-          elapsedMs: Date.now() - policyResolveStartedAt,
-          hookElapsedMs: Date.now() - hookStartedAt,
-          resolved: Boolean(resolved),
-          usedCachedPolicy: resolved?.usedCachedPolicy === true,
-          route: stringValue(asRecord(resolvedDecisionForTiming.route_decision).route),
-          decision_bucket: stringValue(asRecord(resolvedDecisionForTiming.route_decision).decision_bucket),
-          workContractId: stringValue(resolvedDecisionForTiming.workContractId || asRecord(resolvedDecisionForTiming.work_contract).workContractId || asRecord(resolvedDecisionForTiming.work_contract).work_contract_id),
-        },
-        pi.logger,
-        null,
-      ).catch(() => {});
-      pendingDecision.value = asRecord(resolved?.decision);
-
-      if (resolved) {
-        const postDecision = asRecord(resolved?.decision);
-        updateAckGuardDecision(preStateKey || preSessionKey, postDecision ?? {});
-      }
-
-      const decision = asRecord(resolved?.decision);
-      const hookConfig = asRecord(asRecord(decision.hook_interface).before_prompt_build);
-      if (!hookConfig.enabled) return;
-      const stateKey = stringValue(resolved?.stateKey || resolvePolicyStateKey(ctx) || "");
-      const state = (resolved?.state as PolicyStateEntry | null | undefined) ?? getPolicyStateForContext(ctx).state;
-      const recoveryCheck = isDelegatedRoute(decision)
-        ? checkActiveTaskRecovery({
-            taskId: stringValue(asRecord(asRecord(decision.runtime_truth).binding).taskId),
-          })
-        : { checkedAt: "", updatedCount: 0, timedOutCount: 0, recoveries: [] as UnknownRecord[] };
-      const activeRecoveryState = recoveryCheck.updatedCount > 0 && stateKey
-        ? getPolicyStateForContext({ ...ctx, canonicalSessionKey: stateKey }).state
-        : state;
-      let effectiveState = activeRecoveryState ?? state;
-      let effectiveDecision = recoveryCheck.updatedCount > 0
-        ? asRecord(effectiveState?.decision)
-        : decision;
-      if (stateKey) {
-        updatePolicyState(stateKey, (current) => ({
-          ...current,
-          ...buildReactionAckState(preSessionKey),
-          ackGuardKey: preSessionKey || current.ackGuardKey || "",
-          inboundMessageTs: inboundMessageTs || current.inboundMessageTs,
-          inboundObservedAt: Number(current.inboundObservedAt || current.inbound_observed_at || 0) || Date.now(),
-          inbound_observed_at: Number(current.inboundObservedAt || current.inbound_observed_at || 0) || Date.now(),
-          replyToMessageId: inboundMessageTs || current.replyToMessageId,
-          deliveryTarget: asRecord(current.deliveryTarget).immutable ? current.deliveryTarget : immutableDeliveryTarget,
-          delivery_target: asRecord(current.delivery_target).immutable ? current.delivery_target : immutableDeliveryTarget,
-        }));
-      }
-      if (effectiveState) {
-        applyReactionAckState(effectiveState, preSessionKey);
-        effectiveState.ackGuardKey = preSessionKey || "";
-        effectiveState.ack_guard_key = preSessionKey || "";
-        effectiveState.deliveryTarget = immutableDeliveryTarget;
-        effectiveState.delivery_target = immutableDeliveryTarget;
-        effectiveState.inboundObservedAt = Number(effectiveState.inboundObservedAt || effectiveState.inbound_observed_at || 0) || Date.now();
-        effectiveState.inbound_observed_at = effectiveState.inboundObservedAt;
-        if (inboundMessageTs) {
-          effectiveState.inboundMessageTs = inboundMessageTs;
-          effectiveState.replyToMessageId = inboundMessageTs;
-        }
-        const syncedState = syncPolicyStateAliases(stateKey, ctx, asRecord(effectiveState));
-        if (syncedState) {
-          effectiveState = syncedState;
-        }
-      }
-
-      // D1: Route Commit ACK — send truthful ACK projection after route seal, before dispatch.
-      // For delegate/observe routes: send immediately (user needs to know task was delegated).
-      // For reply routes: delay 500ms so fast local models don't produce a simultaneous ACK+reply.
-      // At fire time, check firstTokenSeen/formalReplyVisible — if agent already responded, skip.
-      const routeCommitRoute = stringValue(asRecord(asRecord(effectiveDecision).route_decision).route);
-      const isReplyRoute = routeCommitRoute !== "delegate" && routeCommitRoute !== "observe";
-      const routeCommitAckParams = {
-        sessionKey: preSessionKey || stringValue(ctx.sessionKey) || "",
-        stateKey: stringValue(resolved?.stateKey || resolvePolicyStateKey(ctx) || ""),
-        decision: effectiveDecision ?? {},
-        state: asRecord(effectiveState),
-        replyToMessageId: deliveryTargetReplyTo(asRecord(effectiveState)) || inboundMessageTs,
-        cwd: stringValue(ctx.cwd) || process.cwd(),
-        logger: pi.logger,
-      };
-      const doSendRouteCommitAck = async () => {
-        try {
-          const liveState = getPolicyStateForContext(ctx).state;
-          // For reply routes: cancel if agent has already started responding.
-          // Check ack tracking state (reliable even when policyState is null/stale)
-          // as well as policy state fields (both camelCase and snake_case variants).
-          if (isReplyRoute) {
-            const trackingStateKey = routeCommitAckParams.stateKey || preStateKey;
-            const tracking = getAckTrackingState(trackingStateKey);
-            const ls = liveState as UnknownRecord | null;
-            const alreadyReplied =
-              Boolean(tracking.formal_reply_visible)
-              || Boolean(tracking.reactionAckSent)
-              || Boolean(ls?.formal_reply_visible)
-              || Boolean(ls?.formalReplyVisible)
-              || Boolean(ls?.finalResponseStreaming)
-              || Boolean(ls?.final_response_streaming)
-              || Boolean(ls?.delivered)
-              || Boolean(ls?.firstTokenSeen)
-              || Boolean(ls?.first_token_seen);
-            if (alreadyReplied) {
-              pi.logger?.debug?.("octoclaw route-commit-ack: skipped, agent already responded");
-              return;
-            }
-            // Second check: wait 600ms more, then check again.
-            // Handles models that respond in the 800ms–1400ms window (check 1 passed
-            // but model responds before sendRouteCommitAck HTTP call completes).
-            // Also skip if a reaction ACK was already sent (emoji replaces text ACK).
-            await new Promise<void>((r) => { const t = setTimeout(r, 600); (t as unknown as { unref?: () => void }).unref?.(); });
-            const tracking2 = getAckTrackingState(trackingStateKey);
-            if (Boolean(tracking2.formal_reply_visible) || Boolean(tracking2.reactionAckSent)) {
-              pi.logger?.debug?.("octoclaw route-commit-ack: skipped on second check, agent responded or reaction already sent");
-              return;
-            }
-          }
-          const routeCommitResult = await sendRouteCommitAck({
-            ...routeCommitAckParams,
-            state: asRecord(liveState ?? effectiveState),
-          });
-          if (routeCommitResult.sent && effectiveState) {
-            effectiveState.routeCommitAckSent = true;
-            effectiveState.route_commit_ack_sent = true;
-            effectiveState.routeCommitAckId = routeCommitResult.routeCommitId;
-            if (routeCommitResult.reason === "reaction_ack_sent") {
-              updateAckTrackingState(routeCommitAckParams.stateKey || preStateKey, {
-                reactionAckSent: true,
-                reaction_ack_sent: true,
-                reactionAckAttempted: true,
-                reaction_ack_attempted: true,
-                latencyAckSent: true,
-                latencyAckMode: "reaction",
-              });
-            }
-          }
-        } catch (routeCommitErr) {
-          pi.logger?.warn?.(`octoclaw route-commit-ack error: ${String(routeCommitErr)}`);
-        }
-      };
-      if (isReplyRoute) {
-        // Delay for reply routes: cancel if agent starts within 500ms
-        const REPLY_ACK_DELAY_MS = 800;
-        const replyAckTimer = setTimeout(() => { void doSendRouteCommitAck(); }, REPLY_ACK_DELAY_MS);
-        (replyAckTimer as unknown as { unref?: () => void }).unref?.();
-      } else {
-        void doSendRouteCommitAck();
-      }
-
-      const metadata = buildPolicyMetadata(ctx, { stateKey });
-      const immutableReplyToMessageId = deliveryTargetReplyTo(asRecord(effectiveState)) || inboundMessageTs;
-      if (immutableReplyToMessageId && !stringValue(metadata.message_id)) {
-        metadata.message_id = immutableReplyToMessageId;
-      }
-      metadata.delivery_target = immutableDeliveryTarget;
-
-      const prependSystem: string[] = [];
-      const currentBudgetedMainState = readBudgetedMainState(asRecord(effectiveState));
-      if (currentBudgetedMainState?.escalatedPending && stateKey) {
-        prependSystem.push([
-          "[OctoClaw budgeted main soft-budget notice]",
-          `This budgeted main execution exceeded ${BUDGETED_MAIN_MAX_WALL_MS}ms before this prompt injection point.`,
-          "If you already have enough information, produce the final answer now.",
-          `You may use at most ${MAIN_FAST_PATH_READ_ONLY_TOOL_LIMIT} lightweight read-only tools if they are necessary to finish the answer.`,
-          "If writing, long commands, multi-step tools, tests/build/review/validation, or more work is needed, call octoclaw_dispatch with the original task.",
-          "Do not claim the task has started until sessions_spawn is accepted and octoclaw_dispatch_confirm succeeds.",
-        ].join("\n"));
-      } else if (isBudgetedMainDecision(effectiveDecision)) {
-        prependSystem.push([
-          "[OctoClaw budgeted main execution]",
-          `This turn is decision_bucket=budgeted_main_then_delegate with maxWallMs=${BUDGETED_MAIN_MAX_WALL_MS}.`,
-          `Answer directly only if the task can be completed in the main agent with at most ${MAIN_FAST_PATH_READ_ONLY_TOOL_LIMIT} lightweight read-only tools.`,
-          "If writing, long commands, multi-step tools, tests/build/review/validation, or more work is needed, call octoclaw_dispatch.",
-          `If dispatching local code/docs/repo work, pass known exact anchors as metadataJson.context_refs; use at most ${MAIN_FAST_PATH_READ_ONLY_TOOL_LIMIT} lightweight read-only lookups to find refs, and do not invent anchors.`,
-          "Do not claim the task has started until sessions_spawn is accepted and octoclaw_dispatch_confirm succeeds.",
-        ].join("\n"));
-      }
-      const judgeSucceeded = Boolean(effectiveDecision._judge_succeeded);
-      const decisionDelegationEnabled = Boolean(effectiveDecision._delegation_enabled ?? true);
-
-      const promptRequiresRouteHint = routeHintPromptRequired(effectiveDecision);
-      if (promptRequiresRouteHint) {
-        prependSystem.push(OCTOCLAW_ROUTE_HINT_SYSTEM_CONTEXT);
-      }
-
-      if (decisionDelegationEnabled && !judgeSucceeded && promptRequiresRouteHint) {
-        prependSystem.push([
-          "OctoClaw delegation is available for this run.",
-          "You can decide whether to handle this request directly or delegate to a sub-agent via octoclaw_dispatch.",
-          "Use octoclaw_route_hint to indicate your routing preference (reply or delegate). Read-only observation is delegate with observer role.",
-        ].join("\n"));
-      }
-
-      const route = stringValue(asRecord(effectiveDecision.route_decision).route);
-      const slimMainContextEnabled = resolveSlimMainContextEnabled(currentPluginConfig());
-      const useSlimDelegateContext = slimMainContextEnabled && route === "delegate";
-      if (isDelegatedRoute(effectiveDecision)) {
-        prependSystem.push(useSlimDelegateContext ? OCTOCLAW_DELEGATION_SLIM_SYSTEM_CONTEXT : OCTOCLAW_DELEGATION_SYSTEM_CONTEXT);
-      }
-      const isSpawnRoute = route === "delegate";
-      const reviewRequired = Boolean(asRecord(effectiveDecision.review_policy).required);
-      if (isSpawnRoute && reviewRequired) {
-        prependSystem.push(OCTOCLAW_PRE_DELEGATION_CONFIRM_CONTEXT);
-      }
-      const lookupGuard = buildDirectLookupGuard(effectiveDecision);
-      if (lookupGuard) {
-        prependSystem.push(lookupGuard);
-      }
-      if (asRecord(effectiveDecision.state_grounding).required) {
-        const executionFacts = buildRecentExecutionFacts(collectRecentExecutionReceipts(stateKey));
-        const grounding = buildConversationGrounding({
-          prompt,
-          replayLogPath: resolveReplayLogPath(),
-          taskStatePath: resolveTaskStatePath(),
-          sessionKeys: [
-            stateKey,
-            stringValue((metadata as { session_key?: unknown }).session_key),
-            stringValue(effectiveState?.canonicalSessionKey),
-            stringValue(ctx.sessionKey),
-          ].filter(Boolean),
-          recentExecutionFacts: executionFacts,
-        });
-        if (grounding?.context) {
-          prependSystem.push(grounding.context);
-        }
-      }
-      const resolvedStateBoundaryStatus = stringValue(
-        asRecord((resolved?.state as UnknownRecord | undefined)?.sessionBoundary).status,
-      );
-      if (stringValue(effectiveState?.sessionBoundary?.status || resolvedStateBoundaryStatus || detectSessionBoundary(ctx).status) === "contaminated_subagent_identity") {
-        prependSystem.push([
-          "[OctoClaw session boundary guard]",
-          "Prior subagent context in this session is stale. Only use authoritative execution facts from the current turn or fresh workflow outputs.",
-          "Do not claim a task was dispatched unless octoclaw_dispatch actually ran and returned a materialized result.",
-        ].join("\n"));
-      }
-      const anomalyNotice = asRecord(effectiveState?.latestAnomalyNotice);
-      if (stringValue(anomalyNotice.kind)) {
-        prependSystem.push([
-          "[OctoClaw execution anomaly notice]",
-          `kind=${stringValue(anomalyNotice.kind)}, severity=${stringValue(anomalyNotice.severity || "warning")}`,
-          stringValue(anomalyNotice.message),
-          `task=${stringValue(anomalyNotice.taskId || anomalyNotice.nativeTaskId || "unknown")}, flow=${stringValue(anomalyNotice.nativeFlowId || "unknown")}`,
-          "Do not claim the delegated sub-agent is running unless spawnExecuted=true or child session/run evidence exists.",
-        ].filter(Boolean).join("\n"));
-      }
-      if (recoveryCheck.timedOutCount > 0) {
-        const timedOutLines = recoveryCheck.recoveries
-          .filter((entry) => asRecord(entry).timedOut === true)
-          .map((entry) => {
-            const item = asRecord(entry);
-            return `- ${stringValue(item.delegateTaskId || item.taskId || item.flowId)}: ${stringValue(item.reason || item.trigger || "timed_out")}`;
-          });
-        prependSystem.push([
-          "[OctoClaw recovery notice]",
-          "One or more delegated tasks timed out during this event check.",
-          "Treat those delegated runs as timed out/requiring recovery and avoid claiming they are still healthy.",
-          timedOutLines.length > 0 ? `Timed out tasks:\n${timedOutLines.join("\n")}` : "",
-        ].filter(Boolean).join("\n"));
-      }
-      prependSystem.push(OCTOCLAW_TASK_ACTION_SYSTEM_CONTEXT);
-      const contextPayload = useSlimDelegateContext
-        ? compactDelegatePolicyPrompt(effectiveDecision)
-        : compactPolicyPrompt(effectiveDecision);
-      const promptKey = prompt || "";
-      const hasDedupKey = Boolean(stateKey);
-      const shouldInjectPrependContext = !hasDedupKey || lastGroundedPromptByStateKey.get(stateKey) !== promptKey;
-      if (hasDedupKey && shouldInjectPrependContext) {
-        lastGroundedPromptByStateKey.set(stateKey, promptKey);
-      }
-      maybeStartBudgetedMain({
-        stateKey,
-        ctx,
-        state: asRecord(effectiveState),
-        decision: effectiveDecision,
-        logger: pi.logger,
-      });
-      effectiveState = maybeInjectSpeculativePreload({
-        stateKey,
-        ctx,
-        state: asRecord(effectiveState),
-        decision: effectiveDecision,
-        route,
-        prompt,
-        prependSystem,
-        pluginConfig: currentPluginConfig(),
-        logger: pi.logger,
-      }) as PolicyStateEntry;
-      const projection = buildPromptContextProjection({
-        prependSystem,
-        contextPayload,
-        shouldInjectPolicyProjection: shouldInjectPrependContext,
-      });
-      void recordPolicyReplay(
-        "prompt_projection_built",
-        {
-          sessionKey: stateKey || stringValue(ctx.sessionKey),
-          sessionId: stringValue(ctx.sessionId),
-          stateKey,
-          route,
-          decision_bucket: stringValue(asRecord(effectiveDecision.route_decision).decision_bucket),
-          elapsedMs: Date.now() - hookStartedAt,
-          prependSystemCount: prependSystem.length,
-          prependSystemChars: prependSystem.join("\n\n").length,
-          contextPayloadChars: contextPayload.length,
-          injectedPolicyProjection: shouldInjectPrependContext,
-          slim_main_context_enabled: slimMainContextEnabled,
-          slim_delegate_context_applied: useSlimDelegateContext,
-          projectionReturned: Boolean(projection),
-          speculative_preload_enabled: resolveSpeculativePreloadEnabled(currentPluginConfig()),
-          speculative_preload_state: stringValue(readSpeculativePreloadState(effectiveState)?.status),
-        },
-        pi.logger,
-        null,
-      ).catch(() => {});
-      return projection;
-    });
-
-    registerLifecycleHook("before_tool_call", async (event, ctx) => {
-      if (!isManagedAgentContext(ctx)) return;
-      const toolName = stringValue(event.toolName || ctx.toolName);
-      const toolParams = asRecord(event.params || event.arguments || event.input);
-      if (toolName === "octoclaw_route_hint") {
-        bindRouteHintPromptToCurrentContext(ctx, toolParams);
-      }
-      let { key: stateKey, state } = getPolicyStateForContext(ctx);
-      if (state && isNativeAnnounceBlockedState(state) && toolName === "octoclaw_dispatch") {
-        void recordPolicyReplay(
-          "native_announce_blocker_redispatch_allowed",
-          {
-            sessionKey: stateKey || "",
-            sessionId: stringValue(ctx.sessionId),
-            toolName,
-            workContractId: stringValue(asRecord(state).workContractId || asRecord(state).work_contract_id),
-            blocker: stringValue(asRecord(state).nativeAnnounceBlocker || asRecord(state).native_announce_blocker),
-          },
-          pi.logger,
-          asRecord(state.decision),
-        ).catch(() => {});
-        return;
-      }
-      if (state && isNativeAnnounceDeliveryState(state) && NATIVE_ANNOUNCE_BLOCKED_TOOLS.has(toolName)) {
-        updatePolicyState(stateKey, (current) => ({
-          ...current,
-          blockedTools: [...(Array.isArray(current.blockedTools) ? current.blockedTools.slice(-7) : []), toolName].filter(Boolean),
-        }));
-        void recordPolicyReplay(
-          "tool_blocked_native_announce_completion",
-          {
-            sessionKey: stateKey || "",
-            sessionId: stringValue(ctx.sessionId),
-            toolName,
-            workContractId: stringValue(asRecord(state).workContractId || asRecord(state).work_contract_id),
-            reason: "native_announce_completion_delivery",
-          },
-          pi.logger,
-          asRecord(state.decision),
-        ).catch(() => {});
-        return {
-          block: true,
-          blockReason: "OctoClaw is delivering an existing native subagent completion; do not dispatch or spawn new work for this inter-session announce.",
-        };
-      }
-      let budgetDecision = asRecord(state?.decision);
-      let budgetedMainHandledTool = false;
-      const budgetState = readBudgetedMainState(asRecord(state));
-      if (budgetState?.active && !budgetState.completedAt && !budgetState.escalatedAt) {
-        const classification = classifyBudgetedMainTool(toolName, toolParams);
-        const now = Date.now();
-        if (toolName === "octoclaw_dispatch") {
-          const reason = budgetState.escalatedPending || now - budgetState.startedAt >= budgetState.maxWallMs
-            ? "wall_time_over_budget"
-            : "main_agent_called_dispatch";
-          const escalated = await escalateBudgetedMainForTool({
-            stateKey,
-            ctx,
-            state: asRecord(state),
-            decision: budgetDecision,
-            budgetState,
-            reason,
-            logger: pi.logger,
-          });
-          state = escalated.state as PolicyStateEntry | null;
-          budgetDecision = escalated.decision;
-        } else if (classification.counted) {
-          budgetedMainHandledTool = true;
-          const updatedBudget = updateBudgetedMainToolState(budgetState, classification);
-          const escalationReason = budgetedMainToolEscalationReason(updatedBudget, classification);
-          if (escalationReason) {
-            const escalated = await escalateBudgetedMainForTool({
-              stateKey,
-              ctx,
-              state: asRecord(state),
-              decision: budgetDecision,
-              budgetState: updatedBudget,
-              reason: escalationReason,
-              logger: pi.logger,
-            });
-            state = escalated.state as PolicyStateEntry | null;
-            updatePolicyState(stateKey, (current) => ({
-              ...current,
-              blockedTools: [...(Array.isArray(current.blockedTools) ? current.blockedTools.slice(-7) : []), toolName].filter(Boolean),
-            }));
-            return {
-              block: true,
-              blockReason: `OctoClaw budgeted main execution escalated (${escalationReason}). Call octoclaw_dispatch with the original task; do not use ordinary tools or claim the task has started before dispatch_confirm.`,
-            };
-          }
-          state = updateBudgetedMainForContext({
-            stateKey,
-            ctx,
-            state: asRecord(state),
-            budgetState: updatedBudget,
-          }) as PolicyStateEntry | null;
-        }
-      }
-      if (toolName === "octoclaw_dispatch") {
-        const taskPolicyContext = policyState.getDispatchPolicyContext(ctx, stringValue(toolParams.task));
-        const taskDecision = asRecord(taskPolicyContext.state?.decision);
-        const taskRoute = stringValue(asRecord(taskDecision.route_decision).route);
-        const taskToolPolicy = asRecord(taskDecision.tool_policy);
-        const taskRouteHintPolicy = asRecord(taskDecision.route_hint_policy);
-        const taskUpdatedAt = Number(taskPolicyContext.state?.updatedAt || taskPolicyContext.state?.createdAt || 0);
-        const currentUpdatedAt = Number(state?.updatedAt || state?.createdAt || 0);
-        const taskHasSubmittedHint = taskPolicyContext.state?.routeHintSubmitted === true || taskRouteHintPolicy.submitted === true;
-        const taskAllowsDispatch = taskRoute === "delegate"
-          && taskHasSubmittedHint
-          && (!currentUpdatedAt || taskUpdatedAt >= currentUpdatedAt)
-          && (stringValue(taskToolPolicy.must_delegate_via) === "octoclaw_dispatch"
-            || stringArray(taskToolPolicy.allowed_control_tools).includes("octoclaw_dispatch"));
-        if (taskAllowsDispatch) {
-          stateKey = stringValue(taskPolicyContext.key) || stateKey;
-          state = taskPolicyContext.state as PolicyStateEntry | null;
-        }
-        const promotedDispatch = await promoteBudgetedMainDispatch({
-          stateKey,
-          ctx,
-          state: asRecord(state),
-          decision: asRecord(state?.decision),
-          task: stringValue(toolParams.task),
-          logger: pi.logger,
-        });
-        if (promotedDispatch.promoted) {
-          state = promotedDispatch.state;
-          budgetDecision = promotedDispatch.decision;
-        }
-      }
-      const decision = asRecord(state?.decision);
-      const hookConfig = asRecord(asRecord(decision.hook_interface).before_tool_call);
-      const speculativeDispatchGuardEnabled = toolName === "octoclaw_dispatch"
-        && resolveSpawnBackend() === "planner"
-        && resolveSpeculativePreloadEnabled(currentPluginConfig());
-      if (!hookConfig.enabled && toolName !== "sessions_spawn" && toolName !== "sessions_send" && !speculativeDispatchGuardEnabled) return;
-
-      const routeHintTool = stringValue(hookConfig.route_hint_tool || "octoclaw_route_hint");
-      const routeHintIsRequired = routeHintRequired(decision) || Boolean(hookConfig.route_hint_required);
-      const delegationEnforcementEnabled = Boolean(hookConfig.delegate_required || hookConfig.delegation_enforcement);
-      const routeHintAlreadySubmitted = Boolean(state?.routeHintSubmitted) || Boolean(asRecord(decision.route_hint_policy).submitted);
-      const allowedPreHintTools = preHintAllowedTools(decision, routeHintTool);
-      const allowedObserverTools = observerControlTools(decision, routeHintTool);
-      const allowedSessionTools = sessionControlTools(decision, routeHintTool);
-      const toolPolicy = asRecord(decision.tool_policy);
-      const metadata = buildPolicyMetadata(ctx, { stateKey });
-      if (["octoclaw_status", "octoclaw_task_action"].includes(toolName)) {
-        updatePolicyState(stateKey, (current) => ({
-          ...current,
-          controlToolsSeen: Array.from(new Set([
-            ...(Array.isArray(current?.controlToolsSeen) ? current.controlToolsSeen : []),
-            toolName,
-          ])),
-        }));
-      }
-      const storedInboundTs = stringValue(state?.inboundMessageTs);
-      if (storedInboundTs && !stringValue(metadata.message_id)) {
-        metadata.message_id = storedInboundTs;
-      }
-
-      if (
-        speculativeDispatchGuardEnabled
-      ) {
-        const decisionRoute = stringValue(asRecord(decision.route_decision).route);
-        const expectedWorkContractId = stateWorkContractId(state);
-        const deferredCandidates: Array<{
-          key: string;
-          speculative: NonNullable<ReturnType<typeof readSpeculativePreloadState>>;
-          spawnArgs: UnknownRecord;
-        }> = [];
-        const addDeferredCandidate = (key: string, candidateState: unknown): void => {
-          const candidateKey = stringValue(key);
-          if (!candidateKey || deferredCandidates.some((candidate) => candidate.key === candidateKey)) return;
-          const candidateRecord = asRecord(candidateState);
-          if (expectedWorkContractId && stateWorkContractId(candidateRecord) !== expectedWorkContractId) return;
-          const candidateSpeculative = readSpeculativePreloadState(candidateRecord);
-          const candidateSpawnArgs = asRecord(candidateSpeculative?.spawnArgs);
-          if (candidateSpeculative?.status !== "hinted" || Object.keys(candidateSpawnArgs).length === 0) return;
-          deferredCandidates.push({ key: candidateKey, speculative: candidateSpeculative, spawnArgs: candidateSpawnArgs });
-        };
-        for (const key of Array.from(new Set([
-          stateKey,
-          stringValue(ctx.sessionKey),
-          stringValue(ctx.canonicalSessionKey),
-          stringValue(asRecord(decision.request).session_key),
-          ...resolvePolicyStateKeys(ctx),
-        ].map((value) => stringValue(value)).filter(Boolean)))) {
-          addDeferredCandidate(key, policyState.get(key));
-        }
-        if (stateKey) addDeferredCandidate(stateKey, state);
-        if (deferredCandidates.length === 0 && expectedWorkContractId) {
-          for (const entry of policyState.entries()) addDeferredCandidate(entry.key, entry.state);
-        }
-        const deferred = deferredCandidates[0];
-        if (decisionRoute === "delegate" && deferred) {
-          void recordPolicyReplay("speculative_preload_dispatch_deferred", {
-            sessionKey: stringValue(asRecord(decision.request).session_key) || deferred.key || stateKey || "",
-            sessionId: stringValue(ctx.sessionId),
-            route: decisionRoute,
-            toolName,
-            label: deferred.speculative.label,
-            reason: "standby_spawn_required",
-            alias_count: deferredCandidates.length,
-          }, pi.logger, decision).catch(() => {});
-          return {
-            block: true,
-            blockReason: [
-              "OctoClaw speculative preload is active for this delegated route.",
-              `First call sessions_spawn exactly with these runtime-generated args: ${JSON.stringify(deferred.spawnArgs)}.`,
-              "After sessions_spawn returns, call octoclaw_dispatch with the original task.",
-              "If sessions_spawn is rejected or unavailable, call octoclaw_dispatch after the failed result so OctoClaw can fall back to new_spawn.",
-            ].join(" "),
-          };
-        }
-      }
-
-      if (toolName === "sessions_spawn") {
-        const sessionKeys = [
-          stateKey,
-          stringValue(ctx.sessionKey),
-          stringValue(ctx.canonicalSessionKey),
-          stringValue(asRecord(decision.request).session_key),
-          ...resolvePolicyStateKeys(ctx),
-        ];
-        const plannerGateEnabled = resolveSpawnBackend() === "planner"
-          && sessionKeys.some((sessionKey) => isPlannerAllowedForSession(sessionKey));
-        if (plannerGateEnabled) {
-          const speculativeMatches: Array<{ key: string; state: UnknownRecord; speculative: NonNullable<ReturnType<typeof readSpeculativePreloadState>> }> = [];
-          for (const key of Array.from(new Set(sessionKeys.map((value) => stringValue(value)).filter(Boolean)))) {
-            const candidateState = asRecord(policyState.get(key));
-            const candidateSpeculative = readSpeculativePreloadState(candidateState);
-            if (candidateSpeculative?.status !== "hinted") continue;
-            if (!isMatchingSpeculativePreloadSpawn(candidateState, toolParams)) continue;
-            speculativeMatches.push({ key, state: candidateState, speculative: candidateSpeculative });
-          }
-          const directSpeculative = readSpeculativePreloadState(state);
-          if (
-            stateKey
-            && speculativeMatches.every((match) => match.key !== stateKey)
-            && directSpeculative?.status === "hinted"
-            && isMatchingSpeculativePreloadSpawn(state, toolParams)
-          ) {
-            speculativeMatches.push({ key: stateKey, state: asRecord(state), speculative: directSpeculative });
-          }
-          if (speculativeMatches.length === 0) {
-            for (const entry of policyState.entries()) {
-              const candidateState = asRecord(entry.state);
-              const candidateSpeculative = readSpeculativePreloadState(candidateState);
-              if (candidateSpeculative?.status !== "hinted") continue;
-              if (!isMatchingSpeculativePreloadSpawn(candidateState, toolParams)) continue;
-              speculativeMatches.push({ key: entry.key, state: candidateState, speculative: candidateSpeculative });
-            }
-          }
-          if (resolveSpeculativePreloadEnabled(currentPluginConfig()) && speculativeMatches.length > 0) {
-            const now = Date.now();
-            for (const match of speculativeMatches) {
-              const nextSpeculative = serializeSpeculativePreloadState({
-                ...match.speculative,
-                status: "spawn_call_started",
-                updatedAt: now,
-              });
-              updatePolicyState(match.key, (current) => ({
-                ...current,
-                speculativePreload: nextSpeculative,
-                speculative_preload: nextSpeculative,
-                controlToolsSeen: Array.from(new Set([...(Array.isArray(current.controlToolsSeen) ? current.controlToolsSeen : []), toolName])),
-              }));
-            }
-            const preferredReplayKeys = new Set([
-              stringValue(ctx.sessionKey),
-              stringValue(ctx.canonicalSessionKey),
-              stringValue(asRecord(decision.request).session_key),
-              stringValue(stateKey),
-            ].filter(Boolean));
-            const replayMatch = speculativeMatches.find((match) => preferredReplayKeys.has(match.key)) || speculativeMatches[0];
-            const replaySessionKey = stringValue(ctx.sessionKey) || stringValue(ctx.canonicalSessionKey) || replayMatch.key || stateKey || "";
-            void recordPolicyReplay("speculative_preload_spawn_allowed", {
-              sessionKey: replaySessionKey,
-              sessionId: stringValue(ctx.sessionId),
-              route: stringValue(asRecord(decision.route_decision).route),
-              toolName,
-              label: replayMatch.speculative.label || stringValue(toolParams.label),
-              alias_count: speculativeMatches.length,
-            }, pi.logger, decision).catch(() => {});
-            return;
-          }
-          const gate = evaluateNativeSpawnGate({ sessionKeys, args: toolParams as { task: string; [key: string]: unknown }, decision });
-          if (!gate.allowed) {
-            updatePolicyState(stateKey, (current) => ({
-              ...current,
-              blockedTools: [...(Array.isArray(current.blockedTools) ? current.blockedTools.slice(-7) : []), toolName].filter(Boolean),
-            }));
-            void recordPolicyReplay("sessions_spawn_intent_blocked", {
-              sessionKey: stateKey || "",
-              sessionId: stringValue(ctx.sessionId),
-              route: stringValue(asRecord(decision.route_decision).route),
-              toolName,
-              reason: gate.reason,
-              spawn_intent_id: gate.intent?.spawnIntentId ?? null,
-              expected_hash: gate.expectedHash ?? null,
-              actual_hash: gate.actualHash ?? null,
-            }, pi.logger).catch(() => {});
-            return {
-              block: true,
-              blockReason: gate.reason === "args_hash_mismatch"
-                ? "OctoClaw blocked sessions_spawn because the arguments do not match the pending native spawn intent. Call octoclaw_dispatch again or use the exact sessionsSpawnArgs."
-                : "OctoClaw blocked sessions_spawn because no current pending native spawn intent exists. Call octoclaw_dispatch first.",
-            };
-          }
-          updatePolicyState(stateKey, (current) => ({
-            ...current,
-            delegated: false,
-            spawnIntentId: gate.intent.spawnIntentId,
-            workContractId: gate.intent.workContractId,
-            dispatchStatus: "spawn_call_started",
-            controlToolsSeen: Array.from(new Set([...(Array.isArray(current.controlToolsSeen) ? current.controlToolsSeen : []), toolName])),
-          }));
-          const decisionBucket = stringValue(asRecord(decision.route_decision).decision_bucket || decision._decision_bucket || asRecord(asRecord(decision.route_decision).startup_cost_policy).decision_bucket);
-          if (decisionBucket === "budgeted_main_then_delegate") {
-            const now = Date.now();
-            const stateRecord = asRecord(state);
-            const liveBudget = readBudgetedMainState(stateRecord);
-            if (!liveBudget?.escalatedAt) {
-              const startedBudget = liveBudget ?? buildBudgetedMainState({
-                now,
-                decision,
-                visibleStartAt: budgetedMainVisibleStartAt(stateRecord, now),
-                budgetStartSource: "sessions_spawn_gate_fallback",
-                workContractId: gate.intent.workContractId,
-                spawnIntentId: gate.intent.spawnIntentId,
-              });
-              const reason = liveBudget?.escalatedPending || now - startedBudget.startedAt >= startedBudget.maxWallMs
-                ? "wall_time_over_budget"
-                : "main_agent_called_dispatch";
-              const escalatedBudget = {
-                ...startedBudget,
-                active: false,
-                escalatedAt: now,
-                escalatedPending: false,
-                reason,
-                workContractId: gate.intent.workContractId,
-                spawnIntentId: gate.intent.spawnIntentId,
-              };
-              updateBudgetedMainForContext({
-                stateKey: stateKey || gate.intent.sessionKey,
-                ctx,
-                state: stateRecord,
-                budgetState: escalatedBudget,
-                extra: {
-                  budgeted_main_escalated: true,
-                  budgeted_main_escalated_at: new Date(now).toISOString(),
-                },
-              });
-              await recordBudgetedMainEvent({
-                event: "budgeted_main_escalated",
-                stateKey: stateKey || gate.intent.sessionKey,
-                ctx,
-                state: stateRecord,
-                decision,
-                budgetState: escalatedBudget,
-                reason,
-                logger: pi.logger,
-                now,
-              }).catch(() => {});
-            }
-          }
-          void recordPolicyReplay("sessions_spawn_intent_allowed", {
-            sessionKey: stateKey || gate.intent.sessionKey,
-            sessionId: stringValue(ctx.sessionId),
-            route: stringValue(asRecord(decision.route_decision).route),
-            decision_bucket: decisionBucket,
-            decisionBucket,
-            toolName,
-            spawn_intent_id: gate.intent.spawnIntentId,
-            work_contract_id: gate.intent.workContractId,
-          }, pi.logger).catch(() => {});
-          return;
-        }
-      }
-      if (toolName === "sessions_send") {
-        const sessionKeys = [
-          stateKey,
-          stringValue(ctx.sessionKey),
-          stringValue(ctx.canonicalSessionKey),
-          stringValue(asRecord(decision.request).session_key),
-          ...resolvePolicyStateKeys(ctx),
-        ];
-        const plannerGateEnabled = resolveSpawnBackend() === "planner"
-          && sessionKeys.some((sessionKey) => isPlannerAllowedForSession(sessionKey));
-        const route = stringValue(asRecord(decision.route_decision).route);
-        const speculativeSendExpected = plannerGateEnabled && route === "delegate";
-        if (speculativeSendExpected) {
-          const gate = evaluateNativeSessionsSendGate({ sessionKeys, args: toolParams as { task: string; [key: string]: unknown }, decision });
-          if (!gate.allowed) {
-            updatePolicyState(stateKey, (current) => ({
-              ...current,
-              blockedTools: [...(Array.isArray(current.blockedTools) ? current.blockedTools.slice(-7) : []), toolName].filter(Boolean),
-            }));
-            void recordPolicyReplay("sessions_send_intent_blocked", {
-              sessionKey: stateKey || "",
-              sessionId: stringValue(ctx.sessionId),
-              route,
-              toolName,
-              reason: gate.reason,
-              spawn_intent_id: gate.intent?.spawnIntentId ?? null,
-              expected_hash: gate.expectedHash ?? null,
-              actual_hash: gate.actualHash ?? null,
-            }, pi.logger, decision).catch(() => {});
-            return {
-              block: true,
-              blockReason: gate.reason === "args_hash_mismatch"
-                ? "OctoClaw blocked sessions_send because the arguments do not match the pending speculative send intent. Call octoclaw_dispatch again or use the exact sessionsSendArgs."
-                : "OctoClaw blocked sessions_send because no current pending speculative send intent exists. Call octoclaw_dispatch first.",
-            };
-          }
-          updatePolicyState(stateKey, (current) => ({
-            ...current,
-            delegated: false,
-            spawnIntentId: gate.intent.spawnIntentId,
-            workContractId: gate.intent.workContractId,
-            dispatchStatus: "spawn_call_started",
-            controlToolsSeen: Array.from(new Set([...(Array.isArray(current.controlToolsSeen) ? current.controlToolsSeen : []), toolName])),
-          }));
-          void recordPolicyReplay("sessions_send_intent_allowed", {
-            sessionKey: stateKey || gate.intent.sessionKey,
-            sessionId: stringValue(ctx.sessionId),
-            route,
-            decision_bucket: stringValue(asRecord(decision.route_decision).decision_bucket),
-            toolName,
-            spawn_intent_id: gate.intent.spawnIntentId,
-            work_contract_id: gate.intent.workContractId,
-            dispatch_mode: gate.intent.dispatchMode || "send_to_speculative",
-            speculative_session_label: gate.intent.speculativeSessionLabel || "",
-          }, pi.logger).catch(() => {});
-          return;
-        }
-      }
-
-      if (!hookConfig.enabled) return;
-
-      if (
-        stringValue(asRecord(decision.route_decision).route) === "reply"
-        && !isControlObserverDecision(decision)
-        && !isSessionControlDecision(decision)
-        && toolName
-        && !toolName.startsWith("octoclaw_")
-      ) {
-        const classification = classifyBudgetedMainTool(toolName, toolParams);
-        if (!budgetedMainHandledTool && classification.counted) {
-          const now = Date.now();
-          const stateRecord = asRecord(state);
-          const existingBudget = readBudgetedMainState(stateRecord);
-          const startedBudget = existingBudget?.active && !existingBudget.completedAt && !existingBudget.escalatedAt
-            ? existingBudget
-            : {
-                ...buildBudgetedMainState({
-                  now,
-                  decision,
-                  visibleStartAt: budgetedMainVisibleStartAt(stateRecord, now),
-                  budgetStartSource: "main_reply_tool_guard",
-                  workContractId: budgetedMainWorkContractId(stateRecord, decision),
-                  spawnIntentId: budgetedMainSpawnIntentId(stateRecord),
-                }),
-                reason: "main_reply_tool_observed",
-                decisionBucket: stringValue(asRecord(decision.route_decision).decision_bucket || decision._decision_bucket || "main_reply_tool_guard"),
-              };
-          const updatedBudget = updateBudgetedMainToolState(startedBudget, classification);
-          const escalationReason = budgetedMainToolEscalationReason(updatedBudget, classification);
-          if (escalationReason) {
-            const escalated = await escalateBudgetedMainForTool({
-              stateKey,
-              ctx,
-              state: stateRecord,
-              decision,
-              budgetState: updatedBudget,
-              reason: escalationReason,
-              logger: pi.logger,
-            });
-            state = escalated.state as PolicyStateEntry | null;
-            updatePolicyState(stateKey, (current) => ({
-              ...current,
-              blockedTools: [...(Array.isArray(current.blockedTools) ? current.blockedTools.slice(-7) : []), toolName].filter(Boolean),
-            }));
-            return {
-              block: true,
-              blockReason: `OctoClaw main reply tool budget escalated (${escalationReason}). Call octoclaw_dispatch with the original task; do not continue ordinary tool execution in the main agent.`,
-            };
-          }
-          state = updateBudgetedMainForContext({
-            stateKey,
-            ctx,
-            state: stateRecord,
-            budgetState: updatedBudget,
-          }) as PolicyStateEntry | null;
-          scheduleBudgetedMainTimeout({
-            stateKey,
-            ctx,
-            state: stateRecord,
-            decision,
-            budgetState: updatedBudget,
-            logger: pi.logger,
-          });
-          void recordPolicyReplay(
-            "main_reply_tool_guard_observed",
-            {
-              sessionKey: stateKey || "",
-              sessionId: stringValue(ctx.sessionId),
-              route: stringValue(asRecord(decision.route_decision).route),
-              decision_bucket: updatedBudget.decisionBucket,
-              toolName,
-              toolCount: updatedBudget.toolCount,
-              readOnlyToolCount: updatedBudget.readOnlyToolCount,
-              budgetStartSource: updatedBudget.budgetStartSource,
-            },
-            pi.logger,
-            decision,
-          ).catch(() => {});
-        }
-        updateAckTrackingState(stateKey, { tool_active: true });
-        const latencyAck = await maybeSendLatencyAck(decision, metadata, stateKey, asRecord(state), ctx, pi.logger ?? {}, toolName);
-        updatePolicyState(stateKey, (current) => ({
-          ...current,
-          directToolsSeen: Array.from(new Set([...(Array.isArray(current?.directToolsSeen) ? current.directToolsSeen : []), toolName])),
-        }));
-        await recordAckReplay({
-          decision,
-          stateKey,
-          ctx,
-          logger: pi.logger,
-          kind: "latency",
-          phase: "direct_tool",
-          result: latencyAck,
-          toolName,
-        });
-        void recordPolicyReplay(
-          "direct_tool_called",
-          {
-            sessionKey: stateKey || "",
-            sessionId: stringValue(ctx.sessionId),
-            route: stringValue(asRecord(decision.route_decision).route),
-            taskClass: stringValue(asRecord(decision.route_decision).task_class),
-            protectedLane: stringValue(asRecord(decision.route_decision).protected_lane),
-            toolName,
-            latencyAckRequired: Boolean(asRecord(decision.latency_ack).required),
-            latencyAckSent: Boolean(latencyAck?.sent),
-            latencyAckReason: stringValue(latencyAck?.reason),
-          },
-          pi.logger,
-          decision,
-        ).catch(() => {});
-        void recordPolicyReplay(
-          "tool_used",
-          {
-            sessionKey: stateKey || "",
-            sessionId: stringValue(ctx.sessionId),
-            route: stringValue(asRecord(decision.route_decision).route),
-            taskClass: stringValue(asRecord(decision.route_decision).task_class),
-            protectedLane: stringValue(asRecord(decision.route_decision).protected_lane),
-            toolName,
-            latencyAckRequired: Boolean(asRecord(decision.latency_ack).required),
-            latencyAckSent: Boolean(latencyAck?.sent),
-            latencyAckReason: stringValue(latencyAck?.reason),
-          },
-          pi.logger,
-          decision,
-        ).catch(() => {});
-      }
-
-      if (isControlObserverDecision(decision)) {
-        if (allowedObserverTools.has(toolName)) {
-          return;
-        }
-        updatePolicyState(stateKey, (current) => ({
-          ...current,
-          blockedTools: [...(Array.isArray(current.blockedTools) ? current.blockedTools.slice(-7) : []), toolName].filter(Boolean),
-        }));
-        void recordPolicyReplay(
-          "tool_blocked_control_observer",
-          {
-            sessionKey: stateKey || "",
-            sessionId: stringValue(ctx.sessionId),
-            route: stringValue(asRecord(decision.route_decision).route),
-            toolName,
-            allowedTools: [...allowedObserverTools],
-          },
-          pi.logger,
-          decision,
-        ).catch(() => {});
-        return {
-          block: true,
-          blockReason: `OctoClaw control/observer request must use control tools only: ${[...allowedObserverTools].join(", ")}.`,
-        };
-      }
-
-      if (isSessionControlDecision(decision)) {
-        if (allowedSessionTools.has(toolName)) {
-          return;
-        }
-        updatePolicyState(stateKey, (current) => ({
-          ...current,
-          blockedTools: [...(Array.isArray(current.blockedTools) ? current.blockedTools.slice(-7) : []), toolName].filter(Boolean),
-        }));
-        void recordPolicyReplay(
-          "tool_blocked_session_control",
-          {
-            sessionKey: stateKey || "",
-            sessionId: stringValue(ctx.sessionId),
-            route: stringValue(asRecord(decision.route_decision).route),
-            toolName,
-            allowedTools: [...allowedSessionTools],
-          },
-          pi.logger,
-          decision,
-        ).catch(() => {});
-        return {
-          block: true,
-          blockReason: `OctoClaw current-session control request must use session control tools only: ${[...allowedSessionTools].join(", ")}.`,
-        };
-      }
-
-      const routeAllowsDirectTools = stringValue(asRecord(decision.route_decision).route) === "reply"
-        || Boolean(toolPolicy.allow_direct_tools);
-      const directReplyToolsAllowed = routeAllowsDirectTools
-        && !isControlObserverDecision(decision)
-        && !isSessionControlDecision(decision);
-      if (routeHintIsRequired && !routeHintAlreadySubmitted && !directReplyToolsAllowed && !allowedPreHintTools.has(toolName)) {
-        if (toolName === "octoclaw_dispatch") {
-          void recordPolicyReplay(
-            "route_hint_dispatch_advisory",
-            {
-              sessionKey: stateKey || "",
-              sessionId: stringValue(ctx.sessionId),
-              route: stringValue(asRecord(decision.route_decision).route),
-              toolName,
-              requiredTool: routeHintTool,
-            },
-            pi.logger,
-            decision,
-          ).catch(() => {});
-        } else {
-          updatePolicyState(stateKey, (current) => ({
-            ...current,
-            blockedTools: [...(Array.isArray(current.blockedTools) ? current.blockedTools.slice(-7) : []), toolName].filter(Boolean),
-          }));
-          void recordPolicyReplay(
-            "tool_blocked_before_route_hint",
-            {
-              sessionKey: stateKey || "",
-              sessionId: stringValue(ctx.sessionId),
-              route: stringValue(asRecord(decision.route_decision).route),
-              toolName,
-              requiredTool: routeHintTool,
-            },
-            pi.logger,
-            decision,
-          ).catch(() => {});
-          return {
-            block: true,
-            blockReason: `OctoClaw runtime policy requires ${routeHintTool} before using other tools.`,
-          };
-        }
-      }
-
-      const workContractProjection = asRecord(decision.work_contract);
-      const forbiddenContractTools = new Set(stringArray(workContractProjection.forbiddenTools || workContractProjection.forbidden_tools));
-      const routeDecision = asRecord(decision.route_decision);
-      const isDeterministicFallbackToDelegate = stringValue(routeDecision.route) === "delegate"
-        && (stringValue(routeDecision.route_source) === "fallback" || stringValue(routeDecision.fallback_reason).includes("explicit_delegate"));
-      const isBudgetedMainDispatch = toolName === "octoclaw_dispatch"
-        && hasBudgetedMainEscalationEvidence(asRecord(state), decision);
-      const isExplicitDelegateDispatch = toolName === "octoclaw_dispatch"
-        && explicitDelegateDispatchRequest({
-          params: toolParams,
-          metadata,
-          cachedDecision: decision,
-          dispatchCallImpliesDelegateObjection: true,
-        }).requested;
-      if (forbiddenContractTools.has(toolName) && !isDeterministicFallbackToDelegate && !isBudgetedMainDispatch && !isExplicitDelegateDispatch) {
-        if (toolName === "octoclaw_dispatch") {
-          void recordPolicyReplay(
-            "work_contract_forbidden_dispatch_advisory",
-            {
-              sessionKey: stateKey || "",
-              sessionId: stringValue(ctx.sessionId),
-              route: stringValue(workContractProjection.route || asRecord(decision.route_decision).route),
-              toolName,
-              workContractId: stringValue(workContractProjection.workContractId || workContractProjection.work_contract_id),
-            },
-            pi.logger,
-            decision,
-          ).catch(() => {});
-        } else {
-          updatePolicyState(stateKey, (current) => ({
-            ...current,
-            blockedTools: [...(Array.isArray(current.blockedTools) ? current.blockedTools.slice(-7) : []), toolName].filter(Boolean),
-          }));
-          void recordPolicyReplay(
-            "tool_blocked_work_contract_forbidden",
-            {
-              sessionKey: stateKey || "",
-              sessionId: stringValue(ctx.sessionId),
-              route: stringValue(workContractProjection.route || asRecord(decision.route_decision).route),
-              toolName,
-              workContractId: stringValue(workContractProjection.workContractId || workContractProjection.work_contract_id),
-            },
-            pi.logger,
-            decision,
-          ).catch(() => {});
-          return {
-            block: true,
-            blockReason: `OctoClaw WorkContract forbids ${toolName} for this turn.`,
-          };
-        }
-      }
-      if (isExplicitDelegateDispatch) {
-        updatePolicyState(stateKey, (current) => ({
-          ...current,
-          delegated: true,
-          delegationTool: toolName,
-        }));
-        updateAckTrackingState(stateKey, { delegated_running: true, tool_active: false });
-        return;
-      }
-      const blockedPatterns = Array.isArray(toolPolicy.block_tool_patterns)
-        ? toolPolicy.block_tool_patterns.map((item) => stringValue(item)).filter(Boolean)
-        : [];
-      const delegateTool = stringValue(toolPolicy.must_delegate_via || "octoclaw_dispatch");
-      const isPolicyControlTool = toolName.startsWith("octoclaw_") || toolName === routeHintTool || toolName === delegateTool;
-      const currentRouteIsDelegated = isDelegatedRoute(decision);
-      if (currentRouteIsDelegated && !isPolicyControlTool && matchesBlockedPattern(stringifyParamsForPolicy(event.params), blockedPatterns)) {
-        void recordPolicyReplay(
-          "tool_blocked_manual_delegation",
-          {
-            sessionKey: stateKey || "",
-            sessionId: stringValue(ctx.sessionId),
-            route: stringValue(asRecord(decision.route_decision).route),
-            toolName,
-          },
-          pi.logger,
-          decision,
-        ).catch(() => {});
-        return {
-          block: true,
-          blockReason: `OctoClaw runtime policy blocked a manual delegation pattern. Use ${stringValue(toolPolicy.must_delegate_via || "octoclaw_dispatch")} instead.`,
-        };
-      }
-
-      if (!delegationEnforcementEnabled) {
-        return;
-      }
-
-      const workflowRule = workflowEnforcementRule(decision, toolName, routeHintTool);
-      if (!workflowRule.block && workflowRule.delegateTool && toolName === workflowRule.delegateTool) {
-        updatePolicyState(stateKey, (current) => ({
-          ...current,
-          delegated: true,
-          delegationTool: toolName,
-        }));
-        updateAckTrackingState(stateKey, { delegated_running: true, tool_active: false });
-        return;
-      }
-      if (!workflowRule.block) {
-        return;
-      }
-
-      if (toolName === "octoclaw_dispatch") {
-        void recordPolicyReplay(
-          "workflow_enforcement_dispatch_advisory",
-          {
-            sessionKey: stateKey || "",
-            sessionId: stringValue(ctx.sessionId),
-            route: stringValue(workflowRule.route || asRecord(decision.route_decision).route),
-            toolName,
-            allowedTools: workflowRule.allowedTools,
-          },
-          pi.logger,
-          state?.decision as Record<string, unknown> | null,
-        ).catch(() => {});
-        return;
-      }
-
-      updatePolicyState(stateKey, (current) => ({
-        ...current,
-        blockedTools: [...(Array.isArray(current.blockedTools) ? current.blockedTools.slice(-7) : []), toolName].filter(Boolean),
-      }));
-      const workflowRoute = stringValue(workflowRule.route || asRecord(decision.route_decision).route);
-      const observerOnly = Boolean(asRecord(asRecord(decision.hook_interface).before_tool_call).observe_only);
-      void recordPolicyReplay(
-        observerOnly ? "tool_blocked_runner_policy" : "tool_blocked_delegation_policy",
-        {
-          sessionKey: stateKey || "",
-          sessionId: stringValue(ctx.sessionId),
-          route: workflowRoute,
-          toolName,
-          allowedTools: workflowRule.allowedTools,
-        },
-        pi.logger,
-        state?.decision as Record<string, unknown> | null,
-      ).catch(() => {});
-      return {
-        block: true,
-          blockReason: observerOnly
-            ? `OctoClaw runtime policy route=delegate with role=observer_probe requires the observe workflow. Use ${workflowRule.delegateTool || "octoclaw_dispatch"} first. Allowed workflow tools: ${workflowRule.allowedTools.join(", ") || "octoclaw_dispatch"}.`
-            : `OctoClaw runtime policy route=${stringValue(asRecord(decision.route_decision).route || "reply")} requires delegation. Use ${workflowRule.delegateTool || "octoclaw_dispatch"} first. Allowed control tools: ${workflowRule.allowedTools.join(", ") || "octoclaw_dispatch"}.`,
-      };
-    });
+    registerLifecycleHook("before_tool_call", makeBeforeToolCallHook({
+      pi,
+      currentPluginConfig,
+    }));
 
     registerLifecycleHook("after_tool_call", async (event, ctx) => {
       if (!isManagedAgentContext(ctx)) return;
