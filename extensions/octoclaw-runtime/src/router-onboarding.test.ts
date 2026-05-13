@@ -45,6 +45,7 @@ describe("router wizard Slack onboarding", () => {
   it("builds a Slack interactive onboarding card", () => {
     const blocks = buildRouterWizardSlackBlocks();
     expect(blocks.some((block) => block.type === "actions")).toBe(true);
+    expect(JSON.stringify(blocks)).toContain("octoclaw_router_wizard_start_questions");
     expect(JSON.stringify(blocks)).toContain("octoclaw_router_wizard_use_defaults");
   });
 
@@ -121,6 +122,96 @@ describe("router wizard Slack onboarding", () => {
     expect(isRouterWizardComplete(tempHome)).toBe(true);
     expect(discoverConfiguredRouterModels(tempHome)).toEqual(["openai/gpt-5.5", "zhipu/GLM-5.1"]);
     expect(sends[0]!.message).toContain("默认配置已启用");
+  });
+
+  it("runs a Slack question wizard and writes selected answers on confirm", async () => {
+    writeOpenclawConfig();
+    const sends: Parameters<RouterWizardOnboardingSendMessage>[0][] = [];
+    const sendMessage: RouterWizardOnboardingSendMessage = async (params) => {
+      sends.push(params);
+      return { sent: true, messageId: `1777770001.${String(sends.length).padStart(6, "0")}` };
+    };
+    const common = {
+      sessionKey: "agent:main:slack:default:direct:u123abc",
+      replyToMessageId: "1777770000.000001",
+      openclawHome: tempHome,
+      now: new Date("2026-05-14T00:00:00.000Z"),
+      sendMessage,
+    };
+
+    expect((await handleRouterWizardAction({
+      ...common,
+      event: { actions: [{ action_id: "octoclaw_router_wizard_start_questions" }] },
+    })).action).toBe("start_questions");
+    expect(sends.at(-1)?.message).toContain("隐私模式");
+
+    expect((await handleRouterWizardAction({
+      ...common,
+      event: { actions: [{ action_id: "octoclaw_router_wizard_privacy_local_only" }] },
+    })).action).toBe("privacy_local_only");
+    expect(sends.at(-1)?.message).toContain("月预算");
+
+    expect((await handleRouterWizardAction({
+      ...common,
+      event: { actions: [{ action_id: "octoclaw_router_wizard_budget_custom" }] },
+    })).action).toBe("budget_custom");
+    expect(sends.at(-1)?.message).toContain("回复 `budget 100`");
+
+    expect((await handleRouterWizardAction({
+      ...common,
+      event: { text: "budget 120" },
+    })).action).toBe("budget_text");
+    expect(sends.at(-1)?.message).toContain("禁用模型");
+
+    expect((await handleRouterWizardAction({
+      ...common,
+      event: { text: "ban openai/gpt-5.5, zhipu/GLM-5.1" },
+    })).action).toBe("restricted_models_text");
+    expect(sends.at(-1)?.message).toContain("确认写入");
+
+    const confirmed = await handleRouterWizardAction({
+      ...common,
+      event: { actions: [{ action_id: "octoclaw_router_wizard_confirm" }] },
+    });
+    expect(confirmed).toMatchObject({ handled: true, action: "confirm" });
+    const saved = JSON.parse(fs.readFileSync(routerWizardConfigPath(tempHome), "utf8")) as Record<string, unknown>;
+    expect(saved).toMatchObject({
+      schemaVersion: "octoclaw.router_wizard/v1",
+      privacy: "local_only",
+      budget: { monthly: 120, currency: "USD" },
+      restrictedModels: ["openai/gpt-5.5", "zhipu/GLM-5.1"],
+    });
+    expect(Object.keys(saved.models as Record<string, unknown>)).toEqual(["openai/gpt-5.5", "zhipu/GLM-5.1"]);
+    expect(sends.at(-1)?.message).toContain("Auto Router 配置已写入");
+  });
+
+  it("supports all-button question wizard path without free-form text", async () => {
+    writeOpenclawConfig();
+    const sends: Parameters<RouterWizardOnboardingSendMessage>[0][] = [];
+    const sendMessage: RouterWizardOnboardingSendMessage = async (params) => {
+      sends.push(params);
+      return { sent: true };
+    };
+    const common = {
+      sessionKey: "agent:main:slack:default:direct:u123abc",
+      openclawHome: tempHome,
+      now: new Date("2026-05-14T00:00:00.000Z"),
+      sendMessage,
+    };
+
+    await handleRouterWizardAction({ ...common, event: { actions: [{ action_id: "octoclaw_router_wizard_start_questions" }] } });
+    await handleRouterWizardAction({ ...common, event: { actions: [{ action_id: "octoclaw_router_wizard_privacy_standard" }] } });
+    await handleRouterWizardAction({ ...common, event: { actions: [{ action_id: "octoclaw_router_wizard_budget_100" }] } });
+    await handleRouterWizardAction({ ...common, event: { actions: [{ action_id: "octoclaw_router_wizard_restricted_none" }] } });
+    await handleRouterWizardAction({ ...common, event: { actions: [{ action_id: "octoclaw_router_wizard_confirm" }] } });
+
+    const saved = JSON.parse(fs.readFileSync(routerWizardConfigPath(tempHome), "utf8")) as Record<string, unknown>;
+    expect(saved).toMatchObject({
+      privacy: "standard",
+      budget: { monthly: 100, currency: "USD" },
+      restrictedModels: [],
+    });
+    expect(sends.map((send) => send.message).join("\n")).toContain("确认写入");
   });
 
   it("extracts remind and skip actions from nested Slack payloads", () => {
