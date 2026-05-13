@@ -1,6 +1,6 @@
 {
   "name": "@octoclaw/contracts",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "type": "module",
   "main": "./dist/schemas.js",
   "types": "./dist/schemas.d.ts",

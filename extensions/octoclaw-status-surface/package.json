@@ -1,6 +1,6 @@
 {
   "name": "@octoclaw/status-surface",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "type": "module",
   "main": "dist/index.js",
   "types": "src/index.ts",

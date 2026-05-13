@@ -1,6 +1,6 @@
 {
   "name": "@octoclaw/router",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -17,7 +17,8 @@
     "./health": { "types": "./dist/health/index.d.ts", "default": "./dist/health/index.js" },
     "./promotion": { "types": "./dist/promotion/index.d.ts", "default": "./dist/promotion/index.js" },
     "./overrides": { "types": "./dist/overrides/index.d.ts", "default": "./dist/overrides/index.js" },
-    "./wizard": { "types": "./dist/wizard/index.d.ts", "default": "./dist/wizard/index.js" }
+    "./wizard": { "types": "./dist/wizard/index.d.ts", "default": "./dist/wizard/index.js" },
+    "./invariants": { "types": "./dist/invariants/index.d.ts", "default": "./dist/invariants/index.js" }
   },
   "dependencies": {
     "@octoclaw/contracts": "workspace:*"

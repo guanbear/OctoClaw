@@ -2,7 +2,7 @@
 name: octoclaw
 metadata:
   author: openclaw-community
-  version: "0.5.0"
+  version: "0.6.0"
   timestamp: "2026-05-09"
   stable: false
 tags:
@@ -22,7 +22,7 @@ postInstall: |
 
 # OctoClaw Runtime Skill
 
-This skill describes the current `v0.5.0` runtime line. It intentionally does
+This skill describes the current `v0.6.0` runtime line. It intentionally does
 not describe the old Python `octoclaw_spawn.py`, completion-file finalizer, or
 JSON delivery-outbox runtime. Those were historical mechanisms and must not be
 reintroduced as compatibility paths.
@@ -63,6 +63,18 @@ reintroduced as compatibility paths.
 | `octoclaw_task_action` | Read task details, queue, artifacts, or supported task operations. |
 | `octoclaw_status` | Render status/details/queue/timeline from projection. |
 | `octoclaw_crash_recovery` | Run explicit recovery diagnostics. |
+
+## Auto Router Commands
+
+| Command | Use |
+|---------|-----|
+| `octoclawctl router wizard [--incremental]` | Create or update local router plan/budget/override config. |
+| `octoclawctl router decisions [--since 7d]` | Inspect shadow-to-live promotion decisions. |
+| `octoclawctl router cost report [--period 7d]` | Review local cost grouped by model, complexity, and route. |
+| `octoclawctl router cost budget set --monthly <usd>` | Store the local monthly router budget. |
+| `octoclawctl router score override <model> <tier>=<score>` | Override a model score for a complexity tier. |
+| `octoclawctl router model mark <model> --dispreferred-for <tier>` | Soft-avoid a model for a tier. |
+| `octoclawctl router model ban <model> --for <tier>` | Hard-exclude a model for a tier. |
 
 ## Delegation Contract
 

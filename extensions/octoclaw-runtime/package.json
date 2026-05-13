@@ -1,6 +1,6 @@
 {
   "name": "@octoclaw/runtime",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "OpenClaw extension tools for OctoClaw routing, dispatch, and status",
   "type": "module",
   "main": "dist/index.js",

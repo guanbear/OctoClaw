@@ -165,24 +165,22 @@ user turn
 
 ## Auto Router (cost-aware model selection)
 
-Currently **recommend-only** — it does not change live routing.
+Auto Router v3 lives in `@octoclaw/router`. V1 is a single balanced mode for delegated/sub-agent model choice; the main agent is never silently switched.
 
-1. `octoclawctl router model-intel refresh` pulls configured models, public prices, capabilities, and quota pressure into one snapshot
-   - Price sources: OpenClaw pricing cache, OpenRouter, models.dev, LiteLLM mapping
-   - Capability sources: OpenClaw provider catalog, OpenRouter `supported_parameters`, local smoke probes
-   - Scenario priors: PinchBench, Aider, SWE-bench, LiveCodeBench, BFCL, Artificial Analysis
-   - Cross-source disagreements (>20% price delta, capability mismatch) get a `conflict=true` flag — never silently overwritten
-2. `octoclawctl router model-config analyze` suggests cheaper same-provider candidates (never writes your OpenClaw config automatically)
-3. **Shadow mode** records "we used X, Y would have saved $Z" on every delegated turn
-4. **Gated live rollout** requires 7+ days of samples, no quality regression, no cost regression, and a one-flag rollback — before any live switch
+1. `octoclawctl router wizard` writes local plan, budget, privacy, and override config to `~/.openclaw/octoclaw/router-wizard.json`
+2. `octoclawctl router model-intel refresh` pulls configured models, public prices, capabilities, and quota pressure into one snapshot
+3. `octoclawctl router decisions --since 7d` shows shadow-to-live promotion audit records
+4. `octoclawctl router cost report --period 7d` groups spend by model, complexity, and route
+5. `octoclawctl router score override`, `router model mark`, and `router model ban` keep user overrides local
 
-Evidence priority: **local replay > your OpenClaw config > external leaderboards and catalogs.**
-A leaderboard score never promotes a model; your own runs do.
+Evidence priority: **your OpenClaw config and local routing data > packaged snapshot > external leaderboards and catalogs.**
+External data can seed scoring, but auto-promotion requires local shadow evidence.
 
 Hard rules:
 - Unknown quota is never treated as free
 - Unconfigured models never go live
 - A shadow failure can never change actual routing
+- All cost, shadow, wizard, and decision data stays local in V1
 
 ---
 
