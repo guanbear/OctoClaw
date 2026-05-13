@@ -1,0 +1,42 @@
+{
+  "snapshotVersion": "2026-05-13",
+  "schemaVersion": "1.0",
+  "sources": [
+    "pinchbench@2026-05-13",
+    "aider@2026-05-13",
+    "bfcl@2026-05-13",
+    "artificial_analysis@2026-05-13"
+  ],
+  "models": {
+    "openai/gpt-5.5": {
+      "tier": "frontier",
+      "price": 30,
+      "scores": {
+        "coding_worker": { "score": 95, "confidence": "high" },
+        "research": { "score": 92, "confidence": "high" },
+        "agentic": { "score": 90, "confidence": "high" }
+      },
+      "lastVerifiedAt": "2026-05-13T00:00:00.000Z"
+    },
+    "zhipu/glm-5.1": {
+      "tier": "standard",
+      "price": 8,
+      "scores": {
+        "coding_worker": { "score": 70, "confidence": "medium" },
+        "research": { "score": 78, "confidence": "medium" },
+        "agentic": { "score": 72, "confidence": "medium" }
+      },
+      "lastVerifiedAt": "2026-05-13T00:00:00.000Z"
+    },
+    "openai/gpt-5-mini": {
+      "tier": "mini",
+      "price": 1,
+      "scores": {
+        "coding_worker": { "score": 45, "confidence": "high" },
+        "research": { "score": 50, "confidence": "high" },
+        "agentic": { "score": 42, "confidence": "medium" }
+      },
+      "lastVerifiedAt": "2026-05-13T00:00:00.000Z"
+    }
+  }
+}

@@ -10,13 +10,17 @@
     "./judge-schema": { "types": "./dist/semantic/judge-schema.d.ts", "default": "./dist/semantic/judge-schema.js" },
     "./judge-prompt": { "types": "./dist/semantic/judge-prompt.d.ts", "default": "./dist/semantic/judge-prompt.js" },
     "./decision": { "types": "./dist/decision/index.d.ts", "default": "./dist/decision/index.js" },
-    "./router-lite": { "types": "./dist/decision/index.d.ts", "default": "./dist/decision/index.js" }
+    "./router-lite": { "types": "./dist/decision/index.d.ts", "default": "./dist/decision/index.js" },
+    "./capability": { "types": "./dist/capability/index.d.ts", "default": "./dist/capability/index.js" },
+    "./scoring": { "types": "./dist/scoring/index.d.ts", "default": "./dist/scoring/index.js" },
+    "./cost": { "types": "./dist/cost/index.d.ts", "default": "./dist/cost/index.js" },
+    "./health": { "types": "./dist/health/index.d.ts", "default": "./dist/health/index.js" }
   },
   "dependencies": {
     "@octoclaw/contracts": "workspace:*"
   },
   "scripts": {
-    "build": "tsc --build",
+    "build": "tsc --build && mkdir -p dist/data && cp src/data/leaderboard-snapshot.json dist/data/leaderboard-snapshot.json",
     "check": "tsc --noEmit",
     "test": "vitest run --root ../.. packages/octoclaw-router/src",
     "test:watch": "vitest --root ../.. packages/octoclaw-router/src",

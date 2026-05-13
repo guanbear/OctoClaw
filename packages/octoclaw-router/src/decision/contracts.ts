@@ -179,7 +179,19 @@ export interface RouterLiteRecommendation {
   mode: "shadow" | "live";
   scoringMode?: RouterLiteScoringMode;
   scenario?: RouterLiteScenario;
-  ignoredReason?: "low_confidence" | "no_eligible_model" | "live_route_not_supported" | "not_configured" | "status_or_provenance_request" | "stale_evidence" | "explicit_override";
+  ignoredReason?:
+    | "low_confidence"
+    | "no_eligible_model"
+    | "live_route_not_supported"
+    | "not_configured"
+    | "status_or_provenance_request"
+    | "stale_evidence"
+    | "explicit_override"
+    | "no_capability_data"
+    | "all_unconfigured"
+    | "all_cooldown"
+    | "no_quality_floor_match"
+    | "all_banned";
 }
 
 export interface RouterLiteShadowEvent {

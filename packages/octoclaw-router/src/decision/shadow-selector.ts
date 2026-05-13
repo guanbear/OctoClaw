@@ -9,14 +9,14 @@ import type {
   ScenarioAbilityLite,
 } from "./contracts.js";
 
+type Rejection = RouterLiteRecommendation["rejectedModels"][number];
+
 type ScoreWeights = {
   quality: number;
   cost: number;
   stability: number;
   speed: number;
 };
-
-type Rejection = RouterLiteRecommendation["rejectedModels"][number];
 
 const SCORING_WEIGHTS: Record<RouterLiteScoringMode, ScoreWeights> = {
   cost_first: { quality: 20, cost: 45, stability: 25, speed: 10 },
@@ -242,7 +242,7 @@ function getScenarioRejectionReason(
 
 function scoreModel(
   request: RouterLiteRequest,
-  model: ModelIntelLite,
+  model: ModelIntelSnapshot["models"][number],
   mode: RouterLiteScoringMode,
   maxBlendedPrice: number,
   maxP50: number,
