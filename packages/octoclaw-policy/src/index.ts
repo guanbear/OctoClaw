@@ -6,7 +6,6 @@ export * from "./judge/judge-prompt.js";
 export * from "./model/index.js";
 export * from "./gate/index.js";
 export * from "./roles/index.js";
-export * from "./compound/index.js";
 export * from "./admission/index.js";
 export * from "./caps/index.js";
 export * from "./spec/index.js";

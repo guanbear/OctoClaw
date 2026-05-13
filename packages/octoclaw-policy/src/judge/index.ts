@@ -1,7 +1,6 @@
 import type { BackendType, WorkspaceMode } from "@octoclaw/contracts/schemas";
 import { evaluateAdmission, type AdmissionDecision } from "../admission/index.js";
 import { decidePolicyCaps, type CapsDecision } from "../caps/index.js";
-import { buildCompoundPolicyPlaceholder, type CompoundPolicyPlaceholder } from "../compound/index.js";
 import { decideBackend, decideExecutionProfile, decideModelProfile, type ExecutionProfileTarget, type ModelProfile } from "../model/index.js";
 import { buildIntentPacket, type IntentClass, type IntentHints, type IntentPacket } from "../intent/index.js";
 import { decideRole, type PolicyRole } from "../roles/index.js";
@@ -47,7 +46,6 @@ export interface PolicyDecision {
 export interface JudgeFastOutput {
   intent: IntentPacket;
   decision: PolicyDecision;
-  compound: CompoundPolicyPlaceholder;
 }
 
 export function judgePolicy(input: PolicyJudgeInput): PolicyDecision {
@@ -100,7 +98,6 @@ export function judgeFast(input: JudgeFastInput): JudgeFastOutput {
   return {
     intent,
     decision: judgePolicy(input),
-    compound: buildCompoundPolicyPlaceholder(),
   };
 }
 
