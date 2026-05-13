@@ -1,7 +1,5 @@
 import { buildContractEnvelope, type ScopeMetadata } from "@octoclaw/contracts/schemas";
 
-export * from "./surface-binding.js";
-
 export interface RuntimeIngressRequestInput {
   prompt: string;
   sessionKey?: string;

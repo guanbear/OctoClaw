@@ -10,7 +10,6 @@ import type {
 import type { NormalizedRuntimeRequest } from "../requests/index.js";
 export * from "./execution-fallback.js";
 export * from "./summary-snapshot.js";
-export * from "./thread-aggregation.js";
 import { createAckLedger, type AckLedger } from "../ack/index.js";
 import { createOutbox, type DeliveryOutbox } from "../delivery/outbox.js";
 import {
