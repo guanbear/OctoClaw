@@ -32,7 +32,7 @@ export interface SlackSendResult {
   messageId?: string;
   threadTs?: string;
   error?: string;
-  transport?: "slack_api" | "legacy_cli";
+  transport?: "slack_api" | "slack_api_stream" | "legacy_cli";
   targetSource?: string;
   footerSource?: string;
 }
@@ -204,6 +204,7 @@ function legacyCliDeliveryEnabled(): boolean {
 }
 
 const SLACK_API_TEXT_CHUNK_LIMIT = 39000;
+const SLACK_STREAM_TEXT_LIMIT = 12000;
 
 function splitSlackText(message: string): string[] {
   const text = String(message ?? "");
@@ -211,6 +212,16 @@ function splitSlackText(message: string): string[] {
   const chunks: string[] = [];
   for (let index = 0; index < text.length; index += SLACK_API_TEXT_CHUNK_LIMIT) {
     chunks.push(text.slice(index, index + SLACK_API_TEXT_CHUNK_LIMIT));
+  }
+  return chunks;
+}
+
+function splitSlackStreamText(message: string): string[] {
+  const text = String(message ?? "");
+  if (!text) return [];
+  const chunks: string[] = [];
+  for (let index = 0; index < text.length; index += SLACK_STREAM_TEXT_LIMIT) {
+    chunks.push(text.slice(index, index + SLACK_STREAM_TEXT_LIMIT));
   }
   return chunks;
 }
@@ -581,7 +592,7 @@ export class SlackAdapter implements IMAdapter {
     const projected = applyEnvelopeFooter(envelope);
     const result = legacyCliDeliveryEnabled()
       ? await this.executeLegacyCliSend(target, projected.content, timeoutMs, options.cwd, replyToMessageId || undefined, options.suppressProjectionFooter)
-      : await this.executeSlackApiSend(target, projected.content, timeoutMs);
+      : await this.executeSlackApiSend(target, projected.content, timeoutMs, envelope.kind);
 
     return {
       ok: result.sent || result.delivered,
@@ -690,6 +701,7 @@ export class SlackAdapter implements IMAdapter {
     target: SlackDeliveryTarget,
     message: string,
     timeoutMs: number,
+    deliveryKind?: string,
   ): Promise<SlackSendResult> {
     const token = readSlackBotToken();
     if (!token) {
@@ -707,6 +719,11 @@ export class SlackAdapter implements IMAdapter {
     }
 
     const threadTs = normalizeSlackMessageTs(target.replyToMessageId || target.threadTs);
+    if (deliveryKind === "native_child_final" && this.isStreamingAvailable() && threadTs) {
+      const streamed = await this.executeSlackApiStream(channelResult.channelId, message, threadTs, token, timeoutMs);
+      if (streamed.sent || streamed.delivered) return streamed;
+    }
+
     let lastMessageId = "";
     for (const chunk of chunks) {
       try {
@@ -731,6 +748,69 @@ export class SlackAdapter implements IMAdapter {
       ...(threadTs ? { threadTs } : {}),
       transport: "slack_api",
     };
+  }
+
+  private async executeSlackApiStream(
+    channelId: string,
+    message: string,
+    threadTs: string,
+    token: string,
+    timeoutMs: number,
+  ): Promise<SlackSendResult> {
+    const chunks = splitSlackStreamText(message);
+    if (!chunks.length) {
+      return { sent: false, delivered: false, error: "empty_message", transport: "slack_api_stream" };
+    }
+    try {
+      const started = await postSlackApi<{
+        channel?: unknown;
+        ts?: unknown;
+        message?: { ts?: unknown; thread_ts?: unknown };
+      }>("chat.startStream", token, {
+        channel: channelId,
+        thread_ts: threadTs,
+        markdown_text: chunks[0],
+      }, Math.max(500, timeoutMs));
+      if (started.ok !== true) {
+        return { sent: false, delivered: false, error: stringValue(started.error) || "stream_start_failed", transport: "slack_api_stream" };
+      }
+      const streamTs = normalizeSlackMessageTs(started.ts || started.message?.ts);
+      if (!streamTs) {
+        return { sent: false, delivered: false, error: "stream_missing_ts", transport: "slack_api_stream" };
+      }
+      for (const chunk of chunks.slice(1)) {
+        const appended = await postSlackApi("chat.appendStream", token, {
+          channel: channelId,
+          ts: streamTs,
+          markdown_text: chunk,
+        }, Math.max(500, timeoutMs));
+        if (appended.ok !== true) {
+          await postSlackApi("chat.stopStream", token, { channel: channelId, ts: streamTs }, Math.max(500, Math.floor(timeoutMs * 0.5))).catch(() => {});
+          return { sent: false, delivered: false, error: stringValue(appended.error) || "stream_append_failed", transport: "slack_api_stream" };
+        }
+      }
+      const stopped = await postSlackApi("chat.stopStream", token, {
+        channel: channelId,
+        ts: streamTs,
+      }, Math.max(500, timeoutMs));
+      if (stopped.ok !== true) {
+        return { sent: false, delivered: false, error: stringValue(stopped.error) || "stream_stop_failed", transport: "slack_api_stream" };
+      }
+      return {
+        sent: true,
+        delivered: true,
+        messageId: streamTs,
+        threadTs,
+        transport: "slack_api_stream",
+      };
+    } catch (error) {
+      return {
+        sent: false,
+        delivered: false,
+        error: String(error),
+        transport: "slack_api_stream",
+      };
+    }
   }
 
   shouldUseThread(): boolean {

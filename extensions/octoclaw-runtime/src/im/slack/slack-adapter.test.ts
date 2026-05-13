@@ -155,11 +155,18 @@ describe("SlackAdapter", () => {
     delete process.env.OCTOCLAW_LEGACY_CLI_DELIVERY;
     process.env.SLACK_BOT_TOKEN = "xoxb-test";
     const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
-      expect(String(url)).toBe("https://slack.com/api/chat.postMessage");
+      if (String(url) === "https://slack.com/api/chat.stopStream") {
+        expect(JSON.parse(String(init?.body))).toEqual({
+          channel: "C123ABCDEF",
+          ts: "1700000000.000220",
+        });
+        return { json: async () => ({ ok: true, ts: "1700000000.000220" }) } as Response;
+      }
+      expect(String(url)).toBe("https://slack.com/api/chat.startStream");
       const body = JSON.parse(String(init?.body));
       expect(body.channel).toBe("C123ABCDEF");
-      expect(body.text).toContain("done");
-      expect(body.text).toContain("route=delegate | model=zhipu/GLM-5.1 · thread | via=native_announce | wc=wc-12345");
+      expect(body.markdown_text).toContain("done");
+      expect(body.markdown_text).toContain("route=delegate | model=zhipu/GLM-5.1 · thread | via=native_announce | wc=wc-12345");
       expect(body.thread_ts).toBe("1700000000.000100");
       return { json: async () => ({ ok: true, ts: "1700000000.000220" }) } as Response;
     });
@@ -186,10 +193,136 @@ describe("SlackAdapter", () => {
 
     expect(result).toMatchObject({
       ok: true,
-      transport: "slack_api",
+      transport: "slack_api_stream",
       targetSource: "inbound_anchor",
       footerSource: "envelope",
     });
+  });
+
+  it("streams native child finals when Slack native streaming is enabled", async () => {
+    delete process.env.OCTOCLAW_LEGACY_CLI_DELIVERY;
+    process.env.SLACK_BOT_TOKEN = "xoxb-test";
+    const calls: Array<{ method: string; body: Record<string, unknown> }> = [];
+    const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      const method = String(url).split("/").pop() || "";
+      const body = JSON.parse(String(init?.body));
+      calls.push({ method, body });
+      if (method === "chat.startStream") {
+        expect(body).toEqual({
+          channel: "C123ABCDEF",
+          thread_ts: "1700000000.000100",
+          markdown_text: "streamed child result",
+        });
+        return { json: async () => ({ ok: true, channel: "C123ABCDEF", ts: "1700000000.000230" }) } as Response;
+      }
+      expect(method).toBe("chat.stopStream");
+      expect(body).toEqual({
+        channel: "C123ABCDEF",
+        ts: "1700000000.000230",
+      });
+      return { json: async () => ({ ok: true, channel: "C123ABCDEF", ts: "1700000000.000230" }) } as Response;
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const adapter = new SlackAdapter({ streamingMode: "partial", nativeTransport: true });
+    const result = await adapter.sendText({
+      kind: "native_child_final",
+      channel: "slack",
+      target: {
+        to: "C123ABCDEF",
+        replyToMessageId: "1700000000.000100",
+        source: "inbound_anchor",
+      },
+      content: "streamed child result",
+      footerMode: "off",
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      messageId: "1700000000.000230",
+      threadTs: "1700000000.000100",
+      transport: "slack_api_stream",
+      targetSource: "inbound_anchor",
+    });
+    expect(calls.map((call) => call.method)).toEqual(["chat.startStream", "chat.stopStream"]);
+  });
+
+  it("falls back to postMessage when native child stream start fails", async () => {
+    delete process.env.OCTOCLAW_LEGACY_CLI_DELIVERY;
+    process.env.SLACK_BOT_TOKEN = "xoxb-test";
+    const calls: string[] = [];
+    const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      const method = String(url).split("/").pop() || "";
+      calls.push(method);
+      const body = JSON.parse(String(init?.body));
+      if (method === "chat.startStream") {
+        expect(body.channel).toBe("C123ABCDEF");
+        return { json: async () => ({ ok: false, error: "channel_type_not_supported" }) } as Response;
+      }
+      expect(method).toBe("chat.postMessage");
+      expect(body).toEqual({
+        channel: "C123ABCDEF",
+        text: "fallback child result",
+        thread_ts: "1700000000.000100",
+      });
+      return { json: async () => ({ ok: true, ts: "1700000000.000240" }) } as Response;
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const adapter = new SlackAdapter({ streamingMode: "partial", nativeTransport: true });
+    const result = await adapter.sendText({
+      kind: "native_child_final",
+      channel: "slack",
+      target: {
+        to: "C123ABCDEF",
+        replyToMessageId: "1700000000.000100",
+        source: "inbound_anchor",
+      },
+      content: "fallback child result",
+      footerMode: "off",
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      messageId: "1700000000.000240",
+      transport: "slack_api",
+    });
+    expect(calls).toEqual(["chat.startStream", "chat.postMessage"]);
+  });
+
+  it("does not stream native child finals when Slack streaming is disabled", async () => {
+    delete process.env.OCTOCLAW_LEGACY_CLI_DELIVERY;
+    process.env.SLACK_BOT_TOKEN = "xoxb-test";
+    const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      expect(String(url)).toBe("https://slack.com/api/chat.postMessage");
+      expect(JSON.parse(String(init?.body))).toEqual({
+        channel: "C123ABCDEF",
+        text: "plain child result",
+        thread_ts: "1700000000.000100",
+      });
+      return { json: async () => ({ ok: true, ts: "1700000000.000250" }) } as Response;
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const adapter = new SlackAdapter({ streamingMode: "off", nativeTransport: true });
+    const result = await adapter.sendText({
+      kind: "native_child_final",
+      channel: "slack",
+      target: {
+        to: "C123ABCDEF",
+        replyToMessageId: "1700000000.000100",
+        source: "inbound_anchor",
+      },
+      content: "plain child result",
+      footerMode: "off",
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      messageId: "1700000000.000250",
+      transport: "slack_api",
+    });
+    expect(fetchMock).toHaveBeenCalledOnce();
   });
 
   it("resolveTarget parses Slack channel+thread session keys", () => {

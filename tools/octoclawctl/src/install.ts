@@ -91,39 +91,8 @@ export async function syncOctoClawCoreRules(openclawHome: string): Promise<void>
 }
 
 
-function envFlagEnabled(value: string | undefined): boolean {
-  return ["1", "true", "on", "yes"].includes(String(value ?? "").trim().toLowerCase());
-}
-
-export async function syncSlackDeliveryHookCompatibility(openclawHome: string): Promise<void> {
-  if (envFlagEnabled(process.env.OCTOCLAW_PRESERVE_SLACK_STREAMING)) return;
-
-  const openclawConfigPath = path.join(openclawHome, "openclaw.json");
-  const config = await readJson(openclawConfigPath);
-  if (!config) return;
-  const channels = isRecord(config.channels) ? config.channels as JsonRecord : null;
-  const slack = channels && isRecord(channels.slack) ? channels.slack as JsonRecord : null;
-  if (!slack) return;
-
-  const streaming = isRecord(slack.streaming) ? slack.streaming as JsonRecord : {};
-  const nextStreaming: JsonRecord = {
-    ...streaming,
-    mode: "off",
-    nativeTransport: false,
-  };
-  const legacySlackStreamingKeys = [
-    "streamMode",
-    "chunkMode",
-    "blockStreaming",
-    "blockStreamingCoalesce",
-    "nativeStreaming",
-  ];
-  const hasLegacySlackStreamingKeys = legacySlackStreamingKeys.some((key) => Object.prototype.hasOwnProperty.call(slack, key));
-  const changed = JSON.stringify(streaming) !== JSON.stringify(nextStreaming) || hasLegacySlackStreamingKeys;
-  if (!changed) return;
-  for (const key of legacySlackStreamingKeys) delete slack[key];
-  slack.streaming = nextStreaming;
-  await fs.writeFile(openclawConfigPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
+export async function syncSlackDeliveryHookCompatibility(_openclawHome: string): Promise<void> {
+  // Retained for older octoclawctl call sites; Slack streaming is owned by OpenClaw config.
 }
 
 export async function setupSymlinks(openclawHome: string): Promise<void> {

@@ -2,7 +2,14 @@ import { describe, expect, it, vi } from "vitest";
 
 vi.mock("node:fs", () => ({
   default: {
-    readFileSync: vi.fn(() => JSON.stringify({ channels: { slack: { replyToMode: "first" } } })),
+    readFileSync: vi.fn(() => JSON.stringify({
+      channels: {
+        slack: {
+          replyToMode: "first",
+          streaming: { mode: "off", nativeTransport: false },
+        },
+      },
+    })),
   },
 }));
 
@@ -36,6 +43,16 @@ describe("IM adapter factory", () => {
     const second = getAdapterForSession("agent:main:slack:default:dm:U123");
 
     expect(first).toBe(second);
+  });
+
+  it("loads Slack streaming settings from OpenClaw config", () => {
+    const adapter = getAdapterForSession("agent:main:slack:default:channel:C123") as SlackAdapter | null;
+
+    expect(adapter?.config).toMatchObject({
+      replyToMode: "first",
+      streamingMode: "off",
+      nativeTransport: false,
+    });
   });
 
 

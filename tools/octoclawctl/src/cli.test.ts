@@ -428,8 +428,8 @@ describe("octoclawctl cli", () => {
       expect(openclawConfig.plugins.entries["octoclaw-runtime"].config.octoclawRoot).toBe(repoRoot);
       expect(openclawConfig.plugins.entries["octoclaw-runtime"].config.workspaceRoot).toBe(path.join(openclawHome, "workspace"));
       expect(openclawConfig.plugins.entries["octoclaw-runtime"].hooks.allowPromptInjection).toBe(true);
-      expect(openclawConfig.channels.slack.streaming).toEqual({ mode: "off", nativeTransport: false });
-      expect(openclawConfig.channels.slack).not.toHaveProperty("nativeStreaming");
+      expect(openclawConfig.channels.slack.streaming).toEqual({ mode: "partial", nativeTransport: true });
+      expect(openclawConfig.channels.slack.nativeStreaming).toBe(true);
       const workspaceAgents = await fs.readFile(path.join(openclawHome, "workspace", "AGENTS.md"), "utf8");
       expect(workspaceAgents).toContain("octoclaw:core-rules v1.9.1");
       expect(workspaceAgents).toContain("主 Agent 不是最终 route authority");

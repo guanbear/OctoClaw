@@ -975,6 +975,7 @@ function statusPanelRelevantMs(task: RuntimeStatusTaskView): number | null {
 
 function statusPanelRetentionMs(task: RuntimeStatusTaskView): number | null {
   if (["failed", "completed", "canceled"].includes(task.status)) return STATUS_PANEL_TERMINAL_VISIBLE_MS;
+  if (task.status === "queued" && task.statusReason === "dispatch_materialized_but_no_spawn_evidence") return STATUS_PANEL_STALE_VISIBLE_MS;
   if (["timed_out", "blocked", "registered", "deliverable_ready", "degraded", "lost"].includes(task.status)) return STATUS_PANEL_STALE_VISIBLE_MS;
   return null;
 }
@@ -1357,16 +1358,23 @@ export async function buildNativeStatusOutput(format: string, imType: string = "
       "degraded",
     ]);
 
-    type GroupKey = "active" | "completed" | "failed";
-    const groupOrder: GroupKey[] = ["active", "completed", "failed"];
-    const groupEmoji: Record<GroupKey, string> = { active: "⏳", completed: "✅", failed: "❌" };
-    const groupLabel: Record<GroupKey, string> = { active: "Active", completed: "Completed", failed: "Failed" };
+    const attentionStates = new Set([
+      "degraded",
+      "lost",
+      "deliverable_ready",
+    ]);
+
+    type GroupKey = "active" | "attention" | "completed" | "failed";
+    const groupOrder: GroupKey[] = ["active", "attention", "completed", "failed"];
+    const groupEmoji: Record<GroupKey, string> = { active: "⏳", attention: "⚠️", completed: "✅", failed: "❌" };
+    const groupLabel: Record<GroupKey, string> = { active: "Active", attention: "Attention", completed: "Completed", failed: "Failed" };
 
     const groups = new Map<GroupKey, typeof sortedVisibleTasks>();
     for (const key of groupOrder) groups.set(key, []);
     for (const task of sortedVisibleTasks) {
       let key: GroupKey;
       if (completedStates.has(task.status)) key = "completed";
+      else if (attentionStates.has(task.status)) key = "attention";
       else if (failedStates.has(task.status)) key = "failed";
       else key = "active";
       groups.get(key)!.push(task);
