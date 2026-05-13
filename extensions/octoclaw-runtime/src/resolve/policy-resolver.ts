@@ -96,6 +96,7 @@ import {
   asBoolean,
   asStringArray,
 } from "../util/type-coercion.js";
+import { emitRouterLiteShadowEvent } from "../router-lite/shadow-bridge.js";
 
 type LoggerLike = { warn?: (message: string) => void } | null | undefined;
 type ManagedContext = Record<string, unknown>;
@@ -1766,6 +1767,18 @@ export async function resolvePolicyDecisionForContext(
       logger,
       decision,
     );
+    // Router-lite shadow emission: compare actual vs recommended model.
+    // Fail-open: any error here must not affect the live policy return.
+    try {
+      emitRouterLiteShadowEvent({
+        sessionKey: stateKey,
+        turnId: `turn-${stateKey}-${Date.now()}`,
+        decision,
+        metadata,
+        logger,
+      });
+    } catch { /* shadow must never block live path */ }
+
     return { decision, stateKey, state: nextState, usedCachedPolicy: false, resolveElapsedMs };
   } catch (error) {
     logger?.warn?.(`octoclaw runtime policy resolve failed: ${String(error instanceof Error ? error.message : error)}`);

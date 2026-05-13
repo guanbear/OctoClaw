@@ -1341,6 +1341,7 @@ export function printUsage(): string {
     "  octoclawctl nightly-eval deliver-slack --config <slack-acceptance.json> --output-dir <nightly-report-dir> [--format markdown|json]",
     "  octoclawctl router model-intel refresh [--output-dir <dir>] [--openclaw-home <dir>] [--format json]",
     "  octoclawctl router model-config analyze [--input <snapshot.json>] [--output-dir <dir>] [--format json]",
+    "  octoclawctl router shadow-report [--input <shadow.jsonl>] [--format json]",
     "  octoclawctl slack-acceptance --config <acceptance.json> --output-dir <dir> [--format markdown|json]",
     "  octoclawctl calibration-gate --baseline <report.json> --candidate <report.json> --output-dir <dir> [--format markdown|json]",
     "",
@@ -1941,7 +1942,36 @@ async function runRouterLiteCommand(parsed: ParsedCliArgs, env: Record<string, s
     ].join("\n");
   }
 
-  throw new Error("router command expects: router model-intel refresh OR router model-config analyze");
+  if (area === "shadow-report" || (area === "shadow" && action === "report")) {
+    const shadowPath = resolvePath(parsed.input ?? path.join(outputDir, "shadow.jsonl"));
+    const { generateShadowReport } = await import("@octoclaw/policy/router-lite");
+    const summary = generateShadowReport(shadowPath);
+    if (wantsJson) {
+      return JSON.stringify(summary, null, 2);
+    }
+    const lines = [
+      "OctoClaw router-lite shadow report",
+      "==================================",
+      `total events            : ${summary.totalEvents}`,
+      `unique models actual    : ${summary.uniqueModelsActual.join(", ") || "(none)"}`,
+      `unique models recommended: ${summary.uniqueModelsRecommended.join(", ") || "(none)"}`,
+      "ignoredReason counts:",
+    ];
+    for (const [reason, count] of Object.entries(summary.ignoredReasonCounts)) {
+      lines.push(`  ${reason.padEnd(22)}: ${count}`);
+    }
+    if (Object.keys(summary.ignoredReasonCounts).length === 0) {
+      lines.push("  (none)");
+    }
+    lines.push(`estimated cost delta   : $${summary.estimatedCostDeltaTotalUsd.toFixed(4)} USD (negative = recommendation would save)`);
+    lines.push(`quality gate           : ${summary.qualityGatePass} pass / ${summary.qualityGateFail} fail / ${summary.qualityGateUnknown} unknown`);
+    if (summary.timeRange) {
+      lines.push(`time range             : ${summary.timeRange.first} → ${summary.timeRange.last}`);
+    }
+    return lines.join("\n");
+  }
+
+  throw new Error("router command expects: router model-intel refresh | router model-config analyze | router shadow-report");
 }
 
 async function runCommandFromSnapshot(parsed: ParsedCliArgs, env: Record<string, string | undefined>): Promise<string> {
