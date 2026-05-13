@@ -552,6 +552,7 @@ export class SlackAdapter implements IMAdapter {
         source,
       },
       content: message,
+      interactiveBlocks: params.interactiveBlocks,
       provenance: params.deliveryProvenance,
       footerMode,
       dedupeKey: params.dedupeKey,
@@ -592,7 +593,7 @@ export class SlackAdapter implements IMAdapter {
     const projected = applyEnvelopeFooter(envelope);
     const result = legacyCliDeliveryEnabled()
       ? await this.executeLegacyCliSend(target, projected.content, timeoutMs, options.cwd, replyToMessageId || undefined, options.suppressProjectionFooter)
-      : await this.executeSlackApiSend(target, projected.content, timeoutMs, envelope.kind);
+      : await this.executeSlackApiSend(target, projected.content, timeoutMs, envelope.kind, envelope.interactiveBlocks);
 
     return {
       ok: result.sent || result.delivered,
@@ -702,6 +703,7 @@ export class SlackAdapter implements IMAdapter {
     message: string,
     timeoutMs: number,
     deliveryKind?: string,
+    interactiveBlocks?: Array<Record<string, unknown>>,
   ): Promise<SlackSendResult> {
     const token = readSlackBotToken();
     if (!token) {
@@ -713,13 +715,14 @@ export class SlackAdapter implements IMAdapter {
       return { sent: false, delivered: false, error: channelResult.error || "send_channel_unresolved", transport: "slack_api" };
     }
 
+    const blocks = Array.isArray(interactiveBlocks) && interactiveBlocks.length > 0 ? interactiveBlocks : undefined;
     const chunks = splitSlackText(message);
     if (!chunks.length) {
       return { sent: false, delivered: false, error: "empty_message", transport: "slack_api" };
     }
 
     const threadTs = normalizeSlackMessageTs(target.replyToMessageId || target.threadTs);
-    if (deliveryKind === "native_child_final" && this.isStreamingAvailable() && threadTs) {
+    if (!blocks && deliveryKind === "native_child_final" && this.isStreamingAvailable() && threadTs) {
       const streamed = await this.executeSlackApiStream(channelResult.channelId, message, threadTs, token, timeoutMs);
       if (streamed.sent || streamed.delivered) return streamed;
     }
@@ -730,6 +733,7 @@ export class SlackAdapter implements IMAdapter {
         const response = await postSlackApi<{ ts?: unknown; message?: { ts?: unknown; thread_ts?: unknown } }>("chat.postMessage", token, {
           channel: channelResult.channelId,
           text: chunk,
+          ...(blocks && chunk === chunks[0] ? { blocks } : {}),
           ...(threadTs ? { thread_ts: threadTs } : {}),
         }, Math.max(500, timeoutMs));
         if (response.ok !== true) {

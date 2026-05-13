@@ -21,6 +21,7 @@ export interface IMMessageTurnAnchorParams {
 export interface IMSendParams {
   sessionKey: string;
   message: string;
+  interactiveBlocks?: Array<Record<string, unknown>>;
   replyToMessageId?: string;
   timeoutMs?: number;
   cwd?: string;

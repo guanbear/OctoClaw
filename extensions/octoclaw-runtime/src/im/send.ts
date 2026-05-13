@@ -6,6 +6,7 @@ import type { MessageDeliveryKind, MessageDeliveryProvenance, MessageDeliveryTar
 export interface SendIMParams {
   sessionKey: string;
   message: string;
+  interactiveBlocks?: Array<Record<string, unknown>>;
   replyToMessageId?: string;
   timeoutMs?: number;
   cwd?: string;
@@ -36,6 +37,7 @@ export async function sendIMMessage(params: SendIMParams): Promise<SendIMResult>
   const result = await sendWithDegradation(adapter, {
     sessionKey: params.sessionKey,
     message: params.message,
+    interactiveBlocks: params.interactiveBlocks,
     replyToMessageId: params.replyToMessageId,
     timeoutMs: params.timeoutMs ?? 5000,
     cwd: params.cwd ?? resolveWorkspaceRoot(),

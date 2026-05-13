@@ -117,6 +117,51 @@ describe("SlackAdapter", () => {
     expect(fetchMock).toHaveBeenCalledOnce();
   });
 
+  it("sends Slack interactive blocks through chat.postMessage", async () => {
+    delete process.env.OCTOCLAW_LEGACY_CLI_DELIVERY;
+    process.env.SLACK_BOT_TOKEN = "xoxb-test";
+    const blocks = [
+      {
+        type: "actions",
+        elements: [
+          {
+            type: "button",
+            text: { type: "plain_text", text: "启用默认设置" },
+            action_id: "octoclaw_router_wizard_use_defaults",
+            value: "use_defaults",
+          },
+        ],
+      },
+    ];
+    const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      expect(String(url)).toBe("https://slack.com/api/chat.postMessage");
+      expect(JSON.parse(String(init?.body))).toEqual({
+        channel: "C123ABCDEF",
+        text: "Auto Router wizard",
+        blocks,
+        thread_ts: "1700000000.000100",
+      });
+      return { json: async () => ({ ok: true, ts: "1700000000.000211" }) } as Response;
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const adapter = new SlackAdapter();
+    const result = await adapter.send({
+      sessionKey: "agent:main:slack:channel:C123abcdef",
+      message: "Auto Router wizard",
+      interactiveBlocks: blocks,
+      deliveryKind: "router_wizard_onboarding",
+      replyToMessageId: "1700000000.000100",
+      suppressProjectionFooter: true,
+    });
+
+    expect(result).toMatchObject({
+      sent: true,
+      messageId: "1700000000.000211",
+      transport: "slack_api",
+    });
+  });
+
   it("opens Slack DMs before Web API message delivery", async () => {
     delete process.env.OCTOCLAW_LEGACY_CLI_DELIVERY;
     process.env.SLACK_BOT_TOKEN = "xoxb-test";

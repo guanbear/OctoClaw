@@ -97,6 +97,10 @@ import { extractInboundMessageTimestamp, extractInboundMessageTimestampWithSourc
 import { detectIMType } from "./im-status-renderer.js";
 import { makeBeforePromptBuildHook } from "./hooks/before-prompt-build.js";
 import { makeBeforeToolCallHook } from "./hooks/before-tool-call.js";
+import {
+  handleRouterWizardAction,
+  maybeSendRouterWizardOnboarding,
+} from "./router-onboarding.js";
 
 export type NativeAnnounceSendMessage = (params: {
   sessionKey: string;
@@ -3255,6 +3259,22 @@ export const plugin = {
       if (!sessionKey) return;
       const stateKey = stringValue(ctxRecord.sessionKey || eventRecord.sessionKey) || sessionKey;
       const anchor = extractInboundMessageTimestampWithSource(ctxRecord, eventRecord, prompt);
+      void handleRouterWizardAction({
+        event: eventRecord,
+        sessionKey,
+        replyToMessageId: anchor.ts || undefined,
+        cwd: stringValue(ctxRecord.cwd) || process.cwd(),
+      }).then((result) => {
+        if (result.handled) return;
+        return maybeSendRouterWizardOnboarding({
+          sessionKey,
+          replyToMessageId: anchor.ts || undefined,
+          cwd: stringValue(ctxRecord.cwd) || process.cwd(),
+          logger: pi.logger,
+        });
+      }).catch((error) => {
+        pi.logger?.warn?.(`octoclaw router wizard onboarding failed: ${String(error)}`);
+      });
       if (anchor.ts) {
         const now = Date.now();
         updatePolicyState(stateKey, (current) => ({

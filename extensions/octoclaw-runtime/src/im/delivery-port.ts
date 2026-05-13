@@ -2,6 +2,7 @@ export type MessageDeliveryKind =
   | "neutral_ack"
   | "accepted_ack"
   | "native_child_final"
+  | "router_wizard_onboarding"
   | "status_reply"
   | "legacy_fallback";
 
@@ -34,6 +35,7 @@ export interface MessageDeliveryEnvelope {
   channel: string;
   target: MessageDeliveryTarget;
   content: string;
+  interactiveBlocks?: Array<Record<string, unknown>>;
   provenance?: MessageDeliveryProvenance;
   footerMode?: "off" | "debug";
   dedupeKey?: string;
