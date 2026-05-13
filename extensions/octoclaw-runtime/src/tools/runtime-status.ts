@@ -924,6 +924,8 @@ function projectRuntimeStatus(record: RuntimeTaskStateRecord, nowMs = Date.now()
 
   if (route === "delegate") {
     if (!evidence.hasDispatchEvidence) return { status: "registered", reason: "no_dispatch_evidence" };
+    // TODO(WP-E): Add "main_fallback" status when dispatch was rejected and main executed bounded fallback.
+    // Requires evidence.dispatchRejected + evidence.mainFallbackExecuted fields in @octoclaw/contracts.
     if (!evidence.hasSpawnEvidence && !["failed", "canceled", "blocked", "timed_out"].includes(terminalStatus)) {
       return { status: "queued", reason: "dispatch_materialized_but_no_spawn_evidence" };
     }

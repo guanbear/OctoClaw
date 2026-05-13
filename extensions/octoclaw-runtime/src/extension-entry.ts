@@ -1806,8 +1806,18 @@ function resolveDisplayModel(state: UnknownRecord, event: UnknownRecord, ctx: Un
   const decision = asRecord(state.decision);
   const modelPolicy = asRecord(decision.model_policy);
   const runtimeTruth = asRecord(decision.runtime_truth);
+  const workContract = asRecord(decision.work_contract);
+  const delegate = asRecord(workContract.delegate);
+
+  // Priority: spawn intent model > WorkContract delegate model > policy model > fallback
+  const spawnModel = displayModelOrEmpty(
+    delegate.modelProfile,
+    delegate.model,
+    delegate.model_profile,
+  );
 
   return firstDisplayModel(
+    spawnModel || undefined,
     snapshot.model,
     snapshot.modelId,
     snapshot.model_id,

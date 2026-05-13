@@ -2673,7 +2673,7 @@ export function getToolRegistrations(options: ToolRegistrationOptions = {}): Too
               native_flow_id: materializedNativeFlowId ?? null,
               result_materialized: false,
               delivery_status: null,
-              user_message: "已登记到 Native TaskFlow，但没有子会话/runId 证据，不能视为已启动子 agent；请重试派发或改为主会话直接处理。",
+              user_message: "Dispatch registered but no child session/runId evidence yet. Task is not started. Retry dispatch or handle directly in main session.",
             },
           });
         }
