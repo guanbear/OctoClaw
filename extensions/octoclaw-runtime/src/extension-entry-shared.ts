@@ -16,6 +16,7 @@ export interface PluginInterface {
   registerHook?(event: string, handler: HookHandler, options?: Record<string, unknown>): void;
   registerTool?(definition: Record<string, unknown>): void;
   registerCommand?(definition: Record<string, unknown>): void;
+  registerInteractiveHandler?(registration: Record<string, unknown>): void;
   runtime?: {
     config?: { current?: () => unknown };
   };

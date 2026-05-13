@@ -109,6 +109,23 @@ export type NativeAnnounceSendMessage = (params: {
   cwd?: string;
 }) => Promise<SendIMResult>;
 
+const ROUTER_WIZARD_SLACK_INTERACTIVE_ACTION_IDS = [
+  "octoclaw_router_wizard_start_questions",
+  "octoclaw_router_wizard_use_defaults",
+  "octoclaw_router_wizard_remind_later",
+  "octoclaw_router_wizard_skip",
+  "octoclaw_router_wizard_privacy_standard",
+  "octoclaw_router_wizard_privacy_local_only",
+  "octoclaw_router_wizard_budget_none",
+  "octoclaw_router_wizard_budget_50",
+  "octoclaw_router_wizard_budget_100",
+  "octoclaw_router_wizard_budget_200",
+  "octoclaw_router_wizard_budget_custom",
+  "octoclaw_router_wizard_restricted_none",
+  "octoclaw_router_wizard_restricted_text",
+  "octoclaw_router_wizard_confirm",
+];
+
 
 export const OCTOCLAW_DELEGATION_SYSTEM_CONTEXT = [
   "OctoClaw runtime policy is authoritative for this run.",
@@ -2893,6 +2910,52 @@ function toOpenClawCommandDefinition(definition: Record<string, unknown>): Recor
   };
 }
 
+function slackWizardSessionKeyFromInteraction(ctx: UnknownRecord): string {
+  const interaction = asRecord(ctx.interaction);
+  const accountId = stringValue(ctx.accountId) || "default";
+  const senderId = stringValue(ctx.senderId).toLowerCase();
+  const conversationId = stringValue(ctx.conversationId).toLowerCase();
+  const threadId = stringValue(ctx.threadId || interaction.threadTs || interaction.messageTs);
+  const scope = conversationId.startsWith("d")
+    ? `direct:${senderId}`
+    : `channel:${conversationId}`;
+  return [
+    "agent",
+    "main",
+    "slack",
+    accountId,
+    scope,
+    threadId ? `thread:${threadId}` : "",
+  ].filter(Boolean).join(":");
+}
+
+function registerRouterWizardSlackInteractiveHandlers(pi: PluginInterface): void {
+  if (typeof pi.registerInteractiveHandler !== "function") return;
+  for (const actionId of ROUTER_WIZARD_SLACK_INTERACTIVE_ACTION_IDS) {
+    pi.registerInteractiveHandler({
+      channel: "slack",
+      namespace: actionId,
+      handler: async (ctx: UnknownRecord) => {
+        const interaction = asRecord(ctx.interaction);
+        const sessionKey = slackWizardSessionKeyFromInteraction(ctx);
+        const replyToMessageId = stringValue(ctx.threadId || interaction.threadTs || interaction.messageTs);
+        const value = stringValue(interaction.value || asRecord(interaction).payload);
+        const result = await handleRouterWizardAction({
+          event: {
+            actions: [{ action_id: actionId, value }],
+            interaction,
+          },
+          sessionKey,
+          replyToMessageId: replyToMessageId || undefined,
+          cwd: resolveWorkspaceRoot(),
+        });
+        if (!result.handled) return { handled: false };
+        return { handled: true };
+      },
+    });
+  }
+}
+
 export const plugin = {
   id: "octoclaw-runtime",
   name: "OctoClaw Runtime",
@@ -3180,6 +3243,7 @@ export const plugin = {
     // Fire-and-forget bridge init — lazy-loads openclaw runtime binding
     // If runtime unavailable, getCachedBridge() returns unavailable bridge (fail-closed)
     initNativeHelperBridge().catch(() => { /* bridge will use unavailable fallback */ });
+    registerRouterWizardSlackInteractiveHandlers(pi);
 
     const registerLifecycleHook = (hookName: string, handler: HookHandler, priority = 180): boolean => {
       if (typeof pi.on === "function") {

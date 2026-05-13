@@ -2,6 +2,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { plugin } from "./extension-entry.js";
+import type { IMAdapter, IMSendParams } from "./im/adapter.js";
+import { registerIMAdapter } from "./im/index.js";
 import {
   buildRouterWizardSlackBlocks,
   discoverConfiguredRouterModels,
@@ -15,6 +18,7 @@ import {
 } from "./router-onboarding.js";
 
 let tempHome = "";
+let originalOpenclawHome: string | undefined;
 const fsModule = fs as unknown as {
   mkdtempSync(prefix: string): string;
   rmSync(pathname: string, options?: { recursive?: boolean; force?: boolean }): void;
@@ -22,12 +26,17 @@ const fsModule = fs as unknown as {
 const osModule = os as unknown as { tmpdir(): string };
 
 beforeEach(() => {
+  originalOpenclawHome = process.env.OPENCLAW_HOME;
   tempHome = fsModule.mkdtempSync(path.join(osModule.tmpdir(), "octoclaw-router-onboarding-"));
+  process.env.OPENCLAW_HOME = tempHome;
 });
 
 afterEach(() => {
+  if (originalOpenclawHome === undefined) delete process.env.OPENCLAW_HOME;
+  else process.env.OPENCLAW_HOME = originalOpenclawHome;
   fsModule.rmSync(tempHome, { recursive: true, force: true });
   tempHome = "";
+  originalOpenclawHome = undefined;
 });
 
 function writeOpenclawConfig(): void {
@@ -212,6 +221,60 @@ describe("router wizard Slack onboarding", () => {
       restrictedModels: [],
     });
     expect(sends.map((send) => send.message).join("\n")).toContain("确认写入");
+  });
+
+  it("registers Slack interactive handlers that start the question wizard", async () => {
+    const interactiveHandlers = new Map<string, (ctx: Record<string, unknown>) => Promise<{ handled?: boolean } | void>>();
+    const sends: IMSendParams[] = [];
+    const adapter: IMAdapter = {
+      channel: "slack",
+      capabilityLevel: "L2",
+      canHandle: (sessionKey) => sessionKey.includes("direct:u123abc"),
+      resolveTarget: () => ({ channel: "slack", target: "user:U123ABC", threadTs: "1777770000.000001" }),
+      send: async (params) => {
+        sends.push(params);
+        return { sent: true, delivered: true, messageId: "1777770001.000001", threadTs: params.replyToMessageId };
+      },
+      react: async () => ({ ok: true }),
+    };
+    registerIMAdapter(adapter);
+    plugin.register({
+      pluginConfig: {},
+      on: () => {},
+      registerTool: () => {},
+      registerCommand: () => {},
+      registerInteractiveHandler: (registration) => {
+        interactiveHandlers.set(String(registration.namespace), registration.handler as (ctx: Record<string, unknown>) => Promise<{ handled?: boolean } | void>);
+      },
+      logger: {},
+    });
+
+    const handler = interactiveHandlers.get("octoclaw_router_wizard_start_questions");
+    expect(handler).toBeTruthy();
+    const result = await handler!({
+      accountId: "default",
+      conversationId: "D0AR3GTPYQL",
+      senderId: "U123ABC",
+      threadId: "1777770000.000001",
+      interaction: {
+        actionId: "octoclaw_router_wizard_start_questions",
+        value: "start_questions",
+        messageTs: "1777770001.000001",
+        threadTs: "1777770000.000001",
+      },
+    });
+
+    expect(result).toMatchObject({ handled: true });
+    expect(sends.at(-1)).toMatchObject({
+      message: expect.stringContaining("隐私模式"),
+      replyToMessageId: "1777770000.000001",
+      deliveryKind: "router_wizard_onboarding",
+    });
+    const state = JSON.parse(fs.readFileSync(routerWizardOnboardingStatePath(tempHome), "utf8")) as Record<string, unknown>;
+    expect(state.active).toMatchObject({
+      step: "privacy",
+      sessionKey: "agent:main:slack:default:direct:u123abc:thread:1777770000.000001",
+    });
   });
 
   it("extracts remind and skip actions from nested Slack payloads", () => {
