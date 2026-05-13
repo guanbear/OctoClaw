@@ -44,6 +44,8 @@ export interface AckTimerResult {
   routePhase: AckRoutePhase;
 }
 
+export type ChannelStreamingMode = "native" | "partial" | "off";
+
 export interface CreateAckTimersParams {
   stateKey: string;
   sessionKey: string;
@@ -51,6 +53,7 @@ export interface CreateAckTimersParams {
   inboundTs?: number;
   onTierFire: (result: AckTimerResult) => void;
   config?: Partial<AckTimingConfig>;
+  channelStreaming?: ChannelStreamingMode;
 }
 
 export const DEFAULT_ACK_TIMING_CONFIG: AckTimingConfig = {
@@ -194,13 +197,17 @@ export function createAckTimers(params: CreateAckTimersParams): AckTimerState {
     cancelled: false,
   };
 
-  for (let tier = 0; tier <= 3; tier++) {
-    const delayMs = tierDelays[tier] ?? config.tierDelaysMs[tier];
-    if (!delayMs || !shouldScheduleTier(state.routePhase, tier)) continue;
-    const timerRef = tier === 0 ? "tier0Timer" : tier === 1 ? "tier1Timer" : tier === 2 ? "tier2Timer" : "tier3Timer";
-    state[timerRef] = setTimeout(() => {
-      fireTier(state, tier as 0 | 1 | 2 | 3, params.onTierFire);
-    }, delayMs);
+  const streamingSkipsTiers = params.channelStreaming === "native";
+
+  if (!streamingSkipsTiers) {
+    for (let tier = 0; tier <= 3; tier++) {
+      const delayMs = tierDelays[tier] ?? config.tierDelaysMs[tier];
+      if (!delayMs || !shouldScheduleTier(state.routePhase, tier)) continue;
+      const timerRef = tier === 0 ? "tier0Timer" : tier === 1 ? "tier1Timer" : tier === 2 ? "tier2Timer" : "tier3Timer";
+      state[timerRef] = setTimeout(() => {
+        fireTier(state, tier as 0 | 1 | 2 | 3, params.onTierFire);
+      }, delayMs);
+    }
   }
 
   ackTimersByStateKey.set(stateKey, state);

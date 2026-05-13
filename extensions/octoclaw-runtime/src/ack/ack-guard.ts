@@ -1,5 +1,6 @@
 import { resolveWorkspaceRoot } from "../resolve/env.js";
 import { getAdapterForSession } from "../im/index.js";
+import { resolveChannelStreamingMode } from "../im/index.js";
 import { sendIMMessage } from "../im/send.js";
 import {
   AckStage,
@@ -68,6 +69,14 @@ const ACK_DEBUG = Boolean(process.env.OCTOCLAW_ACK_DEBUG);
 function ackDebug(message: string): void {
   if (ACK_DEBUG) {
     console.log(`[octoclaw-ack] ${message}`);
+  }
+}
+
+function resolveChannelStreamingForAck(sessionKey: string): import("./ack-timing.js").ChannelStreamingMode {
+  try {
+    return resolveChannelStreamingMode(sessionKey);
+  } catch {
+    return "off";
   }
 }
 
@@ -956,6 +965,7 @@ export function startAckGuard(sessionKey: string, cwd: string, options: UnknownR
     routePhase,
     inboundTs: turnTs,
     config: isRecord(options.ackTimingConfig) ? options.ackTimingConfig as Partial<import("./ack-timing.js").AckTimingConfig> : undefined,
+    channelStreaming: resolveChannelStreamingForAck(normalizedSessionKey),
     onTierFire: (result) => {
       const currentState = ackTimerStateForKey(stateKey);
       if (!currentState || currentState.cancelled) {

@@ -35,8 +35,32 @@ function readReplyToMode(channel: string): "off" | "first" | "all" {
   return "off";
 }
 
+function readSlackStreamingConfig(): Partial<Pick<SlackAdapterConfig, "streamingMode" | "nativeTransport">> {
+  const config = readChannelConfig("slack");
+  const rawStreaming = config.streaming;
+  if (rawStreaming === false) return { streamingMode: "off", nativeTransport: false };
+  const streaming = rawStreaming && typeof rawStreaming === "object" && !Array.isArray(rawStreaming)
+    ? config.streaming as Record<string, unknown>
+    : {};
+  const rawMode = String(streaming.mode || (typeof rawStreaming === "string" ? rawStreaming : "") || config.streamMode || "").trim().toLowerCase();
+  const streamingMode = rawMode === "off" || rawMode === "block" || rawMode === "progress" || rawMode === "partial"
+    ? rawMode
+    : undefined;
+  const rawNativeTransport = streaming.nativeTransport ?? config.nativeStreaming;
+  const nativeTransport = rawNativeTransport === undefined
+    ? undefined
+    : !["0", "false", "off", "no"].includes(String(rawNativeTransport).trim().toLowerCase());
+  return {
+    ...(streamingMode ? { streamingMode } : {}),
+    ...(nativeTransport === undefined ? {} : { nativeTransport }),
+  };
+}
+
 function buildSlackAdapterConfig(): Partial<SlackAdapterConfig> {
-  return { replyToMode: readReplyToMode("slack") };
+  return {
+    replyToMode: readReplyToMode("slack"),
+    ...readSlackStreamingConfig(),
+  };
 }
 
 function buildFeishuAdapterConfig(): Partial<FeishuAdapterConfig> {
@@ -101,3 +125,19 @@ export { FeishuAdapter } from "./feishu/index.js";
 export type { FeishuAdapterConfig } from "./feishu/index.js";
 export { WeChatAdapter } from "./wechat/index.js";
 export type { WeChatAdapterConfig } from "./wechat/index.js";
+
+export type ChannelStreamingMode = "native" | "partial" | "off";
+
+/**
+ * Resolve the streaming mode for a session's IM channel.
+ * Used by ACK tier scheduling to skip progress timers on natively-streaming channels.
+ */
+export function resolveChannelStreamingMode(sessionKey: string): ChannelStreamingMode {
+  const adapter = getAdapterForSession(sessionKey);
+  if (!adapter) return "off";
+  // SlackAdapter exposes isStreamingAvailable() which checks streamingMode + nativeTransport.
+  if ("isStreamingAvailable" in adapter && typeof (adapter as { isStreamingAvailable: () => boolean }).isStreamingAvailable === "function") {
+    return (adapter as { isStreamingAvailable: () => boolean }).isStreamingAvailable() ? "native" : "off";
+  }
+  return "off";
+}
