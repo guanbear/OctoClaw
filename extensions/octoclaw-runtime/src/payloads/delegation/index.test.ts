@@ -12,7 +12,6 @@ describe("delegation public API", () => {
   it("exposes the current package surface", () => {
     expect(Object.keys(publicApi).sort()).toEqual([
       "DELEGATION_PROFILES",
-      "buildCompoundDelegationPlaceholder",
       "buildWorkerBrief",
       "createDelegationRoleRegistry",
       "createNoOpAdvisorAdapter",

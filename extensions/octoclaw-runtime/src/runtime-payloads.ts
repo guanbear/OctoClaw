@@ -22,7 +22,7 @@ import type { DelegateHandoffPacket } from "@octoclaw/contracts/delegate-context
 import type { PolicyDecision } from "@octoclaw/policy/judge";
 import { createOctoClawRuntimePlugin } from "./plugin.js";
 import type { NativeHelperInvoker } from "./adapter/native-helper.js";
-import { buildCompoundDelegationPlaceholder, materializeDelegatedWork } from "./payloads/delegation/index.js";
+import { materializeDelegatedWork } from "./payloads/delegation/index.js";
 import { buildFastReplyAck, buildDirectReply, buildDirectReplyContext } from "./payloads/fast-reply/index.js";
 import { isObserveMode } from "./resolve/route-helpers.js";
 import { buildDelegateHandoffPacket } from "./context/delegate-packets.js";
@@ -571,7 +571,6 @@ export function buildTsRuntimeSpawnPayload(
     writeScope: workflow.scope.writeScope,
     workspaceMode: workflow.scope.workspaceMode,
   });
-  const compoundPlaceholder = buildCompoundDelegationPlaceholder();
 
   try {
     workflow = markWorkflowCheckpointEmitted(workflow);
@@ -658,7 +657,6 @@ export function buildTsRuntimeSpawnPayload(
           attemptGeneration: delegateAttemptBinding.attempt.attemptGeneration,
           handoff: handoffPacket,
         },
-        compound: compoundPlaceholder,
       },
       runtime_truth: {
         authority: "ts-runtime-core",

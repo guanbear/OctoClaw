@@ -4,8 +4,6 @@ import type { PolicyRole } from "@octoclaw/policy/roles";
 import { buildWorkerBrief } from "../brief/index.js";
 import { decideConflictPolicy, type ConflictDecision } from "../conflicts/index.js";
 import { selectDelegationBackend } from "../profiles/index.js";
-export type { CompoundDelegationPlaceholder } from "../compound/index.js";
-export { buildCompoundDelegationPlaceholder } from "../compound/index.js";
 
 export interface DelegatedMaterialization {
   requestId: string;
