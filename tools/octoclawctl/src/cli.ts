@@ -72,6 +72,7 @@ const LEGACY_ACTIONS: StatusSurfaceAction[] = ["status", "details", "queue", "ti
 const STATUS_FORMATS: StatusFormat[] = ["compact", "table", "lanes", "anchors", "text", "json"];
 const SERVICE_NAMES: ServiceName[] = ["openclaw", "runner"];
 const RUNNER_MODES: RunnerMode[] = ["ondemand", "daemon"];
+const ROUTER_COST_PERIODS: Array<NonNullable<ParsedCliArgs["period"]>> = ["1d", "7d", "30d", "month"];
 const RUNNING_STATES = new Set(["running", "in_progress", "active", "working"]);
 const QUEUED_STATES = new Set(["queued", "pending", "planned", "waiting"]);
 const DONE_STATES = new Set(["completed", "done", "succeeded", "success"]);
@@ -92,11 +93,17 @@ interface ParsedCliArgs {
   model: boolean;
   drift: boolean;
   once: boolean;
+  incremental: boolean;
   input?: string;
   baseline?: string;
   candidate?: string;
   outputDir?: string;
   since?: string;
+  period?: "1d" | "7d" | "30d" | "month";
+  monthly?: number;
+  forTier?: string;
+  dispreferredFor?: string;
+  reason?: string;
   nightlyFormat: NightlyFormat;
   calibrationFormat: "markdown" | "json";
   config?: string;
@@ -978,11 +985,17 @@ export function parseCliArgs(argv: string[]): ParsedCliArgs {
   let model = false;
   let drift = false;
   let once = false;
+  let incremental = false;
   let input: string | undefined;
   let baseline: string | undefined;
   let candidate: string | undefined;
   let outputDir: string | undefined;
   let since: string | undefined;
+  let period: ParsedCliArgs["period"];
+  let monthly: number | undefined;
+  let forTier: string | undefined;
+  let dispreferredFor: string | undefined;
+  let reason: string | undefined;
   let nightlyFormat: NightlyFormat = "markdown";
   let calibrationFormat: "markdown" | "json" = "markdown";
   let config: string | undefined;
@@ -1065,6 +1078,10 @@ export function parseCliArgs(argv: string[]): ParsedCliArgs {
       once = true;
       continue;
     }
+    if (argument === "--incremental") {
+      incremental = true;
+      continue;
+    }
     if (argument === "--input") {
       input = argv[index + 1];
       index += 1;
@@ -1108,6 +1125,53 @@ export function parseCliArgs(argv: string[]): ParsedCliArgs {
     }
     if (argument.startsWith("--since=")) {
       [, since] = argument.split("=", 2);
+      continue;
+    }
+    if (argument === "--period") {
+      period = parseEnumValue(argv[index + 1], ROUTER_COST_PERIODS, "period");
+      index += 1;
+      continue;
+    }
+    if (argument.startsWith("--period=")) {
+      const [, rawPeriod] = argument.split("=", 2);
+      period = parseEnumValue(rawPeriod, ROUTER_COST_PERIODS, "period");
+      continue;
+    }
+    if (argument === "--monthly") {
+      monthly = Number(argv[index + 1]);
+      index += 1;
+      continue;
+    }
+    if (argument.startsWith("--monthly=")) {
+      const [, rawMonthly] = argument.split("=", 2);
+      monthly = Number(rawMonthly);
+      continue;
+    }
+    if (argument === "--for") {
+      forTier = argv[index + 1];
+      index += 1;
+      continue;
+    }
+    if (argument.startsWith("--for=")) {
+      [, forTier] = argument.split("=", 2);
+      continue;
+    }
+    if (argument === "--dispreferred-for") {
+      dispreferredFor = argv[index + 1];
+      index += 1;
+      continue;
+    }
+    if (argument.startsWith("--dispreferred-for=")) {
+      [, dispreferredFor] = argument.split("=", 2);
+      continue;
+    }
+    if (argument === "--reason") {
+      reason = argv[index + 1];
+      index += 1;
+      continue;
+    }
+    if (argument.startsWith("--reason=")) {
+      [, reason] = argument.split("=", 2);
       continue;
     }
     if (argument === "--config") {
@@ -1292,11 +1356,17 @@ export function parseCliArgs(argv: string[]): ParsedCliArgs {
     model,
     drift,
     once,
+    incremental,
     input,
     baseline,
     candidate,
     outputDir,
     since,
+    period,
+    monthly,
+    forTier,
+    dispreferredFor,
+    reason,
     nightlyFormat,
     calibrationFormat,
     config,
@@ -1355,7 +1425,12 @@ export function printUsage(): string {
     "  octoclawctl nightly-eval uninstall-launchagent",
     "  octoclawctl nightly-eval print-plist --config <eval-config.json> --output-dir <dir> [--schedule-hour 2]",
     "  octoclawctl nightly-eval deliver-slack --config <slack-acceptance.json> --output-dir <nightly-report-dir> [--format markdown|json]",
+    "  octoclawctl router wizard [--incremental]",
     "  octoclawctl router decisions [--since 7d] [--format text|json]",
+    "  octoclawctl router cost report [--period 1d|7d|30d|month] [--format text|json]",
+    "  octoclawctl router score override <model> <tier>=<score>",
+    "  octoclawctl router model mark <model> --dispreferred-for <tier>",
+    "  octoclawctl router model ban <model> --for <tier>",
     "  octoclawctl router model-intel refresh [--output-dir <dir>] [--openclaw-home <dir>] [--format json]",
     "  octoclawctl router model-config analyze [--input <snapshot.json>] [--output-dir <dir>] [--format json]",
     "  octoclawctl router shadow-report [--input <shadow.jsonl>] [--format json]",
@@ -1933,10 +2008,211 @@ function parseCliDurationMs(value: string): number {
   return amount * 60 * 1000;
 }
 
+interface RouterWizardFile {
+  schemaVersion: "octoclaw.router_wizard/v1";
+  completedAt: string;
+  models: Record<string, { planType: string; configuredAt: string }>;
+  budget?: { monthly: number; currency: "USD" };
+  privacy: "standard" | "local_only";
+  restrictedModels: string[];
+  overrides: {
+    scoreOverrides: Record<string, Record<string, number>>;
+    userBans: Record<string, string[]>;
+    userDispreferred: Record<string, string[]>;
+    entries: Array<{ model: string; tier: string; type: string; value?: number; reason?: string; since: string }>;
+  };
+}
+
+function defaultRouterWizardFile(models: string[], now = new Date().toISOString()): RouterWizardFile {
+  return {
+    schemaVersion: "octoclaw.router_wizard/v1",
+    completedAt: now,
+    models: Object.fromEntries(models.map((model) => [model, { planType: inferRouterPlanType(model), configuredAt: now }])),
+    privacy: "standard",
+    restrictedModels: [],
+    overrides: { scoreOverrides: {}, userBans: {}, userDispreferred: {}, entries: [] },
+  };
+}
+
+function inferRouterPlanType(model: string): string {
+  const lower = model.toLowerCase();
+  return lower.includes("codex") || lower.includes("chatgpt") || lower.includes("claude") || lower.includes("glm") ? "subscription" : "pay_as_you_go";
+}
+
+async function loadRouterWizardFile(openclawHome: string): Promise<RouterWizardFile> {
+  const filePath = routerWizardPath(openclawHome);
+  try {
+    const value = await readJsonFile(filePath);
+    if (isRecord(value) && value.schemaVersion === "octoclaw.router_wizard/v1") return value as unknown as RouterWizardFile;
+  } catch (error) {
+    if (!isNotFoundError(error)) throw error;
+  }
+  return defaultRouterWizardFile([]);
+}
+
+async function writeRouterWizardFile(openclawHome: string, config: RouterWizardFile): Promise<string> {
+  const filePath = routerWizardPath(openclawHome);
+  await ensureDir(path.dirname(filePath));
+  await fs.writeFile(filePath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
+  return filePath;
+}
+
+function routerWizardPath(openclawHome: string): string {
+  return path.join(openclawHome, "octoclaw", "router-wizard.json");
+}
+
+async function discoverConfiguredRouterModels(openclawHome: string): Promise<string[]> {
+  const config = await readJsonFile(path.join(openclawHome, "openclaw.json"));
+  const providers = asRecord(asRecord(asRecord(config).models).providers);
+  const models: string[] = [];
+  for (const [provider, providerConfig] of Object.entries(providers)) {
+    const providerModels = asRecord(providerConfig).models;
+    if (!Array.isArray(providerModels)) continue;
+    for (const item of providerModels) {
+      const id = asString(asRecord(item).id);
+      if (id) models.push(`${provider}/${id}`);
+    }
+  }
+  return models;
+}
+
+function upsertRouterOverride(config: RouterWizardFile, entry: { model: string; tier: string; type: string; value?: number; reason?: string; since: string }): void {
+  config.overrides.entries = config.overrides.entries.filter((candidate) => !(candidate.model === entry.model && candidate.tier === entry.tier && candidate.type === entry.type));
+  config.overrides.entries.push(entry);
+}
+
+function renderRouterOverrides(config: RouterWizardFile, format: "text" | "json"): string {
+  if (format === "json") return JSON.stringify({ overrides: config.overrides.entries }, null, 2);
+  if (config.overrides.entries.length === 0) return "No router model overrides.";
+  return ["Router model overrides", ...config.overrides.entries.map((entry) => `${entry.model}  ${entry.tier}  ${entry.type}  ${entry.value ?? ""}  ${entry.reason ?? ""}`.trim())].join("\n");
+}
+
+interface RouterCostCliEvent {
+  ts: string;
+  model: string;
+  complexity?: string;
+  route?: string;
+  costUsd?: number;
+  cost_usd?: number;
+}
+
+function parseRouterCostEvents(text: string): RouterCostCliEvent[] {
+  return text.split(/\r?\n/u).map((line) => line.trim()).filter(Boolean).map((line) => JSON.parse(line) as RouterCostCliEvent);
+}
+
+function renderRouterCostReport(events: RouterCostCliEvent[], period: ParsedCliArgs["period"], format: "text" | "json"): string {
+  const total = events.reduce((sumValue, event) => sumValue + (event.costUsd ?? event.cost_usd ?? 0), 0);
+  const byModel = groupRouterCost(events, (event) => event.model);
+  const byComplexity = groupRouterCost(events, (event) => event.complexity ?? "unknown");
+  const byRoute = groupRouterCost(events, (event) => event.route ?? "unknown");
+  const report = { period: period ?? "7d", totalUsd: total, byModel, byComplexity, byRoute };
+  if (format === "json") return JSON.stringify(report, null, 2);
+  return [
+    `OctoClaw Auto Router - Cost Report (${report.period})`,
+    `Total spend: $${total.toFixed(2)}`,
+    `By model: ${JSON.stringify(byModel)}`,
+    `By complexity: ${JSON.stringify(byComplexity)}`,
+    `By route: ${JSON.stringify(byRoute)}`,
+  ].join("\n");
+}
+
+function groupRouterCost(events: RouterCostCliEvent[], keyFor: (event: RouterCostCliEvent) => string): Record<string, number> {
+  const grouped: Record<string, number> = {};
+  for (const event of events) {
+    const key = keyFor(event);
+    grouped[key] = (grouped[key] ?? 0) + (event.costUsd ?? event.cost_usd ?? 0);
+  }
+  return grouped;
+}
+
 async function runRouterLiteCommand(parsed: ParsedCliArgs, env: Record<string, string | undefined>, openclawHome: string): Promise<string> {
   const [area, action] = parsed.extraArgs;
   const outputDir = resolveRouterLiteOutputDir(parsed, openclawHome);
   const wantsJson = parsed.format === "json";
+
+  if (area === "wizard") {
+    const configured = await discoverConfiguredRouterModels(openclawHome);
+    const existing = parsed.incremental ? await loadRouterWizardFile(openclawHome) : defaultRouterWizardFile([]);
+    const now = new Date().toISOString();
+    const newModels = configured.filter((modelName) => existing.models[modelName] === undefined);
+    const config = parsed.incremental ? existing : defaultRouterWizardFile(configured, now);
+    for (const modelName of newModels) {
+      config.models[modelName] = { planType: inferRouterPlanType(modelName), configuredAt: now };
+    }
+    const filePath = await writeRouterWizardFile(openclawHome, config);
+    return wantsJson ? JSON.stringify({ path: filePath, models: Object.keys(config.models), newModels }, null, 2) : `Router wizard config written: ${filePath}`;
+  }
+
+  if (area === "score" && action === "override") {
+    const modelName = parsed.extraArgs[2];
+    const assignment = parsed.extraArgs[3];
+    if (!modelName || !assignment?.includes("=")) throw new Error("router score override expects: router score override <model> <tier>=<score>");
+    const [tier, rawScore] = assignment.split("=", 2) as [string, string];
+    const score = Number(rawScore);
+    if (!Number.isFinite(score)) throw new Error(`Invalid score: ${rawScore}`);
+    const config = await loadRouterWizardFile(openclawHome);
+    config.overrides.scoreOverrides[modelName] = { ...(config.overrides.scoreOverrides[modelName] ?? {}), [tier]: score };
+    upsertRouterOverride(config, { model: modelName, tier, type: "score", value: score, since: new Date().toISOString() });
+    const filePath = await writeRouterWizardFile(openclawHome, config);
+    return `Router score override saved: ${modelName} ${tier}=${score} (${filePath})`;
+  }
+
+  if (area === "score" && action === "reset") {
+    const modelName = parsed.extraArgs[2];
+    if (!modelName) throw new Error("router score reset expects: router score reset <model>");
+    const config = await loadRouterWizardFile(openclawHome);
+    delete config.overrides.scoreOverrides[modelName];
+    delete config.overrides.userBans[modelName];
+    delete config.overrides.userDispreferred[modelName];
+    config.overrides.entries = config.overrides.entries.filter((entry) => entry.model !== modelName);
+    const filePath = await writeRouterWizardFile(openclawHome, config);
+    return `Router overrides reset: ${modelName} (${filePath})`;
+  }
+
+  if (area === "model" && action === "list-overrides") {
+    const config = await loadRouterWizardFile(openclawHome);
+    return renderRouterOverrides(config, wantsJson ? "json" : "text");
+  }
+
+  if (area === "model" && (action === "mark" || action === "ban")) {
+    const modelName = parsed.extraArgs[2];
+    const tier = action === "mark" ? parsed.dispreferredFor : parsed.forTier;
+    if (!modelName || !tier) throw new Error(`router model ${action} expects model and tier`);
+    const config = await loadRouterWizardFile(openclawHome);
+    if (action === "mark") {
+      config.overrides.userDispreferred[modelName] = [...new Set([...(config.overrides.userDispreferred[modelName] ?? []), tier])];
+      upsertRouterOverride(config, { model: modelName, tier, type: "dispreferred", reason: parsed.reason, since: new Date().toISOString() });
+    } else {
+      config.overrides.userBans[modelName] = [...new Set([...(config.overrides.userBans[modelName] ?? []), tier])];
+      upsertRouterOverride(config, { model: modelName, tier, type: "ban", reason: parsed.reason, since: new Date().toISOString() });
+    }
+    const filePath = await writeRouterWizardFile(openclawHome, config);
+    return `Router model override saved: ${modelName} ${tier} (${filePath})`;
+  }
+
+  if (area === "cost" && action === "budget" && parsed.extraArgs[2] === "set") {
+    if (parsed.monthly === undefined || !Number.isFinite(parsed.monthly)) throw new Error("router cost budget set requires --monthly <usd>");
+    const config = await loadRouterWizardFile(openclawHome);
+    config.budget = { monthly: parsed.monthly, currency: "USD" };
+    const filePath = await writeRouterWizardFile(openclawHome, config);
+    return `Router monthly budget saved: $${parsed.monthly} (${filePath})`;
+  }
+
+  if (area === "cost" && action === "budget" && parsed.extraArgs[2] === "show") {
+    const config = await loadRouterWizardFile(openclawHome);
+    return wantsJson ? JSON.stringify(config.budget ?? null, null, 2) : `Router monthly budget: ${config.budget ? `$${config.budget.monthly} ${config.budget.currency}` : "(unset)"}`;
+  }
+
+  if (area === "cost" && action === "report") {
+    const costPath = resolvePath(parsed.input ?? path.join(openclawHome, "octoclaw", "cost-events.jsonl"));
+    let events: RouterCostCliEvent[] = [];
+    try {
+      events = parseRouterCostEvents(await fs.readFile(costPath, "utf8"));
+    } catch (error) {
+      if (!isNotFoundError(error)) events = [];
+    }
+    return renderRouterCostReport(events, parsed.period, wantsJson ? "json" : "text");
+  }
 
   if (area === "decisions") {
     const decisionsPath = resolvePath(parsed.input ?? path.join(openclawHome, "octoclaw", "router-lite", "decisions.log"));
@@ -2045,7 +2321,7 @@ async function runRouterLiteCommand(parsed: ParsedCliArgs, env: Record<string, s
     return lines.join("\n");
   }
 
-  throw new Error("router command expects: router model-intel refresh | router model-config analyze | router shadow-report | router decisions");
+  throw new Error("router command expects: router wizard | router model-intel refresh | router model-config analyze | router shadow-report | router decisions | router cost report | router score override/reset | router model mark/ban/list-overrides");
 }
 
 async function runCommandFromSnapshot(parsed: ParsedCliArgs, env: Record<string, string | undefined>): Promise<string> {

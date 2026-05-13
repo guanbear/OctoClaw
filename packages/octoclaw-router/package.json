@@ -15,7 +15,9 @@
     "./scoring": { "types": "./dist/scoring/index.d.ts", "default": "./dist/scoring/index.js" },
     "./cost": { "types": "./dist/cost/index.d.ts", "default": "./dist/cost/index.js" },
     "./health": { "types": "./dist/health/index.d.ts", "default": "./dist/health/index.js" },
-    "./promotion": { "types": "./dist/promotion/index.d.ts", "default": "./dist/promotion/index.js" }
+    "./promotion": { "types": "./dist/promotion/index.d.ts", "default": "./dist/promotion/index.js" },
+    "./overrides": { "types": "./dist/overrides/index.d.ts", "default": "./dist/overrides/index.js" },
+    "./wizard": { "types": "./dist/wizard/index.d.ts", "default": "./dist/wizard/index.js" }
   },
   "dependencies": {
     "@octoclaw/contracts": "workspace:*"

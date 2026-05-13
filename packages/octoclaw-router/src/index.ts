@@ -5,3 +5,5 @@ export * from "./scoring/index.js";
 export * from "./cost/index.js";
 export * from "./health/index.js";
 export * from "./promotion/index.js";
+export * from "./overrides/index.js";
+export * from "./wizard/index.js";

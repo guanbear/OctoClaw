@@ -97,6 +97,21 @@ describe("octoclawctl cli", () => {
       format: "json",
       extraArgs: ["decisions"],
     });
+    expect(parseCliArgs(["router", "wizard", "--incremental"])).toMatchObject({
+      command: "router",
+      incremental: true,
+      extraArgs: ["wizard"],
+    });
+    expect(parseCliArgs(["router", "cost", "report", "--period", "month"])).toMatchObject({
+      command: "router",
+      period: "month",
+      extraArgs: ["cost", "report"],
+    });
+    expect(parseCliArgs(["router", "model", "ban", "openai/gpt-5.5", "--for", "normal"])).toMatchObject({
+      command: "router",
+      forTier: "normal",
+      extraArgs: ["model", "ban", "openai/gpt-5.5"],
+    });
   });
 
   it("valid actions produce output", async () => {
