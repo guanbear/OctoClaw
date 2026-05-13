@@ -91,6 +91,12 @@ describe("octoclawctl cli", () => {
       input: "snapshot.json",
       extraArgs: ["model-config", "analyze"],
     });
+    expect(parseCliArgs(["router", "decisions", "--since", "7d", "--format", "json"])).toMatchObject({
+      command: "router",
+      since: "7d",
+      format: "json",
+      extraArgs: ["decisions"],
+    });
   });
 
   it("valid actions produce output", async () => {
@@ -330,6 +336,28 @@ describe("octoclawctl cli", () => {
           candidateModel: "cliproxyapi/gpt-5.5-mini",
         }),
       ]));
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("router decisions lists filtered promotion audit records", async () => {
+    const tmpDir = path.join(os.homedir(), ".octoclawctl-test-tmp", `router-decisions-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    const openclawHome = path.join(tmpDir, ".openclaw");
+    const decisionsDir = path.join(openclawHome, "octoclaw", "router-lite");
+    try {
+      await fs.mkdir(decisionsDir, { recursive: true });
+      await fs.writeFile(path.join(decisionsDir, "decisions.log"), [
+        JSON.stringify({ ts: "2026-05-01T00:00:00.000Z", model: "a/old", tier: "normal", decision: "promote", reason: "meets_promotion_criteria" }),
+        JSON.stringify({ ts: new Date().toISOString(), model: "deepseek/deepseek-v4", tier: "normal", decision: "reject", reason: "no_cost_benefit" }),
+      ].join("\n"), "utf8");
+
+      const capture = createIo();
+      const exitCode = await main(["router", "decisions", "--since", "7d", "--openclaw-home", openclawHome], {}, capture.io);
+
+      expect(exitCode).toBe(0);
+      expect(capture.stdout[0]).toContain("deepseek/deepseek-v4");
+      expect(capture.stdout[0]).not.toContain("a/old");
     } finally {
       await fs.rm(tmpDir, { recursive: true, force: true });
     }

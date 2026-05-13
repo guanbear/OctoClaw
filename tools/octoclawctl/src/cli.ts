@@ -26,7 +26,7 @@ import type { NightlyEvalConfig, LaunchAgentConfig } from "./nightly-eval/index.
 import { installLaunchAgent, uninstallLaunchAgent } from "./platform.js";
 
 type LegacyCliFormat = "text" | "json";
-type StatusFormat = "compact" | "table" | "lanes" | "anchors" | "json";
+type StatusFormat = "compact" | "table" | "lanes" | "anchors" | "text" | "json";
 type ServiceName = "openclaw" | "runner";
 type RunnerMode = "ondemand" | "daemon";
 type NightlyFormat = "markdown" | "json";
@@ -69,7 +69,7 @@ declare const process: {
 };
 
 const LEGACY_ACTIONS: StatusSurfaceAction[] = ["status", "details", "queue", "timeline"];
-const STATUS_FORMATS: StatusFormat[] = ["compact", "table", "lanes", "anchors", "json"];
+const STATUS_FORMATS: StatusFormat[] = ["compact", "table", "lanes", "anchors", "text", "json"];
 const SERVICE_NAMES: ServiceName[] = ["openclaw", "runner"];
 const RUNNER_MODES: RunnerMode[] = ["ondemand", "daemon"];
 const RUNNING_STATES = new Set(["running", "in_progress", "active", "working"]);
@@ -96,6 +96,7 @@ interface ParsedCliArgs {
   baseline?: string;
   candidate?: string;
   outputDir?: string;
+  since?: string;
   nightlyFormat: NightlyFormat;
   calibrationFormat: "markdown" | "json";
   config?: string;
@@ -187,6 +188,10 @@ interface TimelineEvent {
 
 function isRecord(value: unknown): value is JsonRecord {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function isNotFoundError(value: unknown): boolean {
+  return isRecord(value) && value.code === "ENOENT";
 }
 
 function asRecord(value: unknown): JsonRecord {
@@ -977,6 +982,7 @@ export function parseCliArgs(argv: string[]): ParsedCliArgs {
   let baseline: string | undefined;
   let candidate: string | undefined;
   let outputDir: string | undefined;
+  let since: string | undefined;
   let nightlyFormat: NightlyFormat = "markdown";
   let calibrationFormat: "markdown" | "json" = "markdown";
   let config: string | undefined;
@@ -1093,6 +1099,15 @@ export function parseCliArgs(argv: string[]): ParsedCliArgs {
     }
     if (argument.startsWith("--output-dir=")) {
       [, outputDir] = argument.split("=", 2);
+      continue;
+    }
+    if (argument === "--since") {
+      since = argv[index + 1];
+      index += 1;
+      continue;
+    }
+    if (argument.startsWith("--since=")) {
+      [, since] = argument.split("=", 2);
       continue;
     }
     if (argument === "--config") {
@@ -1281,6 +1296,7 @@ export function parseCliArgs(argv: string[]): ParsedCliArgs {
     baseline,
     candidate,
     outputDir,
+    since,
     nightlyFormat,
     calibrationFormat,
     config,
@@ -1339,6 +1355,7 @@ export function printUsage(): string {
     "  octoclawctl nightly-eval uninstall-launchagent",
     "  octoclawctl nightly-eval print-plist --config <eval-config.json> --output-dir <dir> [--schedule-hour 2]",
     "  octoclawctl nightly-eval deliver-slack --config <slack-acceptance.json> --output-dir <nightly-report-dir> [--format markdown|json]",
+    "  octoclawctl router decisions [--since 7d] [--format text|json]",
     "  octoclawctl router model-intel refresh [--output-dir <dir>] [--openclaw-home <dir>] [--format json]",
     "  octoclawctl router model-config analyze [--input <snapshot.json>] [--output-dir <dir>] [--format json]",
     "  octoclawctl router shadow-report [--input <shadow.jsonl>] [--format json]",
@@ -1871,10 +1888,67 @@ function countModels(snapshot: ModelIntelSnapshot): { configured: number; propos
   };
 }
 
+interface RouterDecisionRow {
+  ts: string;
+  model: string;
+  tier: string;
+  decision: string;
+  reason: string;
+  evidence?: unknown;
+}
+
+function parseRouterDecisionRows(text: string): RouterDecisionRow[] {
+  return text
+    .split(/\r?\n/u)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => JSON.parse(line) as RouterDecisionRow);
+}
+
+function filterRouterDecisionRows(rows: RouterDecisionRow[], since?: string, now = Date.now()): RouterDecisionRow[] {
+  if (since === undefined) return rows;
+  const cutoff = now - parseCliDurationMs(since);
+  return rows.filter((row) => {
+    const ts = Date.parse(row.ts);
+    return !Number.isNaN(ts) && ts >= cutoff;
+  });
+}
+
+function renderRouterDecisionRows(rows: RouterDecisionRow[], format: "text" | "json"): string {
+  if (format === "json") return JSON.stringify({ decisions: rows }, null, 2);
+  if (rows.length === 0) return "No router promotion decisions found.";
+  return [
+    "Router promotion decisions",
+    ...rows.map((row) => `${row.ts}  ${row.model}  ${row.tier}  ${row.decision}  ${row.reason}`),
+  ].join("\n");
+}
+
+function parseCliDurationMs(value: string): number {
+  const match = /^(\d+)([dhm])$/u.exec(value.trim());
+  if (!match) throw new Error(`Invalid duration: ${value}`);
+  const amount = Number.parseInt(match[1]!, 10);
+  const unit = match[2];
+  if (unit === "d") return amount * 24 * 60 * 60 * 1000;
+  if (unit === "h") return amount * 60 * 60 * 1000;
+  return amount * 60 * 1000;
+}
+
 async function runRouterLiteCommand(parsed: ParsedCliArgs, env: Record<string, string | undefined>, openclawHome: string): Promise<string> {
   const [area, action] = parsed.extraArgs;
   const outputDir = resolveRouterLiteOutputDir(parsed, openclawHome);
   const wantsJson = parsed.format === "json";
+
+  if (area === "decisions") {
+    const decisionsPath = resolvePath(parsed.input ?? path.join(openclawHome, "octoclaw", "router-lite", "decisions.log"));
+    let text = "";
+    try {
+      text = await fs.readFile(decisionsPath, "utf8");
+    } catch (error) {
+      if (!isNotFoundError(error)) throw error;
+    }
+    const decisions = filterRouterDecisionRows(parseRouterDecisionRows(text), parsed.since);
+    return renderRouterDecisionRows(decisions, wantsJson ? "json" : "text");
+  }
 
   if (area === "model-intel" && action === "refresh") {
     const commandEnv = { ...env, OPENCLAW_HOME: openclawHome };
@@ -1971,7 +2045,7 @@ async function runRouterLiteCommand(parsed: ParsedCliArgs, env: Record<string, s
     return lines.join("\n");
   }
 
-  throw new Error("router command expects: router model-intel refresh | router model-config analyze | router shadow-report");
+  throw new Error("router command expects: router model-intel refresh | router model-config analyze | router shadow-report | router decisions");
 }
 
 async function runCommandFromSnapshot(parsed: ParsedCliArgs, env: Record<string, string | undefined>): Promise<string> {
