@@ -20,6 +20,17 @@ import { disablePlugin, enablePlugin, getConfigValue, restartAll, setConfigValue
 import { buildWorkspace, cloneOrUpdate, DEFAULT_REF, DEFAULT_REPO_URL, deployExtension, deployPackages, setupSymlinks, syncOctoClawCoreRules, syncOpenClawPluginEntry, syncSlackDeliveryHookCompatibility, uninstallDeployment, validateLoad, writeSourceManifest } from "./install.js";
 import { readConfig, syncToOpenClawPluginConfig, writeConfig } from "./config.js";
 import { analyzeModelConfig, buildModelIntelSnapshot, type ModelIntelSnapshot } from "@octoclaw/policy/router-lite";
+import {
+  aggregateShadowEvents,
+  createPromotionDecisionEvent,
+  evaluateBudget,
+  evaluatePromotionForConfiguredModel,
+  generateCostReport,
+  parsePromotionDecisionLog,
+  renderPromotionDecisions,
+  type CostEvent,
+  type RouterShadowEvent,
+} from "@octoclaw/router";
 import type { CalibrationInputFile } from "./calibration/types.js";
 import type { SlackAcceptanceFormat } from "./slack-acceptance/types.js";
 import type { NightlyEvalConfig, LaunchAgentConfig } from "./nightly-eval/index.js";
@@ -1427,6 +1438,7 @@ export function printUsage(): string {
     "  octoclawctl nightly-eval deliver-slack --config <slack-acceptance.json> --output-dir <nightly-report-dir> [--format markdown|json]",
     "  octoclawctl router wizard [--incremental]",
     "  octoclawctl router decisions [--since 7d] [--format text|json]",
+    "  octoclawctl router promotion review [--input <shadow.jsonl>] [--format text|json]",
     "  octoclawctl router cost report [--period 1d|7d|30d|month] [--format text|json]",
     "  octoclawctl router score override <model> <tier>=<score>",
     "  octoclawctl router model mark <model> --dispreferred-for <tier>",
@@ -1998,6 +2010,89 @@ function renderRouterDecisionRows(rows: RouterDecisionRow[], format: "text" | "j
   ].join("\n");
 }
 
+function parseRouterShadowEvents(text: string): RouterShadowEvent[] {
+  return text
+    .split(/\r?\n/u)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => normalizeRouterShadowEvent(JSON.parse(line) as JsonRecord))
+    .filter((event): event is RouterShadowEvent => Boolean(event));
+}
+
+function normalizeRouterShadowEvent(raw: JsonRecord): RouterShadowEvent | null {
+  const recommendation = asRecord(raw.recommendation);
+  const recommendedModel = asString(raw.recommendedModel) || asString(recommendation.recommendedModel);
+  if (!recommendedModel) return null;
+  const outcome = asRecord(raw.outcome);
+  const recommendationOutcome = asRecord(raw.recommendation);
+  const estimatedCostDeltaUsd = asNumber(raw.estimatedCostDeltaUsd);
+  const actualCost = asNumber(outcome.costUsd);
+  return {
+    ts: asString(raw.ts) || new Date().toISOString(),
+    sessionKey: asString(raw.sessionKey) || undefined,
+    turnId: asString(raw.turnId) || undefined,
+    actualModel: asString(raw.actualModel) || undefined,
+    recommendedModel,
+    promotionState: raw.promotionState === "live" ? "live" : "shadow",
+    reasonCodes: Array.isArray(raw.reasonCodes) ? raw.reasonCodes.map((item) => asString(item)).filter(Boolean) : undefined,
+    judge: { complexity: asString(asRecord(raw.judge).complexity) || "unknown" },
+    outcome: {
+      success: typeof outcome.success === "boolean" ? outcome.success : true,
+      ...(actualCost !== undefined ? { costUsd: actualCost } : {}),
+      ...(asNumber(outcome.latencyMs) !== undefined ? { latencyMs: asNumber(outcome.latencyMs) } : {}),
+    },
+    recommendation: {
+      expectedSuccess: typeof recommendationOutcome.expectedSuccess === "boolean" ? recommendationOutcome.expectedSuccess : true,
+      ...(asNumber(recommendationOutcome.expectedCostUsd) !== undefined
+        ? { expectedCostUsd: asNumber(recommendationOutcome.expectedCostUsd) }
+        : actualCost !== undefined && estimatedCostDeltaUsd !== undefined
+          ? { expectedCostUsd: actualCost + estimatedCostDeltaUsd }
+          : {}),
+    },
+  };
+}
+
+async function runRouterPromotionReview(input: {
+  openclawHome: string;
+  shadowPath: string;
+  decisionsPath: string;
+  format: "text" | "json";
+}): Promise<string> {
+  const [shadowText, existingText] = await Promise.all([
+    fs.readFile(input.shadowPath, "utf8").catch(() => ""),
+    fs.readFile(input.decisionsPath, "utf8").catch(() => ""),
+  ]);
+  const config = await loadRouterWizardFile(input.openclawHome);
+  const configuredModels = Object.entries(config.models)
+    .filter(([, value]) => value.source !== "same_provider_discovery")
+    .map(([modelName]) => modelName);
+  const existing = parsePromotionDecisionLog(existingText);
+  const today = new Date().toISOString().slice(0, 10);
+  let todayPromotionCount = existing.filter((decision) => decision.decision === "promote" && decision.ts.startsWith(today)).length;
+  const decisions = aggregateShadowEvents(parseRouterShadowEvents(shadowText)).map((metrics) => {
+    const decision = evaluatePromotionForConfiguredModel({
+      model: metrics.model,
+      tier: metrics.tier,
+      metrics,
+      todayPromotionCount,
+      configuredModels,
+    });
+    if (decision.action === "promote") todayPromotionCount += 1;
+    return createPromotionDecisionEvent({
+      ts: new Date().toISOString(),
+      model: metrics.model,
+      tier: metrics.tier,
+      decision,
+    });
+  });
+  if (decisions.length > 0) {
+    await ensureDir(path.dirname(input.decisionsPath));
+    const existingSuffix = existingText && !existingText.endsWith("\n") ? "\n" : "";
+    await fs.writeFile(input.decisionsPath, `${existingText}${existingSuffix}${decisions.map((decision) => JSON.stringify(decision)).join("\n")}\n`, "utf8");
+  }
+  return renderPromotionDecisions(decisions, input.format);
+}
+
 function parseCliDurationMs(value: string): number {
   const match = /^(\d+)([dhm])$/u.exec(value.trim());
   if (!match) throw new Error(`Invalid duration: ${value}`);
@@ -2016,12 +2111,23 @@ interface RouterWizardFile {
   privacy: "standard" | "local_only";
   language: "auto" | "zh" | "en";
   restrictedModels: string[];
+  openclawConfigHash?: string;
   overrides: {
     scoreOverrides: Record<string, Record<string, number>>;
     userBans: Record<string, string[]>;
     userDispreferred: Record<string, string[]>;
     entries: Array<{ model: string; tier: string; type: string; value?: number; reason?: string; since: string }>;
   };
+}
+
+interface RouterWizardAnswerFile {
+  budget?: { monthly?: number; currency?: string };
+  monthlyBudget?: number;
+  privacy?: "standard" | "local_only";
+  language?: "auto" | "zh" | "en";
+  restrictedModels?: string[];
+  modelPlanTypes?: Record<string, string>;
+  sameProviderModels?: string[];
 }
 
 function defaultRouterWizardFile(models: string[], now = new Date().toISOString()): RouterWizardFile {
@@ -2063,6 +2169,57 @@ function routerWizardPath(openclawHome: string): string {
   return path.join(openclawHome, "octoclaw", "router-wizard.json");
 }
 
+async function openclawConfigHash(openclawHome: string): Promise<string | undefined> {
+  try {
+    const raw = await fs.readFile(path.join(openclawHome, "openclaw.json"), "utf8");
+    let hash = 0x811c9dc5;
+    for (let index = 0; index < raw.length; index += 1) {
+      hash ^= raw.charCodeAt(index);
+      hash = Math.imul(hash, 0x01000193) >>> 0;
+    }
+    return hash.toString(16).padStart(8, "0");
+  } catch {
+    return undefined;
+  }
+}
+
+async function loadRouterWizardAnswers(filePath?: string): Promise<RouterWizardAnswerFile> {
+  if (!filePath) return {};
+  const raw = await readJsonFile(resolvePath(filePath));
+  if (!raw) throw new Error(`Invalid router wizard answers file: ${filePath}`);
+  const budget = asRecord(raw.budget);
+  const answers: RouterWizardAnswerFile = {};
+  const monthly = asNumber(raw.monthlyBudget) ?? asNumber(budget.monthly);
+  if (monthly !== undefined) answers.budget = { monthly, currency: "USD" };
+  if (raw.privacy === "standard" || raw.privacy === "local_only") answers.privacy = raw.privacy;
+  if (raw.language === "auto" || raw.language === "zh" || raw.language === "en") answers.language = raw.language;
+  if (Array.isArray(raw.restrictedModels)) answers.restrictedModels = raw.restrictedModels.map((item) => asString(item)).filter(Boolean);
+  const rawPlanTypes = asRecord(raw.modelPlanTypes);
+  answers.modelPlanTypes = Object.fromEntries(Object.entries(rawPlanTypes)
+    .filter(([, value]) => value === "subscription" || value === "pay_as_you_go" || value === "unknown")
+    .map(([modelName, value]) => [modelName, String(value)]));
+  if (Array.isArray(raw.sameProviderModels)) answers.sameProviderModels = raw.sameProviderModels.map((item) => asString(item)).filter(Boolean);
+  return answers;
+}
+
+function applyRouterWizardAnswers(config: RouterWizardFile, answers: RouterWizardAnswerFile, now: string): void {
+  if (answers.budget?.monthly !== undefined) config.budget = { monthly: answers.budget.monthly, currency: "USD" };
+  if (answers.privacy) config.privacy = answers.privacy;
+  if (answers.language) config.language = answers.language;
+  if (answers.restrictedModels) config.restrictedModels = answers.restrictedModels;
+  for (const [modelName, planType] of Object.entries(answers.modelPlanTypes ?? {})) {
+    const existing = config.models[modelName];
+    if (existing) existing.planType = planType;
+  }
+  for (const modelName of answers.sameProviderModels ?? []) {
+    config.models[modelName] = {
+      planType: answers.modelPlanTypes?.[modelName] ?? inferRouterPlanType(modelName),
+      configuredAt: now,
+      source: "same_provider_discovery",
+    };
+  }
+}
+
 async function discoverConfiguredRouterModels(openclawHome: string): Promise<string[]> {
   const config = await readJsonFile(path.join(openclawHome, "openclaw.json"));
   const providers = asRecord(asRecord(asRecord(config).models).providers);
@@ -2098,33 +2255,64 @@ interface RouterCostCliEvent {
   cost_usd?: number;
 }
 
+interface RouterCostCliReport {
+  period: ParsedCliArgs["period"] | "7d";
+  totalUsd: number;
+  byModel: Record<string, { totalUsd: number; percent: number }>;
+  byComplexity: Record<string, { totalUsd: number; percent: number }>;
+  byRoute: Record<string, { totalUsd: number; percent: number }>;
+  monthEndPredictionUsd: number;
+  anomalies: Array<{ day: string; costUsd: number; reason: string }>;
+  budget?: {
+    monthly: number;
+    currency: "USD";
+    usedPercent: number;
+    action?: "warn" | "plan_only";
+    notification?: string;
+    reasonCodes: string[];
+    ignoredReason?: "budget_exceeded_no_plan";
+  };
+}
+
 function parseRouterCostEvents(text: string): RouterCostCliEvent[] {
   return text.split(/\r?\n/u).map((line) => line.trim()).filter(Boolean).map((line) => JSON.parse(line) as RouterCostCliEvent);
 }
 
-function renderRouterCostReport(events: RouterCostCliEvent[], period: ParsedCliArgs["period"], format: "text" | "json"): string {
-  const total = events.reduce((sumValue, event) => sumValue + (event.costUsd ?? event.cost_usd ?? 0), 0);
-  const byModel = groupRouterCost(events, (event) => event.model);
-  const byComplexity = groupRouterCost(events, (event) => event.complexity ?? "unknown");
-  const byRoute = groupRouterCost(events, (event) => event.route ?? "unknown");
-  const report = { period: period ?? "7d", totalUsd: total, byModel, byComplexity, byRoute };
+function toRouterCostEvents(events: RouterCostCliEvent[]): CostEvent[] {
+  return events.map((event) => ({
+    ts: event.ts,
+    model: event.model,
+    ...(event.complexity === "simple" || event.complexity === "normal" || event.complexity === "complex" || event.complexity === "deep" ? { complexity: event.complexity } : {}),
+    ...(event.route === "reply" || event.route === "delegate" ? { route: event.route } : {}),
+    costUsd: event.costUsd ?? event.cost_usd ?? 0,
+  }));
+}
+
+function renderRouterCostReport(events: RouterCostCliEvent[], period: ParsedCliArgs["period"], format: "text" | "json", config?: RouterWizardFile): string {
+  const base = generateCostReport(toRouterCostEvents(events), { period: period ?? "7d" });
+  const report: RouterCostCliReport = { ...base };
+  if (config?.budget) {
+    const budget = evaluateBudget(config.budget.monthly, base.totalUsd);
+    report.budget = {
+      monthly: config.budget.monthly,
+      currency: config.budget.currency,
+      usedPercent: budget.usedPercent,
+      ...(budget.action ? { action: budget.action } : {}),
+      ...(budget.notification ? { notification: budget.notification } : {}),
+      reasonCodes: budget.reasonCodes,
+      ...(budget.ignoredReason ? { ignoredReason: budget.ignoredReason } : {}),
+    };
+  }
   if (format === "json") return JSON.stringify(report, null, 2);
   return [
     `OctoClaw Auto Router - Cost Report (${report.period})`,
-    `Total spend: $${total.toFixed(2)}`,
-    `By model: ${JSON.stringify(byModel)}`,
-    `By complexity: ${JSON.stringify(byComplexity)}`,
-    `By route: ${JSON.stringify(byRoute)}`,
+    `Total spend: $${report.totalUsd.toFixed(2)}`,
+    `Predicted month-end: $${report.monthEndPredictionUsd.toFixed(2)}`,
+    ...(report.budget ? [`Budget: ${Math.round(report.budget.usedPercent)}% of $${report.budget.monthly} ${report.budget.currency}${report.budget.action ? ` (${report.budget.action})` : ""}`] : []),
+    `By model: ${JSON.stringify(report.byModel)}`,
+    `By complexity: ${JSON.stringify(report.byComplexity)}`,
+    `By route: ${JSON.stringify(report.byRoute)}`,
   ].join("\n");
-}
-
-function groupRouterCost(events: RouterCostCliEvent[], keyFor: (event: RouterCostCliEvent) => string): Record<string, number> {
-  const grouped: Record<string, number> = {};
-  for (const event of events) {
-    const key = keyFor(event);
-    grouped[key] = (grouped[key] ?? 0) + (event.costUsd ?? event.cost_usd ?? 0);
-  }
-  return grouped;
 }
 
 async function runRouterLiteCommand(parsed: ParsedCliArgs, env: Record<string, string | undefined>, openclawHome: string): Promise<string> {
@@ -2134,6 +2322,7 @@ async function runRouterLiteCommand(parsed: ParsedCliArgs, env: Record<string, s
 
   if (area === "wizard") {
     const configured = await discoverConfiguredRouterModels(openclawHome);
+    const answers = await loadRouterWizardAnswers(parsed.config);
     const existing = parsed.incremental ? await loadRouterWizardFile(openclawHome) : defaultRouterWizardFile([]);
     const now = new Date().toISOString();
     const newModels = configured.filter((modelName) => existing.models[modelName] === undefined);
@@ -2141,8 +2330,20 @@ async function runRouterLiteCommand(parsed: ParsedCliArgs, env: Record<string, s
     for (const modelName of newModels) {
       config.models[modelName] = { planType: inferRouterPlanType(modelName), configuredAt: now, source: "configured" };
     }
+    applyRouterWizardAnswers(config, answers, now);
+    const hash = await openclawConfigHash(openclawHome);
+    if (hash) config.openclawConfigHash = hash;
     const filePath = await writeRouterWizardFile(openclawHome, config);
-    return wantsJson ? JSON.stringify({ path: filePath, models: Object.keys(config.models), newModels }, null, 2) : `Router wizard config written: ${filePath}`;
+    const steps = [
+      "model_scan",
+      "plan_confirmation",
+      "budget",
+      "privacy",
+      "language",
+      "restricted_models",
+      "same_provider_discovery",
+    ];
+    return wantsJson ? JSON.stringify({ path: filePath, models: Object.keys(config.models), newModels, steps }, null, 2) : `Router wizard config written: ${filePath}`;
   }
 
   if (area === "score" && action === "override") {
@@ -2213,7 +2414,7 @@ async function runRouterLiteCommand(parsed: ParsedCliArgs, env: Record<string, s
     } catch (error) {
       if (!isNotFoundError(error)) events = [];
     }
-    return renderRouterCostReport(events, parsed.period, wantsJson ? "json" : "text");
+    return renderRouterCostReport(events, parsed.period, wantsJson ? "json" : "text", await loadRouterWizardFile(openclawHome));
   }
 
   if (area === "decisions") {
@@ -2226,6 +2427,17 @@ async function runRouterLiteCommand(parsed: ParsedCliArgs, env: Record<string, s
     }
     const decisions = filterRouterDecisionRows(parseRouterDecisionRows(text), parsed.since);
     return renderRouterDecisionRows(decisions, wantsJson ? "json" : "text");
+  }
+
+  if (area === "promotion" && action === "review") {
+    const shadowPath = resolvePath(parsed.input ?? path.join(openclawHome, "workspace", "tmp", "octopus", "router-lite", "shadow.jsonl"));
+    const decisionsPath = path.join(openclawHome, "octoclaw", "router-lite", "decisions.log");
+    return runRouterPromotionReview({
+      openclawHome,
+      shadowPath,
+      decisionsPath,
+      format: wantsJson ? "json" : "text",
+    });
   }
 
   if (area === "model-intel" && action === "refresh") {
@@ -2323,7 +2535,7 @@ async function runRouterLiteCommand(parsed: ParsedCliArgs, env: Record<string, s
     return lines.join("\n");
   }
 
-  throw new Error("router command expects: router wizard | router model-intel refresh | router model-config analyze | router shadow-report | router decisions | router cost report | router score override/reset | router model mark/ban/list-overrides");
+  throw new Error("router command expects: router wizard | router model-intel refresh | router model-config analyze | router shadow-report | router decisions | router promotion review | router cost report | router score override/reset | router model mark/ban/list-overrides");
 }
 
 async function runCommandFromSnapshot(parsed: ParsedCliArgs, env: Record<string, string | undefined>): Promise<string> {

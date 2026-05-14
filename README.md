@@ -2,6 +2,10 @@
 
 English | [简体中文](./README.zh-CN.md)
 
+[![CI](https://github.com/guanbear/OctoClaw/actions/workflows/test.yml/badge.svg)](https://github.com/guanbear/OctoClaw/actions/workflows/test.yml)
+[![npm](https://img.shields.io/npm/v/@octoclaw/cli?label=%40octoclaw%2Fcli)](https://www.npmjs.com/package/@octoclaw/cli)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 ![OctoClaw banner](./banner.png)
 
 > Your OpenClaw main agent shouldn't have to do everything itself.
@@ -167,11 +171,12 @@ user turn
 
 Auto Router v3 lives in `@octoclaw/router`. V1 is a single balanced mode for delegated/sub-agent model choice; the main agent is never silently switched.
 
-1. `octoclawctl router wizard` writes local plan, budget, privacy, and override config to `~/.openclaw/octoclaw/router-wizard.json`
+1. `octoclawctl router wizard` writes local plan, budget, privacy, language, restricted-model, and same-provider discovery config to `~/.openclaw/octoclaw/router-wizard.json`; `--config <answers.json>` supports a scripted 7-step answer file
 2. `octoclawctl router model-intel refresh` pulls configured models, public prices, capabilities, and quota pressure into one snapshot
-3. `octoclawctl router decisions --since 7d` shows shadow-to-live promotion audit records
-4. `octoclawctl router cost report --period 7d` groups spend by model, complexity, and route
-5. `octoclawctl router score override`, `router model mark`, and `router model ban` keep user overrides local
+3. `octoclawctl router promotion review --input <shadow.jsonl>` evaluates local shadow samples and writes promotion decisions
+4. `octoclawctl router decisions --since 7d` shows shadow-to-live promotion audit records
+5. `octoclawctl router cost report --period 7d` groups spend by model, complexity, and route, and includes prediction plus budget status when configured
+6. `octoclawctl router score override`, `router model mark`, and `router model ban` keep user overrides local
 
 Evidence priority: **your OpenClaw config and local routing data > packaged snapshot > external leaderboards and catalogs.**
 External data can seed scoring, but auto-promotion requires local shadow evidence.

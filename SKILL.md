@@ -68,9 +68,10 @@ reintroduced as compatibility paths.
 
 | Command | Use |
 |---------|-----|
-| `octoclawctl router wizard [--incremental]` | Create or update local router plan/budget/override config. |
+| `octoclawctl router wizard [--incremental] [--config answers.json]` | Create or update local router plan/budget/privacy/language/restricted/same-provider config. |
+| `octoclawctl router promotion review [--input shadow.jsonl]` | Evaluate local shadow samples and append promotion decisions. |
 | `octoclawctl router decisions [--since 7d]` | Inspect shadow-to-live promotion decisions. |
-| `octoclawctl router cost report [--period 7d]` | Review local cost grouped by model, complexity, and route. |
+| `octoclawctl router cost report [--period 7d]` | Review local cost grouped by model, complexity, and route, including prediction and budget status. |
 | `octoclawctl router cost budget set --monthly <usd>` | Store the local monthly router budget. |
 | `octoclawctl router score override <model> <tier>=<score>` | Override a model score for a complexity tier. |
 | `octoclawctl router model mark <model> --dispreferred-for <tier>` | Soft-avoid a model for a tier. |

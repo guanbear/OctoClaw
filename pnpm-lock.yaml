@@ -58,6 +58,9 @@ importers:
       '@octoclaw/policy':
         specifier: workspace:*
         version: link:../../packages/octoclaw-policy
+      '@octoclaw/router':
+        specifier: workspace:*
+        version: link:../../packages/octoclaw-router
       '@octoclaw/runtime':
         specifier: workspace:*
         version: link:../../extensions/octoclaw-runtime

@@ -129,6 +129,33 @@ describe("router wizard Slack onboarding", () => {
     expect(result).toMatchObject({ sent: false, reason: "wizard_complete" });
   });
 
+  it("prompts again when OpenClaw config has new models missing from wizard config", async () => {
+    writeOpenclawConfig();
+    fs.mkdirSync(path.dirname(routerWizardConfigPath(tempHome)), { recursive: true });
+    fs.writeFileSync(routerWizardConfigPath(tempHome), JSON.stringify({
+      schemaVersion: "octoclaw.router_wizard/v1",
+      completedAt: "2026-05-14T00:00:00.000Z",
+      models: { "openai/gpt-5.5": { planType: "subscription", configuredAt: "2026-05-14T00:00:00.000Z", source: "configured" } },
+      privacy: "standard",
+      language: "auto",
+      restrictedModels: [],
+      overrides: { scoreOverrides: {}, userBans: {}, userDispreferred: {}, entries: [] },
+    }), "utf8");
+    const sends: Parameters<RouterWizardOnboardingSendMessage>[0][] = [];
+
+    const result = await maybeSendRouterWizardOnboarding({
+      sessionKey: "agent:main:slack:default:direct:u123abc",
+      openclawHome: tempHome,
+      sendMessage: async (params) => {
+        sends.push(params);
+        return { sent: true, messageId: "1777770001.000001" };
+      },
+    });
+
+    expect(result.sent).toBe(true);
+    expect(sends[0]?.message).toContain("还没完成首次配置");
+  });
+
   it("handles Slack default setup action by writing wizard config", async () => {
     writeOpenclawConfig();
     const sends: Parameters<RouterWizardOnboardingSendMessage>[0][] = [];

@@ -2,6 +2,10 @@
 
 [English](./README.md) | 简体中文
 
+[![CI](https://github.com/guanbear/OctoClaw/actions/workflows/test.yml/badge.svg)](https://github.com/guanbear/OctoClaw/actions/workflows/test.yml)
+[![npm](https://img.shields.io/npm/v/@octoclaw/cli?label=%40octoclaw%2Fcli)](https://www.npmjs.com/package/@octoclaw/cli)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 ![OctoClaw 横幅](./banner.png)
 
 > 你的 OpenClaw 主 agent 不该什么都自己干。

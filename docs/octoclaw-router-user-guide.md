@@ -10,11 +10,21 @@ Run:
 octoclawctl router wizard
 ```
 
-The wizard writes `~/.openclaw/octoclaw/router-wizard.json`. When new OpenClaw models are added later, run:
+The wizard writes `~/.openclaw/octoclaw/router-wizard.json`. For scripted setup, pass an answers file:
+
+```bash
+octoclawctl router wizard --config answers.json
+```
+
+Supported answer fields are `budget.monthly`, `privacy`, `language`, `restrictedModels`, `modelPlanTypes`, and `sameProviderModels`.
+
+When new OpenClaw models are added later, run:
 
 ```bash
 octoclawctl router wizard --incremental
 ```
+
+Slack onboarding also re-prompts when `openclaw.json` contains configured models that are missing from `router-wizard.json`.
 
 ## Capability And Decisions
 
@@ -30,6 +40,12 @@ Review promotion audit records:
 octoclawctl router decisions --since 7d
 ```
 
+Generate promotion audit records from local shadow samples:
+
+```bash
+octoclawctl router promotion review --input ~/.openclaw/workspace/tmp/octopus/router-lite/shadow.jsonl
+```
+
 Auto-promotion only applies to configured models and is limited by sample count, quality regression, cost benefit, and one promotion per day.
 
 ## Cost And Budget
@@ -39,6 +55,8 @@ Show cost grouped by model, complexity, and route:
 ```bash
 octoclawctl router cost report --period 7d
 ```
+
+The report includes month-end prediction and budget status when a monthly budget is configured.
 
 Set a monthly budget:
 

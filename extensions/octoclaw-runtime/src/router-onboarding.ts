@@ -121,7 +121,10 @@ export function routerWizardOnboardingStatePath(openclawHome = ""): string {
 export function isRouterWizardComplete(openclawHome = ""): boolean {
   try {
     const raw = JSON.parse(fsSync.readFileSync(routerWizardConfigPath(openclawHome), "utf8")) as UnknownRecord;
-    return raw.schemaVersion === ROUTER_WIZARD_SCHEMA && Object.keys(asRecord(raw.models)).length > 0;
+    const models = asRecord(raw.models);
+    if (raw.schemaVersion !== ROUTER_WIZARD_SCHEMA || Object.keys(models).length === 0) return false;
+    const configuredModels = discoverConfiguredRouterModels(openclawHome);
+    return configuredModels.length === 0 || configuredModels.every((model) => models[model] !== undefined);
   } catch {
     return false;
   }

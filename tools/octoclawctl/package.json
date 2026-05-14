@@ -15,6 +15,7 @@
   },
   "dependencies": {
     "@octoclaw/policy": "workspace:*",
+    "@octoclaw/router": "workspace:*",
     "@octoclaw/runtime": "workspace:*",
     "@octoclaw/status-surface": "workspace:*"
   },

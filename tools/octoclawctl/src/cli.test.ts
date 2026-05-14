@@ -140,6 +140,156 @@ describe("octoclawctl cli", () => {
     }
   });
 
+  it("router wizard consumes scripted 7-step answers and imports same-provider candidates", async () => {
+    const tmpDir = path.join(os.homedir(), ".octoclawctl-test-tmp", `router-wizard-answers-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    const openclawHome = path.join(tmpDir, ".openclaw");
+    const answersPath = path.join(tmpDir, "wizard-answers.json");
+    try {
+      await fs.mkdir(openclawHome, { recursive: true });
+      await fs.writeFile(path.join(openclawHome, "openclaw.json"), JSON.stringify({
+        models: {
+          providers: {
+            openai: { models: [{ id: "gpt-5.5" }] },
+            zhipu: { models: [{ id: "GLM-5.1" }] },
+          },
+        },
+      }), "utf8");
+      await fs.writeFile(answersPath, JSON.stringify({
+        budget: { monthly: 125 },
+        privacy: "local_only",
+        language: "zh",
+        restrictedModels: ["zhipu/GLM-5.1"],
+        modelPlanTypes: {
+          "openai/gpt-5.5": "pay_as_you_go",
+          "zhipu/GLM-5.1": "subscription",
+          "openai/gpt-5-mini": "pay_as_you_go",
+        },
+        sameProviderModels: ["openai/gpt-5-mini"],
+      }), "utf8");
+
+      const capture = createIo();
+      const exitCode = await main([
+        "router",
+        "wizard",
+        "--openclaw-home",
+        openclawHome,
+        "--config",
+        answersPath,
+        "--format",
+        "json",
+      ], {}, capture.io);
+
+      expect(exitCode).toBe(0);
+      const summary = JSON.parse(capture.stdout[0] ?? "{}");
+      const saved = JSON.parse(await fs.readFile(summary.path, "utf8"));
+      expect(summary.steps).toEqual([
+        "model_scan",
+        "plan_confirmation",
+        "budget",
+        "privacy",
+        "language",
+        "restricted_models",
+        "same_provider_discovery",
+      ]);
+      expect(saved).toMatchObject({
+        budget: { monthly: 125, currency: "USD" },
+        privacy: "local_only",
+        language: "zh",
+        restrictedModels: ["zhipu/GLM-5.1"],
+        openclawConfigHash: expect.any(String),
+        models: {
+          "openai/gpt-5.5": { planType: "pay_as_you_go", source: "configured" },
+          "zhipu/GLM-5.1": { planType: "subscription", source: "configured" },
+          "openai/gpt-5-mini": { planType: "pay_as_you_go", source: "same_provider_discovery" },
+        },
+      });
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("router cost report includes prediction and budget status from local router config", async () => {
+    const tmpDir = path.join(os.homedir(), ".octoclawctl-test-tmp", `router-cost-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    const openclawHome = path.join(tmpDir, ".openclaw");
+    const octoclawDir = path.join(openclawHome, "octoclaw");
+    try {
+      await fs.mkdir(octoclawDir, { recursive: true });
+      await fs.writeFile(path.join(octoclawDir, "router-wizard.json"), JSON.stringify({
+        schemaVersion: "octoclaw.router_wizard/v1",
+        completedAt: "2026-05-14T00:00:00.000Z",
+        models: { "openai/gpt-5.5": { planType: "pay_as_you_go", configuredAt: "2026-05-14T00:00:00.000Z", source: "configured" } },
+        budget: { monthly: 100, currency: "USD" },
+        privacy: "standard",
+        language: "auto",
+        restrictedModels: [],
+        overrides: { scoreOverrides: {}, userBans: {}, userDispreferred: {}, entries: [] },
+      }), "utf8");
+      await fs.writeFile(path.join(octoclawDir, "cost-events.jsonl"), [
+        JSON.stringify({ ts: new Date().toISOString(), model: "openai/gpt-5.5", complexity: "deep", route: "delegate", costUsd: 84 }),
+      ].join("\n"), "utf8");
+
+      const capture = createIo();
+      const exitCode = await main(["router", "cost", "report", "--openclaw-home", openclawHome, "--format", "json"], {}, capture.io);
+
+      expect(exitCode).toBe(0);
+      const report = JSON.parse(capture.stdout[0] ?? "{}");
+      expect(report.monthEndPredictionUsd).toBeGreaterThan(0);
+      expect(report.budget).toMatchObject({
+        monthly: 100,
+        usedPercent: 84,
+        action: "warn",
+        reasonCodes: ["budget_warning_80_percent"],
+      });
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("router promotion review evaluates shadow samples and writes decisions log", async () => {
+    const tmpDir = path.join(os.homedir(), ".octoclawctl-test-tmp", `router-promotion-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    const openclawHome = path.join(tmpDir, ".openclaw");
+    const octoclawDir = path.join(openclawHome, "octoclaw");
+    const routerLiteDir = path.join(octoclawDir, "router-lite");
+    const shadowPath = path.join(routerLiteDir, "shadow.jsonl");
+    try {
+      await fs.mkdir(routerLiteDir, { recursive: true });
+      await fs.writeFile(path.join(octoclawDir, "router-wizard.json"), JSON.stringify({
+        schemaVersion: "octoclaw.router_wizard/v1",
+        completedAt: "2026-05-14T00:00:00.000Z",
+        models: {
+          "openai/gpt-5.5": { planType: "pay_as_you_go", configuredAt: "2026-05-14T00:00:00.000Z", source: "configured" },
+          "openai/gpt-5-mini": { planType: "pay_as_you_go", configuredAt: "2026-05-14T00:00:00.000Z", source: "configured" },
+        },
+        privacy: "standard",
+        language: "auto",
+        restrictedModels: [],
+        overrides: { scoreOverrides: {}, userBans: {}, userDispreferred: {}, entries: [] },
+      }), "utf8");
+      const events = Array.from({ length: 35 }, (_, index) => JSON.stringify({
+        ts: new Date(Date.UTC(2026, 4, 14, 0, index)).toISOString(),
+        actualModel: "openai/gpt-5.5",
+        recommendedModel: "openai/gpt-5-mini",
+        promotionState: "shadow",
+        judge: { complexity: "normal" },
+        outcome: { success: true, costUsd: 1 },
+        recommendation: { expectedSuccess: true, expectedCostUsd: 0.8 },
+      })).join("\n");
+      await fs.writeFile(shadowPath, events, "utf8");
+
+      const capture = createIo();
+      const exitCode = await main(["router", "promotion", "review", "--openclaw-home", openclawHome, "--input", shadowPath, "--format", "json"], {}, capture.io);
+
+      expect(exitCode).toBe(0);
+      const result = JSON.parse(capture.stdout[0] ?? "{}");
+      expect(result.decisions).toEqual([
+        expect.objectContaining({ model: "openai/gpt-5-mini", tier: "normal", decision: "promote" }),
+      ]);
+      expect(await fs.readFile(path.join(routerLiteDir, "decisions.log"), "utf8")).toContain("openai/gpt-5-mini");
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   it("valid actions produce output", async () => {
     for (const action of ["status", "details", "queue", "timeline"] as const) {
       const capture = createIo();
