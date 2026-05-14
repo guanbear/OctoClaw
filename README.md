@@ -2,11 +2,15 @@
 
 English | [简体中文](./README.zh-CN.md)
 
+<p align="center">
+  <img src="./icon.png" alt="OctoClaw icon" width="96" height="96">
+</p>
+
+![OctoClaw banner](./banner.png)
+
 [![CI](https://github.com/guanbear/OctoClaw/actions/workflows/test.yml/badge.svg)](https://github.com/guanbear/OctoClaw/actions/workflows/test.yml)
 [![npm](https://img.shields.io/npm/v/@octoclaw/cli?label=%40octoclaw%2Fcli)](https://www.npmjs.com/package/@octoclaw/cli)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-
-![OctoClaw banner](./banner.png)
 
 > Your OpenClaw main agent shouldn't have to do everything itself.
 > Delegate heavy, slow, or uncertain work to cheap sub-agents in the background — automatically.

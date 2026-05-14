@@ -2,11 +2,15 @@
 
 [English](./README.md) | 简体中文
 
+<p align="center">
+  <img src="./icon.png" alt="OctoClaw 图标" width="96" height="96">
+</p>
+
+![OctoClaw 横幅](./banner.png)
+
 [![CI](https://github.com/guanbear/OctoClaw/actions/workflows/test.yml/badge.svg)](https://github.com/guanbear/OctoClaw/actions/workflows/test.yml)
 [![npm](https://img.shields.io/npm/v/@octoclaw/cli?label=%40octoclaw%2Fcli)](https://www.npmjs.com/package/@octoclaw/cli)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-
-![OctoClaw 横幅](./banner.png)
 
 > 你的 OpenClaw 主 agent 不该什么都自己干。
 > 把重活、慢活、不确定的活自动丢给便宜的子 agent，在后台跑。
