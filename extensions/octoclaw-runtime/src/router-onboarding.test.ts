@@ -67,6 +67,37 @@ function writeModelIntelSnapshot(): void {
   }), "utf8");
 }
 
+function writeOpenclawConfigForSameProviderDiscovery(): void {
+  fs.writeFileSync(path.join(tempHome, "openclaw.json"), JSON.stringify({
+    models: {
+      providers: {
+        zhipu: { models: [{ id: "GLM-5.1" }] },
+        cliproxyapi: { models: [{ id: "gpt-5.5" }] },
+        omniroute: { models: [{ id: "cx/gpt-5.4" }] },
+      },
+    },
+  }), "utf8");
+}
+
+function writeSameProviderDiscoverySnapshot(): void {
+  const snapshotDir = path.join(tempHome, "octoclaw", "router-lite");
+  fs.mkdirSync(snapshotDir, { recursive: true });
+  fs.writeFileSync(path.join(snapshotDir, "model-intel-snapshot.json"), JSON.stringify({
+    schemaVersion: "octoclaw.router_lite.model_intel_snapshot/v1",
+    snapshotId: "test-same-provider-snapshot",
+    generatedAt: "2026-05-14T00:00:00.000Z",
+    sourceStatus: [],
+    models: [
+      { provider: "zhipu", model: "glm-5.1", modelKey: "zhipu/glm-5.1", configured: true },
+      { provider: "zhipu", model: "glm-4.7", modelKey: "zhipu/glm-4.7", configured: false },
+      { provider: "cliproxyapi", model: "gpt-5.5", modelKey: "cliproxyapi/gpt-5.5", configured: true },
+      { provider: "cliproxyapi", model: "gpt-5.4-mini", modelKey: "cliproxyapi/gpt-5.4-mini", configured: false },
+      { provider: "omniroute", model: "cx/gpt-5.4", modelKey: "omniroute/cx/gpt-5.4", configured: true },
+      { provider: "omniroute", model: "cx/gpt-5.4-mini", modelKey: "omniroute/cx/gpt-5.4-mini", configured: false },
+    ],
+  }), "utf8");
+}
+
 describe("router wizard Slack onboarding", () => {
   it("builds a Slack interactive onboarding card", () => {
     const blocks = buildRouterWizardSlackBlocks();
@@ -281,6 +312,130 @@ describe("router wizard Slack onboarding", () => {
     });
     expect(saved.models).not.toHaveProperty("openai/gpt-5-nano");
     expect(sends.at(-1)?.message).toContain("Auto Router 配置已写入");
+  });
+
+  it("uses explicit per-model plan wording without recommendation labels", async () => {
+    writeOpenclawConfig();
+    const sends: Parameters<RouterWizardOnboardingSendMessage>[0][] = [];
+    const common = {
+      sessionKey: "agent:main:slack:default:direct:u123abc",
+      openclawHome: tempHome,
+      now: new Date("2026-05-14T00:00:00.000Z"),
+      sendMessage: async (params: Parameters<RouterWizardOnboardingSendMessage>[0]) => {
+        sends.push(params);
+        return { sent: true };
+      },
+    };
+
+    await handleRouterWizardAction({ ...common, event: { actions: [{ action_id: "octoclaw_router_wizard_start_questions" }] } });
+    await handleRouterWizardAction({ ...common, event: { actions: [{ action_id: "octoclaw_router_wizard_model_scan_continue" }] } });
+
+    const planSend = sends.at(-1);
+    const planBlocks = JSON.stringify(planSend?.interactiveBlocks);
+    expect(planSend?.message).toContain("当前确认：`openai/gpt-5.5`（1/2）");
+    expect(planSend?.message).toContain("未确认");
+    expect(planSend?.message).not.toContain("推荐");
+    expect(planBlocks).toContain("按量付费");
+    expect(planBlocks).toContain("订阅/Plan");
+    expect(planBlocks).toContain("我不确定");
+  });
+
+  it("ignores stale budget button repeats after the wizard has advanced", async () => {
+    writeOpenclawConfig();
+    const sends: Parameters<RouterWizardOnboardingSendMessage>[0][] = [];
+    const sendMessage: RouterWizardOnboardingSendMessage = async (params) => {
+      sends.push(params);
+      return { sent: true };
+    };
+    const common = {
+      sessionKey: "agent:main:slack:default:direct:u123abc",
+      openclawHome: tempHome,
+      now: new Date("2026-05-14T00:00:00.000Z"),
+      sendMessage,
+    };
+    const budgetEvent = { actions: [{ action_id: "octoclaw_router_wizard_budget_100", value: "budget_100" }] };
+
+    await handleRouterWizardAction({ ...common, event: { actions: [{ action_id: "octoclaw_router_wizard_start_questions" }] } });
+    await handleRouterWizardAction({ ...common, event: { actions: [{ action_id: "octoclaw_router_wizard_model_scan_continue" }] } });
+    await handleRouterWizardAction({ ...common, event: { actions: [{ action_id: "octoclaw_router_wizard_plan_confirm" }] } });
+    await handleRouterWizardAction({ ...common, event: budgetEvent });
+    const repeat = await handleRouterWizardAction({ ...common, event: budgetEvent });
+
+    expect(repeat).toMatchObject({ handled: true, action: "budget_100" });
+    expect(sends.filter((send) => send.message.includes("隐私模式"))).toHaveLength(1);
+  });
+
+  it("lets Slack users restrict configured models with buttons instead of free-form ban text", async () => {
+    writeOpenclawConfig();
+    const sends: Parameters<RouterWizardOnboardingSendMessage>[0][] = [];
+    const sendMessage: RouterWizardOnboardingSendMessage = async (params) => {
+      sends.push(params);
+      return { sent: true };
+    };
+    const common = {
+      sessionKey: "agent:main:slack:default:direct:u123abc",
+      openclawHome: tempHome,
+      now: new Date("2026-05-14T00:00:00.000Z"),
+      sendMessage,
+    };
+
+    await handleRouterWizardAction({ ...common, event: { actions: [{ action_id: "octoclaw_router_wizard_start_questions" }] } });
+    await handleRouterWizardAction({ ...common, event: { actions: [{ action_id: "octoclaw_router_wizard_model_scan_continue" }] } });
+    await handleRouterWizardAction({ ...common, event: { actions: [{ action_id: "octoclaw_router_wizard_plan_confirm" }] } });
+    await handleRouterWizardAction({ ...common, event: { actions: [{ action_id: "octoclaw_router_wizard_budget_none" }] } });
+    await handleRouterWizardAction({ ...common, event: { actions: [{ action_id: "octoclaw_router_wizard_privacy_standard" }] } });
+    await handleRouterWizardAction({ ...common, event: { actions: [{ action_id: "octoclaw_router_wizard_language_auto" }] } });
+
+    const restrictedSend = sends.at(-1);
+    const restrictedBlocks = JSON.stringify(restrictedSend?.interactiveBlocks);
+    expect(restrictedSend?.message).toContain("当前确认：`openai/gpt-5.5`（1/2）");
+    expect(restrictedSend?.message).not.toContain("ban model-a");
+    expect(restrictedBlocks).toContain("octoclaw_router_wizard_restricted_ban");
+    expect(restrictedBlocks).toContain("octoclaw_router_wizard_restricted_allow");
+
+    await handleRouterWizardAction({
+      ...common,
+      event: { actions: [{ action_id: "octoclaw_router_wizard_restricted_ban", value: "restricted_ban:openai/gpt-5.5" }] },
+    });
+    expect(sends.at(-1)?.message).toContain("当前确认：`zhipu/GLM-5.1`（2/2）");
+
+    await handleRouterWizardAction({
+      ...common,
+      event: { actions: [{ action_id: "octoclaw_router_wizard_restricted_allow", value: "restricted_allow:zhipu/GLM-5.1" }] },
+    });
+    expect(sends.at(-1)?.message).toContain("同供应商模型");
+  });
+
+  it("discovers same-provider candidates case-insensitively across configured providers", async () => {
+    writeOpenclawConfigForSameProviderDiscovery();
+    writeSameProviderDiscoverySnapshot();
+    const sends: Parameters<RouterWizardOnboardingSendMessage>[0][] = [];
+    const sendMessage: RouterWizardOnboardingSendMessage = async (params) => {
+      sends.push(params);
+      return { sent: true };
+    };
+    const common = {
+      sessionKey: "agent:main:slack:default:direct:u123abc",
+      openclawHome: tempHome,
+      now: new Date("2026-05-14T00:00:00.000Z"),
+      sendMessage,
+    };
+
+    await handleRouterWizardAction({ ...common, event: { actions: [{ action_id: "octoclaw_router_wizard_start_questions" }] } });
+    await handleRouterWizardAction({ ...common, event: { actions: [{ action_id: "octoclaw_router_wizard_model_scan_continue" }] } });
+    await handleRouterWizardAction({ ...common, event: { actions: [{ action_id: "octoclaw_router_wizard_plan_confirm" }] } });
+    await handleRouterWizardAction({ ...common, event: { actions: [{ action_id: "octoclaw_router_wizard_budget_none" }] } });
+    await handleRouterWizardAction({ ...common, event: { actions: [{ action_id: "octoclaw_router_wizard_privacy_standard" }] } });
+    await handleRouterWizardAction({ ...common, event: { actions: [{ action_id: "octoclaw_router_wizard_language_auto" }] } });
+    await handleRouterWizardAction({ ...common, event: { actions: [{ action_id: "octoclaw_router_wizard_restricted_none" }] } });
+
+    const sameProviderMessage = sends.at(-1)?.message ?? "";
+    expect(sameProviderMessage).toContain("zhipu/glm-4.7");
+    expect(sameProviderMessage).toContain("cliproxyapi/gpt-5.4-mini");
+    expect(sameProviderMessage).toContain("omniroute/cx/gpt-5.4-mini");
+    expect(sameProviderMessage).not.toContain("`zhipu/glm-5.1` → 待确认");
+    expect(sameProviderMessage).not.toContain("`cliproxyapi/gpt-5.5` → 待确认");
+    expect(sameProviderMessage).not.toContain("`omniroute/cx/gpt-5.4` → 待确认");
   });
 
   it("supports all-button question wizard path without free-form text", async () => {

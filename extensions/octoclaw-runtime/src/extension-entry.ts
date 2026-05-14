@@ -132,6 +132,8 @@ const ROUTER_WIZARD_SLACK_INTERACTIVE_ACTION_IDS = [
   "octoclaw_router_wizard_budget_custom",
   "octoclaw_router_wizard_restricted_none",
   "octoclaw_router_wizard_restricted_text",
+  "octoclaw_router_wizard_restricted_ban",
+  "octoclaw_router_wizard_restricted_allow",
   "octoclaw_router_wizard_language_auto",
   "octoclaw_router_wizard_language_zh",
   "octoclaw_router_wizard_language_en",

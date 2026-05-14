@@ -57,6 +57,7 @@
   },
   "dependencies": {
     "@octoclaw/contracts": "workspace:*",
+    "@octoclaw/errors": "workspace:*",
     "@octoclaw/policy": "workspace:*",
     "@octoclaw/router": "workspace:*"
   },

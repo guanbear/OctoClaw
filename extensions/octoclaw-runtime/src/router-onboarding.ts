@@ -55,6 +55,8 @@ type RouterWizardAction =
   | "budget_text"
   | "restricted_none"
   | "restricted_text"
+  | "restricted_ban"
+  | "restricted_allow"
   | "restricted_models_text"
   | "language_auto"
   | "language_zh"
@@ -71,6 +73,7 @@ interface RouterWizardAnswers {
   language?: "auto" | "zh" | "en";
   monthlyBudget?: number;
   restrictedModels?: string[];
+  restrictedModelReviewed?: string[];
   modelPlanTypes?: Record<string, "subscription" | "pay_as_you_go" | "unknown">;
   sameProviderModels?: string[];
   sameProviderReviewed?: string[];
@@ -241,6 +244,7 @@ function normalizeActiveSession(value: unknown): RouterWizardActiveSession | und
       language: answers.language === "zh" || answers.language === "en" || answers.language === "auto" ? answers.language : undefined,
       ...(Number.isFinite(monthlyBudget) ? { monthlyBudget } : {}),
       restrictedModels: Array.isArray(answers.restrictedModels) ? answers.restrictedModels.map(stringValue).filter(Boolean) : undefined,
+      restrictedModelReviewed: Array.isArray(answers.restrictedModelReviewed) ? answers.restrictedModelReviewed.map(stringValue).filter(Boolean) : undefined,
       modelPlanTypes: Object.fromEntries(Object.entries(rawPlanTypes)
         .map(([model, planType]) => [model, planType === "subscription" || planType === "pay_as_you_go" || planType === "unknown" ? planType : "unknown"])),
       sameProviderModels: Array.isArray(answers.sameProviderModels) ? answers.sameProviderModels.map(stringValue).filter(Boolean) : undefined,
@@ -335,6 +339,8 @@ function extractRouterWizardActionDetails(event: unknown): { action: RouterWizar
     if (actionId === "octoclaw_router_wizard_budget_custom" || value === "budget_custom") return { action: "budget_custom", value };
     if (actionId === "octoclaw_router_wizard_restricted_none" || value === "restricted_none") return { action: "restricted_none", value };
     if (actionId === "octoclaw_router_wizard_restricted_text" || value === "restricted_text") return { action: "restricted_text", value };
+    if (actionId === "octoclaw_router_wizard_restricted_ban" || value.startsWith("restricted_ban:")) return { action: "restricted_ban", value };
+    if (actionId === "octoclaw_router_wizard_restricted_allow" || value.startsWith("restricted_allow:")) return { action: "restricted_allow", value };
     if (actionId === "octoclaw_router_wizard_language_auto" || value === "language_auto") return { action: "language_auto", value };
     if (actionId === "octoclaw_router_wizard_language_zh" || value === "language_zh") return { action: "language_zh", value };
     if (actionId === "octoclaw_router_wizard_language_en" || value === "language_en") return { action: "language_en", value };
@@ -389,13 +395,22 @@ function providerForModel(modelKey: string): string {
   return slash > 0 ? modelKey.slice(0, slash).toLowerCase() : "";
 }
 
+function normalizedModelKey(modelKey: string): string {
+  return stringValue(modelKey).trim().toLowerCase();
+}
+
 function discoverSameProviderRouterModels(openclawHome = "", configuredModels = discoverConfiguredRouterModels(openclawHome)): string[] {
-  const configured = new Set(configuredModels);
+  const configured = new Set(configuredModels.map(normalizedModelKey).filter(Boolean));
   const configuredProviders = new Set(configuredModels.map(providerForModel).filter(Boolean));
-  return Array.from(new Set(loadRouterWizardSnapshotModels(openclawHome)
-    .filter((model) => configuredProviders.has(providerForModel(model.modelKey)) && !configured.has(model.modelKey))
-    .map((model) => model.modelKey)
-    .filter(Boolean))).slice(0, 8);
+  const discovered = new Map<string, string>();
+  for (const model of loadRouterWizardSnapshotModels(openclawHome)) {
+    const modelKey = stringValue(model.modelKey);
+    const normalized = normalizedModelKey(modelKey);
+    if (!modelKey || !normalized) continue;
+    if (!configuredProviders.has(providerForModel(modelKey)) || configured.has(normalized)) continue;
+    if (!discovered.has(normalized)) discovered.set(normalized, modelKey);
+  }
+  return [...discovered.values()].slice(0, 8);
 }
 
 function inferPlanTypes(models: string[], mode?: "subscription" | "pay_as_you_go"): Record<string, "subscription" | "pay_as_you_go" | "unknown"> {
@@ -410,6 +425,15 @@ function actionValueModel(value: string, prefix: string): string | undefined {
 function nextPlanModel(models: string[], answers: RouterWizardAnswers): string | undefined {
   const planTypes = answers.modelPlanTypes ?? {};
   return models.find((model) => planTypes[model] === undefined);
+}
+
+function restrictedReviewed(answers: RouterWizardAnswers): Set<string> {
+  return new Set(answers.restrictedModelReviewed ?? []);
+}
+
+function nextRestrictedModel(models: string[], answers: RouterWizardAnswers): string | undefined {
+  const reviewed = restrictedReviewed(answers);
+  return models.find((model) => !reviewed.has(model));
 }
 
 function sameProviderReviewed(answers: RouterWizardAnswers): Set<string> {
@@ -484,7 +508,7 @@ function planQuestion(models: string[], answers: RouterWizardAnswers = {}): { me
   const modelText = models.length
     ? models.map((model) => {
       const selected = answers.modelPlanTypes?.[model];
-      return `- \`${model}\` → ${selected ? `已选 \`${selected}\`` : `推荐 \`${detectPlanType(model)}\``}`;
+      return `- \`${model}\` → ${selected ? `已选 \`${selected}\`` : "未确认"}`;
     }).join("\n")
     : "未发现 OpenClaw 已配置模型。";
   const currentText = current ? `\n当前确认：\`${current}\`（${index}/${models.length}）` : "";
@@ -493,14 +517,14 @@ function planQuestion(models: string[], answers: RouterWizardAnswers = {}): { me
     ? [
       actionButton("订阅/Plan", "octoclaw_router_wizard_plan_subscription", `plan_subscription:${current}`, detectPlanType(current) === "subscription" ? "primary" : undefined),
       actionButton("按量付费", "octoclaw_router_wizard_plan_pay_as_you_go", `plan_pay_as_you_go:${current}`, detectPlanType(current) === "pay_as_you_go" ? "primary" : undefined),
-      actionButton("未知", "octoclaw_router_wizard_plan_unknown", `plan_unknown:${current}`),
-      actionButton("全部按推荐", "octoclaw_router_wizard_plan_confirm", "plan_confirm"),
+      actionButton("我不确定", "octoclaw_router_wizard_plan_unknown", `plan_unknown:${current}`),
+      actionButton("跳过剩余", "octoclaw_router_wizard_plan_confirm", "plan_confirm"),
     ]
     : [actionButton("继续", "octoclaw_router_wizard_plan_confirm", "plan_confirm", "primary")];
   return {
     message,
     blocks: [
-      { type: "section", text: { type: "mrkdwn", text: `*2/7 Plan 类型*\n用于区分订阅/额度内模型和按量付费模型。逐个确认，可随时全部按推荐。\n${modelText}${currentText}` } },
+      { type: "section", text: { type: "mrkdwn", text: `*2/7 Plan 类型*\n逐个确认每个模型是否属于订阅/额度内，还是按量付费；不确定可先标记。\n${modelText}${currentText}` } },
       actionsBlock(elements),
     ],
   };
@@ -551,16 +575,30 @@ function languageQuestion(): { message: string; blocks: Array<Record<string, unk
   };
 }
 
-function restrictedModelsQuestion(models: string[]): { message: string; blocks: Array<Record<string, unknown>> } {
-  const modelText = models.length ? models.map((model) => `- \`${model}\``).join("\n") : "未发现 OpenClaw 模型。";
+function restrictedModelsQuestion(models: string[], answers: RouterWizardAnswers = {}): { message: string; blocks: Array<Record<string, unknown>> } {
+  const current = nextRestrictedModel(models, answers);
+  const index = current ? models.indexOf(current) + 1 : models.length;
+  const restricted = new Set(answers.restrictedModels ?? []);
+  const reviewed = restrictedReviewed(answers);
+  const modelText = models.length
+    ? models.map((model) => {
+      const status = restricted.has(model) ? "已禁用" : reviewed.has(model) ? "保留" : "未确认";
+      return `- \`${model}\` → ${status}`;
+    }).join("\n")
+    : "未发现 OpenClaw 模型。";
+  const currentText = current ? `\n当前确认：\`${current}\`（${index}/${models.length}）` : "";
+  const elements = current
+    ? [
+      actionButton("禁用此模型", "octoclaw_router_wizard_restricted_ban", `restricted_ban:${current}`, "danger"),
+      actionButton("保留此模型", "octoclaw_router_wizard_restricted_allow", `restricted_allow:${current}`, "primary"),
+      actionButton("全部保留", "octoclaw_router_wizard_restricted_none", "restricted_none"),
+    ]
+    : [actionButton("继续", "octoclaw_router_wizard_restricted_none", "restricted_none", "primary")];
   return {
-    message: `Auto Router 向导 6/7：禁用模型设置。\n${modelText}`,
+    message: `Auto Router 向导 6/7：禁用模型设置。\n${modelText}${currentText}`,
     blocks: [
-      { type: "section", text: { type: "mrkdwn", text: `*6/7 禁用模型*\n当前模型：\n${modelText}` } },
-      actionsBlock([
-        actionButton("不禁用", "octoclaw_router_wizard_restricted_none", "restricted_none", "primary"),
-        actionButton("我要输入", "octoclaw_router_wizard_restricted_text", "restricted_text"),
-      ]),
+      { type: "section", text: { type: "mrkdwn", text: `*6/7 禁用模型*\n逐个选择哪些模型不允许 Auto Router 使用。\n${modelText}${currentText}` } },
+      actionsBlock(elements),
     ],
   };
 }
@@ -680,6 +718,22 @@ function upsertActiveSession(
   };
 }
 
+function actionMatchesActiveStep(action: RouterWizardAction, step?: RouterWizardStep): boolean {
+  if (action === "use_defaults" || action === "start_questions" || action === "remind_later" || action === "skip") return true;
+  if (!step) return false;
+  if (action === "model_scan_continue") return step === "model_scan";
+  if (action === "plan_subscription" || action === "plan_pay_as_you_go" || action === "plan_unknown" || action === "plan_confirm" || action === "plan_all_subscription" || action === "plan_all_pay_as_you_go") return step === "plan";
+  if (action === "budget_custom" || action === "budget_none" || action === "budget_50" || action === "budget_100" || action === "budget_200") return step === "budget";
+  if (action === "budget_text") return step === "budget_custom";
+  if (action === "privacy_standard" || action === "privacy_local_only" || action === "privacy_custom") return step === "privacy";
+  if (action === "language_auto" || action === "language_zh" || action === "language_en") return step === "language";
+  if (action === "restricted_none" || action === "restricted_text" || action === "restricted_ban" || action === "restricted_allow") return step === "restricted_models";
+  if (action === "restricted_models_text") return step === "restricted_models" || step === "restricted_models_text";
+  if (action === "same_provider_import" || action === "same_provider_skip" || action === "same_provider_import_all" || action === "same_provider_add" || action === "same_provider_skip_one") return step === "same_provider";
+  if (action === "confirm") return step === "confirm";
+  return false;
+}
+
 export async function handleRouterWizardAction(input: {
   event: unknown;
   sessionKey: string;
@@ -703,6 +757,7 @@ export async function handleRouterWizardAction(input: {
   if (!action && active?.step === "budget_custom" && parseBudgetText(text) !== undefined) action = "budget_text";
   if (!action && (active?.step === "restricted_models" || active?.step === "restricted_models_text") && text) action = "restricted_models_text";
   if (!action) return { handled: false };
+  if (!actionMatchesActiveStep(action, active?.step)) return { handled: true, action };
   if (action === "use_defaults") {
     const models = discoverConfiguredRouterModels(openclawHome);
     const filePath = await writeWizardConfig(openclawHome, models, now);
@@ -814,7 +869,7 @@ export async function handleRouterWizardAction(input: {
       sessionKey: input.sessionKey,
       replyToMessageId: input.replyToMessageId,
       cwd: input.cwd,
-      question: restrictedModelsQuestion(discoverConfiguredRouterModels(openclawHome)),
+      question: restrictedModelsQuestion(discoverConfiguredRouterModels(openclawHome), answers),
     });
     return { handled: true, action };
   }
@@ -824,9 +879,40 @@ export async function handleRouterWizardAction(input: {
     await sendWizardQuestion({ sendMessage, sessionKey: input.sessionKey, replyToMessageId: input.replyToMessageId, cwd: input.cwd, question: restrictedTextQuestion() });
     return { handled: true, action };
   }
+  if (action === "restricted_ban" || action === "restricted_allow") {
+    const models = discoverConfiguredRouterModels(openclawHome);
+    const answers: RouterWizardAnswers = {
+      ...(active?.answers ?? {}),
+      restrictedModels: [...(active?.answers.restrictedModels ?? [])],
+      restrictedModelReviewed: [...(active?.answers.restrictedModelReviewed ?? [])],
+    };
+    const model = actionValueModel(actionValue, action) ?? nextRestrictedModel(models, answers);
+    if (model) {
+      const restricted = new Set(answers.restrictedModels ?? []);
+      const reviewed = new Set(answers.restrictedModelReviewed ?? []);
+      if (action === "restricted_ban") restricted.add(model);
+      else restricted.delete(model);
+      reviewed.add(model);
+      answers.restrictedModels = [...restricted].filter((entry) => models.includes(entry));
+      answers.restrictedModelReviewed = [...reviewed].filter((entry) => models.includes(entry));
+    }
+    const hasMore = nextRestrictedModel(models, answers) !== undefined;
+    state.active = upsertActiveSession(state, input.sessionKey, hasMore ? "restricted_models" : "same_provider", now, answers);
+    await writeOnboardingState(openclawHome, state);
+    await sendWizardQuestion({
+      sendMessage,
+      sessionKey: input.sessionKey,
+      replyToMessageId: input.replyToMessageId,
+      cwd: input.cwd,
+      question: hasMore ? restrictedModelsQuestion(models, answers) : sameProviderQuestion(discoverSameProviderRouterModels(openclawHome), answers),
+    });
+    return { handled: true, action };
+  }
   if (action === "restricted_none" || action === "restricted_models_text") {
     const answers = { ...(active?.answers ?? {}) };
+    const models = discoverConfiguredRouterModels(openclawHome);
     answers.restrictedModels = action === "restricted_none" ? [] : parseRestrictedModelsText(text);
+    answers.restrictedModelReviewed = action === "restricted_none" ? models : answers.restrictedModels;
     state.active = upsertActiveSession(state, input.sessionKey, "same_provider", now, answers);
     await writeOnboardingState(openclawHome, state);
     await sendWizardQuestion({
