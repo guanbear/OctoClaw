@@ -1,7 +1,13 @@
 import fsSync from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { createWizardConfig } from "@octoclaw/router";
+import {
+  createWizardConfig,
+  detectPlanType,
+  loadPackagedModelIntelSnapshot,
+  loadSnapshotFromText,
+  type ModelIntelLite,
+} from "@octoclaw/router";
 import { sendIMMessage, type SendIMResult } from "./im/send.js";
 import type { LoggerLike } from "./extension-entry-shared.js";
 import { stringValue } from "./extension-entry-shared.js";
@@ -15,14 +21,32 @@ const REMIND_ACTION = "octoclaw_router_wizard_remind_later";
 const SKIP_ACTION = "octoclaw_router_wizard_skip";
 const CONFIRM_ACTION = "octoclaw_router_wizard_confirm";
 
-type RouterWizardStep = "privacy" | "budget" | "budget_custom" | "restricted_models" | "restricted_models_text" | "confirm";
+type RouterWizardStep =
+  | "model_scan"
+  | "plan"
+  | "budget"
+  | "budget_custom"
+  | "privacy"
+  | "language"
+  | "restricted_models"
+  | "restricted_models_text"
+  | "same_provider"
+  | "confirm";
 type RouterWizardAction =
   | "start_questions"
   | "use_defaults"
   | "remind_later"
   | "skip"
+  | "model_scan_continue"
+  | "plan_confirm"
+  | "plan_all_subscription"
+  | "plan_all_pay_as_you_go"
+  | "plan_subscription"
+  | "plan_pay_as_you_go"
+  | "plan_unknown"
   | "privacy_standard"
   | "privacy_local_only"
+  | "privacy_custom"
   | "budget_none"
   | "budget_50"
   | "budget_100"
@@ -32,12 +56,24 @@ type RouterWizardAction =
   | "restricted_none"
   | "restricted_text"
   | "restricted_models_text"
+  | "language_auto"
+  | "language_zh"
+  | "language_en"
+  | "same_provider_import"
+  | "same_provider_skip"
+  | "same_provider_add"
+  | "same_provider_skip_one"
+  | "same_provider_import_all"
   | "confirm";
 
 interface RouterWizardAnswers {
   privacy?: "standard" | "local_only";
+  language?: "auto" | "zh" | "en";
   monthlyBudget?: number;
   restrictedModels?: string[];
+  modelPlanTypes?: Record<string, "subscription" | "pay_as_you_go" | "unknown">;
+  sameProviderModels?: string[];
+  sameProviderReviewed?: string[];
 }
 
 interface RouterWizardActiveSession {
@@ -188,9 +224,10 @@ function shouldPrompt(state: RouterWizardOnboardingState, sessionKey: string, no
 function normalizeActiveSession(value: unknown): RouterWizardActiveSession | undefined {
   const record = asRecord(value);
   const step = stringValue(record.step) as RouterWizardStep;
-  if (!["privacy", "budget", "budget_custom", "restricted_models", "restricted_models_text", "confirm"].includes(step)) return undefined;
+  if (!["model_scan", "plan", "budget", "budget_custom", "privacy", "language", "restricted_models", "restricted_models_text", "same_provider", "confirm"].includes(step)) return undefined;
   const answers = asRecord(record.answers);
   const monthlyBudget = Number(answers.monthlyBudget);
+  const rawPlanTypes = asRecord(answers.modelPlanTypes);
   return {
     sessionKey: stringValue(record.sessionKey),
     step,
@@ -198,8 +235,13 @@ function normalizeActiveSession(value: unknown): RouterWizardActiveSession | und
     updatedAt: stringValue(record.updatedAt),
     answers: {
       privacy: answers.privacy === "local_only" ? "local_only" : answers.privacy === "standard" ? "standard" : undefined,
+      language: answers.language === "zh" || answers.language === "en" || answers.language === "auto" ? answers.language : undefined,
       ...(Number.isFinite(monthlyBudget) ? { monthlyBudget } : {}),
       restrictedModels: Array.isArray(answers.restrictedModels) ? answers.restrictedModels.map(stringValue).filter(Boolean) : undefined,
+      modelPlanTypes: Object.fromEntries(Object.entries(rawPlanTypes)
+        .map(([model, planType]) => [model, planType === "subscription" || planType === "pay_as_you_go" || planType === "unknown" ? planType : "unknown"])),
+      sameProviderModels: Array.isArray(answers.sameProviderModels) ? answers.sameProviderModels.map(stringValue).filter(Boolean) : undefined,
+      sameProviderReviewed: Array.isArray(answers.sameProviderReviewed) ? answers.sameProviderReviewed.map(stringValue).filter(Boolean) : undefined,
     },
   };
 }
@@ -262,23 +304,43 @@ function collectActionCandidates(value: unknown, depth = 0): UnknownRecord[] {
 }
 
 export function extractRouterWizardAction(event: unknown): RouterWizardAction | null {
+  return extractRouterWizardActionDetails(event)?.action ?? null;
+}
+
+function extractRouterWizardActionDetails(event: unknown): { action: RouterWizardAction; value: string } | null {
   for (const action of collectActionCandidates(event)) {
     const actionId = stringValue(action.action_id || action.actionId);
     const value = stringValue(action.value);
-    if (actionId === QUESTION_ACTION || value === "start_questions") return "start_questions";
-    if (actionId === START_ACTION || value === "use_defaults") return "use_defaults";
-    if (actionId === REMIND_ACTION || value === "remind_later") return "remind_later";
-    if (actionId === SKIP_ACTION || value === "skip") return "skip";
-    if (actionId === "octoclaw_router_wizard_privacy_standard" || value === "privacy_standard") return "privacy_standard";
-    if (actionId === "octoclaw_router_wizard_privacy_local_only" || value === "privacy_local_only") return "privacy_local_only";
-    if (actionId === "octoclaw_router_wizard_budget_none" || value === "budget_none") return "budget_none";
-    if (actionId === "octoclaw_router_wizard_budget_50" || value === "budget_50") return "budget_50";
-    if (actionId === "octoclaw_router_wizard_budget_100" || value === "budget_100") return "budget_100";
-    if (actionId === "octoclaw_router_wizard_budget_200" || value === "budget_200") return "budget_200";
-    if (actionId === "octoclaw_router_wizard_budget_custom" || value === "budget_custom") return "budget_custom";
-    if (actionId === "octoclaw_router_wizard_restricted_none" || value === "restricted_none") return "restricted_none";
-    if (actionId === "octoclaw_router_wizard_restricted_text" || value === "restricted_text") return "restricted_text";
-    if (actionId === CONFIRM_ACTION || value === "confirm") return "confirm";
+    if (actionId === QUESTION_ACTION || value === "start_questions") return { action: "start_questions", value };
+    if (actionId === START_ACTION || value === "use_defaults") return { action: "use_defaults", value };
+    if (actionId === REMIND_ACTION || value === "remind_later") return { action: "remind_later", value };
+    if (actionId === SKIP_ACTION || value === "skip") return { action: "skip", value };
+    if (actionId === "octoclaw_router_wizard_model_scan_continue" || value === "model_scan_continue") return { action: "model_scan_continue", value };
+    if (actionId === "octoclaw_router_wizard_plan_confirm" || value === "plan_confirm") return { action: "plan_confirm", value };
+    if (actionId === "octoclaw_router_wizard_plan_all_subscription" || value === "plan_all_subscription") return { action: "plan_all_subscription", value };
+    if (actionId === "octoclaw_router_wizard_plan_all_pay_as_you_go" || value === "plan_all_pay_as_you_go") return { action: "plan_all_pay_as_you_go", value };
+    if (actionId === "octoclaw_router_wizard_plan_subscription" || value.startsWith("plan_subscription:")) return { action: "plan_subscription", value };
+    if (actionId === "octoclaw_router_wizard_plan_pay_as_you_go" || value.startsWith("plan_pay_as_you_go:")) return { action: "plan_pay_as_you_go", value };
+    if (actionId === "octoclaw_router_wizard_plan_unknown" || value.startsWith("plan_unknown:")) return { action: "plan_unknown", value };
+    if (actionId === "octoclaw_router_wizard_privacy_standard" || value === "privacy_standard") return { action: "privacy_standard", value };
+    if (actionId === "octoclaw_router_wizard_privacy_local_only" || value === "privacy_local_only") return { action: "privacy_local_only", value };
+    if (actionId === "octoclaw_router_wizard_privacy_custom" || value === "privacy_custom") return { action: "privacy_custom", value };
+    if (actionId === "octoclaw_router_wizard_budget_none" || value === "budget_none") return { action: "budget_none", value };
+    if (actionId === "octoclaw_router_wizard_budget_50" || value === "budget_50") return { action: "budget_50", value };
+    if (actionId === "octoclaw_router_wizard_budget_100" || value === "budget_100") return { action: "budget_100", value };
+    if (actionId === "octoclaw_router_wizard_budget_200" || value === "budget_200") return { action: "budget_200", value };
+    if (actionId === "octoclaw_router_wizard_budget_custom" || value === "budget_custom") return { action: "budget_custom", value };
+    if (actionId === "octoclaw_router_wizard_restricted_none" || value === "restricted_none") return { action: "restricted_none", value };
+    if (actionId === "octoclaw_router_wizard_restricted_text" || value === "restricted_text") return { action: "restricted_text", value };
+    if (actionId === "octoclaw_router_wizard_language_auto" || value === "language_auto") return { action: "language_auto", value };
+    if (actionId === "octoclaw_router_wizard_language_zh" || value === "language_zh") return { action: "language_zh", value };
+    if (actionId === "octoclaw_router_wizard_language_en" || value === "language_en") return { action: "language_en", value };
+    if (actionId === "octoclaw_router_wizard_same_provider_import" || value === "same_provider_import") return { action: "same_provider_import", value };
+    if (actionId === "octoclaw_router_wizard_same_provider_skip" || value === "same_provider_skip") return { action: "same_provider_skip", value };
+    if (actionId === "octoclaw_router_wizard_same_provider_add" || value.startsWith("same_provider_add:")) return { action: "same_provider_add", value };
+    if (actionId === "octoclaw_router_wizard_same_provider_skip_one" || value.startsWith("same_provider_skip_one:")) return { action: "same_provider_skip_one", value };
+    if (actionId === "octoclaw_router_wizard_same_provider_import_all" || value === "same_provider_import_all") return { action: "same_provider_import_all", value };
+    if (actionId === CONFIRM_ACTION || value === "confirm") return { action: "confirm", value };
   }
   return null;
 }
@@ -302,6 +364,63 @@ export function discoverConfiguredRouterModels(openclawHome = ""): string[] {
   }
 }
 
+function routerWizardSnapshotPath(openclawHome = ""): string {
+  return path.join(resolveOpenclawHome(openclawHome), "octoclaw", "router-lite", "model-intel-snapshot.json");
+}
+
+function loadRouterWizardSnapshotModels(openclawHome = ""): ModelIntelLite[] {
+  try {
+    const raw = fsSync.readFileSync(routerWizardSnapshotPath(openclawHome), "utf8");
+    return loadSnapshotFromText(raw).models;
+  } catch {
+    try {
+      return loadPackagedModelIntelSnapshot().models;
+    } catch {
+      return [];
+    }
+  }
+}
+
+function providerForModel(modelKey: string): string {
+  const slash = modelKey.indexOf("/");
+  return slash > 0 ? modelKey.slice(0, slash).toLowerCase() : "";
+}
+
+function discoverSameProviderRouterModels(openclawHome = "", configuredModels = discoverConfiguredRouterModels(openclawHome)): string[] {
+  const configured = new Set(configuredModels);
+  const configuredProviders = new Set(configuredModels.map(providerForModel).filter(Boolean));
+  return Array.from(new Set(loadRouterWizardSnapshotModels(openclawHome)
+    .filter((model) => configuredProviders.has(providerForModel(model.modelKey)) && !configured.has(model.modelKey))
+    .map((model) => model.modelKey)
+    .filter(Boolean))).slice(0, 8);
+}
+
+function inferPlanTypes(models: string[], mode?: "subscription" | "pay_as_you_go"): Record<string, "subscription" | "pay_as_you_go" | "unknown"> {
+  return Object.fromEntries(models.map((model) => [model, mode ?? detectPlanType(model)]));
+}
+
+function actionValueModel(value: string, prefix: string): string | undefined {
+  const marker = `${prefix}:`;
+  return value.startsWith(marker) ? value.slice(marker.length) : undefined;
+}
+
+function nextPlanModel(models: string[], answers: RouterWizardAnswers): string | undefined {
+  const planTypes = answers.modelPlanTypes ?? {};
+  return models.find((model) => planTypes[model] === undefined);
+}
+
+function sameProviderReviewed(answers: RouterWizardAnswers): Set<string> {
+  return new Set([
+    ...(answers.sameProviderReviewed ?? []),
+    ...(answers.sameProviderModels ?? []),
+  ]);
+}
+
+function nextSameProviderModel(models: string[], answers: RouterWizardAnswers): string | undefined {
+  const reviewed = sameProviderReviewed(answers);
+  return models.find((model) => !reviewed.has(model));
+}
+
 async function writeWizardConfig(
   openclawHome: string,
   modelIds: string[],
@@ -312,7 +431,10 @@ async function writeWizardConfig(
   const config = createWizardConfig(modelIds, {
     now: now.toISOString(),
     privacy: answers.privacy,
+    language: answers.language,
     restrictedModels: answers.restrictedModels,
+    modelPlanTypes: answers.modelPlanTypes,
+    sameProviderModels: answers.sameProviderModels,
     ...(answers.monthlyBudget !== undefined ? { budgetInput: String(answers.monthlyBudget) } : {}),
   });
   fsSync.mkdirSync(path.dirname(filePath), { recursive: true });
@@ -341,22 +463,63 @@ function questionBlocks(text: string, elements: Record<string, unknown>[]): Arra
   ];
 }
 
-function privacyQuestion(): { message: string; blocks: Array<Record<string, unknown>> } {
-  const message = "Auto Router 向导 1/4：选择隐私模式。";
+function modelScanQuestion(models: string[]): { message: string; blocks: Array<Record<string, unknown>> } {
+  const modelText = models.length ? models.map((model) => `- \`${model}\``).join("\n") : "未发现 OpenClaw 已配置模型。";
+  const message = `Auto Router 向导 1/7：模型扫描。\n${modelText}`;
   return {
     message,
-    blocks: questionBlocks("*1/4 隐私模式*\n`standard` 会允许使用云端模型能力数据；`local_only` 只考虑本地/私有模型。", [
+    blocks: [
+      { type: "section", text: { type: "mrkdwn", text: `*1/7 模型扫描*\n当前 OpenClaw 已配置模型：\n${modelText}` } },
+      actionsBlock([actionButton("继续", "octoclaw_router_wizard_model_scan_continue", "model_scan_continue", "primary")]),
+    ],
+  };
+}
+
+function planQuestion(models: string[], answers: RouterWizardAnswers = {}): { message: string; blocks: Array<Record<string, unknown>> } {
+  const current = nextPlanModel(models, answers);
+  const index = current ? models.indexOf(current) + 1 : models.length;
+  const modelText = models.length
+    ? models.map((model) => {
+      const selected = answers.modelPlanTypes?.[model];
+      return `- \`${model}\` → ${selected ? `已选 \`${selected}\`` : `推荐 \`${detectPlanType(model)}\``}`;
+    }).join("\n")
+    : "未发现 OpenClaw 已配置模型。";
+  const currentText = current ? `\n当前确认：\`${current}\`（${index}/${models.length}）` : "";
+  const message = `Auto Router 向导 2/7：确认 Plan 类型。\n${modelText}${currentText}`;
+  const elements = current
+    ? [
+      actionButton("订阅/Plan", "octoclaw_router_wizard_plan_subscription", `plan_subscription:${current}`, detectPlanType(current) === "subscription" ? "primary" : undefined),
+      actionButton("按量付费", "octoclaw_router_wizard_plan_pay_as_you_go", `plan_pay_as_you_go:${current}`, detectPlanType(current) === "pay_as_you_go" ? "primary" : undefined),
+      actionButton("未知", "octoclaw_router_wizard_plan_unknown", `plan_unknown:${current}`),
+      actionButton("全部按推荐", "octoclaw_router_wizard_plan_confirm", "plan_confirm"),
+    ]
+    : [actionButton("继续", "octoclaw_router_wizard_plan_confirm", "plan_confirm", "primary")];
+  return {
+    message,
+    blocks: [
+      { type: "section", text: { type: "mrkdwn", text: `*2/7 Plan 类型*\n用于区分订阅/额度内模型和按量付费模型。逐个确认，可随时全部按推荐。\n${modelText}${currentText}` } },
+      actionsBlock(elements),
+    ],
+  };
+}
+
+function privacyQuestion(): { message: string; blocks: Array<Record<string, unknown>> } {
+  const message = "Auto Router 向导 4/7：选择隐私模式。";
+  return {
+    message,
+    blocks: questionBlocks("*4/7 隐私模式*\n`standard` 会允许使用云端模型能力数据；`local_only` 只考虑本地/私有模型。", [
       actionButton("标准", "octoclaw_router_wizard_privacy_standard", "privacy_standard", "primary"),
       actionButton("仅本地", "octoclaw_router_wizard_privacy_local_only", "privacy_local_only"),
+      actionButton("我来挑选", "octoclaw_router_wizard_privacy_custom", "privacy_custom"),
     ]),
   };
 }
 
 function budgetQuestion(): { message: string; blocks: Array<Record<string, unknown>> } {
-  const message = "Auto Router 向导 2/4：选择月预算。";
+  const message = "Auto Router 向导 3/7：选择月预算。";
   return {
     message,
-    blocks: questionBlocks("*2/4 月预算*\n用于成本报告和预算保护；可以不设置。", [
+    blocks: questionBlocks("*3/7 月预算*\n用于成本报告和预算保护；可以不设置。", [
       actionButton("不设置", "octoclaw_router_wizard_budget_none", "budget_none"),
       actionButton("$50", "octoclaw_router_wizard_budget_50", "budget_50"),
       actionButton("$100", "octoclaw_router_wizard_budget_100", "budget_100", "primary"),
@@ -373,12 +536,24 @@ function budgetTextQuestion(): { message: string; blocks: Array<Record<string, u
   };
 }
 
+function languageQuestion(): { message: string; blocks: Array<Record<string, unknown>> } {
+  const message = "Auto Router 向导 5/7：选择语言偏好。";
+  return {
+    message,
+    blocks: questionBlocks("*5/7 语言偏好*\n用于后续提示和报告文案；`auto` 会跟随会话语言。", [
+      actionButton("自动", "octoclaw_router_wizard_language_auto", "language_auto", "primary"),
+      actionButton("中文", "octoclaw_router_wizard_language_zh", "language_zh"),
+      actionButton("English", "octoclaw_router_wizard_language_en", "language_en"),
+    ]),
+  };
+}
+
 function restrictedModelsQuestion(models: string[]): { message: string; blocks: Array<Record<string, unknown>> } {
   const modelText = models.length ? models.map((model) => `- \`${model}\``).join("\n") : "未发现 OpenClaw 模型。";
   return {
-    message: `Auto Router 向导 3/4：禁用模型设置。\n${modelText}`,
+    message: `Auto Router 向导 6/7：禁用模型设置。\n${modelText}`,
     blocks: [
-      { type: "section", text: { type: "mrkdwn", text: `*3/4 禁用模型*\n当前模型：\n${modelText}` } },
+      { type: "section", text: { type: "mrkdwn", text: `*6/7 禁用模型*\n当前模型：\n${modelText}` } },
       actionsBlock([
         actionButton("不禁用", "octoclaw_router_wizard_restricted_none", "restricted_none", "primary"),
         actionButton("我要输入", "octoclaw_router_wizard_restricted_text", "restricted_text"),
@@ -394,20 +569,51 @@ function restrictedTextQuestion(): { message: string; blocks: Array<Record<strin
   };
 }
 
+function sameProviderQuestion(models: string[], answers: RouterWizardAnswers = {}): { message: string; blocks: Array<Record<string, unknown>> } {
+  const current = nextSameProviderModel(models, answers);
+  const selected = new Set(answers.sameProviderModels ?? []);
+  const reviewed = sameProviderReviewed(answers);
+  const modelText = models.length
+    ? models.map((model) => {
+      const status = selected.has(model) ? "已导入" : reviewed.has(model) ? "已跳过" : "待确认";
+      return `- \`${model}\` → ${status}`;
+    }).join("\n")
+    : "没有发现可导入的同供应商候选模型。";
+  const currentText = current ? `\n当前候选：\`${current}\`` : "";
+  const elements = current
+    ? [
+      actionButton("导入此模型", "octoclaw_router_wizard_same_provider_add", `same_provider_add:${current}`, "primary"),
+      actionButton("跳过此模型", "octoclaw_router_wizard_same_provider_skip_one", `same_provider_skip_one:${current}`),
+      actionButton("全部导入", "octoclaw_router_wizard_same_provider_import_all", "same_provider_import_all"),
+      actionButton("全部跳过", "octoclaw_router_wizard_same_provider_skip", "same_provider_skip"),
+    ]
+    : [actionButton("继续", "octoclaw_router_wizard_same_provider_skip", "same_provider_skip", "primary")];
+  return {
+    message: `Auto Router 向导 7/7：同供应商模型发现。\n${modelText}${currentText}`,
+    blocks: [
+      { type: "section", text: { type: "mrkdwn", text: `*7/7 同供应商模型发现*\n${modelText}${currentText}` } },
+      actionsBlock(elements),
+    ],
+  };
+}
+
 function confirmQuestion(answers: RouterWizardAnswers, models: string[]): { message: string; blocks: Array<Record<string, unknown>> } {
   const budget = answers.monthlyBudget === undefined ? "不设置" : `$${answers.monthlyBudget} USD/月`;
   const restricted = answers.restrictedModels?.length ? answers.restrictedModels.join(", ") : "无";
+  const sameProvider = answers.sameProviderModels?.length ? answers.sameProviderModels.join(", ") : "无";
   const message = [
-    "Auto Router 向导 4/4：确认写入配置。",
+    "Auto Router 向导：确认写入配置。",
     `隐私模式：${answers.privacy ?? "standard"}`,
+    `语言偏好：${answers.language ?? "auto"}`,
     `月预算：${budget}`,
     `禁用模型：${restricted}`,
+    `导入候选模型：${sameProvider}`,
     `识别模型数：${models.length}`,
   ].join("\n");
   return {
     message,
     blocks: [
-      { type: "section", text: { type: "mrkdwn", text: `*4/4 确认写入*\n隐私模式：\`${answers.privacy ?? "standard"}\`\n月预算：${budget}\n禁用模型：${restricted}\n识别模型数：${models.length}` } },
+      { type: "section", text: { type: "mrkdwn", text: `*确认写入*\n隐私模式：\`${answers.privacy ?? "standard"}\`\n语言偏好：\`${answers.language ?? "auto"}\`\n月预算：${budget}\n禁用模型：${restricted}\n导入候选模型：${sameProvider}\n识别模型数：${models.length}` } },
       actionsBlock([actionButton("确认写入", CONFIRM_ACTION, "confirm", "primary")]),
     ],
   };
@@ -488,7 +694,9 @@ export async function handleRouterWizardAction(input: {
     ? state.active
     : undefined;
   const text = extractEventText(input.event);
-  let action = extractRouterWizardAction(input.event);
+  const actionDetails = extractRouterWizardActionDetails(input.event);
+  let action = actionDetails?.action ?? null;
+  const actionValue = actionDetails?.value ?? "";
   if (!action && active?.step === "budget_custom" && parseBudgetText(text) !== undefined) action = "budget_text";
   if (!action && (active?.step === "restricted_models" || active?.step === "restricted_models_text") && text) action = "restricted_models_text";
   if (!action) return { handled: false };
@@ -510,13 +718,59 @@ export async function handleRouterWizardAction(input: {
     return { handled: true, action, path: filePath };
   }
   if (action === "start_questions") {
-    state.active = upsertActiveSession(state, input.sessionKey, "privacy", now, {});
+    state.active = upsertActiveSession(state, input.sessionKey, "model_scan", now, {});
     await writeOnboardingState(openclawHome, state);
-    await sendWizardQuestion({ sendMessage, sessionKey: input.sessionKey, replyToMessageId: input.replyToMessageId, cwd: input.cwd, question: privacyQuestion() });
+    await sendWizardQuestion({
+      sendMessage,
+      sessionKey: input.sessionKey,
+      replyToMessageId: input.replyToMessageId,
+      cwd: input.cwd,
+      question: modelScanQuestion(discoverConfiguredRouterModels(openclawHome)),
+    });
     return { handled: true, action };
   }
-  if (action === "privacy_standard" || action === "privacy_local_only") {
-    const answers = { ...(active?.answers ?? {}), privacy: action === "privacy_local_only" ? "local_only" as const : "standard" as const };
+  if (action === "model_scan_continue") {
+    const models = discoverConfiguredRouterModels(openclawHome);
+    const answers = { ...(active?.answers ?? {}), modelPlanTypes: active?.answers.modelPlanTypes ?? {} };
+    state.active = upsertActiveSession(state, input.sessionKey, "plan", now, answers);
+    await writeOnboardingState(openclawHome, state);
+    await sendWizardQuestion({
+      sendMessage,
+      sessionKey: input.sessionKey,
+      replyToMessageId: input.replyToMessageId,
+      cwd: input.cwd,
+      question: planQuestion(models, answers),
+    });
+    return { handled: true, action };
+  }
+  if (action === "plan_subscription" || action === "plan_pay_as_you_go" || action === "plan_unknown") {
+    const models = discoverConfiguredRouterModels(openclawHome);
+    const planType = action === "plan_subscription" ? "subscription" as const : action === "plan_pay_as_you_go" ? "pay_as_you_go" as const : "unknown" as const;
+    const model = actionValueModel(actionValue, action) ?? nextPlanModel(models, active?.answers ?? {});
+    const answers: RouterWizardAnswers = {
+      ...(active?.answers ?? {}),
+      modelPlanTypes: { ...(active?.answers.modelPlanTypes ?? {}) },
+    };
+    if (model) answers.modelPlanTypes![model] = planType;
+    state.active = upsertActiveSession(state, input.sessionKey, nextPlanModel(models, answers) ? "plan" : "budget", now, answers);
+    await writeOnboardingState(openclawHome, state);
+    await sendWizardQuestion({
+      sendMessage,
+      sessionKey: input.sessionKey,
+      replyToMessageId: input.replyToMessageId,
+      cwd: input.cwd,
+      question: nextPlanModel(models, answers) ? planQuestion(models, answers) : budgetQuestion(),
+    });
+    return { handled: true, action };
+  }
+  if (action === "plan_confirm" || action === "plan_all_subscription" || action === "plan_all_pay_as_you_go") {
+    const models = discoverConfiguredRouterModels(openclawHome);
+    const forced = action === "plan_all_subscription" ? "subscription" : action === "plan_all_pay_as_you_go" ? "pay_as_you_go" : undefined;
+    const modelPlanTypes = inferPlanTypes(models, forced);
+    const answers = {
+      ...(active?.answers ?? {}),
+      modelPlanTypes: forced ? modelPlanTypes : { ...modelPlanTypes, ...(active?.answers.modelPlanTypes ?? {}) },
+    };
     state.active = upsertActiveSession(state, input.sessionKey, "budget", now, answers);
     await writeOnboardingState(openclawHome, state);
     await sendWizardQuestion({ sendMessage, sessionKey: input.sessionKey, replyToMessageId: input.replyToMessageId, cwd: input.cwd, question: budgetQuestion() });
@@ -535,6 +789,21 @@ export async function handleRouterWizardAction(input: {
     const answers = { ...(active?.answers ?? {}) };
     if (nextBudget === undefined) delete answers.monthlyBudget;
     else answers.monthlyBudget = nextBudget;
+    state.active = upsertActiveSession(state, input.sessionKey, "privacy", now, answers);
+    await writeOnboardingState(openclawHome, state);
+    await sendWizardQuestion({ sendMessage, sessionKey: input.sessionKey, replyToMessageId: input.replyToMessageId, cwd: input.cwd, question: privacyQuestion() });
+    return { handled: true, action };
+  }
+  if (action === "privacy_standard" || action === "privacy_local_only" || action === "privacy_custom") {
+    const answers = { ...(active?.answers ?? {}), privacy: action === "privacy_local_only" ? "local_only" as const : "standard" as const };
+    state.active = upsertActiveSession(state, input.sessionKey, "language", now, answers);
+    await writeOnboardingState(openclawHome, state);
+    await sendWizardQuestion({ sendMessage, sessionKey: input.sessionKey, replyToMessageId: input.replyToMessageId, cwd: input.cwd, question: languageQuestion() });
+    return { handled: true, action };
+  }
+  if (action === "language_auto" || action === "language_zh" || action === "language_en") {
+    const language = action === "language_zh" ? "zh" as const : action === "language_en" ? "en" as const : "auto" as const;
+    const answers = { ...(active?.answers ?? {}), language };
     state.active = upsertActiveSession(state, input.sessionKey, "restricted_models", now, answers);
     await writeOnboardingState(openclawHome, state);
     await sendWizardQuestion({
@@ -555,14 +824,53 @@ export async function handleRouterWizardAction(input: {
   if (action === "restricted_none" || action === "restricted_models_text") {
     const answers = { ...(active?.answers ?? {}) };
     answers.restrictedModels = action === "restricted_none" ? [] : parseRestrictedModelsText(text);
-    state.active = upsertActiveSession(state, input.sessionKey, "confirm", now, answers);
+    state.active = upsertActiveSession(state, input.sessionKey, "same_provider", now, answers);
     await writeOnboardingState(openclawHome, state);
     await sendWizardQuestion({
       sendMessage,
       sessionKey: input.sessionKey,
       replyToMessageId: input.replyToMessageId,
       cwd: input.cwd,
-      question: confirmQuestion(answers, discoverConfiguredRouterModels(openclawHome)),
+      question: sameProviderQuestion(discoverSameProviderRouterModels(openclawHome), answers),
+    });
+    return { handled: true, action };
+  }
+  if (action === "same_provider_import" || action === "same_provider_skip" || action === "same_provider_import_all" || action === "same_provider_add" || action === "same_provider_skip_one") {
+    const candidates = discoverSameProviderRouterModels(openclawHome);
+    const answers = { ...(active?.answers ?? {}) };
+    const selected = new Set(answers.sameProviderModels ?? []);
+    const reviewed = sameProviderReviewed(answers);
+    if (action === "same_provider_import" || action === "same_provider_import_all") {
+      for (const model of candidates) {
+        selected.add(model);
+        reviewed.add(model);
+      }
+    } else if (action === "same_provider_skip") {
+      for (const model of candidates) reviewed.add(model);
+    } else {
+      const model = actionValueModel(actionValue, action) ?? nextSameProviderModel(candidates, answers);
+      if (model) {
+        if (action === "same_provider_add") selected.add(model);
+        reviewed.add(model);
+      }
+    }
+    const sameProviderModels = [...selected].filter((model) => candidates.includes(model));
+    answers.sameProviderModels = sameProviderModels;
+    answers.sameProviderReviewed = [...reviewed].filter((model) => candidates.includes(model));
+    answers.modelPlanTypes = {
+      ...inferPlanTypes(discoverConfiguredRouterModels(openclawHome)),
+      ...(answers.modelPlanTypes ?? {}),
+      ...inferPlanTypes(sameProviderModels),
+    };
+    const hasMore = nextSameProviderModel(candidates, answers) !== undefined;
+    state.active = upsertActiveSession(state, input.sessionKey, hasMore ? "same_provider" : "confirm", now, answers);
+    await writeOnboardingState(openclawHome, state);
+    await sendWizardQuestion({
+      sendMessage,
+      sessionKey: input.sessionKey,
+      replyToMessageId: input.replyToMessageId,
+      cwd: input.cwd,
+      question: hasMore ? sameProviderQuestion(candidates, answers) : confirmQuestion(answers, discoverConfiguredRouterModels(openclawHome)),
     });
     return { handled: true, action };
   }

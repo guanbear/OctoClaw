@@ -5,9 +5,14 @@ import { createEmptyOverrides } from "../overrides/index.js";
 export interface RouterWizardConfig {
   schemaVersion: "octoclaw.router_wizard/v1";
   completedAt: string;
-  models: Record<string, { planType: "subscription" | "pay_as_you_go" | "unknown"; configuredAt: string }>;
+  models: Record<string, {
+    planType: "subscription" | "pay_as_you_go" | "unknown";
+    configuredAt: string;
+    source?: "configured" | "same_provider_discovery";
+  }>;
   budget?: { monthly: number; currency: "USD" };
   privacy: "standard" | "local_only";
+  language: "auto" | "zh" | "en";
   restrictedModels: string[];
   overrides: RouterOverrideConfig;
 }
@@ -16,15 +21,33 @@ export function createWizardConfig(modelIds: string[], options: {
   now?: string;
   budgetInput?: string;
   privacy?: RouterWizardConfig["privacy"];
+  language?: RouterWizardConfig["language"];
   restrictedModels?: string[];
+  modelPlanTypes?: Record<string, RouterWizardConfig["models"][string]["planType"]>;
+  sameProviderModels?: string[];
 } = {}): RouterWizardConfig {
   const now = options.now ?? new Date().toISOString();
+  const configured = Array.from(new Set(modelIds.filter(Boolean)));
+  const sameProviderModels = Array.from(new Set((options.sameProviderModels ?? []).filter((model) => model && !configured.includes(model))));
+  const models = Object.fromEntries([
+    ...configured.map((model) => [model, {
+      planType: options.modelPlanTypes?.[model] ?? detectPlanType(model),
+      configuredAt: now,
+      source: "configured" as const,
+    }]),
+    ...sameProviderModels.map((model) => [model, {
+      planType: options.modelPlanTypes?.[model] ?? detectPlanType(model),
+      configuredAt: now,
+      source: "same_provider_discovery" as const,
+    }]),
+  ]);
   return {
     schemaVersion: "octoclaw.router_wizard/v1",
     completedAt: now,
-    models: Object.fromEntries(modelIds.map((model) => [model, { planType: detectPlanType(model), configuredAt: now }])),
+    models,
     budget: options.budgetInput ? parseBudgetInput(options.budgetInput) : undefined,
     privacy: options.privacy ?? "standard",
+    language: options.language ?? "auto",
     restrictedModels: options.restrictedModels ?? [],
     overrides: createEmptyOverrides(),
   };
@@ -48,7 +71,7 @@ export function mergeIncrementalWizardConfig(
   };
   const newModels = configuredModels.filter((model) => next.models[model] === undefined);
   for (const model of newModels) {
-    next.models[model] = { planType: detectPlanType(model), configuredAt: now };
+    next.models[model] = { planType: detectPlanType(model), configuredAt: now, source: "configured" };
   }
   return { config: next, newModels };
 }

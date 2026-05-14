@@ -2011,9 +2011,10 @@ function parseCliDurationMs(value: string): number {
 interface RouterWizardFile {
   schemaVersion: "octoclaw.router_wizard/v1";
   completedAt: string;
-  models: Record<string, { planType: string; configuredAt: string }>;
+  models: Record<string, { planType: string; configuredAt: string; source?: "configured" | "same_provider_discovery" }>;
   budget?: { monthly: number; currency: "USD" };
   privacy: "standard" | "local_only";
+  language: "auto" | "zh" | "en";
   restrictedModels: string[];
   overrides: {
     scoreOverrides: Record<string, Record<string, number>>;
@@ -2027,8 +2028,9 @@ function defaultRouterWizardFile(models: string[], now = new Date().toISOString(
   return {
     schemaVersion: "octoclaw.router_wizard/v1",
     completedAt: now,
-    models: Object.fromEntries(models.map((model) => [model, { planType: inferRouterPlanType(model), configuredAt: now }])),
+    models: Object.fromEntries(models.map((model) => [model, { planType: inferRouterPlanType(model), configuredAt: now, source: "configured" }])),
     privacy: "standard",
+    language: "auto",
     restrictedModels: [],
     overrides: { scoreOverrides: {}, userBans: {}, userDispreferred: {}, entries: [] },
   };
@@ -2137,7 +2139,7 @@ async function runRouterLiteCommand(parsed: ParsedCliArgs, env: Record<string, s
     const newModels = configured.filter((modelName) => existing.models[modelName] === undefined);
     const config = parsed.incremental ? existing : defaultRouterWizardFile(configured, now);
     for (const modelName of newModels) {
-      config.models[modelName] = { planType: inferRouterPlanType(modelName), configuredAt: now };
+      config.models[modelName] = { planType: inferRouterPlanType(modelName), configuredAt: now, source: "configured" };
     }
     const filePath = await writeRouterWizardFile(openclawHome, config);
     return wantsJson ? JSON.stringify({ path: filePath, models: Object.keys(config.models), newModels }, null, 2) : `Router wizard config written: ${filePath}`;

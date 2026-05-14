@@ -37,6 +37,19 @@ describe("wizard RT-W-001..007", () => {
     expect(Object.keys(merged.config.models)).toContain("openai/gpt-5-mini");
   });
 
+  it("stores language, plan overrides, and discovered same-provider models", () => {
+    const config = createWizardConfig(["openai/gpt-5.5"], {
+      now: "2026-05-13T00:00:00.000Z",
+      language: "zh",
+      modelPlanTypes: { "openai/gpt-5.5": "subscription", "openai/gpt-5-mini": "pay_as_you_go" },
+      sameProviderModels: ["openai/gpt-5-mini"],
+    });
+
+    expect(config.language).toBe("zh");
+    expect(config.models["openai/gpt-5.5"]).toMatchObject({ planType: "subscription", source: "configured" });
+    expect(config.models["openai/gpt-5-mini"]).toMatchObject({ planType: "pay_as_you_go", source: "same_provider_discovery" });
+  });
+
   it("RT-W-004 validates and normalizes budget input", () => {
     expect(parseBudgetInput("100")).toEqual({ monthly: 100, currency: "USD" });
     expect(parseBudgetInput("100.50")).toEqual({ monthly: 100.50, currency: "USD" });

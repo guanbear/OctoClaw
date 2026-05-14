@@ -114,6 +114,32 @@ describe("octoclawctl cli", () => {
     });
   });
 
+  it("router wizard writes language and configured model source metadata", async () => {
+    const tmpDir = path.join(os.homedir(), ".octoclawctl-test-tmp", `router-wizard-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    const openclawHome = path.join(tmpDir, ".openclaw");
+    try {
+      await fs.mkdir(openclawHome, { recursive: true });
+      await fs.writeFile(path.join(openclawHome, "openclaw.json"), JSON.stringify({
+        models: { providers: { openai: { models: [{ id: "gpt-5.5" }] } } },
+      }), "utf8");
+
+      const capture = createIo();
+      const exitCode = await main(["router", "wizard", "--openclaw-home", openclawHome, "--format", "json"], {}, capture.io);
+
+      expect(exitCode).toBe(0);
+      const summary = JSON.parse(capture.stdout[0] ?? "{}");
+      const saved = JSON.parse(await fs.readFile(summary.path, "utf8"));
+      expect(saved).toMatchObject({
+        language: "auto",
+        models: {
+          "openai/gpt-5.5": { source: "configured" },
+        },
+      });
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   it("valid actions produce output", async () => {
     for (const action of ["status", "details", "queue", "timeline"] as const) {
       const capture = createIo();
