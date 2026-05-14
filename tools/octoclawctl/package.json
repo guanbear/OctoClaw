@@ -1,11 +1,12 @@
 {
-  "name": "octoclawctl",
+  "name": "@octoclaw/cli",
   "version": "0.6.0",
   "type": "module",
   "main": "dist/cli.js",
   "types": "src/cli.ts",
   "bin": {
-    "octoclawctl": "./dist/cli.js"
+    "octoclawctl": "./dist/cli.js",
+    "octoclaw": "./dist/cli.js"
   },
   "exports": {
     ".": {
@@ -17,7 +18,8 @@
     "@octoclaw/policy": "workspace:*",
     "@octoclaw/router": "workspace:*",
     "@octoclaw/runtime": "workspace:*",
-    "@octoclaw/status-surface": "workspace:*"
+    "@octoclaw/status-surface": "workspace:*",
+    "@inquirer/prompts": "^7.0.0"
   },
   "scripts": {
     "build": "tsc --build",
@@ -26,6 +28,11 @@
     "test": "vitest run src/*.test.ts src/**/*.test.ts --root ../.."
   },
   "files": [
-    "dist"
-  ]
+    "dist/",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public"
+  }
 }
