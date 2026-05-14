@@ -39,6 +39,7 @@ export function modelFromLeaderboard(modelKey: string, snapshot: LeaderboardSnap
     confidence: record.scores.coding_worker?.confidence ?? "medium",
     source: "packaged_leaderboard",
     freshness: record.lastVerifiedAt,
+    configured: false,
   });
 }
 
@@ -62,6 +63,7 @@ export function modelFromSourceRecord(record: CapabilitySourceRecord, fallbackSo
     confidence: record.confidence ?? "low",
     source: record.source ?? fallbackSource,
     freshness: record.lastVerifiedAt,
+    configured: false,
   });
 }
 
@@ -71,6 +73,7 @@ export function createHeuristicModel(modelKey: string): ModelIntelLite {
     tier: "unknown",
     confidence: "low",
     source: "heuristic",
+    configured: true,
   });
 }
 
@@ -100,16 +103,18 @@ function createModelIntel(input: {
   confidence: RouterLiteConfidence;
   source: string;
   freshness?: string;
+  configured?: boolean;
 }): ModelIntelLite {
   const [provider = "unknown", model = input.modelKey] = input.modelKey.split("/");
+  const configured = input.configured ?? false;
   return {
     provider,
     model,
     modelKey: input.modelKey,
     name: input.name,
-    configured: true,
+    configured,
     available: input.available ?? "yes",
-    proposalOnly: false,
+    proposalOnly: !configured,
     tags: [],
     marketPrice: {
       inputUsdPerMTok: input.inputUsdPerMTok,

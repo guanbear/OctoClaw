@@ -24,7 +24,8 @@ describe("capability snapshot RT-C-001..007", () => {
 
     expect(Object.keys(leaderboard.models).length).toBeGreaterThan(0);
     expect(snapshot.models.length).toBeGreaterThan(0);
-    expect(snapshot.models.every((model) => model.configured === true)).toBe(true);
+    expect(snapshot.models.every((model) => model.configured === false)).toBe(true);
+    expect(snapshot.models.every((model) => model.proposalOnly === true)).toBe(true);
   });
 
   it("RT-C-002 fails open to empty capability data on corrupt snapshot", () => {
@@ -57,6 +58,7 @@ describe("capability snapshot RT-C-001..007", () => {
     expect(calls).toEqual(["leaderboard", "openrouter", "models.dev", "openclaw"]);
     expect(snapshot.snapshotId).toBe("snapshot-2026-05-13T00:00:00.000Z");
     expect(snapshot.models[0]?.marketPrice.conflict).toBe(true);
+    expect(snapshot.models[0]).toMatchObject({ configured: false, proposalOnly: true });
     expect(writes).toHaveLength(1);
   });
 
