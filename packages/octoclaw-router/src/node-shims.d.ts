@@ -5,7 +5,7 @@ declare module "node:crypto" {
 }
 
 declare module "node:fs" {
-  export function appendFileSync(path: string, data: string): void;
+  export function appendFileSync(path: string, data: string, encoding?: string): void;
   export function mkdirSync(path: string, options?: { recursive?: boolean }): void;
   export function readFileSync(path: string, encoding: "utf-8" | "utf8"): string;
   export function existsSync(path: string): boolean;

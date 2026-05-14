@@ -108,6 +108,12 @@ describe("octoclawctl cli", () => {
       period: "month",
       extraArgs: ["cost", "report"],
     });
+    expect(parseCliArgs(["router", "promotion", "nightly-review", "--input", "shadow.jsonl", "--format", "json"])).toMatchObject({
+      command: "router",
+      input: "shadow.jsonl",
+      format: "json",
+      extraArgs: ["promotion", "nightly-review"],
+    });
     expect(parseCliArgs(["router", "model", "ban", "openai/gpt-5.5", "--for", "normal"])).toMatchObject({
       command: "router",
       forTier: "normal",
@@ -325,6 +331,52 @@ describe("octoclawctl cli", () => {
         expect.objectContaining({ model: "openai/gpt-5-mini", tier: "normal", decision: "promote" }),
       ]);
       expect(await fs.readFile(path.join(routerLiteDir, "decisions.log"), "utf8")).toContain("openai/gpt-5-mini");
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("router promotion nightly-review reports lightweight failure cost and ignored-reason signals", async () => {
+    const tmpDir = path.join(os.homedir(), ".octoclawctl-test-tmp", `router-nightly-review-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    const openclawHome = path.join(tmpDir, ".openclaw");
+    const routerLiteDir = path.join(openclawHome, "workspace", "tmp", "octopus", "router-lite");
+    const shadowPath = path.join(routerLiteDir, "shadow.jsonl");
+    try {
+      await fs.mkdir(routerLiteDir, { recursive: true });
+      const events = Array.from({ length: 25 }, (_, index) => JSON.stringify({
+        ts: new Date(Date.UTC(2026, 4, 14, 0, index)).toISOString(),
+        actualModel: "openai/gpt-5.5",
+        recommendation: {
+          recommendedModel: "openai/gpt-5-mini",
+          reasonCodes: index % 2 === 0 ? ["ignored_low_confidence"] : [],
+          expectedSuccess: index >= 8,
+          expectedCostUsd: index === 24 ? 2 : 0.75,
+        },
+        judge: { complexity: "normal" },
+        outcome: { success: index >= 7, costUsd: 1 },
+      })).join("\n");
+      await fs.writeFile(shadowPath, events, "utf8");
+
+      const capture = createIo();
+      const exitCode = await main([
+        "router",
+        "promotion",
+        "nightly-review",
+        "--openclaw-home",
+        openclawHome,
+        "--input",
+        shadowPath,
+        "--format",
+        "json",
+      ], {}, capture.io);
+
+      expect(exitCode).toBe(0);
+      const review = JSON.parse(capture.stdout[0] ?? "{}");
+      expect(review.failureRates["openai/gpt-5-mini"]).toBeGreaterThan(0.20);
+      expect(review.ignoredReasonCounts.ignored_low_confidence).toBe(13);
+      expect(review.alerts).toEqual(expect.arrayContaining([
+        expect.objectContaining({ model: "openai/gpt-5-mini", reason: "consecutive_failures_or_failure_rate" }),
+      ]));
     } finally {
       await fs.rm(tmpDir, { recursive: true, force: true });
     }

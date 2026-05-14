@@ -19,7 +19,7 @@ import { SlackWebApiAcceptanceClient } from "./slack-acceptance/index.js";
 import { disablePlugin, enablePlugin, getConfigValue, restartAll, setConfigValue, showStatus } from "./manage.js";
 import { buildWorkspace, cloneOrUpdate, DEFAULT_REF, DEFAULT_REPO_URL, deployExtension, deployPackages, setupSymlinks, syncOctoClawCoreRules, syncOpenClawPluginEntry, syncSlackDeliveryHookCompatibility, uninstallDeployment, validateLoad, writeSourceManifest } from "./install.js";
 import { readConfig, syncToOpenClawPluginConfig, writeConfig } from "./config.js";
-import { analyzeModelConfig, buildModelIntelSnapshot, type ModelIntelSnapshot } from "@octoclaw/policy/router-lite";
+import { analyzeModelConfig, buildModelIntelSnapshot, type ModelIntelSnapshot } from "@octoclaw/router/router-lite";
 import {
   aggregateShadowEvents,
   createPromotionDecisionEvent,
@@ -28,6 +28,7 @@ import {
   generateCostReport,
   openSqliteCostEventStore,
   parsePromotionDecisionLog,
+  runLightweightPromotionReview,
   renderPromotionDecisions,
   type CostEvent,
   type RouterShadowEvent,
@@ -1440,6 +1441,7 @@ export function printUsage(): string {
     "  octoclawctl router wizard [--incremental]",
     "  octoclawctl router decisions [--since 7d] [--format text|json]",
     "  octoclawctl router promotion review [--input <shadow.jsonl>] [--format text|json]",
+    "  octoclawctl router promotion nightly-review [--input <shadow.jsonl>] [--format text|json]",
     "  octoclawctl router cost report [--period 1d|7d|30d|month] [--format text|json]",
     "  octoclawctl router score override <model> <tier>=<score>",
     "  octoclawctl router model mark <model> --dispreferred-for <tier>",
@@ -2035,7 +2037,10 @@ function normalizeRouterShadowEvent(raw: JsonRecord): RouterShadowEvent | null {
     actualModel: asString(raw.actualModel) || undefined,
     recommendedModel,
     promotionState: raw.promotionState === "live" ? "live" : "shadow",
-    reasonCodes: Array.isArray(raw.reasonCodes) ? raw.reasonCodes.map((item) => asString(item)).filter(Boolean) : undefined,
+    reasonCodes: [
+      ...(Array.isArray(raw.reasonCodes) ? raw.reasonCodes : []),
+      ...(Array.isArray(recommendation.reasonCodes) ? recommendation.reasonCodes : []),
+    ].map((item) => asString(item)).filter(Boolean),
     judge: { complexity: asString(asRecord(raw.judge).complexity) || "unknown" },
     outcome: {
       success: typeof outcome.success === "boolean" ? outcome.success : true,
@@ -2092,6 +2097,27 @@ async function runRouterPromotionReview(input: {
     await fs.writeFile(input.decisionsPath, `${existingText}${existingSuffix}${decisions.map((decision) => JSON.stringify(decision)).join("\n")}\n`, "utf8");
   }
   return renderPromotionDecisions(decisions, input.format);
+}
+
+async function runRouterPromotionNightlyReview(input: {
+  shadowPath: string;
+  format: "text" | "json";
+}): Promise<string> {
+  const shadowText = await fs.readFile(input.shadowPath, "utf8").catch(() => "");
+  const review = runLightweightPromotionReview(parseRouterShadowEvents(shadowText));
+  if (input.format === "json") return JSON.stringify(review, null, 2);
+  const lines = [
+    "Router lightweight promotion review",
+    "Failure rates:",
+    ...Object.entries(review.failureRates).map(([model, rate]) => `  ${model}: ${(rate * 100).toFixed(1)}%`),
+    "Cost delta by model:",
+    ...Object.entries(review.costDeltaByModel).map(([model, delta]) => `  ${model}: ${(delta * 100).toFixed(1)}%`),
+    "Ignored reason counts:",
+    ...Object.entries(review.ignoredReasonCounts).map(([reason, count]) => `  ${reason}: ${count}`),
+    "Alerts:",
+    ...(review.alerts.length > 0 ? review.alerts.map((alert) => `  ${alert.model}: ${alert.reason}`) : ["  (none)"]),
+  ];
+  return lines.join("\n");
 }
 
 function parseCliDurationMs(value: string): number {
@@ -2452,6 +2478,14 @@ async function runRouterLiteCommand(parsed: ParsedCliArgs, env: Record<string, s
     });
   }
 
+  if (area === "promotion" && action === "nightly-review") {
+    const shadowPath = resolvePath(parsed.input ?? path.join(openclawHome, "workspace", "tmp", "octopus", "router-lite", "shadow.jsonl"));
+    return runRouterPromotionNightlyReview({
+      shadowPath,
+      format: wantsJson ? "json" : "text",
+    });
+  }
+
   if (area === "model-intel" && action === "refresh") {
     const commandEnv = { ...env, OPENCLAW_HOME: openclawHome };
     const openClawModelsList = await runOpenClawJsonCommand(["models", "list", "--json"], commandEnv);
@@ -2547,7 +2581,7 @@ async function runRouterLiteCommand(parsed: ParsedCliArgs, env: Record<string, s
     return lines.join("\n");
   }
 
-  throw new Error("router command expects: router wizard | router model-intel refresh | router model-config analyze | router shadow-report | router decisions | router promotion review | router cost report | router score override/reset | router model mark/ban/list-overrides");
+  throw new Error("router command expects: router wizard | router model-intel refresh | router model-config analyze | router shadow-report | router decisions | router promotion review/nightly-review | router cost report | router score override/reset | router model mark/ban/list-overrides");
 }
 
 async function runCommandFromSnapshot(parsed: ParsedCliArgs, env: Record<string, string | undefined>): Promise<string> {

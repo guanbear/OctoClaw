@@ -27,6 +27,7 @@
     "build": "tsc --build && mkdir -p dist/data && cp src/data/leaderboard-snapshot.json dist/data/leaderboard-snapshot.json",
     "check": "tsc --noEmit",
     "test": "vitest run --root ../.. packages/octoclaw-router/src",
+    "test:coverage": "vitest run --root ../.. packages/octoclaw-router/src --coverage --coverage.include='packages/octoclaw-router/src/**/*.ts' --coverage.exclude='**/*.test.ts' --coverage.exclude='**/*.d.ts'",
     "test:watch": "vitest --root ../.. packages/octoclaw-router/src",
     "clean": "rm -rf dist *.tsbuildinfo"
   },
