@@ -3,6 +3,10 @@ import type { SlackAdapterConfig } from "./slack/index.js";
 import { FeishuAdapter } from "./feishu/index.js";
 import type { FeishuAdapterConfig } from "./feishu/index.js";
 import { WeChatAdapter } from "./wechat/index.js";
+import { DiscordAdapter } from "./discord/index.js";
+import type { DiscordAdapterConfig } from "./discord/index.js";
+import { TelegramAdapter } from "./telegram/index.js";
+import type { TelegramAdapterConfig } from "./telegram/index.js";
 import type { IMAdapter, IMSendParams, IMSendResult } from "./adapter.js";
 import fsSync from "node:fs";
 import path from "node:path";
@@ -67,6 +71,14 @@ function buildFeishuAdapterConfig(): Partial<FeishuAdapterConfig> {
   return { replyToMode: readReplyToMode("feishu") };
 }
 
+function buildDiscordAdapterConfig(): Partial<DiscordAdapterConfig> {
+  return readChannelConfig("discord") as Partial<DiscordAdapterConfig>;
+}
+
+function buildTelegramAdapterConfig(): Partial<TelegramAdapterConfig> {
+  return readChannelConfig("telegram") as Partial<TelegramAdapterConfig>;
+}
+
 export function getAdapterForSession(sessionKey: string): IMAdapter | null {
   return adapterRegistry.find((adapter) => adapter.canHandle(sessionKey)) ?? null;
 }
@@ -113,11 +125,13 @@ export async function sendWithDegradation(
 }
 
 // Register built-in adapters.
-// Order matters: first match wins. Slack and Feishu are registered last so
+// Order matters: first match wins. Built-ins are registered after config load so
 // any custom adapters prepended via registerIMAdapter() take priority.
 adapterRegistry.push(new SlackAdapter(buildSlackAdapterConfig()));
 adapterRegistry.push(new FeishuAdapter(buildFeishuAdapterConfig()));
 adapterRegistry.push(new WeChatAdapter());
+adapterRegistry.push(new DiscordAdapter(buildDiscordAdapterConfig()));
+adapterRegistry.push(new TelegramAdapter(buildTelegramAdapterConfig()));
 
 export { SlackAdapter } from "./slack/index.js";
 export type { SlackAdapterConfig } from "./slack/index.js";
@@ -125,6 +139,10 @@ export { FeishuAdapter } from "./feishu/index.js";
 export type { FeishuAdapterConfig } from "./feishu/index.js";
 export { WeChatAdapter } from "./wechat/index.js";
 export type { WeChatAdapterConfig } from "./wechat/index.js";
+export { DiscordAdapter } from "./discord/index.js";
+export type { DiscordAdapterConfig } from "./discord/index.js";
+export { TelegramAdapter } from "./telegram/index.js";
+export type { TelegramAdapterConfig } from "./telegram/index.js";
 
 export type ChannelStreamingMode = "native" | "partial" | "off";
 

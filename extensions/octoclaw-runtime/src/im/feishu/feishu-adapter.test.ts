@@ -12,8 +12,8 @@ function mockRun(code: number, stdout: string, stderr = "") {
 }
 
 describe("FeishuAdapter", () => {
-  it("declares Feishu as L1", () => {
-    expect(new FeishuAdapter().capabilityLevel).toBe("L1");
+  it("declares Feishu as L2", () => {
+    expect(new FeishuAdapter().capabilityLevel).toBe("L2");
   });
 
   it("canHandle matches feishu session keys", () => {
@@ -113,20 +113,82 @@ describe("FeishuAdapter", () => {
     expect(args).not.toContain("--reply-to");
   });
 
-  it("send truncates message to 40000 chars", async () => {
+  it("splits 5000 characters into 2 Feishu messages", async () => {
     const adapter = new FeishuAdapter();
-    const spy = mockRun(0, JSON.stringify({ ok: true }));
-    const longMsg = "x".repeat(50000);
-    await adapter.send({
+    const spy = vi.spyOn(env, "runCommand")
+      .mockResolvedValueOnce({ code: 0, stdout: JSON.stringify({ ok: true, message_id: "om_1" }), stderr: "", timedOut: false })
+      .mockResolvedValueOnce({ code: 0, stdout: JSON.stringify({ ok: true, message_id: "om_2" }), stderr: "", timedOut: false });
+
+    const result = await adapter.send({
       sessionKey: "agent:main:feishu:default:direct:ou_user1",
-      message: longMsg,
+      message: "x".repeat(5000),
     });
-    const args = spy.mock.calls[0][1] as string[];
-    const msgIndex = args.indexOf("--message");
-    expect(args[msgIndex + 1]?.length).toBe(40000);
+
+    expect(result.sent).toBe(true);
+    expect(result.messageId).toBe("om_2");
+    expect(spy).toHaveBeenCalledTimes(2);
+    const firstArgs = spy.mock.calls[0]![1] as string[];
+    const secondArgs = spy.mock.calls[1]![1] as string[];
+    expect(firstArgs[firstArgs.indexOf("--message") + 1]?.length).toBeLessThanOrEqual(4000);
+    expect(secondArgs[secondArgs.indexOf("--message") + 1]?.length).toBeLessThanOrEqual(4000);
+    expect(firstArgs[firstArgs.indexOf("--message") + 1]).toContain("(1/2)");
+    expect(secondArgs[secondArgs.indexOf("--message") + 1]).toContain("(2/2)");
   });
 
-  it("react returns not_supported (L1 capability)", async () => {
+  it("returns IM_SEND_FAILED when any Feishu segment fails", async () => {
+    const adapter = new FeishuAdapter();
+    vi.spyOn(env, "runCommand")
+      .mockResolvedValueOnce({ code: 0, stdout: JSON.stringify({ ok: true, message_id: "om_1" }), stderr: "", timedOut: false })
+      .mockResolvedValueOnce({ code: 1, stdout: JSON.stringify({ ok: false, error: "rate_limited" }), stderr: "", timedOut: false });
+
+    const result = await adapter.send({
+      sessionKey: "agent:main:feishu:default:direct:ou_user1",
+      message: "x".repeat(5000),
+    });
+
+    expect(result.sent).toBe(false);
+    expect(result.error).toBe("IM_SEND_FAILED");
+  });
+
+  it("sends image and file attachments after text", async () => {
+    const adapter = new FeishuAdapter();
+    const spy = vi.spyOn(env, "runCommand")
+      .mockResolvedValueOnce({ code: 0, stdout: JSON.stringify({ ok: true, message_id: "om_text" }), stderr: "", timedOut: false })
+      .mockResolvedValueOnce({ code: 0, stdout: JSON.stringify({ ok: true, message_id: "om_image" }), stderr: "", timedOut: false })
+      .mockResolvedValueOnce({ code: 0, stdout: JSON.stringify({ ok: true, message_id: "om_file" }), stderr: "", timedOut: false });
+
+    const result = await adapter.send({
+      sessionKey: "agent:main:feishu:default:direct:ou_user1",
+      message: "see attached",
+      interactiveBlocks: [
+        { type: "image", url: "https://example.com/image.png" },
+        { type: "file", url: "https://example.com/report.pdf", name: "report.pdf" },
+      ],
+    });
+
+    expect(result.sent).toBe(true);
+    expect(result.messageId).toBe("om_file");
+    expect(spy).toHaveBeenCalledTimes(3);
+    expect(spy.mock.calls[1]![1]).toEqual(expect.arrayContaining([
+      "message", "send",
+      "--channel", "feishu",
+      "--target", "ou_user1",
+      "--type", "image",
+      "--url", "https://example.com/image.png",
+      "--json",
+    ]));
+    expect(spy.mock.calls[2]![1]).toEqual(expect.arrayContaining([
+      "message", "send",
+      "--channel", "feishu",
+      "--target", "ou_user1",
+      "--type", "file",
+      "--url", "https://example.com/report.pdf",
+      "--name", "report.pdf",
+      "--json",
+    ]));
+  });
+
+  it("react returns not_supported (L2 without emoji reactions)", async () => {
     const adapter = new FeishuAdapter();
     const result = await adapter.react({
       sessionKey: "agent:main:feishu:default:direct:ou_user1",

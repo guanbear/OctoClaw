@@ -13,7 +13,7 @@ vi.mock("node:fs", () => ({
   },
 }));
 
-import { getAdapterForSession, registerIMAdapter, sendWithDegradation, SlackAdapter, type IMAdapter } from "./index.js";
+import { getAdapterForChannel, getAdapterForSession, registerIMAdapter, sendWithDegradation, SlackAdapter, type IMAdapter } from "./index.js";
 import { sendIMMessage } from "./send.js";
 
 describe("IM adapter factory", () => {
@@ -36,6 +36,23 @@ describe("IM adapter factory", () => {
     const result = getAdapterForSession("agent:main:wechat:default:direct:wxid_abc");
     expect(result).not.toBeNull();
     expect(result?.channel).toBe("wechat");
+  });
+
+  it("getAdapterForSession returns DiscordAdapter for discord session keys", () => {
+    const result = getAdapterForSession("discord:guild:123:channel:456:user:789");
+    expect(result).not.toBeNull();
+    expect(result?.channel).toBe("discord");
+  });
+
+  it("getAdapterForSession returns TelegramAdapter for telegram session keys", () => {
+    const result = getAdapterForSession("telegram:chat:12345");
+    expect(result).not.toBeNull();
+    expect(result?.channel).toBe("telegram");
+  });
+
+  it("getAdapterForChannel returns Discord and Telegram adapters", () => {
+    expect(getAdapterForChannel("discord")?.channel).toBe("discord");
+    expect(getAdapterForChannel("telegram")?.channel).toBe("telegram");
   });
 
   it("adapter is cached", () => {

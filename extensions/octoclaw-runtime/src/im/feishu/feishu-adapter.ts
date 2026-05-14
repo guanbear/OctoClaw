@@ -1,5 +1,6 @@
 import { runCommand, resolveWorkspaceRoot } from "../../resolve/env.js";
 import type { IMAdapter, IMDeliveryTarget, IMReactParams, IMReactResult, IMSendParams, IMSendResult } from "../adapter.js";
+import { splitIMText } from "../text-split.js";
 
 export interface FeishuAdapterConfig {
   /**
@@ -9,24 +10,27 @@ export interface FeishuAdapterConfig {
    * - "all": thread under every inbound message
    */
   replyToMode: "off" | "first" | "all";
+  segmentMarkers: boolean;
 }
 
 const DEFAULT_FEISHU_CONFIG: FeishuAdapterConfig = {
   replyToMode: "off",
+  segmentMarkers: true,
 };
 
 /**
- * Feishu L1 capability profile: text messaging + thread replies.
+ * Feishu L2 capability profile: text, thread replies, and media/file attachments.
  * No streaming, no message editing, no typing indicators.
  */
 export const FEISHU_CAPABILITIES = {
+  capabilityLevel: "L2",
   canUpdateMessage: false,
   canStreamNative: false,
   canReplyInThread: true,
   canTypingIndicator: false,
   messageIdFormat: "message_id",
   userIdCaseSensitive: false,
-  maxMessageLength: 40000,
+  maxMessageLength: 4000,
 } as const;
 
 type FeishuCommandResult = {
@@ -35,6 +39,16 @@ type FeishuCommandResult = {
   root_id?: unknown;
   error?: unknown;
 };
+
+type FeishuAttachment = {
+  type: "image" | "file";
+  url: string;
+  name?: string;
+};
+
+function stringValue(value: unknown): string {
+  return String(value ?? "").trim();
+}
 
 function normalizeFeishuUserId(rawId: string): string {
   let id = rawId.trim();
@@ -103,14 +117,68 @@ function extractFeishuPayload(text: string): FeishuCommandResult | null {
   return null;
 }
 
+function feishuMessageId(payload: FeishuCommandResult | null): string | undefined {
+  return payload?.message_id ? String(payload.message_id) : undefined;
+}
+
+function parseFeishuSendResult(code: number, stdout: string, stderr: string): IMSendResult {
+  const stdoutPayload = extractFeishuPayload(stdout);
+  const stderrPayload = extractFeishuPayload(stderr);
+  const successPayload = stdoutPayload?.ok === true ? stdoutPayload
+    : stderrPayload?.ok === true ? stderrPayload
+    : null;
+
+  if (successPayload) {
+    const messageId = feishuMessageId(successPayload);
+    const threadTs = successPayload.root_id ? String(successPayload.root_id) : undefined;
+    return {
+      sent: true,
+      delivered: true,
+      ...(messageId ? { messageId } : {}),
+      ...(threadTs ? { threadTs } : {}),
+    };
+  }
+
+  if (code === 0) {
+    return { sent: true, delivered: true };
+  }
+
+  const errorPayload = stdoutPayload?.ok === false ? stdoutPayload : stderrPayload;
+  return {
+    sent: false,
+    delivered: false,
+    error: String(errorPayload?.error ?? stderr ?? "send_failed").slice(0, 200),
+  };
+}
+
+function extractFeishuAttachments(blocks?: Array<Record<string, unknown>>): FeishuAttachment[] {
+  if (!blocks?.length) return [];
+
+  const attachments: FeishuAttachment[] = [];
+  for (const block of blocks) {
+    const type = stringValue(block.type).toLowerCase();
+    if (type !== "image" && type !== "file") continue;
+
+    const url = stringValue(block.url || block.href || block.imageUrl || block.fileUrl);
+    if (!url) continue;
+
+    const name = stringValue(block.name || block.filename || block.fileName);
+    attachments.push({
+      type,
+      url,
+      ...(name ? { name } : {}),
+    });
+  }
+  return attachments;
+}
+
 /**
- * IM adapter for Feishu (L1 tier).
- * Supports text delivery and thread replies; does not support streaming,
- * message editing, or typing indicators.
+ * IM adapter for Feishu (L2 tier).
+ * Supports text delivery, thread replies, image attachments, and file attachments.
  */
 export class FeishuAdapter implements IMAdapter {
   readonly channel = "feishu" as const;
-  readonly capabilityLevel = "L1" as const;
+  readonly capabilityLevel = "L2" as const;
   readonly config: FeishuAdapterConfig;
 
   constructor(config?: Partial<FeishuAdapterConfig>) {
@@ -137,62 +205,64 @@ export class FeishuAdapter implements IMAdapter {
   }
 
   async send(params: IMSendParams): Promise<IMSendResult> {
-    const { sessionKey, message, replyToMessageId, timeoutMs = 5000, cwd } = params;
+    const { sessionKey, message, interactiveBlocks, replyToMessageId, timeoutMs = 5000, cwd } = params;
     const target = this.resolveTarget(sessionKey);
 
     if (!target.target) {
       return { sent: false, delivered: false, error: "unresolvable_session_target" };
     }
 
-    // Truncate to platform limit
-    const text = message.slice(0, FEISHU_CAPABILITIES.maxMessageLength);
-    const args = ["message", "send", "--channel", "feishu", "--target", target.target, "--json"];
+    const textSegments = splitIMText(message, FEISHU_CAPABILITIES.maxMessageLength, {
+      markers: this.config.segmentMarkers,
+    });
+    const attachments = extractFeishuAttachments(interactiveBlocks);
+    const cwdValue = cwd ?? resolveWorkspaceRoot();
+    const timeoutValue = Math.max(500, timeoutMs);
+    let lastResult: IMSendResult = { sent: true, delivered: true };
 
-    if (text) {
-      args.push("--message", text);
+    if (textSegments.length === 0 && attachments.length === 0) {
+      const emptyResult = await this.deliver(["message", "send", "--channel", "feishu", "--target", target.target, "--json"], cwdValue, timeoutValue);
+      return emptyResult;
     }
 
-    // Thread reply: only when replyToMessageId is provided AND config allows it
-    if (replyToMessageId && this.config.replyToMode !== "off") {
-      args.push("--reply-to", replyToMessageId);
-    }
+    for (const segment of textSegments) {
+      const args = ["message", "send", "--channel", "feishu", "--target", target.target, "--json", "--message", segment];
+      if (replyToMessageId && this.config.replyToMode !== "off") {
+        args.push("--reply-to", replyToMessageId);
+      }
 
-    try {
-      const result = await runCommand("openclaw", args, {
-        cwd: cwd ?? resolveWorkspaceRoot(),
-        timeoutMs: Math.max(500, timeoutMs),
-      });
-
-      const stdoutPayload = extractFeishuPayload(result.stdout ?? "");
-      const stderrPayload = extractFeishuPayload(result.stderr ?? "");
-      const successPayload = stdoutPayload?.ok === true ? stdoutPayload
-        : stderrPayload?.ok === true ? stderrPayload
-        : null;
-
-      if (successPayload) {
-        const messageId = successPayload.message_id ? String(successPayload.message_id) : undefined;
-        const threadTs = successPayload.root_id ? String(successPayload.root_id) : undefined;
+      lastResult = await this.deliver(args, cwdValue, timeoutValue);
+      if (!lastResult.sent) {
         return {
-          sent: true,
-          delivered: true,
-          ...(messageId ? { messageId } : {}),
-          ...(threadTs ? { threadTs } : {}),
+          ...lastResult,
+          error: textSegments.length > 1 ? "IM_SEND_FAILED" : lastResult.error || "IM_SEND_FAILED",
         };
       }
+    }
 
-      if (result.code === 0) {
-        return { sent: true, delivered: true };
+    for (const attachment of attachments) {
+      const args = [
+        "message", "send",
+        "--channel", "feishu",
+        "--target", target.target,
+        "--type", attachment.type,
+        "--url", attachment.url,
+        "--json",
+      ];
+      if (attachment.type === "file" && attachment.name) {
+        args.push("--name", attachment.name);
+      }
+      if (replyToMessageId && this.config.replyToMode !== "off") {
+        args.push("--reply-to", replyToMessageId);
       }
 
-      const errorPayload = stdoutPayload?.ok === false ? stdoutPayload : stderrPayload;
-      return {
-        sent: false,
-        delivered: false,
-        error: String(errorPayload?.error ?? result.stderr ?? "send_failed").slice(0, 200),
-      };
-    } catch (err) {
-      return { sent: false, delivered: false, error: String(err) };
+      lastResult = await this.deliver(args, cwdValue, timeoutValue);
+      if (!lastResult.sent) {
+        return { ...lastResult, error: "IM_SEND_FAILED" };
+      }
     }
+
+    return lastResult;
   }
 
   shouldUseThread(): boolean {
@@ -201,5 +271,14 @@ export class FeishuAdapter implements IMAdapter {
 
   normalizeUserId(rawId: string): string {
     return normalizeFeishuUserId(rawId);
+  }
+
+  private async deliver(args: string[], cwd: string, timeoutMs: number): Promise<IMSendResult> {
+    try {
+      const result = await runCommand("openclaw", args, { cwd, timeoutMs });
+      return parseFeishuSendResult(result.code, result.stdout ?? "", result.stderr ?? "");
+    } catch (err) {
+      return { sent: false, delivered: false, error: String(err) };
+    }
   }
 }
