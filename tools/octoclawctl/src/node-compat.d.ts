@@ -28,9 +28,11 @@ declare module "node:fs" {
   }
 
   export function existsSync(path: string): boolean;
+  export function closeSync(fd: number): void;
   export function openSync(path: string, flags: string): number;
 
   const fsSync: {
+    closeSync: typeof closeSync;
     existsSync: typeof existsSync;
     openSync: typeof openSync;
   };
@@ -75,4 +77,14 @@ declare module "node:child_process" {
   }
 
   export function spawn(command: string, args: string[], options?: SpawnOptions): ChildProcess;
+  export interface SpawnSyncResult<T> {
+    error?: Error;
+    status: number | null;
+    stdout: T;
+    stderr: T;
+    signal: string | null;
+    output: Array<T | null>;
+    pid: number;
+  }
+  export function spawnSync(command: string, args: string[], options?: { timeout?: number; encoding?: "utf8" }): SpawnSyncResult<string>;
 }

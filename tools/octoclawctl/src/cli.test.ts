@@ -407,6 +407,34 @@ describe("octoclawctl cli", () => {
 
     expect(exitCode).toBe(0);
     expect(capture.stdout[0]).toContain("Usage: octoclawctl");
+    expect(capture.stdout[0]).toContain("octoclawctl init");
+  });
+
+  it("parses standalone init flags", () => {
+    expect(parseCliArgs(["init", "--non-interactive", "--lang", "en"])).toMatchObject({
+      command: "init",
+      nonInteractive: true,
+      lang: "en",
+    });
+  });
+
+  it("prints package version", async () => {
+    const capture = createIo();
+    const exitCode = await main(["--version"], {}, capture.io);
+
+    expect(exitCode).toBe(0);
+    expect(capture.stdout).toEqual(["0.6.0"]);
+    expect(capture.stderr).toEqual([]);
+  });
+
+  it("runs init non-interactively without runtime data", async () => {
+    const capture = createIo();
+    const exitCode = await main(["init", "--non-interactive", "--lang", "en"], {}, capture.io);
+
+    expect(exitCode).toBe(0);
+    expect(capture.stdout[0]).toContain("Initialization complete");
+    expect(capture.stdout[0]).not.toMatch(/[\u3400-\u9fff]/u);
+    expect(capture.stderr).toEqual([]);
   });
 
   it("format json produces JSON output", async () => {
@@ -421,8 +449,8 @@ describe("octoclawctl cli", () => {
     });
   });
 
-  it("runOctoClawCtl library function still works", () => {
-    const output = runOctoClawCtl("status", createRecord(), "text");
+  it("runOctoClawCtl library function still works", async () => {
+    const output = await runOctoClawCtl("status", createRecord(), "text");
 
     expect(output).toContain("Status: task-123");
   });

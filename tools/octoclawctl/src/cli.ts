@@ -5,12 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
 import type { RuntimeStateSurfaceRecord } from "@octoclaw/runtime/state-surface";
-import {
-  buildDetailsProjection,
-  buildQueueProjection,
-  runStatusSurfaceOperator,
-  type StatusSurfaceAction,
-} from "@octoclaw/status-surface";
+import type { StatusSurfaceAction } from "@octoclaw/status-surface";
 import { generateNightlyReport, filterNightlyReplayEvents, renderMarkdownReport, validateReplayEvents } from "./nightly/index.js";
 import { loadSlackAcceptanceConfig, runSlackAcceptanceHarness, renderSlackAcceptanceMarkdown } from "./slack-acceptance/index.js";
 import { normalizeCalibrationInputFile, runCalibrationGate, renderCalibrationMarkdown } from "./calibration/index.js";
@@ -19,24 +14,41 @@ import { SlackWebApiAcceptanceClient } from "./slack-acceptance/index.js";
 import { disablePlugin, enablePlugin, getConfigValue, restartAll, setConfigValue, showStatus } from "./manage.js";
 import { buildWorkspace, cloneOrUpdate, DEFAULT_REF, DEFAULT_REPO_URL, deployExtension, deployPackages, setupSymlinks, syncOctoClawCoreRules, syncOpenClawPluginEntry, syncSlackDeliveryHookCompatibility, uninstallDeployment, validateLoad, writeSourceManifest } from "./install.js";
 import { readConfig, syncToOpenClawPluginConfig, writeConfig } from "./config.js";
-import { analyzeModelConfig, buildModelIntelSnapshot, type ModelIntelSnapshot } from "@octoclaw/router/router-lite";
-import {
-  aggregateShadowEvents,
-  createPromotionDecisionEvent,
-  evaluateBudget,
-  evaluatePromotionForConfiguredModel,
-  generateCostReport,
-  openSqliteCostEventStore,
-  parsePromotionDecisionLog,
-  runLightweightPromotionReview,
-  renderPromotionDecisions,
-  type CostEvent,
-  type RouterShadowEvent,
-} from "@octoclaw/router";
+import type { ModelIntelSnapshot } from "@octoclaw/policy/router-lite";
+import type { CostEvent, RouterShadowEvent } from "@octoclaw/router";
 import type { CalibrationInputFile } from "./calibration/types.js";
 import type { SlackAcceptanceFormat } from "./slack-acceptance/types.js";
 import type { NightlyEvalConfig, LaunchAgentConfig } from "./nightly-eval/index.js";
 import { installLaunchAgent, uninstallLaunchAgent } from "./platform.js";
+
+// Lazy-loaded workspace modules — only loaded when their commands are used.
+// This allows `init` to work standalone without workspace packages installed.
+type StatusSurfaceModule = typeof import("@octoclaw/status-surface");
+type PolicyRouterLiteModule = typeof import("@octoclaw/policy/router-lite");
+type RouterModule = typeof import("@octoclaw/router");
+
+let _statusSurface: StatusSurfaceModule | undefined;
+async function loadStatusSurface(): Promise<StatusSurfaceModule> {
+  if (!_statusSurface) _statusSurface = await import("@octoclaw/status-surface");
+  return _statusSurface;
+}
+
+let _policyRouterLite: PolicyRouterLiteModule | undefined;
+async function loadPolicyRouterLite(): Promise<PolicyRouterLiteModule> {
+  if (!_policyRouterLite) _policyRouterLite = await import("@octoclaw/policy/router-lite");
+  return _policyRouterLite;
+}
+
+let _router: RouterModule | undefined;
+async function loadRouter(): Promise<RouterModule> {
+  if (!_router) _router = await import("@octoclaw/router");
+  return _router;
+}
+
+function detectLang(): "zh" | "en" {
+  const env = process.env.LANG ?? process.env.LC_ALL ?? "";
+  return env.startsWith("zh") ? "zh" : "en";
+}
 
 type LegacyCliFormat = "text" | "json";
 type StatusFormat = "compact" | "table" | "lanes" | "anchors" | "text" | "json";
@@ -44,6 +56,7 @@ type ServiceName = "openclaw" | "runner";
 type RunnerMode = "ondemand" | "daemon";
 type NightlyFormat = "markdown" | "json";
 type CliCommand =
+  | "doctor"
   | "install"
   | "update"
   | "deploy"
@@ -65,6 +78,7 @@ type CliCommand =
   | "patrol"
   | "reconcile"
   | "repair"
+  | "init"
   | "nightly"
   | "nightly-eval"
   | "router"
@@ -79,6 +93,7 @@ declare const process: {
   cwd(): string;
   exit(code?: number): never;
   kill(pid: number, signal?: string | number): boolean;
+  on(event: "uncaughtException", listener: (err: unknown) => void): void;
 };
 
 const LEGACY_ACTIONS: StatusSurfaceAction[] = ["status", "details", "queue", "timeline"];
@@ -86,6 +101,7 @@ const STATUS_FORMATS: StatusFormat[] = ["compact", "table", "lanes", "anchors", 
 const SERVICE_NAMES: ServiceName[] = ["openclaw", "runner"];
 const RUNNER_MODES: RunnerMode[] = ["ondemand", "daemon"];
 const ROUTER_COST_PERIODS: Array<NonNullable<ParsedCliArgs["period"]>> = ["1d", "7d", "30d", "month"];
+const INIT_LANGUAGES = ["zh", "en"] as const;
 const RUNNING_STATES = new Set(["running", "in_progress", "active", "working"]);
 const QUEUED_STATES = new Set(["queued", "pending", "planned", "waiting"]);
 const DONE_STATES = new Set(["completed", "done", "succeeded", "success"]);
@@ -99,6 +115,7 @@ interface ParsedCliArgs {
   format?: StatusFormat;
   legacyFormat: LegacyCliFormat;
   help: boolean;
+  version: boolean;
   taskId?: string;
   limit?: number;
   service?: ServiceName;
@@ -128,12 +145,14 @@ interface ParsedCliArgs {
   restartServices: boolean;
   scheduleHour?: number;
   logDir?: string;
+  nonInteractive: boolean;
+  lang?: "zh" | "en";
   nightlyEvalSubcommand?: "run" | "install-launchagent" | "uninstall-launchagent" | "print-plist" | "deliver-slack" | "promote" | "clear-baseline" | "show-baseline";
   slackAcceptanceFormat: SlackAcceptanceFormat;
   extraArgs: string[];
 }
 
-interface CliIo {
+export interface CliIo {
   stdout(message: string): void;
   stderr(message: string): void;
 }
@@ -904,8 +923,9 @@ function formatDrift(summary: ReplaySummary): string {
   ].join("\n");
 }
 
-function renderDetails(task: RuntimeTaskRecord, outputJson: boolean): string {
-  const projection = buildDetailsProjection({
+async function renderDetails(task: RuntimeTaskRecord, outputJson: boolean): Promise<string> {
+  const statusSurface = await loadStatusSurface();
+  const projection = statusSurface.buildDetailsProjection({
     record: task.record,
     route: task.route,
     workerPool: task.workerPool,
@@ -915,7 +935,7 @@ function renderDetails(task: RuntimeTaskRecord, outputJson: boolean): string {
     return JSON.stringify({ ...projection, raw: task.raw }, null, 2);
   }
   return [
-    String(runStatusSurfaceOperator("details", task.record, "text")),
+    String(statusSurface.runStatusSurfaceOperator("details", task.record, "text")),
     `route=${task.route}`,
     `worker_pool=${task.workerPool}`,
     `model=${task.model}`,
@@ -925,12 +945,13 @@ function renderDetails(task: RuntimeTaskRecord, outputJson: boolean): string {
   ].filter(Boolean).join("\n");
 }
 
-function renderQueue(tasks: RuntimeTaskRecord[], outputJson: boolean): string {
+async function renderQueue(tasks: RuntimeTaskRecord[], outputJson: boolean): Promise<string> {
+  const statusSurface = await loadStatusSurface();
   const queued = tasks
     .filter((task) => QUEUED_STATES.has(normalizeState(task.state)) || RUNNING_STATES.has(normalizeState(task.state)))
     .map((task, index) => ({
       task,
-      view: buildQueueProjection({
+      view: statusSurface.buildQueueProjection({
         record: task.record,
         queuePosition: index + 1,
         workerPool: task.workerPool,
@@ -941,7 +962,7 @@ function renderQueue(tasks: RuntimeTaskRecord[], outputJson: boolean): string {
   }
   return queued.length === 0
     ? "Queue: empty"
-    : queued.map(({ task, view }) => [String(runStatusSurfaceOperator("queue", task.record, "text")), `route=${task.route}`, `model=${task.model}`, `position=${view.queuePosition ?? "unknown"}`].join("\n")).join("\n\n");
+    : queued.map(({ task, view }) => [String(statusSurface.runStatusSurfaceOperator("queue", task.record, "text")), `route=${task.route}`, `model=${task.model}`, `position=${view.queuePosition ?? "unknown"}`].join("\n")).join("\n\n");
 }
 
 function renderTimeline(events: TimelineEvent[], outputJson: boolean): string {
@@ -991,6 +1012,7 @@ export function parseCliArgs(argv: string[]): ParsedCliArgs {
   let format: StatusFormat | undefined;
   let legacyFormat: LegacyCliFormat = "text";
   let help = false;
+  let version = false;
   let taskId: string | undefined;
   let limit: number | undefined;
   let service: ServiceName | undefined;
@@ -1020,6 +1042,8 @@ export function parseCliArgs(argv: string[]): ParsedCliArgs {
   let restartServices = false;
   let scheduleHour: number | undefined;
   let logDir: string | undefined;
+  let nonInteractive = false;
+  let lang: "zh" | "en" | undefined;
   let nightlyEvalSubcommand: ParsedCliArgs["nightlyEvalSubcommand"];
   let slackAcceptanceFormat: SlackAcceptanceFormat = "markdown";
   let rawFormat: string | undefined;
@@ -1031,9 +1055,17 @@ export function parseCliArgs(argv: string[]): ParsedCliArgs {
       help = true;
       continue;
     }
+    if (argument === "--version" || argument === "-v") {
+      version = true;
+      continue;
+    }
     if (argument === "--format") {
       rawFormat = argv[index + 1];
       index += 1;
+      continue;
+    }
+    if (argument === "--json") {
+      rawFormat = "json";
       continue;
     }
     if (argument.startsWith("--format=")) {
@@ -1259,6 +1291,20 @@ export function parseCliArgs(argv: string[]): ParsedCliArgs {
       [, logDir] = argument.split("=", 2);
       continue;
     }
+    if (argument === "--non-interactive") {
+      nonInteractive = true;
+      continue;
+    }
+    if (argument === "--lang") {
+      lang = parseEnumValue(argv[index + 1], INIT_LANGUAGES, "language");
+      index += 1;
+      continue;
+    }
+    if (argument.startsWith("--lang=")) {
+      const [, rawLang] = argument.split("=", 2);
+      lang = parseEnumValue(rawLang, INIT_LANGUAGES, "language");
+      continue;
+    }
     if (argument.startsWith("--")) {
       throw new Error(`Unknown option: ${argument}`);
     }
@@ -1279,8 +1325,8 @@ export function parseCliArgs(argv: string[]): ParsedCliArgs {
   if (command === "details" && positionals[1] && !taskId) {
     taskId = positionals[1];
   }
-  if (command && !["install", "update", "deploy", "enable", "disable", "config", "uninstall", "calibration-gate", "review", "curate", "status", "details", "queue", "timeline", "health", "up", "down", "restart", "patrol", "reconcile", "repair", "nightly", "nightly-eval", "router", "slack-acceptance"].includes(command)) {
-    throw new Error(`Unknown action: ${command}. Expected one of: install, update, deploy, enable, disable, config, uninstall, calibration-gate, review, curate, status, details, queue, timeline, health, up, down, restart, patrol, reconcile, repair, nightly, nightly-eval, router, slack-acceptance`);
+  if (command && !["doctor", "install", "update", "deploy", "enable", "disable", "config", "uninstall", "calibration-gate", "review", "curate", "status", "details", "queue", "timeline", "health", "up", "down", "restart", "patrol", "reconcile", "repair", "init", "nightly", "nightly-eval", "router", "slack-acceptance"].includes(command)) {
+    throw new Error(`Unknown action: ${command}. Expected one of: doctor, install, update, deploy, enable, disable, config, uninstall, calibration-gate, review, curate, status, details, queue, timeline, health, up, down, restart, patrol, reconcile, repair, init, nightly, nightly-eval, router, slack-acceptance`);
   }
   if (limit !== undefined && (!Number.isFinite(limit) || limit <= 0)) {
     throw new Error(`Unknown limit: ${String(limit)}. Expected a positive integer`);
@@ -1362,6 +1408,7 @@ export function parseCliArgs(argv: string[]): ParsedCliArgs {
     format,
     legacyFormat,
     help,
+    version,
     taskId,
     limit,
     service,
@@ -1391,6 +1438,8 @@ export function parseCliArgs(argv: string[]): ParsedCliArgs {
     restartServices,
     scheduleHour,
     logDir,
+    nonInteractive,
+    lang,
     nightlyEvalSubcommand,
     slackAcceptanceFormat,
     extraArgs: positionals.slice(1),
@@ -1401,11 +1450,13 @@ export function runOctoClawCtl(
   action: StatusSurfaceAction,
   record: RuntimeStateSurfaceRecord,
   format: LegacyCliFormat = "text",
-): string {
+): Promise<string> {
+  return loadStatusSurface().then((statusSurface) => {
   if (format === "json") {
-    return JSON.stringify(runStatusSurfaceOperator(action, record, "rich"), null, 2);
+    return JSON.stringify(statusSurface.runStatusSurfaceOperator(action, record, "rich"), null, 2);
   }
-  return String(runStatusSurfaceOperator(action, record, "text"));
+  return String(statusSurface.runStatusSurfaceOperator(action, record, "text"));
+  });
 }
 
 export function printUsage(): string {
@@ -1413,6 +1464,8 @@ export function printUsage(): string {
     "Usage: octoclawctl <command> [options]",
     "",
     "Commands:",
+    "  octoclawctl doctor [--json] [--lang zh|en] [--openclaw-home DIR]",
+    "  octoclawctl init [--non-interactive] [--lang zh|en] [--openclaw-home DIR]",
     "  octoclawctl install [--repo-url URL] [--branch NAME] [--openclaw-home DIR] [--octoclaw-root DIR] [--skip-build] [--restart]",
     "  octoclawctl update [--repo-url URL] [--branch NAME] [--openclaw-home DIR] [--octoclaw-root DIR] [--skip-build] [--restart]",
     "  octoclawctl deploy [--openclaw-home DIR] [--octoclaw-root DIR] [--skip-build] [--restart]",
@@ -2069,14 +2122,15 @@ async function runRouterPromotionReview(input: {
     fs.readFile(input.decisionsPath, "utf8").catch(() => ""),
   ]);
   const config = await loadRouterWizardFile(input.openclawHome);
+  const router = await loadRouter();
   const configuredModels = Object.entries(config.models)
     .filter(([, value]) => value.source !== "same_provider_discovery")
     .map(([modelName]) => modelName);
-  const existing = parsePromotionDecisionLog(existingText);
+  const existing = router.parsePromotionDecisionLog(existingText);
   const today = new Date().toISOString().slice(0, 10);
   let todayPromotionCount = existing.filter((decision) => decision.decision === "promote" && decision.ts.startsWith(today)).length;
-  const decisions = aggregateShadowEvents(parseRouterShadowEvents(shadowText)).map((metrics) => {
-    const decision = evaluatePromotionForConfiguredModel({
+  const decisions = router.aggregateShadowEvents(parseRouterShadowEvents(shadowText)).map((metrics) => {
+    const decision = router.evaluatePromotionForConfiguredModel({
       model: metrics.model,
       tier: metrics.tier,
       metrics,
@@ -2084,7 +2138,7 @@ async function runRouterPromotionReview(input: {
       configuredModels,
     });
     if (decision.action === "promote") todayPromotionCount += 1;
-    return createPromotionDecisionEvent({
+    return router.createPromotionDecisionEvent({
       ts: new Date().toISOString(),
       model: metrics.model,
       tier: metrics.tier,
@@ -2096,7 +2150,7 @@ async function runRouterPromotionReview(input: {
     const existingSuffix = existingText && !existingText.endsWith("\n") ? "\n" : "";
     await fs.writeFile(input.decisionsPath, `${existingText}${existingSuffix}${decisions.map((decision) => JSON.stringify(decision)).join("\n")}\n`, "utf8");
   }
-  return renderPromotionDecisions(decisions, input.format);
+  return router.renderPromotionDecisions(decisions, input.format);
 }
 
 async function runRouterPromotionNightlyReview(input: {
@@ -2104,7 +2158,8 @@ async function runRouterPromotionNightlyReview(input: {
   format: "text" | "json";
 }): Promise<string> {
   const shadowText = await fs.readFile(input.shadowPath, "utf8").catch(() => "");
-  const review = runLightweightPromotionReview(parseRouterShadowEvents(shadowText));
+  const router = await loadRouter();
+  const review = router.runLightweightPromotionReview(parseRouterShadowEvents(shadowText));
   if (input.format === "json") return JSON.stringify(review, null, 2);
   const lines = [
     "Router lightweight promotion review",
@@ -2315,11 +2370,12 @@ function toRouterCostEvents(events: RouterCostCliEvent[]): CostEvent[] {
   }));
 }
 
-function renderRouterCostReport(events: RouterCostCliEvent[], period: ParsedCliArgs["period"], format: "text" | "json", config?: RouterWizardFile): string {
-  const base = generateCostReport(toRouterCostEvents(events), { period: period ?? "7d" });
+async function renderRouterCostReport(events: RouterCostCliEvent[], period: ParsedCliArgs["period"], format: "text" | "json", config?: RouterWizardFile): Promise<string> {
+  const router = await loadRouter();
+  const base = router.generateCostReport(toRouterCostEvents(events), { period: period ?? "7d" });
   const report: RouterCostCliReport = { ...base };
   if (config?.budget) {
-    const budget = evaluateBudget(config.budget.monthly, base.totalUsd);
+    const budget = router.evaluateBudget(config.budget.monthly, base.totalUsd);
     report.budget = {
       monthly: config.budget.monthly,
       currency: config.budget.currency,
@@ -2442,7 +2498,7 @@ async function runRouterLiteCommand(parsed: ParsedCliArgs, env: Record<string, s
       if (!isNotFoundError(error)) {
         events = [];
       } else {
-        const opened = openSqliteCostEventStore({ dbPath: path.join(openclawHome, "octoclaw", "cost.sqlite") });
+        const opened = (await loadRouter()).openSqliteCostEventStore({ dbPath: path.join(openclawHome, "octoclaw", "cost.sqlite") });
         if (opened.status === "ok") {
           try {
             events = opened.store?.list() ?? [];
@@ -2493,7 +2549,7 @@ async function runRouterLiteCommand(parsed: ParsedCliArgs, env: Record<string, s
     const usageCost = await runOpenClawJsonCommand(["gateway", "usage-cost", "--days", "3", "--json"], commandEnv);
     const openClawConfig = await readJsonFile(path.join(openclawHome, "openclaw.json"));
     const legacyCatalog = await readJsonFile(path.join(openclawHome, "workspace", "tmp", "octopus", "model-catalog.json"));
-    const snapshot = buildModelIntelSnapshot({
+    const snapshot = (await loadPolicyRouterLite()).buildModelIntelSnapshot({
       openClawModelsList,
       openClawConfig,
       legacyCatalog,
@@ -2526,7 +2582,7 @@ async function runRouterLiteCommand(parsed: ParsedCliArgs, env: Record<string, s
     const inputPath = resolvePath(parsed.input ?? path.join(outputDir, "model-intel-snapshot.json"));
     const rawSnapshot = await readJsonFile(inputPath);
     const snapshot = assertModelIntelSnapshot(rawSnapshot, inputPath);
-    const proposal = analyzeModelConfig(snapshot);
+    const proposal = (await loadPolicyRouterLite()).analyzeModelConfig(snapshot);
     const proposalPath = path.join(outputDir, "model-config-proposal.json");
     await ensureDir(outputDir);
     await fs.writeFile(proposalPath, `${JSON.stringify(proposal, null, 2)}\n`, "utf8");
@@ -2554,7 +2610,7 @@ async function runRouterLiteCommand(parsed: ParsedCliArgs, env: Record<string, s
 
   if (area === "shadow-report" || (area === "shadow" && action === "report")) {
     const shadowPath = resolvePath(parsed.input ?? path.join(outputDir, "shadow.jsonl"));
-    const { generateShadowReport } = await import("@octoclaw/policy/router-lite");
+    const { generateShadowReport } = await loadPolicyRouterLite();
     const summary = generateShadowReport(shadowPath);
     if (wantsJson) {
       return JSON.stringify(summary, null, 2);
@@ -2622,10 +2678,10 @@ async function runCommandFromSnapshot(parsed: ParsedCliArgs, env: Record<string,
       if (!task) {
         throw new Error(`Unknown task id: ${parsed.taskId ?? "(missing)"}`);
       }
-      return renderDetails(task, parsed.format === "json");
+      return await renderDetails(task, parsed.format === "json");
     }
     case "queue":
-      return renderQueue(snapshot.tasks, parsed.format === "json");
+      return await renderQueue(snapshot.tasks, parsed.format === "json");
     case "timeline": {
       const events = await buildTimeline(env, parsed.taskId, parsed.limit ?? 20);
       return renderTimeline(events, parsed.format === "json");
@@ -2752,16 +2808,37 @@ export async function main(
 ): Promise<number> {
   try {
     const parsed = parseCliArgs(argv);
+    if (parsed.version) {
+      try {
+        const pkgPath = new URL("../package.json", import.meta.url).pathname;
+        const raw = await fs.readFile(pkgPath, "utf8");
+        const pkg = JSON.parse(raw) as { version?: string };
+        io.stdout(pkg.version ?? "unknown");
+      } catch {
+        io.stdout("0.6.0");
+      }
+      return 0;
+    }
     if (parsed.help) {
       io.stdout(printUsage());
       return 0;
     }
     if (!parsed.command) {
-      io.stderr("Unknown action: (missing). Expected one of: install, update, deploy, enable, disable, config, uninstall, calibration-gate, status, details, queue, timeline, health, up, down, restart, patrol, reconcile, repair, nightly, nightly-eval, router, slack-acceptance");
+      io.stderr("Unknown action: (missing). Expected one of: doctor, install, update, deploy, enable, disable, config, uninstall, calibration-gate, status, details, queue, timeline, health, up, down, restart, patrol, reconcile, repair, init, nightly, nightly-eval, router, slack-acceptance");
       return 1;
     }
 
     const openclawHome = resolveOctoClawHome(env, parsed.openclawHome);
+    if (parsed.command === "doctor") {
+      const { runDoctor } = await import("./commands/doctor.js");
+      const { output, exitCode } = await runDoctor({
+        json: parsed.format === "json",
+        lang: parsed.lang ?? "zh",
+        openclawHome,
+      });
+      io.stdout(output);
+      return exitCode;
+    }
     if (parsed.command === "enable") {
       const restoreEnv = applyProcessEnv(env);
       try {
@@ -2796,6 +2873,15 @@ export async function main(
       io.stdout(await runInstallCommand(parsed, env, openclawHome));
       return 0;
     }
+    if (parsed.command === "init") {
+      const { runInitWizard } = await import("./commands/init.js");
+      io.stdout(await runInitWizard({
+        nonInteractive: parsed.nonInteractive,
+        lang: parsed.lang ?? "zh",
+        openclawHome,
+      }));
+      return 0;
+    }
     if (parsed.command === "uninstall") {
       await uninstallDeployment(openclawHome);
       io.stdout("OctoClaw deployment removed from OpenClaw extensions/packages");
@@ -2808,7 +2894,7 @@ export async function main(
 
     const runtimeRecord = resolveRuntimeStateSurfaceRecord(env);
     if (runtimeRecord && LEGACY_ACTIONS.includes(parsed.command as StatusSurfaceAction) && !parsed.taskId && !parsed.service && !parsed.model && !parsed.drift) {
-      io.stdout(runOctoClawCtl(parsed.command as StatusSurfaceAction, runtimeRecord, parsed.legacyFormat));
+      io.stdout(await runOctoClawCtl(parsed.command as StatusSurfaceAction, runtimeRecord, parsed.legacyFormat));
       return 0;
     }
 
@@ -2825,6 +2911,16 @@ export async function main(
     return 1;
   }
 }
+
+process.on("uncaughtException", (err: unknown) => {
+  if (err && typeof err === "object" && "toUserString" in err && typeof err.toUserString === "function") {
+    console.error(err.toUserString(detectLang()));
+  } else {
+    console.error("[UNEXPECTED]", err instanceof Error ? err.message : String(err));
+    console.error("请提交 issue：https://github.com/guanbear/OctoClaw/issues");
+  }
+  process.exit(1);
+});
 
 if (import.meta.url === new URL(process.argv[1] ?? "", "file:").href) {
   void main().then((exitCode) => {
