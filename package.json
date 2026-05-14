@@ -13,6 +13,7 @@
     "test:watch": "vitest",
     "verify:openclaw-baseline": "node scripts/verify-openclaw-baseline.mjs",
     "router:model-intel:prototype": "node scripts/router-lite-model-intel-prototype.mjs",
+    "router:leaderboard:refresh": "node scripts/refresh-leaderboard-snapshot.mjs",
     "clean": "pnpm -r --stream run clean"
   },
   "devDependencies": {

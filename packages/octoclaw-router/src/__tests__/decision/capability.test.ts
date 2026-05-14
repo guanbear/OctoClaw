@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  createLiteLLMCapabilitySource,
+  createModelsDevCapabilitySource,
+  createOpenRouterCapabilitySource,
   computeFreshness,
   ensureCapabilityForConfiguredModels,
   handleOpenClawConfigChange,
@@ -112,5 +115,150 @@ describe("capability snapshot RT-C-001..007", () => {
       { source: "openrouter", price: 10 },
       { source: "models.dev", price: 13 },
     ])).toMatchObject({ price: 13, conflict: true, sources: ["openrouter", "models.dev"] });
+  });
+
+  it("parses OpenRouter model metadata into capability records", async () => {
+    const source = createOpenRouterCapabilitySource({
+      fetchJson: async () => ({
+        data: [
+          {
+            id: "openai/gpt-5-mini",
+            name: "OpenAI: GPT-5 Mini",
+            context_length: 128000,
+            architecture: { input_modalities: ["text", "image"] },
+            pricing: {
+              prompt: "0.000001",
+              completion: "0.000004",
+              input_cache_read: "0.0000001",
+              input_cache_write: "0.0000004",
+            },
+            supported_parameters: ["tools", "response_format", "reasoning"],
+          },
+        ],
+      }),
+    });
+
+    await expect(source.fetch()).resolves.toEqual([
+      expect.objectContaining({
+        modelKey: "openai/gpt-5-mini",
+        price: 1.75,
+        inputUsdPerMTok: 1,
+        outputUsdPerMTok: 4,
+        contextWindow: 128000,
+        input: ["text", "image"],
+        toolUse: "yes",
+        structuredOutput: "yes",
+        reasoning: "yes",
+        source: "openrouter",
+      }),
+    ]);
+  });
+
+  it("normalizes OpenRouter Z.ai GLM ids to Zhipu provider keys", async () => {
+    const source = createOpenRouterCapabilitySource({
+      fetchJson: async () => ({
+        data: [
+          {
+            id: "z-ai/glm-4.7",
+            pricing: { prompt: "0.000002", completion: "0.000006" },
+          },
+        ],
+      }),
+    });
+
+    await expect(source.fetch()).resolves.toEqual([
+      expect.objectContaining({
+        modelKey: "zhipu/glm-4.7",
+        tier: "strong",
+        price: 3,
+      }),
+    ]);
+  });
+
+  it("parses models.dev provider metadata into capability records", async () => {
+    const source = createModelsDevCapabilitySource({
+      fetchJson: async () => ({
+        openai: {
+          models: {
+            "gpt-5-mini": {
+              id: "gpt-5-mini",
+              name: "GPT-5 Mini",
+              family: "gpt",
+              reasoning: true,
+              tool_call: true,
+              modalities: { input: ["text"] },
+              limit: { context: 200000 },
+              cost: { input: 0.25, output: 2 },
+              last_updated: "2026-05-01",
+            },
+          },
+        },
+      }),
+    });
+
+    await expect(source.fetch()).resolves.toEqual([
+      expect.objectContaining({
+        modelKey: "openai/gpt-5-mini",
+        price: 0.6875,
+        inputUsdPerMTok: 0.25,
+        outputUsdPerMTok: 2,
+        contextWindow: 200000,
+        toolUse: "yes",
+        reasoning: "yes",
+        source: "models.dev",
+        lastVerifiedAt: "2026-05-01",
+      }),
+    ]);
+  });
+
+  it("parses LiteLLM price registry metadata into capability records", async () => {
+    const source = createLiteLLMCapabilitySource({
+      fetchJson: async () => ({
+        sample_spec: {},
+        "gpt-5-mini": {
+          litellm_provider: "openai",
+          input_cost_per_token: 0.000001,
+          output_cost_per_token: 0.000004,
+          cache_read_input_token_cost: 0.0000001,
+          max_input_tokens: 128000,
+          supports_function_calling: true,
+          supports_response_schema: true,
+        },
+      }),
+    });
+
+    await expect(source.fetch()).resolves.toEqual([
+      expect.objectContaining({
+        modelKey: "openai/gpt-5-mini",
+        price: 1.75,
+        inputUsdPerMTok: 1,
+        outputUsdPerMTok: 4,
+        cacheReadUsdPerMTok: 0.1,
+        contextWindow: 128000,
+        toolUse: "yes",
+        structuredOutput: "yes",
+        source: "litellm",
+      }),
+    ]);
+  });
+
+  it("normalizes LiteLLM Z.ai GLM ids to Zhipu provider keys", async () => {
+    const source = createLiteLLMCapabilitySource({
+      fetchJson: async () => ({
+        "glm-4.7": {
+          litellm_provider: "z-ai",
+          input_cost_per_token: 0.000002,
+          output_cost_per_token: 0.000006,
+        },
+      }),
+    });
+
+    await expect(source.fetch()).resolves.toEqual([
+      expect.objectContaining({
+        modelKey: "zhipu/glm-4.7",
+        tier: "strong",
+        price: 3,
+      }),
+    ]);
   });
 });

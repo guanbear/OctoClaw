@@ -386,7 +386,17 @@ function routerWizardSnapshotPaths(openclawHome = ""): string[] {
 }
 
 function loadRouterWizardSnapshotModels(openclawHome = ""): ModelIntelLite[] {
-  for (const snapshotPath of routerWizardSnapshotPaths(openclawHome)) {
+  const snapshotPaths = routerWizardSnapshotPaths(openclawHome)
+    .flatMap((snapshotPath) => {
+      try {
+        return [{ snapshotPath, mtimeMs: fsSync.statSync(snapshotPath).mtimeMs }];
+      } catch {
+        return [];
+      }
+    })
+    .sort((left, right) => right.mtimeMs - left.mtimeMs)
+    .map((entry) => entry.snapshotPath);
+  for (const snapshotPath of snapshotPaths) {
     try {
       const raw = fsSync.readFileSync(snapshotPath, "utf8");
       return loadSnapshotFromText(raw).models;

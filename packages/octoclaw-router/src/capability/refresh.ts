@@ -1,6 +1,6 @@
 import type { ModelIntelSnapshot } from "../decision/contracts.js";
 import { createHeuristicModel, mergePriceData, modelFromSourceRecord } from "./merge.js";
-import type { CapabilitySource } from "./types.js";
+import type { CapabilitySource, CapabilitySourceRecord } from "./types.js";
 
 export interface RefreshCapabilityOptions {
   incremental?: boolean;
@@ -10,7 +10,7 @@ export interface RefreshCapabilityOptions {
 }
 
 export async function refreshCapability(options: RefreshCapabilityOptions): Promise<ModelIntelSnapshot> {
-  const byModel = new Map<string, Array<{ source: string; price?: number }>>();
+  const byModel = new Map<string, CapabilitySourceRecord[]>();
   const sourceStatus: ModelIntelSnapshot["sourceStatus"] = [];
 
   for (const source of options.sources) {
@@ -19,7 +19,7 @@ export async function refreshCapability(options: RefreshCapabilityOptions): Prom
       sourceStatus.push({ source: source.name, status: "ok" });
       for (const record of records) {
         const current = byModel.get(record.modelKey) ?? [];
-        current.push({ source: source.name, price: record.price });
+        current.push({ ...record, source: record.source ?? source.name });
         byModel.set(record.modelKey, current);
       }
     } catch (error) {
@@ -30,12 +30,31 @@ export async function refreshCapability(options: RefreshCapabilityOptions): Prom
   const generatedAt = new Date(options.now?.() ?? Date.now()).toISOString();
   const models = Array.from(byModel.entries()).map(([modelKey, records]) => {
     const priceSources = records
-      .filter((record): record is { source: string; price: number } => typeof record.price === "number");
+      .filter((record): record is CapabilitySourceRecord & { source: string; price: number } => typeof record.price === "number" && typeof record.source === "string");
     const mergedPrice = mergePriceData(modelKey, priceSources);
+    const preferred = records.find((record) => record.tier && record.tier !== "unknown") ?? records[0]!;
+    const first = <T>(selector: (record: CapabilitySourceRecord) => T | undefined): T | undefined => {
+      for (const record of records) {
+        const value = selector(record);
+        if (value !== undefined) return value;
+      }
+      return undefined;
+    };
     const model = modelFromSourceRecord({
+      ...preferred,
       modelKey,
       price: Number.isNaN(mergedPrice.price) ? undefined : mergedPrice.price,
-      source: records[0]?.source,
+      inputUsdPerMTok: first((record) => record.inputUsdPerMTok),
+      outputUsdPerMTok: first((record) => record.outputUsdPerMTok),
+      cacheReadUsdPerMTok: first((record) => record.cacheReadUsdPerMTok),
+      cacheWriteUsdPerMTok: first((record) => record.cacheWriteUsdPerMTok),
+      contextWindow: first((record) => record.contextWindow),
+      input: first((record) => record.input),
+      toolUse: first((record) => record.toolUse),
+      structuredOutput: first((record) => record.structuredOutput),
+      reasoning: first((record) => record.reasoning),
+      promptCache: first((record) => record.promptCache),
+      source: preferred.source,
     });
     model.marketPrice.conflict = mergedPrice.conflict;
     model.marketPrice.sources = mergedPrice.sources;

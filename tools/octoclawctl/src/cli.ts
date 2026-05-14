@@ -1499,6 +1499,11 @@ export function printUsage(): string {
     "  octoclawctl router score override <model> <tier>=<score>",
     "  octoclawctl router model mark <model> --dispreferred-for <tier>",
     "  octoclawctl router model ban <model> --for <tier>",
+    "  octoclawctl router capability refresh [--output-dir <dir>] [--format json]",
+    "  octoclawctl router capability list [--input <snapshot.json>] [--format text|json]",
+    "  octoclawctl router capability show <model> [--input <snapshot.json>] [--format text|json]",
+    "  octoclawctl router capability snapshot show [--input <snapshot.json>] [--format text|json]",
+    "  octoclawctl router capability probe <model> [--input <snapshot.json>] [--format text|json]",
     "  octoclawctl router model-intel refresh [--output-dir <dir>] [--openclaw-home <dir>] [--format json]",
     "  octoclawctl router model-config analyze [--input <snapshot.json>] [--output-dir <dir>] [--format json]",
     "  octoclawctl router shadow-report [--input <shadow.jsonl>] [--format json]",
@@ -2031,6 +2036,89 @@ function countModels(snapshot: ModelIntelSnapshot): { configured: number; propos
   };
 }
 
+function resolveCapabilitySnapshotPath(parsed: ParsedCliArgs, openclawHome: string): string {
+  return resolvePath(parsed.input ?? path.join(openclawHome, "octoclaw", "router-lite", "model-intel-snapshot.json"));
+}
+
+async function readModelIntelSnapshot(filePath: string): Promise<ModelIntelSnapshot> {
+  return assertModelIntelSnapshot(await readJsonFile(filePath), filePath);
+}
+
+function injectedCapabilitySourceJson(env: Record<string, string | undefined>, key: "openrouter" | "modelsDev" | "litellm"): ((url: string) => Promise<unknown>) | undefined {
+  const raw = env.OCTOCLAW_ROUTER_CAPABILITY_SOURCES_JSON;
+  if (!raw) return undefined;
+  return async () => asRecord(JSON.parse(raw))[key];
+}
+
+function formatCapabilityList(snapshot: ModelIntelSnapshot, format: "json" | "text"): string {
+  const models = snapshot.models.map((model) => ({
+    modelKey: model.modelKey,
+    provider: model.provider,
+    tier: model.capability.codingTier,
+    price: model.marketPrice.blendedUsdPerMTok,
+    contextWindow: model.capability.contextWindow,
+    sources: model.sources,
+  }));
+  if (format === "json") return JSON.stringify({ snapshotId: snapshot.snapshotId, generatedAt: snapshot.generatedAt, models }, null, 2);
+  return [
+    `Capability snapshot: ${snapshot.snapshotId}`,
+    ...models.map((model) => `${model.modelKey} tier=${model.tier} price=${model.price ?? "unknown"} context=${model.contextWindow ?? "unknown"} sources=${model.sources.join(",")}`),
+  ].join("\n");
+}
+
+function formatCapabilityFreshness(freshness: string | undefined, now = Date.now()): string {
+  const timestamp = Date.parse(freshness ?? "");
+  if (Number.isNaN(timestamp)) return "data very_stale (unknown age)";
+
+  const ageDays = Math.max(0, Math.floor((now - timestamp) / (1000 * 60 * 60 * 24)));
+  const status = ageDays < 14 ? "fresh" : ageDays < 90 ? "stale" : "very_stale";
+  return `data ${status} (${ageDays} days)`;
+}
+
+function formatCapabilityShow(snapshot: ModelIntelSnapshot, modelKey: string, format: "json" | "text"): string {
+  const normalized = modelKey.toLowerCase();
+  const model = snapshot.models.find((item) => item.modelKey.toLowerCase() === normalized);
+  if (!model) throw new Error(`Capability model not found: ${modelKey}`);
+  if (format === "json") return JSON.stringify(model, null, 2);
+  return [
+    model.modelKey,
+    `tier: ${model.capability.codingTier} (${model.capability.confidence})`,
+    `price: ${model.marketPrice.blendedUsdPerMTok ?? "unknown"} USD/MTok blended`,
+    `context: ${model.capability.contextWindow ?? "unknown"}`,
+    `toolUse: ${model.capability.toolUse}`,
+    `structuredOutput: ${model.capability.structuredOutput}`,
+    `reasoning: ${model.capability.reasoning}`,
+    `freshness: ${formatCapabilityFreshness(model.freshness)}`,
+    `sources: ${model.sources.join(", ") || "(none)"}`,
+  ].join("\n");
+}
+
+function formatCapabilitySnapshotShow(snapshot: ModelIntelSnapshot, format: "json" | "text"): string {
+  const sourceStatus = snapshot.sourceStatus.map((source) => `${source.source}:${source.status}`);
+  const payload = {
+    snapshotId: snapshot.snapshotId,
+    generatedAt: snapshot.generatedAt,
+    models: snapshot.models.length,
+    sourceStatus: snapshot.sourceStatus,
+  };
+  if (format === "json") return JSON.stringify(payload, null, 2);
+  return [
+    `Capability snapshot: ${snapshot.snapshotId}`,
+    `generatedAt=${snapshot.generatedAt}`,
+    `models=${snapshot.models.length}`,
+    `sources=${sourceStatus.join(", ") || "(none)"}`,
+  ].join("\n");
+}
+
+function formatCapabilityProbe(snapshot: ModelIntelSnapshot, modelKey: string, format: "json" | "text"): string {
+  const normalized = modelKey.toLowerCase();
+  const model = snapshot.models.find((item) => item.modelKey.toLowerCase() === normalized);
+  const result = model
+    ? { model: model.modelKey, ok: model.available !== "no", reason: model.available === "no" ? "known_unavailable" : "known_available", sources: model.sources }
+    : { model: modelKey, ok: false, reason: "unknown_model", sources: [] };
+  return format === "json" ? JSON.stringify(result, null, 2) : `Capability probe ${result.model}: ${result.ok ? "ok" : "failed"} (${result.reason})`;
+}
+
 interface RouterDecisionRow {
   ts: string;
   model: string;
@@ -2542,6 +2630,54 @@ async function runRouterLiteCommand(parsed: ParsedCliArgs, env: Record<string, s
     });
   }
 
+  if (area === "capability" && action === "refresh") {
+    const router = await loadRouter();
+    const capabilityOutputDir = resolvePath(parsed.outputDir ?? path.join(openclawHome, "octoclaw", "router-lite"));
+    const snapshotPath = path.join(capabilityOutputDir, "model-intel-snapshot.json");
+    const snapshot = await router.refreshCapability({
+      sources: [
+        router.createPackagedLeaderboardCapabilitySource(),
+        router.createOpenRouterCapabilitySource({ fetchJson: injectedCapabilitySourceJson(env, "openrouter") }),
+        router.createModelsDevCapabilitySource({ fetchJson: injectedCapabilitySourceJson(env, "modelsDev") }),
+        router.createLiteLLMCapabilitySource({ fetchJson: injectedCapabilitySourceJson(env, "litellm") }),
+      ],
+      writeSnapshot: async (value) => {
+        await ensureDir(path.dirname(snapshotPath));
+        await fs.writeFile(snapshotPath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+      },
+    });
+    const counts = countModels(snapshot);
+    if (wantsJson) {
+      return JSON.stringify({
+        snapshotPath,
+        snapshotId: snapshot.snapshotId,
+        generatedAt: snapshot.generatedAt,
+        models: snapshot.models.length,
+        ...counts,
+        sourceStatus: snapshot.sourceStatus,
+      }, null, 2);
+    }
+    return [
+      `Capability snapshot written: ${snapshotPath}`,
+      `models=${snapshot.models.length} configured=${counts.configured} proposalOnly=${counts.proposalOnly}`,
+      `sources=${snapshot.sourceStatus.map((source) => `${source.source}:${source.status}`).join(", ")}`,
+    ].join("\n");
+  }
+
+  if (area === "capability" && action === "snapshot" && parsed.extraArgs[2] === "show") {
+    const snapshot = await readModelIntelSnapshot(resolveCapabilitySnapshotPath(parsed, openclawHome));
+    return formatCapabilitySnapshotShow(snapshot, wantsJson ? "json" : "text");
+  }
+
+  if (area === "capability" && (action === "list" || action === "show" || action === "probe")) {
+    const snapshot = await readModelIntelSnapshot(resolveCapabilitySnapshotPath(parsed, openclawHome));
+    if (action === "list") return formatCapabilityList(snapshot, wantsJson ? "json" : "text");
+    const modelKey = parsed.extraArgs[2];
+    if (!modelKey) throw new Error(`router capability ${action} expects <model>`);
+    if (action === "show") return formatCapabilityShow(snapshot, modelKey, wantsJson ? "json" : "text");
+    return formatCapabilityProbe(snapshot, modelKey, wantsJson ? "json" : "text");
+  }
+
   if (area === "model-intel" && action === "refresh") {
     const commandEnv = { ...env, OPENCLAW_HOME: openclawHome };
     const openClawModelsList = await runOpenClawJsonCommand(["models", "list", "--json"], commandEnv);
@@ -2640,7 +2776,7 @@ async function runRouterLiteCommand(parsed: ParsedCliArgs, env: Record<string, s
     return lines.join("\n");
   }
 
-  throw new Error("router command expects: router wizard | router model-intel refresh | router model-config analyze | router shadow-report | router decisions | router promotion review/nightly-review | router cost report | router score override/reset | router model mark/ban/list-overrides");
+  throw new Error("router command expects: router wizard | router capability refresh/list/show/snapshot show/probe | router model-intel refresh | router model-config analyze | router shadow-report | router decisions | router promotion review/nightly-review | router cost report | router score override/reset | router model mark/ban/list-overrides");
 }
 
 async function runCommandFromSnapshot(parsed: ParsedCliArgs, env: Record<string, string | undefined>): Promise<string> {

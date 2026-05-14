@@ -45,10 +45,23 @@ export function modelFromLeaderboard(modelKey: string, snapshot: LeaderboardSnap
 export function modelFromSourceRecord(record: CapabilitySourceRecord, fallbackSource = "external"): ModelIntelLite {
   return createModelIntel({
     modelKey: record.modelKey,
+    name: record.name,
     tier: record.tier ?? "unknown",
     price: record.price,
+    inputUsdPerMTok: record.inputUsdPerMTok,
+    outputUsdPerMTok: record.outputUsdPerMTok,
+    cacheReadUsdPerMTok: record.cacheReadUsdPerMTok,
+    cacheWriteUsdPerMTok: record.cacheWriteUsdPerMTok,
+    contextWindow: record.contextWindow,
+    input: record.input,
+    toolUse: record.toolUse,
+    structuredOutput: record.structuredOutput,
+    reasoning: record.reasoning,
+    promptCache: record.promptCache,
+    available: record.available,
     confidence: record.confidence ?? "low",
     source: record.source ?? fallbackSource,
+    freshness: record.lastVerifiedAt,
   });
 }
 
@@ -70,8 +83,20 @@ export function mergeCapabilitySnapshot(
 
 function createModelIntel(input: {
   modelKey: string;
+  name?: string;
   tier: RouterLiteCodingTier;
   price?: number;
+  inputUsdPerMTok?: number;
+  outputUsdPerMTok?: number;
+  cacheReadUsdPerMTok?: number;
+  cacheWriteUsdPerMTok?: number;
+  contextWindow?: number;
+  input?: Array<"text" | "image" | "audio" | "video">;
+  toolUse?: "yes" | "no" | "unknown";
+  structuredOutput?: "yes" | "no" | "unknown";
+  reasoning?: "yes" | "no" | "unknown";
+  promptCache?: "yes" | "no" | "unknown";
+  available?: "yes" | "no" | "unknown";
   confidence: RouterLiteConfidence;
   source: string;
   freshness?: string;
@@ -81,21 +106,27 @@ function createModelIntel(input: {
     provider,
     model,
     modelKey: input.modelKey,
+    name: input.name,
     configured: true,
-    available: "yes",
+    available: input.available ?? "yes",
     proposalOnly: false,
     tags: [],
     marketPrice: {
+      inputUsdPerMTok: input.inputUsdPerMTok,
+      outputUsdPerMTok: input.outputUsdPerMTok,
+      cacheReadUsdPerMTok: input.cacheReadUsdPerMTok,
+      cacheWriteUsdPerMTok: input.cacheWriteUsdPerMTok,
       blendedUsdPerMTok: input.price,
       confidence: input.price === undefined ? "unknown" : input.confidence,
       sources: input.price === undefined ? [] : [input.source],
     },
     capability: {
-      input: ["text"],
-      toolUse: "yes",
-      structuredOutput: "yes",
-      reasoning: "yes",
-      promptCache: "unknown",
+      contextWindow: input.contextWindow,
+      input: input.input ?? ["text"],
+      toolUse: input.toolUse ?? "yes",
+      structuredOutput: input.structuredOutput ?? "yes",
+      reasoning: input.reasoning ?? "yes",
+      promptCache: input.promptCache ?? "unknown",
       codingTier: input.tier,
       confidence: input.confidence,
       evidence: [input.source === "heuristic" ? "heuristic" : "declared"],

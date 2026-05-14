@@ -22,6 +22,7 @@ let originalOpenclawHome: string | undefined;
 const fsModule = fs as unknown as {
   mkdtempSync(prefix: string): string;
   rmSync(pathname: string, options?: { recursive?: boolean; force?: boolean }): void;
+  utimesSync(pathname: string, atime: Date, mtime: Date): void;
 };
 const osModule = os as unknown as { tmpdir(): string };
 
@@ -78,6 +79,21 @@ function writeCliModelIntelSnapshot(): void {
     models: [
       { provider: "zhipu", model: "GLM-5.1", modelKey: "zhipu/GLM-5.1", configured: true },
       { provider: "zhipu", model: "GLM-4.7", modelKey: "zhipu/GLM-4.7", configured: false },
+    ],
+  }), "utf8");
+}
+
+function writeLegacyModelIntelSnapshot(): void {
+  const snapshotDir = path.join(tempHome, "octoclaw", "router-lite");
+  fs.mkdirSync(snapshotDir, { recursive: true });
+  fs.writeFileSync(path.join(snapshotDir, "model-intel-snapshot.json"), JSON.stringify({
+    schemaVersion: "octoclaw.router_lite.model_intel_snapshot/v1",
+    snapshotId: "test-legacy-snapshot",
+    generatedAt: "2026-05-14T00:00:00.000Z",
+    sourceStatus: [],
+    models: [
+      { provider: "openai", model: "gpt-5.5", modelKey: "openai/gpt-5.5", configured: true },
+      { provider: "openai", model: "gpt-5-nano", modelKey: "openai/gpt-5-nano", configured: false },
     ],
   }), "utf8");
 }
@@ -493,6 +509,40 @@ describe("router wizard Slack onboarding", () => {
     await handleRouterWizardAction({ ...common, event: { actions: [{ action_id: "octoclaw_router_wizard_restricted_none" }] } });
 
     expect(sends.at(-1)?.message).toContain("zhipu/GLM-4.7");
+  });
+
+  it("uses the newest wizard model-intel snapshot across refresh locations", async () => {
+    fs.writeFileSync(path.join(tempHome, "openclaw.json"), JSON.stringify({
+      models: { providers: { openai: { models: [{ id: "gpt-5.5" }] } } },
+    }), "utf8");
+    writeCliModelIntelSnapshot();
+    writeLegacyModelIntelSnapshot();
+    const legacySnapshot = path.join(tempHome, "octoclaw", "router-lite", "model-intel-snapshot.json");
+    const cliSnapshot = path.join(tempHome, "workspace", "tmp", "octopus", "router-lite", "model-intel-snapshot.json");
+    fsModule.utimesSync(cliSnapshot, new Date("2026-05-14T00:00:00.000Z"), new Date("2026-05-14T00:00:00.000Z"));
+    fsModule.utimesSync(legacySnapshot, new Date("2026-05-14T00:05:00.000Z"), new Date("2026-05-14T00:05:00.000Z"));
+    const sends: Parameters<RouterWizardOnboardingSendMessage>[0][] = [];
+    const common = {
+      sessionKey: "agent:main:slack:default:direct:u123abc",
+      openclawHome: tempHome,
+      now: new Date("2026-05-14T00:00:00.000Z"),
+      sendMessage: async (params: Parameters<RouterWizardOnboardingSendMessage>[0]) => {
+        sends.push(params);
+        return { sent: true };
+      },
+    };
+
+    await handleRouterWizardAction({ ...common, event: { actions: [{ action_id: "octoclaw_router_wizard_start_questions" }] } });
+    await handleRouterWizardAction({ ...common, event: { actions: [{ action_id: "octoclaw_router_wizard_model_scan_continue" }] } });
+    await handleRouterWizardAction({ ...common, event: { actions: [{ action_id: "octoclaw_router_wizard_plan_confirm" }] } });
+    await handleRouterWizardAction({ ...common, event: { actions: [{ action_id: "octoclaw_router_wizard_budget_none" }] } });
+    await handleRouterWizardAction({ ...common, event: { actions: [{ action_id: "octoclaw_router_wizard_privacy_standard" }] } });
+    await handleRouterWizardAction({ ...common, event: { actions: [{ action_id: "octoclaw_router_wizard_language_auto" }] } });
+    await handleRouterWizardAction({ ...common, event: { actions: [{ action_id: "octoclaw_router_wizard_restricted_none" }] } });
+
+    const message = sends.at(-1)?.message ?? "";
+    expect(message).toContain("openai/gpt-5-nano");
+    expect(message).not.toContain("zhipu/GLM-4.7");
   });
 
   it("discovers canonical GPT family candidates for configured gateway aliases", async () => {

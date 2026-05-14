@@ -119,6 +119,11 @@ describe("octoclawctl cli", () => {
       forTier: "normal",
       extraArgs: ["model", "ban", "openai/gpt-5.5"],
     });
+    expect(parseCliArgs(["router", "capability", "show", "openai/gpt-5-mini", "--format", "json"])).toMatchObject({
+      command: "router",
+      format: "json",
+      extraArgs: ["capability", "show", "openai/gpt-5-mini"],
+    });
   });
 
   it("router wizard writes language and configured model source metadata", async () => {
@@ -652,6 +657,221 @@ describe("octoclawctl cli", () => {
       ]));
     } finally {
       await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("router capability refresh, list, show, and probe use external source adapters", async () => {
+    const tempDir = path.join(os.homedir(), ".octoclawctl-test-tmp", `router-capability-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    const openclawHome = path.join(tempDir, "home");
+    const outputDir = path.join(tempDir, "out");
+    try {
+      await fs.mkdir(outputDir, { recursive: true });
+
+      const refreshCapture = createIo();
+      const refreshExitCode = await main([
+        "router",
+        "capability",
+        "refresh",
+        "--openclaw-home",
+        openclawHome,
+        "--output-dir",
+        outputDir,
+        "--format",
+        "json",
+      ], {
+        OCTOCLAW_ROUTER_CAPABILITY_SOURCES_JSON: JSON.stringify({
+          openrouter: {
+            data: [{
+              id: "openai/gpt-5-mini",
+              context_length: 128000,
+              pricing: { prompt: "0.000001", completion: "0.000004" },
+              supported_parameters: ["tools", "response_format"],
+            }],
+          },
+          modelsDev: {},
+          litellm: {},
+        }),
+      }, refreshCapture.io);
+      expect(refreshExitCode).toBe(0);
+      const summary = JSON.parse(refreshCapture.stdout[0] ?? "{}");
+      expect(summary).toMatchObject({
+        sourceStatus: expect.arrayContaining([
+          { source: "packaged_leaderboard", status: "ok" },
+          { source: "openrouter", status: "ok" },
+          { source: "models.dev", status: "ok" },
+          { source: "litellm", status: "ok" },
+        ]),
+      });
+      expect(summary.models).toBeGreaterThanOrEqual(1);
+
+      const snapshotPath = path.join(outputDir, "model-intel-snapshot.json");
+      const listCapture = createIo();
+      const listExitCode = await main([
+        "router",
+        "capability",
+        "list",
+        "--openclaw-home",
+        openclawHome,
+        "--input",
+        snapshotPath,
+        "--format",
+        "json",
+      ], {}, listCapture.io);
+      expect(listExitCode).toBe(0);
+      expect(JSON.parse(listCapture.stdout[0] ?? "{}").models).toEqual(expect.arrayContaining([
+        expect.objectContaining({ modelKey: "openai/gpt-5-mini", provider: "openai" }),
+      ]));
+
+      const showCapture = createIo();
+      const showExitCode = await main([
+        "router",
+        "capability",
+        "show",
+        "openai/gpt-5-mini",
+        "--input",
+        snapshotPath,
+        "--format",
+        "json",
+      ], {}, showCapture.io);
+      expect(showExitCode).toBe(0);
+      expect(JSON.parse(showCapture.stdout[0] ?? "{}")).toMatchObject({
+        modelKey: "openai/gpt-5-mini",
+        marketPrice: { inputUsdPerMTok: 1, outputUsdPerMTok: 4 },
+        capability: { contextWindow: 128000, toolUse: "yes", structuredOutput: "yes" },
+      });
+
+      const probeCapture = createIo();
+      const probeExitCode = await main([
+        "router",
+        "capability",
+        "probe",
+        "openai/gpt-5-mini",
+        "--input",
+        snapshotPath,
+        "--format",
+        "json",
+      ], {}, probeCapture.io);
+      expect(probeExitCode).toBe(0);
+      expect(JSON.parse(probeCapture.stdout[0] ?? "{}")).toMatchObject({
+        model: "openai/gpt-5-mini",
+        ok: true,
+        reason: "known_available",
+      });
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("router capability show reports stale data age in text output", async () => {
+    const tempDir = path.join(os.homedir(), ".octoclawctl-test-tmp", `router-capability-stale-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    const snapshotPath = path.join(tempDir, "model-intel-snapshot.json");
+    try {
+      await fs.mkdir(tempDir, { recursive: true });
+      await fs.writeFile(snapshotPath, JSON.stringify({
+        schemaVersion: "octoclaw.router_lite.model_intel_snapshot/v1",
+        snapshotId: "stale-test",
+        generatedAt: "2026-05-14T00:00:00.000Z",
+        sourceStatus: [],
+        models: [{
+          provider: "openai",
+          model: "gpt-5-mini",
+          modelKey: "openai/gpt-5-mini",
+          configured: false,
+          available: "yes",
+          proposalOnly: true,
+          tags: [],
+          marketPrice: { confidence: "unknown", sources: [] },
+          capability: {
+            input: ["text"],
+            toolUse: "yes",
+            structuredOutput: "yes",
+            reasoning: "unknown",
+            promptCache: "unknown",
+            codingTier: "mini",
+            confidence: "medium",
+            evidence: ["declared"],
+            sources: ["models.dev"],
+          },
+          health: { available: "yes", cooldown: false, quotaPressure: "unknown", sources: [] },
+          plan: { type: "unknown", quotaPressure: "unknown", effectiveCostBand: "unknown", sources: [] },
+          freshness: "2026-01-01T00:00:00.000Z",
+          sources: ["models.dev"],
+        }],
+      }), "utf8");
+
+      const capture = createIo();
+      const exitCode = await main([
+        "router",
+        "capability",
+        "show",
+        "openai/gpt-5-mini",
+        "--input",
+        snapshotPath,
+      ], {}, capture.io);
+
+      expect(exitCode).toBe(0);
+      expect(capture.stdout[0]).toContain("data very_stale");
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("router capability snapshot show reports snapshot metadata", async () => {
+    const tempDir = path.join(os.homedir(), ".octoclawctl-test-tmp", `router-capability-snapshot-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    const snapshotPath = path.join(tempDir, "model-intel-snapshot.json");
+    try {
+      await fs.mkdir(tempDir, { recursive: true });
+      await fs.writeFile(snapshotPath, JSON.stringify({
+        schemaVersion: "octoclaw.router_lite.model_intel_snapshot/v1",
+        snapshotId: "snapshot-meta-test",
+        generatedAt: "2026-05-14T00:00:00.000Z",
+        sourceStatus: [
+          { source: "packaged_leaderboard", status: "ok" },
+          { source: "openrouter", status: "error", detail: "offline" },
+        ],
+        models: [{
+          provider: "openai",
+          model: "gpt-5-mini",
+          modelKey: "openai/gpt-5-mini",
+          configured: false,
+          available: "yes",
+          proposalOnly: true,
+          tags: [],
+          marketPrice: { confidence: "unknown", sources: [] },
+          capability: {
+            input: ["text"],
+            toolUse: "yes",
+            structuredOutput: "yes",
+            reasoning: "unknown",
+            promptCache: "unknown",
+            codingTier: "mini",
+            confidence: "medium",
+            evidence: ["declared"],
+            sources: ["models.dev"],
+          },
+          health: { available: "yes", cooldown: false, quotaPressure: "unknown", sources: [] },
+          plan: { type: "unknown", quotaPressure: "unknown", effectiveCostBand: "unknown", sources: [] },
+          freshness: "2026-05-14T00:00:00.000Z",
+          sources: ["models.dev"],
+        }],
+      }), "utf8");
+
+      const capture = createIo();
+      const exitCode = await main([
+        "router",
+        "capability",
+        "snapshot",
+        "show",
+        "--input",
+        snapshotPath,
+      ], {}, capture.io);
+
+      expect(exitCode).toBe(0);
+      expect(capture.stdout[0]).toContain("Capability snapshot: snapshot-meta-test");
+      expect(capture.stdout[0]).toContain("models=1");
+      expect(capture.stdout[0]).toContain("openrouter:error");
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
     }
   });
 

@@ -25,9 +25,22 @@ export interface LeaderboardSnapshot {
 
 export interface CapabilitySourceRecord {
   modelKey: string;
+  name?: string;
   price?: number;
+  inputUsdPerMTok?: number;
+  outputUsdPerMTok?: number;
+  cacheReadUsdPerMTok?: number;
+  cacheWriteUsdPerMTok?: number;
+  contextWindow?: number;
+  input?: Array<"text" | "image" | "audio" | "video">;
+  toolUse?: "yes" | "no" | "unknown";
+  structuredOutput?: "yes" | "no" | "unknown";
+  reasoning?: "yes" | "no" | "unknown";
+  promptCache?: "yes" | "no" | "unknown";
   tier?: RouterLiteCodingTier;
   confidence?: RouterLiteConfidence;
+  available?: "yes" | "no" | "unknown";
+  lastVerifiedAt?: string;
   source?: string;
 }
 

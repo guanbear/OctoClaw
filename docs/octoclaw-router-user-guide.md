@@ -60,6 +60,24 @@ octoclawctl router model-config analyze
 
 This writes a proposal file. It does not edit OpenClaw config and does not make proposal-only models live.
 
+Refresh the public capability snapshot cache:
+
+```bash
+octoclawctl router capability refresh
+octoclawctl router capability snapshot show
+octoclawctl router capability list
+octoclawctl router capability show openai/gpt-5-mini
+octoclawctl router capability probe openai/gpt-5-mini
+```
+
+Maintainers can regenerate the packaged leaderboard seed from external sources:
+
+```bash
+pnpm router:leaderboard:refresh
+```
+
+The refresh script pulls OpenRouter catalog metadata and PinchBench leaderboard data, then writes `packages/octoclaw-router/src/data/leaderboard-snapshot.json` unless `OCTOCLAW_ROUTER_SNAPSHOT_OUT` or `--output` is provided.
+
 ## Shadow And Promotion
 
 Review shadow comparisons:
