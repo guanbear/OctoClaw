@@ -1,3 +1,9 @@
+import fsSync from "node:fs";
+import { createRequire } from "node:module";
+import os from "node:os";
+import path from "node:path";
+import type { DatabaseSync } from "node:sqlite";
+
 export const COST_SQLITE_PATH = "~/.openclaw/octoclaw/cost.sqlite";
 
 export const COST_SQLITE_SCHEMA = `
@@ -40,6 +46,17 @@ export interface CostEvent {
   latencyMs?: number;
 }
 
+export type SqliteProvider = { DatabaseSync: new(location: string, options?: { open?: boolean }) => DatabaseSync } | null;
+
+export interface SqliteCostEventStoreOpenResult {
+  status: "ok" | "degraded";
+  dbPath: string;
+  store?: SqliteCostEventStore;
+  error?: string;
+  recoveredFromCorrupt?: boolean;
+  brokenPath?: string;
+}
+
 export class InMemoryCostEventStore {
   private readonly events: CostEvent[] = [];
 
@@ -52,6 +69,72 @@ export class InMemoryCostEventStore {
   }
 }
 
+export class SqliteCostEventStore {
+  constructor(private readonly db: DatabaseSync) {}
+
+  record(event: CostEvent): void {
+    this.db.prepare(`INSERT INTO cost_events (
+      ts,
+      session_key,
+      turn_id,
+      model,
+      provider,
+      complexity,
+      input_tokens,
+      output_tokens,
+      cache_read_tokens,
+      cache_write_tokens,
+      cost_usd,
+      route,
+      outcome,
+      is_plan_call,
+      latency_ms
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run(
+        event.ts,
+        event.sessionKey ?? null,
+        event.turnId ?? null,
+        event.model,
+        event.provider ?? null,
+        event.complexity ?? null,
+        event.inputTokens ?? null,
+        event.outputTokens ?? null,
+        event.cacheReadTokens ?? null,
+        event.cacheWriteTokens ?? null,
+        event.costUsd ?? null,
+        event.route ?? null,
+        event.outcome ?? null,
+        event.isPlanCall === undefined ? null : event.isPlanCall ? 1 : 0,
+        event.latencyMs ?? null,
+      );
+  }
+
+  list(): CostEvent[] {
+    return this.db.prepare(`SELECT
+      ts,
+      session_key,
+      turn_id,
+      model,
+      provider,
+      complexity,
+      input_tokens,
+      output_tokens,
+      cache_read_tokens,
+      cache_write_tokens,
+      cost_usd,
+      route,
+      outcome,
+      is_plan_call,
+      latency_ms
+    FROM cost_events
+    ORDER BY ts ASC, rowid ASC`).all().map(rowToCostEvent);
+  }
+
+  close(): void {
+    this.db.close();
+  }
+}
+
 export interface CostReport {
   period: "1d" | "7d" | "30d" | "month";
   totalUsd: number;
@@ -60,6 +143,44 @@ export interface CostReport {
   byRoute: Record<string, { totalUsd: number; percent: number }>;
   monthEndPredictionUsd: number;
   anomalies: Array<{ day: string; costUsd: number; reason: string }>;
+}
+
+const nodeRequire = createRequire(import.meta.url);
+
+function loadNodeSqlite(): SqliteProvider {
+  try {
+    return nodeRequire("node:sqlite") as SqliteProvider;
+  } catch {
+    return null;
+  }
+}
+
+export function resolveCostSqlitePath(openclawHome = path.join(os.homedir(), ".openclaw")): string {
+  return path.join(openclawHome, "octoclaw", "cost.sqlite");
+}
+
+export function openSqliteCostEventStore(input: {
+  dbPath?: string;
+  openclawHome?: string;
+  sqlite?: SqliteProvider;
+  now?: Date | number;
+} = {}): SqliteCostEventStoreOpenResult {
+  const dbPath = input.dbPath ?? resolveCostSqlitePath(input.openclawHome);
+  const sqlite = input.sqlite !== undefined ? input.sqlite : loadNodeSqlite();
+  if (!sqlite) return { status: "degraded", dbPath, error: "node:sqlite module unavailable" };
+
+  try {
+    fsSync.mkdirSync(path.dirname(dbPath), { recursive: true });
+  } catch (error) {
+    return { status: "degraded", dbPath, error: `failed to create cost db directory: ${errorMessage(error)}` };
+  }
+
+  const first = tryOpenCostDb(sqlite, dbPath);
+  if (first.status === "ok") return first;
+
+  const recovered = recoverCorruptCostDb({ dbPath, sqlite, now: input.now });
+  if (recovered.status === "ok") return recovered;
+  return first;
 }
 
 export interface BudgetStatus {
@@ -85,6 +206,81 @@ export function parseCostEventsJsonl(text: string, options: { warn?: (message: s
     options.warn?.(`[router-cost] cost store load failed: ${String(error)}`);
     return [];
   }
+}
+
+function tryOpenCostDb(sqlite: NonNullable<SqliteProvider>, dbPath: string): SqliteCostEventStoreOpenResult {
+  let db: DatabaseSync | undefined;
+  try {
+    db = new sqlite.DatabaseSync(dbPath);
+    db.exec("PRAGMA journal_mode=WAL");
+    db.exec("PRAGMA synchronous=NORMAL");
+    db.exec("PRAGMA busy_timeout=5000");
+    db.exec(COST_SQLITE_SCHEMA);
+    return { status: "ok", dbPath, store: new SqliteCostEventStore(db) };
+  } catch (error) {
+    try { db?.close(); } catch {}
+    return { status: "degraded", dbPath, error: `failed to open cost sqlite: ${errorMessage(error)}` };
+  }
+}
+
+function recoverCorruptCostDb(input: {
+  dbPath: string;
+  sqlite: NonNullable<SqliteProvider>;
+  now?: Date | number;
+}): SqliteCostEventStoreOpenResult {
+  if (!fsSync.existsSync(input.dbPath)) return { status: "degraded", dbPath: input.dbPath, error: "cost sqlite does not exist" };
+  const brokenPath = `${input.dbPath}.broken-${timestampForFile(input.now)}`;
+  try {
+    fsSync.renameSync(input.dbPath, brokenPath);
+  } catch (error) {
+    return { status: "degraded", dbPath: input.dbPath, error: `failed to rename corrupt cost sqlite: ${errorMessage(error)}` };
+  }
+  const opened = tryOpenCostDb(input.sqlite, input.dbPath);
+  if (opened.status === "ok") return { ...opened, recoveredFromCorrupt: true, brokenPath };
+  return opened;
+}
+
+function rowToCostEvent(row: Record<string, unknown>): CostEvent {
+  const isPlanCall = row.is_plan_call === null || row.is_plan_call === undefined ? undefined : Number(row.is_plan_call) === 1;
+  return {
+    ts: String(row.ts),
+    ...(stringField(row.session_key) ? { sessionKey: stringField(row.session_key) } : {}),
+    ...(stringField(row.turn_id) ? { turnId: stringField(row.turn_id) } : {}),
+    model: String(row.model),
+    ...(stringField(row.provider) ? { provider: stringField(row.provider) } : {}),
+    ...(isComplexity(row.complexity) ? { complexity: row.complexity } : {}),
+    ...(numberField(row.input_tokens) !== undefined ? { inputTokens: numberField(row.input_tokens) } : {}),
+    ...(numberField(row.output_tokens) !== undefined ? { outputTokens: numberField(row.output_tokens) } : {}),
+    ...(numberField(row.cache_read_tokens) !== undefined ? { cacheReadTokens: numberField(row.cache_read_tokens) } : {}),
+    ...(numberField(row.cache_write_tokens) !== undefined ? { cacheWriteTokens: numberField(row.cache_write_tokens) } : {}),
+    ...(numberField(row.cost_usd) !== undefined ? { costUsd: numberField(row.cost_usd) } : {}),
+    ...(row.route === "reply" || row.route === "delegate" ? { route: row.route } : {}),
+    ...(row.outcome === "success" || row.outcome === "failure" || row.outcome === "timeout" ? { outcome: row.outcome } : {}),
+    ...(isPlanCall !== undefined ? { isPlanCall } : {}),
+    ...(numberField(row.latency_ms) !== undefined ? { latencyMs: numberField(row.latency_ms) } : {}),
+  };
+}
+
+function stringField(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function numberField(value: unknown): number | undefined {
+  const numeric = typeof value === "number" ? value : value === null || value === undefined ? Number.NaN : Number(value);
+  return Number.isFinite(numeric) ? numeric : undefined;
+}
+
+function isComplexity(value: unknown): value is NonNullable<CostEvent["complexity"]> {
+  return value === "simple" || value === "normal" || value === "complex" || value === "deep";
+}
+
+function timestampForFile(now: Date | number = Date.now()): string {
+  const date = now instanceof Date ? now : new Date(now);
+  return date.toISOString().replace(/[:.]/gu, "-");
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 export function generateCostReport(

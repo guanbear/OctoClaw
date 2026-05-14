@@ -8,6 +8,9 @@ import type {
   RouterLiteScenario,
   ScenarioAbilityLite,
 } from "./contracts.js";
+import { buildPromotionState, getPromotionState } from "../promotion/index.js";
+import type { PromotionDecisionEvent, PromotionStateMap } from "../promotion/index.js";
+import type { BudgetStatus } from "../cost/index.js";
 
 type Rejection = RouterLiteRecommendation["rejectedModels"][number];
 
@@ -17,6 +20,12 @@ type ScoreWeights = {
   stability: number;
   speed: number;
 };
+
+export interface ShadowRecommendationOptions {
+  promotionDecisions?: PromotionDecisionEvent[];
+  promotionState?: PromotionStateMap;
+  budget?: BudgetStatus;
+}
 
 const SCORING_WEIGHTS: Record<RouterLiteScoringMode, ScoreWeights> = {
   cost_first: { quality: 20, cost: 45, stability: 25, speed: 10 },
@@ -81,12 +90,13 @@ export function selectShadowRecommendation(
   request: RouterLiteRequest,
   snapshot: ModelIntelSnapshot,
   mode: RouterLiteScoringMode = "balanced",
+  options: ShadowRecommendationOptions = {},
 ): RouterLiteRecommendation {
   const qualityFloor = QUALITY_FLOOR_BY_COMPLEXITY[request.judge.complexity];
   const outputBudget = OUTPUT_BUDGET_BY_COMPLEXITY[request.judge.complexity];
   const rejectedModels: Rejection[] = [];
   const eligible = snapshot.models.filter((model) => {
-    const rejectionReason = getHardGateRejectionReason(request, model, qualityFloor);
+    const rejectionReason = getHardGateRejectionReason(request, model, qualityFloor, options.budget);
 
     if (rejectionReason !== undefined) {
       rejectedModels.push({ model: model.modelKey, reason: rejectionReason });
@@ -120,11 +130,21 @@ export function selectShadowRecommendation(
 
   const eligibleModels = scoredModels.map((entry) => entry.model);
   const recommendedModel = eligibleModels[0];
-  const ignoredReason = getIgnoredReason(request, rejectedModels, eligibleModels.length);
+  const ignoredReason = getIgnoredReason(request, rejectedModels, eligibleModels.length, options.budget);
+  const promotionState = options.promotionState ?? buildPromotionState(
+    options.promotionDecisions ?? [],
+    snapshot.models.filter((model) => model.configured).map((model) => model.modelKey),
+  );
+  const promotion = recommendedModel === undefined
+    ? undefined
+    : getPromotionState(promotionState, recommendedModel, request.judge.complexity);
+  const isLivePromotion = ignoredReason === undefined && promotion?.state === "live";
   const reasonCodes = [
     eligibleModels.length > 0 ? "hard_gate_pass" : "hard_gate_rejected",
     mode,
     `quality_floor_${qualityFloor}`,
+    isLivePromotion ? "promotion_live" : "promotion_shadow",
+    ...(options.budget?.reasonCodes ?? []),
     ...(ignoredReason ? [`ignored_${ignoredReason}`] : []),
   ];
 
@@ -135,7 +155,7 @@ export function selectShadowRecommendation(
     eligibleModels,
     rejectedModels,
     reasonCodes,
-    mode: "shadow",
+    mode: isLivePromotion ? "live" : "shadow",
     scoringMode: mode,
     scenario: getScenario(request),
     ignoredReason,
@@ -146,6 +166,7 @@ function getHardGateRejectionReason(
   request: RouterLiteRequest,
   model: ModelIntelLite,
   qualityFloor: RouterLiteCodingTier,
+  budget?: BudgetStatus,
 ): string | undefined {
   if (model.configured !== true) {
     return "not_configured";
@@ -161,6 +182,10 @@ function getHardGateRejectionReason(
 
   if (model.health.quotaPressure === "high") {
     return "quota_pressure_high";
+  }
+
+  if (budget?.action === "plan_only" && !isPlanIncluded(model)) {
+    return "budget_exceeded_plan_only";
   }
 
   if (model.marketPrice.conflict === true) {
@@ -338,6 +363,7 @@ function getIgnoredReason(
   request: RouterLiteRequest,
   rejectedModels: Rejection[],
   eligibleModelCount: number,
+  budget?: BudgetStatus,
 ): RouterLiteRecommendation["ignoredReason"] {
   if (request.runtime.statusOrProvenanceRequest === true) {
     return "status_or_provenance_request";
@@ -356,6 +382,9 @@ function getIgnoredReason(
   }
 
   if (eligibleModelCount === 0) {
+    if (budget?.action === "plan_only" && rejectedModels.some((entry) => entry.reason === "budget_exceeded_plan_only")) {
+      return "budget_exceeded_no_plan";
+    }
     if (rejectedModels.length > 0 && rejectedModels.every((entry) => entry.reason === "not_configured")) {
       return "not_configured";
     }
@@ -382,4 +411,8 @@ function getScenario(request: RouterLiteRequest): RouterLiteScenario | undefined
 
 function clampScore(score: number): number {
   return Math.max(0, Math.min(100, score));
+}
+
+function isPlanIncluded(model: ModelIntelLite): boolean {
+  return model.plan.effectiveCostBand === "free_or_sunk";
 }

@@ -53,6 +53,19 @@ export interface PromotionDecisionEvent {
   evidence?: Record<string, unknown>;
 }
 
+export type PromotionRuntimeState = "shadow" | "live" | "failed";
+
+export interface PromotionStateEntry {
+  model: string;
+  tier: string;
+  state: PromotionRuntimeState;
+  since: string;
+  reason: string;
+  decision: PromotionAction;
+}
+
+export type PromotionStateMap = Record<string, PromotionStateEntry>;
+
 export interface PromotionReviewSummary {
   failureRates: Record<string, number>;
   costDeltaByModel: Record<string, number>;
@@ -190,6 +203,57 @@ export function parsePromotionDecisionLog(text: string): PromotionDecisionEvent[
     .map((line) => JSON.parse(line) as PromotionDecisionEvent);
 }
 
+export function buildPromotionState(
+  decisions: PromotionDecisionEvent[],
+  configuredModels: string[] = [],
+): PromotionStateMap {
+  const configured = new Set(configuredModels);
+  const sorted = [...decisions].sort((left, right) => {
+    const leftTime = Date.parse(left.ts);
+    const rightTime = Date.parse(right.ts);
+    const normalizedLeft = Number.isNaN(leftTime) ? 0 : leftTime;
+    const normalizedRight = Number.isNaN(rightTime) ? 0 : rightTime;
+    return normalizedLeft - normalizedRight;
+  });
+  const state: PromotionStateMap = {};
+
+  for (const decision of sorted) {
+    const key = promotionStateKey(decision.model, decision.tier);
+    const isConfigured = configured.size === 0 || configured.has(decision.model);
+    const runtimeState: PromotionRuntimeState = decision.decision === "promote" && isConfigured
+      ? "live"
+      : decision.decision === "mark_failed"
+        ? "failed"
+        : "shadow";
+
+    state[key] = {
+      model: decision.model,
+      tier: decision.tier,
+      state: runtimeState,
+      since: decision.ts,
+      reason: decision.decision === "promote" && !isConfigured ? "not_configured" : decision.reason,
+      decision: decision.decision,
+    };
+  }
+
+  return state;
+}
+
+export function getPromotionState(
+  state: PromotionStateMap,
+  model: string,
+  tier: string,
+): PromotionStateEntry {
+  return state[promotionStateKey(model, tier)] ?? {
+    model,
+    tier,
+    state: "shadow",
+    since: "",
+    reason: "no_promotion_decision",
+    decision: "hold",
+  };
+}
+
 export function filterPromotionDecisions(
   decisions: PromotionDecisionEvent[],
   since?: string,
@@ -258,6 +322,10 @@ function median(values: number[]): number | undefined {
   if (values.length === 0) return undefined;
   const sorted = [...values].sort((left, right) => left - right);
   return sorted[Math.floor(sorted.length / 2)];
+}
+
+function promotionStateKey(model: string, tier: string): string {
+  return `${model}\u0000${tier}`;
 }
 
 function isNumber(value: unknown): value is number {

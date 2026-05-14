@@ -1,5 +1,16 @@
+import fsSync from "node:fs";
+import path from "node:path";
+import os from "node:os";
+import {
+  evaluateBudget,
+  generateCostReport,
+  openSqliteCostEventStore,
+} from "@octoclaw/router";
 import { selectShadowRecommendation, writeShadowEvent } from "@octoclaw/router/decision";
 import type { RouterLiteShadowEvent, ModelIntelSnapshot } from "@octoclaw/router/decision";
+import { parsePromotionDecisionLog } from "@octoclaw/router/promotion";
+import type { PromotionDecisionEvent } from "@octoclaw/router/promotion";
+import type { BudgetStatus } from "@octoclaw/router";
 import { loadRouterLiteSnapshot, resolveShadowEventPath } from "./snapshot-loader.js";
 import { buildRouterLiteRequest, extractJudgeSignals, buildRuntimeSignalsFromDecision, resolveActualModel } from "./request-builder.js";
 import type { RouterLiteRuntimeSignals } from "./request-builder.js";
@@ -47,6 +58,56 @@ function stableTurnId(sessionKey: string): string {
   return `turn-${sessionKey}-${Date.now()}`;
 }
 
+function resolvePromotionDecisionsPath(): string {
+  const override = process.env.OCTOCLAW_ROUTER_DECISIONS_PATH;
+  if (override && override.trim()) return override.trim();
+  return path.join(os.homedir(), ".openclaw", "octoclaw", "router-lite", "decisions.log");
+}
+
+function loadPromotionDecisions(logger: LoggerLike): PromotionDecisionEvent[] {
+  try {
+    return parsePromotionDecisionLog(fsSync.readFileSync(resolvePromotionDecisionsPath(), "utf8"));
+  } catch (error) {
+    const code = typeof error === "object" && error !== null ? (error as { code?: unknown }).code : undefined;
+    if (code !== "ENOENT") {
+      logger?.warn?.(`[router-lite] promotion decisions load failed: ${String(error)}`);
+    }
+    return [];
+  }
+}
+
+function resolveOpenclawHome(): string {
+  const override = process.env.OPENCLAW_HOME;
+  if (override && override.trim()) return override.trim();
+  return path.join(os.homedir(), ".openclaw");
+}
+
+function loadBudgetStatus(logger: LoggerLike): BudgetStatus | undefined {
+  const openclawHome = resolveOpenclawHome();
+  try {
+    const raw = JSON.parse(fsSync.readFileSync(path.join(openclawHome, "octoclaw", "router-wizard.json"), "utf8")) as {
+      budget?: { monthly?: unknown };
+    };
+    const monthly = typeof raw.budget?.monthly === "number" ? raw.budget.monthly : Number(raw.budget?.monthly);
+    if (!Number.isFinite(monthly)) return undefined;
+
+    const opened = openSqliteCostEventStore({ openclawHome });
+    if (opened.status !== "ok" || !opened.store) return undefined;
+    try {
+      const report = generateCostReport(opened.store.list(), { period: "month" });
+      return evaluateBudget(monthly, report.totalUsd);
+    } finally {
+      opened.store.close();
+    }
+  } catch (error) {
+    const code = typeof error === "object" && error !== null ? (error as { code?: unknown }).code : undefined;
+    if (code !== "ENOENT") {
+      logger?.warn?.(`[router-lite] budget status load failed: ${String(error)}`);
+    }
+    return undefined;
+  }
+}
+
 /**
  * Emit a router-lite shadow event comparing actual vs recommended model.
  * 
@@ -75,7 +136,9 @@ export function emitRouterLiteShadowEvent(input: ShadowBridgeInput): void {
     });
     if (!request) return; // incomplete judge data, skip silently
 
-    const recommendation = selectShadowRecommendation(request, snapshot);
+    const promotionDecisions = loadPromotionDecisions(input.logger);
+    const budget = loadBudgetStatus(input.logger);
+    const recommendation = selectShadowRecommendation(request, snapshot, "balanced", { promotionDecisions, budget });
     const estimatedCostDeltaUsd = computeCostDelta(snapshot, actualModel, recommendation.recommendedModel);
 
     const event: RouterLiteShadowEvent = {

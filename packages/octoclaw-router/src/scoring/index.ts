@@ -3,6 +3,9 @@ import type {
   RouterLiteRecommendation,
   RouterLiteRequest,
 } from "../decision/contracts.js";
+import { getPromotionState } from "../promotion/index.js";
+import type { PromotionStateMap } from "../promotion/index.js";
+import type { BudgetStatus } from "../cost/index.js";
 
 export type Complexity = RouterLiteRequest["judge"]["complexity"];
 
@@ -23,6 +26,8 @@ export interface ScoringContext {
   userBans: Record<string, Complexity[]>;
   userDispreferred: Record<string, Complexity[]>;
   scoreOverrides: Record<string, Partial<Record<Complexity, number>>>;
+  promotionState?: PromotionStateMap;
+  budget?: BudgetStatus;
 }
 
 export const BALANCED_WEIGHTS: ScoringWeights = {
@@ -109,7 +114,10 @@ export function buildRecommendation(models: ModelIntelLite[], context: ScoringCo
 
   const ignoredReason = getIgnoredReason(models, rejectedModels);
   const winner = eligible[0]?.model;
-  const reasonCodes = winner ? buildReasonCodes(winner, context, rejectedModels, models) : ["no_eligible_model"];
+  const isLivePromotion = winner === undefined ? false : getPromotionState(context.promotionState ?? {}, winner.modelKey, context.complexity).state === "live";
+  const reasonCodes = winner
+    ? buildReasonCodes(winner, context, rejectedModels, models, isLivePromotion)
+    : ["no_eligible_model", ...(context.budget?.reasonCodes ?? [])];
 
   return {
     recommendedModel: winner?.modelKey,
@@ -118,7 +126,7 @@ export function buildRecommendation(models: ModelIntelLite[], context: ScoringCo
     eligibleModels: eligible.map((candidate) => candidate.model.modelKey),
     rejectedModels,
     reasonCodes,
-    mode: "shadow",
+    mode: isLivePromotion ? "live" : "shadow",
     scoringMode: "balanced",
     ignoredReason,
   };
@@ -185,6 +193,7 @@ export function getRejectionReason(model: ModelIntelLite, context: ScoringContex
   if (model.health.cooldown) return "cooldown_active";
   if (model.health.available === "no" || model.available === "no") return "unavailable";
   if (context.userBans[model.modelKey]?.includes(context.complexity)) return "user_ban_active";
+  if (context.budget?.action === "plan_only" && !isPlanIncluded(model)) return "budget_exceeded_plan_only";
   if (!hasCapabilityFor(model)) return "capability_evidence_missing";
   if (!qualityFloorPassesFor(model, context.complexity)) return "quality_floor_not_met";
   if (context.runtimeSignals.needsTools && model.capability.toolUse !== "yes") return "tool_support_insufficient";
@@ -208,6 +217,7 @@ function getIgnoredReason(
   if (rejectedModels.every((entry) => entry.reason === "cooldown_active")) return "all_cooldown";
   if (rejectedModels.every((entry) => entry.reason === "quality_floor_not_met")) return "no_quality_floor_match";
   if (rejectedModels.every((entry) => entry.reason === "user_ban_active")) return "all_banned";
+  if (rejectedModels.every((entry) => entry.reason === "budget_exceeded_plan_only")) return "budget_exceeded_no_plan";
   if (rejectedModels.every((entry) => entry.reason === "capability_evidence_missing")) return "no_capability_data";
   return "no_eligible_model";
 }
@@ -217,11 +227,14 @@ function buildReasonCodes(
   context: ScoringContext,
   rejectedModels: RouterLiteRecommendation["rejectedModels"],
   allModels: ModelIntelLite[],
+  isLivePromotion: boolean,
 ): string[] {
   const qualityFloor = MIN_TIER_BY_COMPLEXITY[context.complexity];
   const reasonCodes = [
     `quality_floor_pass:${qualityFloor}`,
     `recommended_model:${model.modelKey}`,
+    isLivePromotion ? "promotion_live" : "promotion_shadow",
+    ...(context.budget?.reasonCodes ?? []),
   ];
   if (Object.keys(context.userBans).length > 0) reasonCodes.push("user_ban_active");
   if (context.userDispreferred[model.modelKey]?.includes(context.complexity) === false
@@ -243,4 +256,8 @@ function outputBudgetFor(complexity: Complexity): RouterLiteRecommendation["outp
     : complexity === "normal" ? "medium"
       : complexity === "complex" ? "long"
         : "deep";
+}
+
+function isPlanIncluded(model: ModelIntelLite): boolean {
+  return model.plan.effectiveCostBand === "free_or_sunk";
 }

@@ -6,6 +6,7 @@ import { spawn } from "node:child_process";
 
 declare const process: { env: Record<string, string | undefined> };
 import type { RuntimeStateSurfaceRecord } from "@octoclaw/runtime/state-surface";
+import { openSqliteCostEventStore } from "@octoclaw/router";
 import {
   main,
   parseCliArgs,
@@ -240,6 +241,45 @@ describe("octoclawctl cli", () => {
         action: "warn",
         reasonCodes: ["budget_warning_80_percent"],
       });
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("router cost report reads local cost.sqlite when jsonl events are absent", async () => {
+    const tmpDir = path.join(os.homedir(), ".octoclawctl-test-tmp", `router-cost-sqlite-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    const openclawHome = path.join(tmpDir, ".openclaw");
+    const octoclawDir = path.join(openclawHome, "octoclaw");
+    try {
+      await fs.mkdir(octoclawDir, { recursive: true });
+      await fs.writeFile(path.join(octoclawDir, "router-wizard.json"), JSON.stringify({
+        schemaVersion: "octoclaw.router_wizard/v1",
+        completedAt: "2026-05-14T00:00:00.000Z",
+        models: { "openai/gpt-5.5": { planType: "pay_as_you_go", configuredAt: "2026-05-14T00:00:00.000Z", source: "configured" } },
+        budget: { monthly: 100, currency: "USD" },
+        privacy: "standard",
+        language: "auto",
+        restrictedModels: [],
+        overrides: { scoreOverrides: {}, userBans: {}, userDispreferred: {}, entries: [] },
+      }), "utf8");
+      const opened = openSqliteCostEventStore({ dbPath: path.join(octoclawDir, "cost.sqlite") });
+      expect(opened.status).toBe("ok");
+      opened.store?.record({
+        ts: new Date().toISOString(),
+        model: "openai/gpt-5.5",
+        complexity: "deep",
+        route: "delegate",
+        costUsd: 64,
+      });
+      opened.store?.close();
+
+      const capture = createIo();
+      const exitCode = await main(["router", "cost", "report", "--openclaw-home", openclawHome, "--format", "json"], {}, capture.io);
+
+      expect(exitCode).toBe(0);
+      const report = JSON.parse(capture.stdout[0] ?? "{}");
+      expect(report.totalUsd).toBe(64);
+      expect(report.byModel["openai/gpt-5.5"]).toMatchObject({ totalUsd: 64, percent: 100 });
     } finally {
       await fs.rm(tmpDir, { recursive: true, force: true });
     }

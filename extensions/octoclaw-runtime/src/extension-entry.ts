@@ -101,6 +101,7 @@ import {
   handleRouterWizardAction,
   maybeSendRouterWizardOnboarding,
 } from "./router-onboarding.js";
+import { recordRuntimeCostEventAndBudget } from "./router-cost-runtime.js";
 
 export type NativeAnnounceSendMessage = (params: {
   sessionKey: string;
@@ -3646,10 +3647,17 @@ export const plugin = {
       }, pi.logger, asRecord(replayMatch.state?.decision)).catch(() => {});
     });
 
-    registerLifecycleHook("agent_end", async (_event, ctx) => {
+    registerLifecycleHook("agent_end", async (event, ctx) => {
       if (!isManagedAgentContext(ctx)) return;
       const { key: stateKey, state } = getPolicyStateForContext(ctx);
       if (!stateKey) return;
+      recordRuntimeCostEventAndBudget({
+        event,
+        ctx,
+        state,
+        stateKey,
+        logger: pi.logger,
+      });
       lastGroundedPromptByStateKey.delete(stateKey);
       clearBudgetedMainTimer(stateKey);
       const pendingTimer = pendingLatencyAckTimers.get(stateKey);

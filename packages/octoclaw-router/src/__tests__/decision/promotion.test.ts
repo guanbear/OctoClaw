@@ -7,6 +7,8 @@ import {
   evaluatePromotionForConfiguredModel,
   evaluateRevert,
   filterPromotionDecisions,
+  buildPromotionState,
+  getPromotionState,
   parsePromotionDecisionLog,
   renderPromotionDecisions,
   runLightweightPromotionReview,
@@ -120,6 +122,23 @@ describe("promotion evaluator RT-P-001..008", () => {
     expect(filtered).toHaveLength(1);
     expect(renderPromotionDecisions(filtered)).toContain("deepseek/deepseek-v4");
     expect(JSON.parse(renderPromotionDecisions(filtered, "json"))).toMatchObject({ decisions: [{ model: "deepseek/deepseek-v4" }] });
+  });
+
+  it("RT-P-009 derives live state from latest configured promotion decision", () => {
+    const decisions = parsePromotionDecisionLog([
+      JSON.stringify({ ts: "2026-05-10T00:00:00.000Z", model: "deepseek/deepseek-v4", tier: "normal", decision: "promote", reason: "meets_promotion_criteria" }),
+      JSON.stringify({ ts: "2026-05-11T00:00:00.000Z", model: "unconfigured/frontier", tier: "deep", decision: "promote", reason: "meets_promotion_criteria" }),
+      JSON.stringify({ ts: "2026-05-12T00:00:00.000Z", model: "zhipu/glm-5.1", tier: "normal", decision: "promote", reason: "meets_promotion_criteria" }),
+      JSON.stringify({ ts: "2026-05-13T00:00:00.000Z", model: "zhipu/glm-5.1", tier: "normal", decision: "revert", reason: "failure_rate_exceeded" }),
+      JSON.stringify({ ts: "2026-05-13T01:00:00.000Z", model: "openai/gpt-5-mini", tier: "simple", decision: "mark_failed", reason: "quality_regression" }),
+    ].join("\n"));
+
+    const state = buildPromotionState(decisions, ["deepseek/deepseek-v4", "zhipu/glm-5.1", "openai/gpt-5-mini"]);
+
+    expect(getPromotionState(state, "deepseek/deepseek-v4", "normal")).toMatchObject({ state: "live", since: "2026-05-10T00:00:00.000Z" });
+    expect(getPromotionState(state, "unconfigured/frontier", "deep")).toMatchObject({ state: "shadow", reason: "not_configured" });
+    expect(getPromotionState(state, "zhipu/glm-5.1", "normal")).toMatchObject({ state: "shadow", reason: "failure_rate_exceeded" });
+    expect(getPromotionState(state, "openai/gpt-5-mini", "simple")).toMatchObject({ state: "failed", reason: "quality_regression" });
   });
 
   it("aggregates shadow metrics and lightweight nightly review signals", () => {

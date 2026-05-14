@@ -1,3 +1,7 @@
+import fs from "node:fs";
+import { createRequire } from "node:module";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
 import type { ModelIntelLite } from "../../decision/contracts.js";
@@ -7,10 +11,18 @@ import {
   evaluateBudget,
   generateCostReport,
   InMemoryCostEventStore,
+  openSqliteCostEventStore,
   parseCostEventsJsonl,
   renderCostReport,
   type CostEvent,
+  type SqliteProvider,
 } from "../../cost/index.js";
+
+const nodeRequire = createRequire(import.meta.url);
+
+function requireNodeSqlite(): NonNullable<SqliteProvider> {
+  return nodeRequire("node:sqlite") as NonNullable<SqliteProvider>;
+}
 
 function costEvent(index: number, overrides: Partial<CostEvent> = {}): CostEvent {
   return {
@@ -116,5 +128,79 @@ describe("cost reporting RT-$-001..007", () => {
     expect(events).toEqual([]);
     expect(report.totalUsd).toBe(0);
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("[router-cost] cost store load failed:"));
+  });
+
+  it("persists cost events to local cost.sqlite and reads them back", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "octoclaw-cost-sqlite-"));
+    const dbPath = path.join(tempDir, "cost.sqlite");
+    const sqlite = requireNodeSqlite();
+    try {
+      const opened = openSqliteCostEventStore({ dbPath, sqlite });
+      expect(opened.status).toBe("ok");
+      opened.store?.record(costEvent(0, {
+        sessionKey: "agent:main:slack:default:direct:u123",
+        turnId: "turn-1",
+        model: "openai/gpt-5.5",
+        provider: "openai",
+        complexity: "normal",
+        inputTokens: 1200,
+        outputTokens: 800,
+        cacheReadTokens: 100,
+        cacheWriteTokens: 50,
+        costUsd: 0.42,
+        route: "delegate",
+        outcome: "success",
+        isPlanCall: true,
+        latencyMs: 1234,
+      }));
+      opened.store?.close();
+
+      const reopened = openSqliteCostEventStore({ dbPath, sqlite });
+      expect(reopened.status).toBe("ok");
+      expect(reopened.store?.list()).toEqual([
+        expect.objectContaining({
+          sessionKey: "agent:main:slack:default:direct:u123",
+          turnId: "turn-1",
+          model: "openai/gpt-5.5",
+          provider: "openai",
+          complexity: "normal",
+          inputTokens: 1200,
+          outputTokens: 800,
+          cacheReadTokens: 100,
+          cacheWriteTokens: 50,
+          costUsd: 0.42,
+          route: "delegate",
+          outcome: "success",
+          isPlanCall: true,
+          latencyMs: 1234,
+        }),
+      ]);
+      reopened.store?.close();
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("renames corrupted cost.sqlite and starts with an empty store", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "octoclaw-cost-corrupt-"));
+    const dbPath = path.join(tempDir, "cost.sqlite");
+    const sqlite = requireNodeSqlite();
+    try {
+      fs.writeFileSync(dbPath, "not a sqlite database", "utf8");
+
+      const opened = openSqliteCostEventStore({
+        dbPath,
+        sqlite,
+        now: new Date("2026-05-14T00:00:00.000Z"),
+      });
+
+      expect(opened.status).toBe("ok");
+      expect(opened.recoveredFromCorrupt).toBe(true);
+      expect(opened.store?.list()).toEqual([]);
+      expect(fs.readdirSync(tempDir).some((fileName) => fileName.startsWith("cost.sqlite.broken-"))).toBe(true);
+      opened.store?.close();
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
   });
 });

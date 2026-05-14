@@ -8,6 +8,7 @@ import {
   scoreModel,
   type ScoringContext,
 } from "../../scoring/index.js";
+import { buildPromotionState } from "../../promotion/index.js";
 
 function model(modelKey: string, tier: ModelIntelLite["capability"]["codingTier"], overrides: Partial<ModelIntelLite> = {}): ModelIntelLite {
   const [provider, name] = modelKey.split("/");
@@ -185,5 +186,39 @@ describe("scoring engine RT-S-001..010", () => {
     expect(buildRecommendation([model("a/b", "mini")], context("deep", [model("a/b", "mini")])).ignoredReason).toBe("no_quality_floor_match");
     expect(buildRecommendation([], context("normal", [])).ignoredReason).toBe("no_capability_data");
     expect(buildRecommendation([model("a/b", "standard")], context("normal", [model("a/b", "standard")], { userBans: { "a/b": ["normal"] } })).ignoredReason).toBe("all_banned");
+  });
+
+  it("RT-P-010 marks promoted configured scoring recommendations live", () => {
+    const models = [
+      model("openai/gpt-5.5", "standard", { marketPrice: { blendedUsdPerMTok: 20, confidence: "high", sources: ["test"] } }),
+      model("deepseek/deepseek-v4", "standard", { marketPrice: { blendedUsdPerMTok: 2, confidence: "high", sources: ["test"] } }),
+    ];
+    const promotionState = buildPromotionState([
+      { ts: "2026-05-13T00:00:00.000Z", model: "deepseek/deepseek-v4", tier: "normal", decision: "promote", reason: "meets_promotion_criteria" },
+    ], models.map((entry) => entry.modelKey));
+
+    const recommendation = buildRecommendation(models, context("normal", models, { promotionState }));
+
+    expect(recommendation.recommendedModel).toBe("deepseek/deepseek-v4");
+    expect(recommendation.mode).toBe("live");
+    expect(recommendation.reasonCodes).toContain("promotion_live");
+  });
+
+  it("RT-$-006 applies budget plan-only gating in scoring recommendations", () => {
+    const models = [
+      model("openai/gpt-5.5", "standard", {
+        marketPrice: { blendedUsdPerMTok: 20, confidence: "high", sources: ["test"] },
+        plan: { type: "subscription", quotaPressure: "low", effectiveCostBand: "free_or_sunk", sources: ["test"] },
+      }),
+      model("deepseek/deepseek-v4", "standard", { marketPrice: { blendedUsdPerMTok: 2, confidence: "high", sources: ["test"] } }),
+    ];
+
+    const recommendation = buildRecommendation(models, context("normal", models, {
+      budget: { usedPercent: 102, action: "plan_only", reasonCodes: ["budget_exceeded_plan_only"] },
+    }));
+
+    expect(recommendation.recommendedModel).toBe("openai/gpt-5.5");
+    expect(recommendation.rejectedModels).toContainEqual({ model: "deepseek/deepseek-v4", reason: "budget_exceeded_plan_only" });
+    expect(recommendation.reasonCodes).toContain("budget_exceeded_plan_only");
   });
 });

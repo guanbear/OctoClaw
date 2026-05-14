@@ -191,7 +191,8 @@ export interface RouterLiteRecommendation {
     | "all_unconfigured"
     | "all_cooldown"
     | "no_quality_floor_match"
-    | "all_banned";
+    | "all_banned"
+    | "budget_exceeded_no_plan";
 }
 
 export interface RouterLiteShadowEvent {

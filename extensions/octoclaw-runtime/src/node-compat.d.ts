@@ -47,6 +47,7 @@ declare module "node:path" {
 declare module "node:os" {
   interface OsModule {
     homedir(): string;
+    tmpdir(): string;
   }
   const os: OsModule;
   export default os;
@@ -90,6 +91,7 @@ declare module "node:fs" {
     closeSync(fd: number): void;
     unlinkSync(path: string): void;
     rmSync(path: string, options?: { recursive?: boolean; force?: boolean }): void;
+    mkdtempSync(prefix: string): string;
     constants: FsConstants;
   }
   const fs: FsModule;

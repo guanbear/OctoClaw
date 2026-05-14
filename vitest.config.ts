@@ -38,6 +38,7 @@ export default defineConfig({
       { find: "@octoclaw/router/semantic", replacement: sourcePath("packages/octoclaw-router/src/semantic/index.ts") },
       { find: "@octoclaw/router/decision", replacement: sourcePath("packages/octoclaw-router/src/decision/index.ts") },
       { find: "@octoclaw/router/router-lite", replacement: sourcePath("packages/octoclaw-router/src/decision/index.ts") },
+      { find: "@octoclaw/router/promotion", replacement: sourcePath("packages/octoclaw-router/src/promotion/index.ts") },
       { find: "@octoclaw/router", replacement: sourcePath("packages/octoclaw-router/src/index.ts") },
       { find: "@octoclaw/status-surface", replacement: sourcePath("extensions/octoclaw-status-surface/src/index.ts") },
     ],

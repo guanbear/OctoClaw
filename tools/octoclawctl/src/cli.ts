@@ -26,6 +26,7 @@ import {
   evaluateBudget,
   evaluatePromotionForConfiguredModel,
   generateCostReport,
+  openSqliteCostEventStore,
   parsePromotionDecisionLog,
   renderPromotionDecisions,
   type CostEvent,
@@ -2412,7 +2413,18 @@ async function runRouterLiteCommand(parsed: ParsedCliArgs, env: Record<string, s
     try {
       events = parseRouterCostEvents(await fs.readFile(costPath, "utf8"));
     } catch (error) {
-      if (!isNotFoundError(error)) events = [];
+      if (!isNotFoundError(error)) {
+        events = [];
+      } else {
+        const opened = openSqliteCostEventStore({ dbPath: path.join(openclawHome, "octoclaw", "cost.sqlite") });
+        if (opened.status === "ok") {
+          try {
+            events = opened.store?.list() ?? [];
+          } finally {
+            opened.store?.close();
+          }
+        }
+      }
     }
     return renderRouterCostReport(events, parsed.period, wantsJson ? "json" : "text", await loadRouterWizardFile(openclawHome));
   }
