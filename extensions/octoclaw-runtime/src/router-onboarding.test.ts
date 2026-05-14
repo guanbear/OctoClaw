@@ -67,6 +67,21 @@ function writeModelIntelSnapshot(): void {
   }), "utf8");
 }
 
+function writeCliModelIntelSnapshot(): void {
+  const snapshotDir = path.join(tempHome, "workspace", "tmp", "octopus", "router-lite");
+  fs.mkdirSync(snapshotDir, { recursive: true });
+  fs.writeFileSync(path.join(snapshotDir, "model-intel-snapshot.json"), JSON.stringify({
+    schemaVersion: "octoclaw.router_lite.model_intel_snapshot/v1",
+    snapshotId: "test-cli-snapshot",
+    generatedAt: "2026-05-14T00:00:00.000Z",
+    sourceStatus: [],
+    models: [
+      { provider: "zhipu", model: "GLM-5.1", modelKey: "zhipu/GLM-5.1", configured: true },
+      { provider: "zhipu", model: "GLM-4.7", modelKey: "zhipu/GLM-4.7", configured: false },
+    ],
+  }), "utf8");
+}
+
 function writeOpenclawConfigForSameProviderDiscovery(): void {
   fs.writeFileSync(path.join(tempHome, "openclaw.json"), JSON.stringify({
     models: {
@@ -94,6 +109,23 @@ function writeSameProviderDiscoverySnapshot(): void {
       { provider: "cliproxyapi", model: "gpt-5.4-mini", modelKey: "cliproxyapi/gpt-5.4-mini", configured: false },
       { provider: "omniroute", model: "cx/gpt-5.4", modelKey: "omniroute/cx/gpt-5.4", configured: true },
       { provider: "omniroute", model: "cx/gpt-5.4-mini", modelKey: "omniroute/cx/gpt-5.4-mini", configured: false },
+    ],
+  }), "utf8");
+}
+
+function writeGatewayFamilyDiscoverySnapshot(): void {
+  const snapshotDir = path.join(tempHome, "octoclaw", "router-lite");
+  fs.mkdirSync(snapshotDir, { recursive: true });
+  fs.writeFileSync(path.join(snapshotDir, "model-intel-snapshot.json"), JSON.stringify({
+    schemaVersion: "octoclaw.router_lite.model_intel_snapshot/v1",
+    snapshotId: "test-gateway-family-snapshot",
+    generatedAt: "2026-05-14T00:00:00.000Z",
+    sourceStatus: [],
+    models: [
+      { provider: "cliproxyapi", model: "gpt-5.5", modelKey: "cliproxyapi/gpt-5.5", configured: true },
+      { provider: "openai", model: "gpt-5-mini", modelKey: "openai/gpt-5-mini", configured: false },
+      { provider: "openai", model: "gpt-5.4-mini", modelKey: "openai/gpt-5.4-mini", configured: false },
+      { provider: "zhipu", model: "glm-4.7", modelKey: "zhipu/glm-4.7", configured: false },
     ],
   }), "utf8");
 }
@@ -436,6 +468,65 @@ describe("router wizard Slack onboarding", () => {
     expect(sameProviderMessage).not.toContain("`zhipu/glm-5.1` → 待确认");
     expect(sameProviderMessage).not.toContain("`cliproxyapi/gpt-5.5` → 待确认");
     expect(sameProviderMessage).not.toContain("`omniroute/cx/gpt-5.4` → 待确认");
+  });
+
+  it("loads the model-intel snapshot written by router model-intel refresh", async () => {
+    writeOpenclawConfigForSameProviderDiscovery();
+    writeCliModelIntelSnapshot();
+    const sends: Parameters<RouterWizardOnboardingSendMessage>[0][] = [];
+    const common = {
+      sessionKey: "agent:main:slack:default:direct:u123abc",
+      openclawHome: tempHome,
+      now: new Date("2026-05-14T00:00:00.000Z"),
+      sendMessage: async (params: Parameters<RouterWizardOnboardingSendMessage>[0]) => {
+        sends.push(params);
+        return { sent: true };
+      },
+    };
+
+    await handleRouterWizardAction({ ...common, event: { actions: [{ action_id: "octoclaw_router_wizard_start_questions" }] } });
+    await handleRouterWizardAction({ ...common, event: { actions: [{ action_id: "octoclaw_router_wizard_model_scan_continue" }] } });
+    await handleRouterWizardAction({ ...common, event: { actions: [{ action_id: "octoclaw_router_wizard_plan_confirm" }] } });
+    await handleRouterWizardAction({ ...common, event: { actions: [{ action_id: "octoclaw_router_wizard_budget_none" }] } });
+    await handleRouterWizardAction({ ...common, event: { actions: [{ action_id: "octoclaw_router_wizard_privacy_standard" }] } });
+    await handleRouterWizardAction({ ...common, event: { actions: [{ action_id: "octoclaw_router_wizard_language_auto" }] } });
+    await handleRouterWizardAction({ ...common, event: { actions: [{ action_id: "octoclaw_router_wizard_restricted_none" }] } });
+
+    expect(sends.at(-1)?.message).toContain("zhipu/GLM-4.7");
+  });
+
+  it("discovers canonical GPT family candidates for configured gateway aliases", async () => {
+    fs.writeFileSync(path.join(tempHome, "openclaw.json"), JSON.stringify({
+      models: {
+        providers: {
+          cliproxyapi: { models: [{ id: "gpt-5.5" }] },
+        },
+      },
+    }), "utf8");
+    writeGatewayFamilyDiscoverySnapshot();
+    const sends: Parameters<RouterWizardOnboardingSendMessage>[0][] = [];
+    const common = {
+      sessionKey: "agent:main:slack:default:direct:u123abc",
+      openclawHome: tempHome,
+      now: new Date("2026-05-14T00:00:00.000Z"),
+      sendMessage: async (params: Parameters<RouterWizardOnboardingSendMessage>[0]) => {
+        sends.push(params);
+        return { sent: true };
+      },
+    };
+
+    await handleRouterWizardAction({ ...common, event: { actions: [{ action_id: "octoclaw_router_wizard_start_questions" }] } });
+    await handleRouterWizardAction({ ...common, event: { actions: [{ action_id: "octoclaw_router_wizard_model_scan_continue" }] } });
+    await handleRouterWizardAction({ ...common, event: { actions: [{ action_id: "octoclaw_router_wizard_plan_confirm" }] } });
+    await handleRouterWizardAction({ ...common, event: { actions: [{ action_id: "octoclaw_router_wizard_budget_none" }] } });
+    await handleRouterWizardAction({ ...common, event: { actions: [{ action_id: "octoclaw_router_wizard_privacy_standard" }] } });
+    await handleRouterWizardAction({ ...common, event: { actions: [{ action_id: "octoclaw_router_wizard_language_auto" }] } });
+    await handleRouterWizardAction({ ...common, event: { actions: [{ action_id: "octoclaw_router_wizard_restricted_none" }] } });
+
+    const sameProviderMessage = sends.at(-1)?.message ?? "";
+    expect(sameProviderMessage).toContain("openai/gpt-5-mini");
+    expect(sameProviderMessage).toContain("openai/gpt-5.4-mini");
+    expect(sameProviderMessage).not.toContain("zhipu/glm-4.7");
   });
 
   it("supports all-button question wizard path without free-form text", async () => {

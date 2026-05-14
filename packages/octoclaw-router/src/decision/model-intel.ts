@@ -23,6 +23,7 @@ export interface BuildModelIntelSnapshotInput {
   openClawModelsList?: unknown;
   openClawConfig?: unknown;
   legacyCatalog?: unknown;
+  packagedSnapshot?: unknown;
   usageStatus?: unknown;
   usageCost?: unknown;
   scenarioData?: unknown;
@@ -574,6 +575,40 @@ function modelsFromLegacyCatalog(catalog: unknown): PartialModelIntel[] {
   return models;
 }
 
+function partialObject<T>(value: unknown): Partial<T> | undefined {
+  const record = asRecord(value);
+  return Object.keys(record).length > 0 ? record as Partial<T> : undefined;
+}
+
+function modelsFromModelIntelSnapshot(snapshot: unknown): PartialModelIntel[] {
+  const rawModels = asRecord(snapshot).models;
+  if (!Array.isArray(rawModels)) return [];
+  const models: PartialModelIntel[] = [];
+  for (const rawModel of rawModels) {
+    const record = asRecord(rawModel);
+    const modelKey = asString(record.modelKey);
+    if (!modelKey) continue;
+    const identity = splitModelKey(modelKey, asString(record.provider));
+    models.push({
+      ...identity,
+      provider: asString(record.provider) || identity.provider,
+      model: asString(record.model) || identity.model,
+      name: asString(record.name) || undefined,
+      configured: false,
+      available: triState(record.available),
+      tags: asStringArray(record.tags),
+      marketPrice: partialObject<RouterLitePrice>(record.marketPrice),
+      capability: partialObject<RouterLiteCapability>(record.capability),
+      health: partialObject<RouterLiteHealth>(record.health),
+      plan: partialObject<RouterLitePlan>(record.plan),
+      scenarioAbility: partialObject<ScenarioAbilityLite>(record.scenarioAbility) as ScenarioAbilityLite | undefined,
+      freshness: asString(record.freshness) || asString(asRecord(snapshot).generatedAt) || undefined,
+      sources: unique([...asStringArray(record.sources), "packaged_model_intel"]),
+    });
+  }
+  return models;
+}
+
 function modelSignalEntries(input: unknown): Map<string, JsonRecord> {
   const result = new Map<string, JsonRecord>();
   const root = asRecord(input);
@@ -707,6 +742,7 @@ export function buildModelIntelSnapshot(input: BuildModelIntelSnapshotInput): Mo
       : []),
     ...modelsFromOpenClawConfig(input.openClawConfig),
     ...modelsFromLegacyCatalog(input.legacyCatalog),
+    ...modelsFromModelIntelSnapshot(input.packagedSnapshot),
   ];
 
   const merged = new Map<string, ModelIntelLite>();
@@ -743,6 +779,7 @@ export function buildModelIntelSnapshot(input: BuildModelIntelSnapshotInput): Mo
       sourceStatus("openclaw_models_list", input.openClawModelsList),
       sourceStatus("openclaw_config", input.openClawConfig),
       sourceStatus("legacy_model_catalog", input.legacyCatalog),
+      sourceStatus("packaged_model_intel", input.packagedSnapshot),
       sourceStatus("openclaw_usage_status", input.usageStatus),
       sourceStatus("openclaw_usage_cost", input.usageCost),
       sourceStatus("scenario_data", input.scenarioData),

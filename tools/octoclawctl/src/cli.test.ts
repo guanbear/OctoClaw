@@ -618,13 +618,16 @@ describe("octoclawctl cli", () => {
       ], env, refreshCapture.io);
       expect(refreshExitCode).toBe(0);
       const refreshSummary = JSON.parse(refreshCapture.stdout[0] ?? "{}");
-      expect(refreshSummary).toMatchObject({ models: 2, configured: 1, proposalOnly: 1 });
+      expect(refreshSummary).toMatchObject({ configured: 1, proposalOnly: 4 });
+      expect(refreshSummary.models).toBeGreaterThanOrEqual(5);
 
       const snapshot = JSON.parse(await fs.readFile(path.join(outputDir, "model-intel-snapshot.json"), "utf8"));
       expect(snapshot.models.map((model: { modelKey: string }) => model.modelKey)).toEqual(expect.arrayContaining([
         "cliproxyapi/gpt-5.5",
         "cliproxyapi/gpt-5.5-mini",
+        "openai/gpt-5-mini",
       ]));
+      expect(snapshot.sourceStatus).toContainEqual({ source: "packaged_model_intel", status: "ok" });
 
       const analyzeCapture = createIo();
       const analyzeExitCode = await main([

@@ -2549,10 +2549,13 @@ async function runRouterLiteCommand(parsed: ParsedCliArgs, env: Record<string, s
     const usageCost = await runOpenClawJsonCommand(["gateway", "usage-cost", "--days", "3", "--json"], commandEnv);
     const openClawConfig = await readJsonFile(path.join(openclawHome, "openclaw.json"));
     const legacyCatalog = await readJsonFile(path.join(openclawHome, "workspace", "tmp", "octopus", "model-catalog.json"));
-    const snapshot = (await loadPolicyRouterLite()).buildModelIntelSnapshot({
+    const routerLite = await loadPolicyRouterLite();
+    const router = await loadRouter();
+    const snapshot = routerLite.buildModelIntelSnapshot({
       openClawModelsList,
       openClawConfig,
       legacyCatalog,
+      packagedSnapshot: router.loadPackagedModelIntelSnapshot(),
       usageStatus,
       usageCost,
     });

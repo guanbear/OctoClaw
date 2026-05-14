@@ -227,6 +227,71 @@ describe("model intelligence and shadow reporting", () => {
     expect(proposal.proposals.some((item) => item.whyNotLive.includes("live routing would require explicit operator enable"))).toBe(true);
   });
 
+  it("keeps packaged leaderboard models as proposal-only candidates in refreshed snapshots", () => {
+    const snapshot = buildModelIntelSnapshot({
+      generatedAt: "2026-05-14T00:00:00.000Z",
+      openClawConfig: {
+        models: {
+          providers: {
+            cliproxyapi: {
+              models: [
+                { id: "gpt-5.5", cost: { input: 30, output: 90 } },
+              ],
+            },
+          },
+        },
+      },
+      packagedSnapshot: {
+        schemaVersion: "octoclaw.router_lite.model_intel_snapshot/v1",
+        snapshotId: "packaged",
+        generatedAt: "2026-05-13T00:00:00.000Z",
+        sourceStatus: [{ source: "packaged_leaderboard", status: "ok" }],
+        models: [
+          {
+            provider: "openai",
+            model: "gpt-5-mini",
+            modelKey: "openai/gpt-5-mini",
+            configured: true,
+            available: "yes",
+            proposalOnly: false,
+            tags: [],
+            marketPrice: {
+              blendedUsdPerMTok: 1,
+              confidence: "medium",
+              sources: ["packaged_leaderboard"],
+            },
+            capability: {
+              input: ["text"],
+              toolUse: "yes",
+              structuredOutput: "yes",
+              reasoning: "yes",
+              promptCache: "unknown",
+              codingTier: "mini",
+              confidence: "medium",
+              evidence: ["declared"],
+              sources: ["packaged_leaderboard"],
+            },
+            health: { available: "yes", cooldown: false, quotaPressure: "unknown", sources: [] },
+            plan: { type: "unknown", quotaPressure: "unknown", effectiveCostBand: "unknown", sources: [] },
+            sources: ["packaged_leaderboard"],
+          },
+        ],
+      },
+    });
+
+    expect(snapshot.sourceStatus).toContainEqual({ source: "packaged_model_intel", status: "ok" });
+    expect(snapshot.models.find((model) => model.modelKey === "openai/gpt-5-mini")).toMatchObject({
+      configured: false,
+      proposalOnly: true,
+      marketPrice: { blendedUsdPerMTok: 1, sources: ["packaged_leaderboard"] },
+      capability: { codingTier: "mini", sources: ["packaged_leaderboard"] },
+    });
+    expect(snapshot.models.find((model) => model.modelKey === "cliproxyapi/gpt-5.5")).toMatchObject({
+      configured: true,
+      proposalOnly: false,
+    });
+  });
+
   it("RT-C-010 writes shadow events fail-open and reports local JSONL aggregates", () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "octoclaw-shadow-report-"));
     const jsonlPath = path.join(tempDir, "shadow.jsonl");

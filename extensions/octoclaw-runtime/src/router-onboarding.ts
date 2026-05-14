@@ -377,16 +377,27 @@ function routerWizardSnapshotPath(openclawHome = ""): string {
   return path.join(resolveOpenclawHome(openclawHome), "octoclaw", "router-lite", "model-intel-snapshot.json");
 }
 
+function routerWizardSnapshotPaths(openclawHome = ""): string[] {
+  const home = resolveOpenclawHome(openclawHome);
+  return [
+    path.join(home, "workspace", "tmp", "octopus", "router-lite", "model-intel-snapshot.json"),
+    routerWizardSnapshotPath(openclawHome),
+  ];
+}
+
 function loadRouterWizardSnapshotModels(openclawHome = ""): ModelIntelLite[] {
-  try {
-    const raw = fsSync.readFileSync(routerWizardSnapshotPath(openclawHome), "utf8");
-    return loadSnapshotFromText(raw).models;
-  } catch {
+  for (const snapshotPath of routerWizardSnapshotPaths(openclawHome)) {
     try {
-      return loadPackagedModelIntelSnapshot().models;
+      const raw = fsSync.readFileSync(snapshotPath, "utf8");
+      return loadSnapshotFromText(raw).models;
     } catch {
-      return [];
+      continue;
     }
+  }
+  try {
+    return loadPackagedModelIntelSnapshot().models;
+  } catch {
+    return [];
   }
 }
 
@@ -399,15 +410,29 @@ function normalizedModelKey(modelKey: string): string {
   return stringValue(modelKey).trim().toLowerCase();
 }
 
+function modelFamilyFor(modelKey: string): string {
+  const normalized = normalizedModelKey(modelKey);
+  if (/(^|[\/_-])gpt[-_.]?\d/.test(normalized)) return "openai:gpt";
+  if (/(^|[\/_-])glm[-_.]?\d/.test(normalized)) return "zhipu:glm";
+  if (/(^|[\/_-])claude[-_.]?/.test(normalized)) return "anthropic:claude";
+  if (/(^|[\/_-])gemini[-_.]?/.test(normalized)) return "google:gemini";
+  if (/(^|[\/_-])qwen[-_.]?/.test(normalized)) return "alibaba:qwen";
+  if (/(^|[\/_-])deepseek[-_.]?/.test(normalized)) return "deepseek:deepseek";
+  return "";
+}
+
 function discoverSameProviderRouterModels(openclawHome = "", configuredModels = discoverConfiguredRouterModels(openclawHome)): string[] {
   const configured = new Set(configuredModels.map(normalizedModelKey).filter(Boolean));
   const configuredProviders = new Set(configuredModels.map(providerForModel).filter(Boolean));
+  const configuredFamilies = new Set(configuredModels.map(modelFamilyFor).filter(Boolean));
   const discovered = new Map<string, string>();
   for (const model of loadRouterWizardSnapshotModels(openclawHome)) {
     const modelKey = stringValue(model.modelKey);
     const normalized = normalizedModelKey(modelKey);
     if (!modelKey || !normalized) continue;
-    if (!configuredProviders.has(providerForModel(modelKey)) || configured.has(normalized)) continue;
+    const sameProvider = configuredProviders.has(providerForModel(modelKey));
+    const sameFamily = configuredFamilies.has(modelFamilyFor(modelKey));
+    if ((!sameProvider && !sameFamily) || configured.has(normalized)) continue;
     if (!discovered.has(normalized)) discovered.set(normalized, modelKey);
   }
   return [...discovered.values()].slice(0, 8);
