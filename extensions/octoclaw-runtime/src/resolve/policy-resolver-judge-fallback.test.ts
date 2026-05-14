@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveStatelessPolicyDecision } from "./policy-resolver.js";
 import { policyState } from "../state/policy-state.js";
 import { buildDelegationTicketDryRun } from "../runtime-ledger/ticket-dry-run.js";
+import { resetCooldownForTests } from "./judge-cooldown.js";
 
 const localJudgeConfig = {
   enabled: true,
@@ -75,6 +76,7 @@ function routeDecisionOf(decision: unknown): Record<string, unknown> {
 
 describe("policy resolver judge timeout fallback", () => {
   beforeEach(() => {
+    resetCooldownForTests();
     vi.restoreAllMocks();
   });
 
@@ -338,11 +340,13 @@ describe("execution coverage override intent guard", () => {
   ];
 
   beforeEach(() => {
+    resetCooldownForTests();
     vi.restoreAllMocks();
     for (const key of testKeys) policyState.clear(key);
   });
 
   afterEach(() => {
+    resetCooldownForTests();
     for (const key of testKeys) policyState.clear(key);
   });
 
@@ -1039,11 +1043,13 @@ describe("policy resolver WorkContract integration", () => {
   const stateKey = "agent:main:work-contract-integration";
 
   beforeEach(() => {
+    resetCooldownForTests();
     vi.restoreAllMocks();
     policyState.clear(stateKey);
   });
 
   afterEach(() => {
+    resetCooldownForTests();
     policyState.clear(stateKey);
   });
 
@@ -1504,7 +1510,12 @@ Sender (untrusted metadata):
 
 describe("SR-P1 startup-cost-aware delegation tightening", () => {
   beforeEach(() => {
+    resetCooldownForTests();
     vi.restoreAllMocks();
+  });
+
+  afterEach(() => {
+    resetCooldownForTests();
   });
 
   describe("false-delegate: advisory signals must not force delegate", () => {

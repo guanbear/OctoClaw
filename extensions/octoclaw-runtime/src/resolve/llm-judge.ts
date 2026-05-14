@@ -12,16 +12,19 @@ import {
   buildJudgeSystemPrompt,
   buildJudgeUserPrompt,
 } from "@octoclaw/router/judge-prompt";
+import { OctoClawError, Errors } from "@octoclaw/errors";
 import { buildJudgeContextPacket } from "./judge-context-packet.js";
+import { isHealthGatesDisabled, isJudgeInCooldown, recordJudgeFailure, recordJudgeSuccess } from "./judge-cooldown.js";
 
 export { isValidJudgeOutput, isActionableJudgeResult };
 export type { JudgeFastConfig, JudgeInput, JudgeOutput };
 
 type JudgeConfig = JudgeFastConfig;
 
-export type JudgeFailureClass = "timeout" | "http_error" | "invalid_json" | "unknown";
+export type JudgeFailureClass = "timeout" | "http_error" | "invalid_json" | "unknown" | "cooldown";
 
 export let lastJudgeFailureClass: JudgeFailureClass | null = null;
+export let lastJudgeError: OctoClawError | null = null;
 
 function warnJudgeFailure(error: unknown): void {
   if (process.env.OCTOCLAW_JUDGE_DEBUG) {
@@ -330,6 +333,13 @@ export async function callLlmJudge(
   config: JudgeConfig,
 ): Promise<JudgeOutput | null> {
   lastJudgeFailureClass = null;
+  lastJudgeError = null;
+  if (isJudgeInCooldown(config.modelId) && !isHealthGatesDisabled()) {
+    lastJudgeFailureClass = "cooldown";
+    lastJudgeError = Errors.judgeCooldown(config.modelId);
+    return null;
+  }
+
   const effectiveTimeout = config.local ? config.timeoutLocalMs : config.timeoutMs;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), effectiveTimeout);
@@ -357,13 +367,25 @@ export async function callLlmJudge(
 
     if (!parsed || !isValidJudgeOutput(parsed)) {
       lastJudgeFailureClass = "invalid_json";
+      lastJudgeError = Errors.judgeParseFailed(raw);
       warnJudgeFailure(new Error("judge returned invalid JSON"));
       return null;
     }
 
-    return coerceJudgeOutput(parsed);
+    const output = coerceJudgeOutput(parsed);
+    recordJudgeSuccess(config.modelId);
+    return output;
   } catch (error) {
     lastJudgeFailureClass = classifyJudgeError(error);
+    // Create appropriate OctoClawError based on failure class
+    if (lastJudgeFailureClass === "timeout") {
+      lastJudgeError = Errors.judgeTimeout(config.modelId, effectiveTimeout);
+    } else {
+      lastJudgeError = Errors.judgeEndpointUnreachable(config.baseUrl);
+    }
+    if (recordJudgeFailure(config.modelId)) {
+      console.warn(`[octoclaw-judge] judge entered cooldown: model=${config.modelId}`);
+    }
     warnJudgeFailure(error);
     return null;
   } finally {
