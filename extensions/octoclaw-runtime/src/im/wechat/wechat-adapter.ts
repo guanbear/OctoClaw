@@ -1,3 +1,4 @@
+import { ERROR_CODES } from "@octoclaw/errors";
 import { runCommand, resolveWorkspaceRoot } from "../../resolve/env.js";
 import type { IMAdapter, IMDeliveryTarget, IMReactParams, IMReactResult, IMSendParams, IMSendResult } from "../adapter.js";
 
@@ -112,7 +113,7 @@ export class WeChatAdapter implements IMAdapter {
     const target = this.resolveTarget(sessionKey);
 
     if (!target.target) {
-      return { sent: false, delivered: false, error: "unresolvable_session_target" };
+      return { sent: false, delivered: false, error: ERROR_CODES.IM_UNRESOLVABLE_TARGET };
     }
 
     // L0: truncate to 2048 chars; never pass replyToMessageId (no threading)
@@ -152,7 +153,7 @@ export class WeChatAdapter implements IMAdapter {
       return {
         sent: false,
         delivered: false,
-        error: String(errorPayload?.error ?? result.stderr ?? "send_failed").slice(0, 200),
+        error: String(errorPayload?.error ?? result.stderr ?? ERROR_CODES.IM_SEND_FAILED).slice(0, 200),
       };
     } catch (err) {
       return { sent: false, delivered: false, error: String(err) };

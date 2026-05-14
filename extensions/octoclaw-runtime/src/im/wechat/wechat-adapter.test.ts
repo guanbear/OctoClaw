@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { ERROR_CODES } from "@octoclaw/errors";
 import { WeChatAdapter } from "./wechat-adapter.js";
 import * as env from "../../resolve/env.js";
 
@@ -84,7 +85,7 @@ describe("WeChatAdapter", () => {
       message: "hello",
     });
     expect(result.sent).toBe(false);
-    expect(result.error).toBe("unresolvable_session_target");
+    expect(result.error).toBe(ERROR_CODES.IM_UNRESOLVABLE_TARGET);
   });
 
   it("send ignores replyToMessageId — WeChat has no threading", async () => {

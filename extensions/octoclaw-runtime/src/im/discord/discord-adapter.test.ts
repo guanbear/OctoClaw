@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { ERROR_CODES } from "@octoclaw/errors";
 import { DiscordAdapter } from "./discord-adapter.js";
 import * as env from "../../resolve/env.js";
 
@@ -29,6 +30,16 @@ describe("DiscordAdapter", () => {
     expect(target.channel).toBe("discord");
     expect(target.target).toBe("456");
     expect(target.threadTs).toBe("999");
+  });
+
+  it("send returns coded error for unresolvable session key", async () => {
+    const adapter = new DiscordAdapter();
+    const result = await adapter.send({
+      sessionKey: "agent:main:slack:default:direct:U123",
+      message: "hello",
+    });
+    expect(result.sent).toBe(false);
+    expect(result.error).toBe(ERROR_CODES.IM_UNRESOLVABLE_TARGET);
   });
 
   it("splits 2500 characters into 2 Discord messages", async () => {

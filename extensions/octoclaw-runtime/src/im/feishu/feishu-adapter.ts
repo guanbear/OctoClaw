@@ -1,3 +1,4 @@
+import { ERROR_CODES } from "@octoclaw/errors";
 import { runCommand, resolveWorkspaceRoot } from "../../resolve/env.js";
 import type { IMAdapter, IMDeliveryTarget, IMReactParams, IMReactResult, IMSendParams, IMSendResult } from "../adapter.js";
 import { splitIMText } from "../text-split.js";
@@ -151,7 +152,7 @@ function parseFeishuSendResult(code: number, stdout: string, stderr: string): IM
   return {
     sent: false,
     delivered: false,
-    error: String(errorPayload?.error ?? stderr ?? "send_failed").slice(0, 200),
+    error: String(errorPayload?.error ?? stderr ?? ERROR_CODES.IM_SEND_FAILED).slice(0, 200),
   };
 }
 
@@ -227,7 +228,7 @@ export class FeishuAdapter implements IMAdapter {
     const target = this.resolveTarget(sessionKey);
 
     if (!target.target) {
-      return { sent: false, delivered: false, error: "unresolvable_session_target" };
+      return { sent: false, delivered: false, error: ERROR_CODES.IM_UNRESOLVABLE_TARGET };
     }
 
     const textSegments = splitIMText(message, FEISHU_CAPABILITIES.maxMessageLength, {
@@ -259,7 +260,7 @@ export class FeishuAdapter implements IMAdapter {
 
       lastResult = await this.deliver(args, cwdValue, timeoutValue);
       if (!lastResult.sent) {
-        return { ...lastResult, error: "IM_SEND_FAILED" };
+        return { ...lastResult, error: ERROR_CODES.IM_SEND_FAILED };
       }
     }
 
@@ -273,7 +274,7 @@ export class FeishuAdapter implements IMAdapter {
       if (!lastResult.sent) {
         return {
           ...lastResult,
-          error: textSegments.length > 1 ? "IM_SEND_FAILED" : lastResult.error || "IM_SEND_FAILED",
+          error: textSegments.length > 1 ? ERROR_CODES.IM_SEND_FAILED : lastResult.error || ERROR_CODES.IM_SEND_FAILED,
         };
       }
     }
@@ -296,7 +297,7 @@ export class FeishuAdapter implements IMAdapter {
 
       lastResult = await this.deliver(args, cwdValue, timeoutValue);
       if (!lastResult.sent) {
-        return { ...lastResult, error: "IM_SEND_FAILED" };
+        return { ...lastResult, error: ERROR_CODES.IM_SEND_FAILED };
       }
     }
 

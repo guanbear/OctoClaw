@@ -1,3 +1,4 @@
+import { ERROR_CODES } from "@octoclaw/errors";
 import { runCommand, resolveWorkspaceRoot } from "../../resolve/env.js";
 import type { IMAdapter, IMDeliveryTarget, IMProjectionFooter, IMReactParams, IMReactResult, IMSendParams, IMSendResult } from "../adapter.js";
 import { splitIMText } from "../text-split.js";
@@ -114,7 +115,7 @@ function parseSendResult(code: number, stdout: string, stderr: string): IMSendRe
   return {
     sent: false,
     delivered: false,
-    error: String(errorPayload?.error ?? stderr ?? "send_failed").slice(0, 200),
+    error: String(errorPayload?.error ?? stderr ?? ERROR_CODES.IM_SEND_FAILED).slice(0, 200),
   };
 }
 
@@ -153,7 +154,7 @@ export class DiscordAdapter implements IMAdapter {
     const { sessionKey, interactiveBlocks, replyToMessageId, timeoutMs = 5000, cwd } = params;
     const target = this.resolveTarget(sessionKey);
     if (!target.target) {
-      return { sent: false, delivered: false, error: "unresolvable_session_target" };
+      return { sent: false, delivered: false, error: ERROR_CODES.IM_UNRESOLVABLE_TARGET };
     }
 
     const message = params.projectionFooter && !params.suppressProjectionFooter

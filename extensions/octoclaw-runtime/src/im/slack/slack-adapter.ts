@@ -2,6 +2,7 @@ import fs from "node:fs";
 import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
+import { ERROR_CODES } from "@octoclaw/errors";
 import { runCommand, resolveWorkspaceRoot } from "../../resolve/env.js";
 import { firstDisplayModel } from "../../model-display.js";
 import { hasProjectionFooter, OCTOCLAW_PROJECTION_FOOTER_PREFIX } from "../../projection-footer-sanitizer.js";
@@ -132,12 +133,13 @@ function shouldUseIsolatedSlackApi(): boolean {
 
 const SLACK_API_CHILD_SOURCE = `
 const fs = require("node:fs");
+const ERROR_CODES = { IM_SEND_FAILED: "${ERROR_CODES.IM_SEND_FAILED}" };
 (async () => {
   let timer;
   try {
     const input = JSON.parse(fs.readFileSync(0, "utf8"));
     if (typeof fetch !== "function") {
-      console.log(JSON.stringify({ ok: false, error: "fetch_unavailable" }));
+      console.log(JSON.stringify({ ok: false, error: ERROR_CODES.IM_SEND_FAILED }));
       return;
     }
     const method = String(input.method || "");
@@ -160,11 +162,11 @@ const fs = require("node:fs");
       JSON.parse(text);
       console.log(text);
     } catch {
-      console.log(JSON.stringify({ ok: false, error: "non_json_slack_response" }));
+      console.log(JSON.stringify({ ok: false, error: ERROR_CODES.IM_SEND_FAILED }));
     }
   } catch (error) {
     const message = error && error.message ? String(error.message) : String(error);
-    console.log(JSON.stringify({ ok: false, error: message || "slack_api_child_failed" }));
+    console.log(JSON.stringify({ ok: false, error: message || ERROR_CODES.IM_SEND_FAILED }));
   } finally {
     if (timer) clearTimeout(timer);
   }
@@ -185,16 +187,16 @@ function postSlackApiIsolated<T extends Record<string, unknown>>(
     maxBuffer: 1024 * 1024,
   });
   if (child.error) {
-    return { ok: false, error: child.error.message || "slack_api_child_error" } as T & { ok?: boolean; error?: string };
+    return { ok: false, error: child.error.message || ERROR_CODES.IM_SEND_FAILED } as T & { ok?: boolean; error?: string };
   }
   const stdout = stringValue(child.stdout);
   if (!stdout) {
-    return { ok: false, error: stringValue(child.stderr) || "slack_api_child_empty_response" } as T & { ok?: boolean; error?: string };
+    return { ok: false, error: stringValue(child.stderr) || ERROR_CODES.IM_SEND_FAILED } as T & { ok?: boolean; error?: string };
   }
   try {
     return JSON.parse(stdout) as T & { ok?: boolean; error?: string };
   } catch {
-    return { ok: false, error: "slack_api_child_invalid_json" } as T & { ok?: boolean; error?: string };
+    return { ok: false, error: ERROR_CODES.IM_SEND_FAILED } as T & { ok?: boolean; error?: string };
   }
 }
 
@@ -475,18 +477,18 @@ export class SlackAdapter implements IMAdapter {
     const { sessionKey, messageId, emoji, timeoutMs = 2500 } = params;
     const target = this.resolveTarget(sessionKey);
     if (!target.target || !messageId) {
-      return { ok: false, error: "missing_target_or_message_id" };
+      return { ok: false, error: ERROR_CODES.IM_UNRESOLVABLE_TARGET };
     }
 
     const token = readSlackBotToken();
     if (!token) {
-      return { ok: false, error: "missing_slack_bot_token" };
+      return { ok: false, error: ERROR_CODES.IM_TOKEN_MISSING };
     }
 
     try {
       const channelResult = await this.resolveReactionChannelId(target.target, token, Math.max(500, Math.floor(timeoutMs * 0.45)));
       if (!channelResult.channelId) {
-        return { ok: false, error: channelResult.error || "reaction_channel_unresolved" };
+        return { ok: false, error: channelResult.error || ERROR_CODES.IM_CHANNEL_NOT_CONFIGURED };
       }
       const reaction = await postSlackApi<Record<string, unknown>>("reactions.add", token, {
         channel: channelResult.channelId,
@@ -498,7 +500,7 @@ export class SlackAdapter implements IMAdapter {
         return { ok: true };
       }
       this.ackDebug(`react failed: slack_error=${stringValue(reaction.error).slice(0, 80)}`);
-      return { ok: false, error: stringValue(reaction.error) || "reaction_ack_failed" };
+      return { ok: false, error: stringValue(reaction.error) || ERROR_CODES.IM_SEND_FAILED };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       this.ackDebug(`react failed: ${message.slice(0, 80)}`);
@@ -512,7 +514,7 @@ export class SlackAdapter implements IMAdapter {
       return { channelId: normalized };
     }
     if (!/^U[A-Z0-9]{8,}$/u.test(normalized)) {
-      return { channelId: "", error: "unsupported_reaction_target" };
+      return { channelId: "", error: ERROR_CODES.IM_CHANNEL_NOT_CONFIGURED };
     }
 
     const opened = await postSlackApi<{ channel?: { id?: unknown } }>("conversations.open", token, {
@@ -522,7 +524,7 @@ export class SlackAdapter implements IMAdapter {
     if (opened.ok === true && channelId) {
       return { channelId };
     }
-    return { channelId: "", error: stringValue(opened.error) || "dm_channel_unresolved" };
+    return { channelId: "", error: stringValue(opened.error) || ERROR_CODES.IM_CHANNEL_NOT_CONFIGURED };
   }
 
   async send(params: IMSendParams): Promise<SlackSendResult> {
@@ -531,7 +533,7 @@ export class SlackAdapter implements IMAdapter {
       return {
         sent: false,
         delivered: false,
-        error: "unresolvable_session_target",
+        error: ERROR_CODES.IM_UNRESOLVABLE_TARGET,
       };
     }
 
@@ -581,7 +583,7 @@ export class SlackAdapter implements IMAdapter {
     if (!target.target) {
       return {
         ok: false,
-        error: "unresolvable_session_target",
+        error: ERROR_CODES.IM_UNRESOLVABLE_TARGET,
         transport: legacyCliDeliveryEnabled() ? "legacy_cli" : "slack_api",
         targetSource: envelope.target.source,
         footerSource: envelope.footerMode === "debug" ? "envelope" : "none",
@@ -673,7 +675,7 @@ export class SlackAdapter implements IMAdapter {
         return {
           sent: false,
           delivered: false,
-          error: stringValue(explicitFailure.error) || "send_failed",
+          error: stringValue(explicitFailure.error) || ERROR_CODES.IM_SEND_FAILED,
           transport: "legacy_cli",
         };
       }
@@ -685,7 +687,7 @@ export class SlackAdapter implements IMAdapter {
       return {
         sent: false,
         delivered: false,
-        error: result.stderr || "send_failed",
+        error: result.stderr || ERROR_CODES.IM_SEND_FAILED,
         transport: "legacy_cli",
       };
     } catch (error) {
@@ -707,18 +709,18 @@ export class SlackAdapter implements IMAdapter {
   ): Promise<SlackSendResult> {
     const token = readSlackBotToken();
     if (!token) {
-      return { sent: false, delivered: false, error: "missing_slack_bot_token", transport: "slack_api" };
+      return { sent: false, delivered: false, error: ERROR_CODES.IM_TOKEN_MISSING, transport: "slack_api" };
     }
 
     const channelResult = await this.resolveReactionChannelId(target.target, token, Math.max(500, Math.floor(timeoutMs * 0.35)));
     if (!channelResult.channelId) {
-      return { sent: false, delivered: false, error: channelResult.error || "send_channel_unresolved", transport: "slack_api" };
+      return { sent: false, delivered: false, error: channelResult.error || ERROR_CODES.IM_CHANNEL_NOT_CONFIGURED, transport: "slack_api" };
     }
 
     const blocks = Array.isArray(interactiveBlocks) && interactiveBlocks.length > 0 ? interactiveBlocks : undefined;
     const chunks = splitSlackText(message);
     if (!chunks.length) {
-      return { sent: false, delivered: false, error: "empty_message", transport: "slack_api" };
+      return { sent: false, delivered: false, error: ERROR_CODES.IM_CHANNEL_NOT_CONFIGURED, transport: "slack_api" };
     }
 
     const threadTs = normalizeSlackMessageTs(target.replyToMessageId || target.threadTs);
@@ -737,7 +739,7 @@ export class SlackAdapter implements IMAdapter {
           ...(threadTs ? { thread_ts: threadTs } : {}),
         }, Math.max(500, timeoutMs));
         if (response.ok !== true) {
-          return { sent: false, delivered: false, error: stringValue(response.error) || "send_failed", transport: "slack_api" };
+          return { sent: false, delivered: false, error: stringValue(response.error) || ERROR_CODES.IM_SEND_FAILED, transport: "slack_api" };
         }
         lastMessageId = stringValue(response.ts || response.message?.ts || lastMessageId);
       } catch (error) {
@@ -763,7 +765,7 @@ export class SlackAdapter implements IMAdapter {
   ): Promise<SlackSendResult> {
     const chunks = splitSlackStreamText(message);
     if (!chunks.length) {
-      return { sent: false, delivered: false, error: "empty_message", transport: "slack_api_stream" };
+      return { sent: false, delivered: false, error: ERROR_CODES.IM_CHANNEL_NOT_CONFIGURED, transport: "slack_api_stream" };
     }
     try {
       const started = await postSlackApi<{
@@ -776,11 +778,11 @@ export class SlackAdapter implements IMAdapter {
         markdown_text: chunks[0],
       }, Math.max(500, timeoutMs));
       if (started.ok !== true) {
-        return { sent: false, delivered: false, error: stringValue(started.error) || "stream_start_failed", transport: "slack_api_stream" };
+        return { sent: false, delivered: false, error: stringValue(started.error) || ERROR_CODES.IM_SEND_FAILED, transport: "slack_api_stream" };
       }
       const streamTs = normalizeSlackMessageTs(started.ts || started.message?.ts);
       if (!streamTs) {
-        return { sent: false, delivered: false, error: "stream_missing_ts", transport: "slack_api_stream" };
+        return { sent: false, delivered: false, error: ERROR_CODES.IM_SEND_FAILED, transport: "slack_api_stream" };
       }
       for (const chunk of chunks.slice(1)) {
         const appended = await postSlackApi("chat.appendStream", token, {
@@ -790,7 +792,7 @@ export class SlackAdapter implements IMAdapter {
         }, Math.max(500, timeoutMs));
         if (appended.ok !== true) {
           await postSlackApi("chat.stopStream", token, { channel: channelId, ts: streamTs }, Math.max(500, Math.floor(timeoutMs * 0.5))).catch(() => {});
-          return { sent: false, delivered: false, error: stringValue(appended.error) || "stream_append_failed", transport: "slack_api_stream" };
+          return { sent: false, delivered: false, error: stringValue(appended.error) || ERROR_CODES.IM_SEND_FAILED, transport: "slack_api_stream" };
         }
       }
       const stopped = await postSlackApi("chat.stopStream", token, {
@@ -798,7 +800,7 @@ export class SlackAdapter implements IMAdapter {
         ts: streamTs,
       }, Math.max(500, timeoutMs));
       if (stopped.ok !== true) {
-        return { sent: false, delivered: false, error: stringValue(stopped.error) || "stream_stop_failed", transport: "slack_api_stream" };
+        return { sent: false, delivered: false, error: stringValue(stopped.error) || ERROR_CODES.IM_SEND_FAILED, transport: "slack_api_stream" };
       }
       return {
         sent: true,

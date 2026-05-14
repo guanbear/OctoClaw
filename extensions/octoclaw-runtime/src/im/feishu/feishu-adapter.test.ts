@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { ERROR_CODES } from "@octoclaw/errors";
 import { FeishuAdapter } from "./feishu-adapter.js";
 import * as env from "../../resolve/env.js";
 
@@ -85,7 +86,7 @@ describe("FeishuAdapter", () => {
       message: "hello",
     });
     expect(result.sent).toBe(false);
-    expect(result.error).toBe("unresolvable_session_target");
+    expect(result.error).toBe(ERROR_CODES.IM_UNRESOLVABLE_TARGET);
   });
 
   it("send passes --reply-to when replyToMessageId provided and replyToMode is 'first'", async () => {
@@ -147,7 +148,7 @@ describe("FeishuAdapter", () => {
     });
 
     expect(result.sent).toBe(false);
-    expect(result.error).toBe("IM_SEND_FAILED");
+    expect(result.error).toBe(ERROR_CODES.IM_SEND_FAILED);
   });
 
   it("sends image and file attachments after text", async () => {

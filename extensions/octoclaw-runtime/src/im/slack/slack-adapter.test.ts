@@ -29,6 +29,7 @@ import {
   auditSlackFacingToolExposure,
   isSlackTargetAllowed,
 } from "./slack-adapter.js";
+import { ERROR_CODES } from "@octoclaw/errors";
 
 describe("SlackAdapter", () => {
   it("declares Slack as L2 and renders projection footer inside adapter", () => {
@@ -395,6 +396,21 @@ describe("SlackAdapter", () => {
     expect(adapter.resolveTarget("agent:main:main")).toEqual({
       channel: "slack",
       target: "",
+    });
+  });
+
+  it("send returns coded error for unresolvable session key", async () => {
+    const adapter = new SlackAdapter();
+
+    const result = await adapter.send({
+      sessionKey: "agent:main:main",
+      message: "ack",
+    });
+
+    expect(result).toMatchObject({
+      sent: false,
+      delivered: false,
+      error: ERROR_CODES.IM_UNRESOLVABLE_TARGET,
     });
   });
 
