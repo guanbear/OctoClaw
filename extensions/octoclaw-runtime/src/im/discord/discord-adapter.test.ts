@@ -73,6 +73,24 @@ describe("DiscordAdapter", () => {
     ]));
   });
 
+  it("passes Discord embed blocks to openclaw CLI", async () => {
+    const adapter = new DiscordAdapter();
+    const spy = mockRun(0, JSON.stringify({ ok: true, message_id: "m1" }));
+    const embed = { title: "OctoClaw status", fields: [{ name: "running", value: "task" }] };
+
+    await adapter.send({
+      sessionKey: "discord:guild:123:channel:456:user:789",
+      message: "status fallback",
+      interactiveBlocks: [{ type: "discord_embed", embed }],
+    });
+
+    const args = spy.mock.calls[0]![1] as string[];
+    expect(args).toEqual(expect.arrayContaining([
+      "--embed", JSON.stringify(embed),
+      "--message", "status fallback",
+    ]));
+  });
+
   it("send returns CLI error payload on failure", async () => {
     const adapter = new DiscordAdapter();
     mockRun(1, JSON.stringify({ ok: false, error: "channel_not_found" }));

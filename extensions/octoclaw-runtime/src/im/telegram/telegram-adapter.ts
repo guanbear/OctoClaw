@@ -76,6 +76,20 @@ function telegramMessageId(payload: TelegramPayload | null): string | undefined 
   return value === undefined || value === null || value === "" ? undefined : String(value);
 }
 
+function firstTelegramMarkup(blocks?: Array<Record<string, unknown>>): { replyMarkup: Record<string, unknown>; parseMode?: string } | undefined {
+  for (const block of blocks ?? []) {
+    if (String(block.type ?? "").toLowerCase() !== "telegram_reply_markup") continue;
+    const replyMarkup = block.reply_markup;
+    if (!replyMarkup || typeof replyMarkup !== "object" || Array.isArray(replyMarkup)) continue;
+    const parseMode = String(block.parse_mode ?? "").trim();
+    return {
+      replyMarkup: replyMarkup as Record<string, unknown>,
+      ...(parseMode ? { parseMode } : {}),
+    };
+  }
+  return undefined;
+}
+
 function parseSendResult(code: number, stdout: string, stderr: string): IMSendResult {
   const stdoutPayload = extractTelegramPayload(stdout);
   const stderrPayload = extractTelegramPayload(stderr);
@@ -130,7 +144,7 @@ export class TelegramAdapter implements IMAdapter {
   }
 
   async send(params: IMSendParams): Promise<IMSendResult> {
-    const { sessionKey, replyToMessageId, timeoutMs = 5000, cwd } = params;
+    const { sessionKey, interactiveBlocks, replyToMessageId, timeoutMs = 5000, cwd } = params;
     const target = this.resolveTarget(sessionKey);
     if (!target.target) {
       return { sent: false, delivered: false, error: "unresolvable_session_target" };
@@ -139,6 +153,7 @@ export class TelegramAdapter implements IMAdapter {
     const message = params.projectionFooter && !params.suppressProjectionFooter
       ? this.renderProjectionFooter(params.message, params.projectionFooter)
       : params.message;
+    const markup = firstTelegramMarkup(interactiveBlocks);
     const segments = splitIMText(message, TELEGRAM_CAPABILITIES.maxMessageLength);
     const sends = segments.length > 0 ? segments : [""];
     let lastResult: IMSendResult = { sent: true, delivered: true };
@@ -147,6 +162,12 @@ export class TelegramAdapter implements IMAdapter {
       const args = ["message", "send", "--channel", "telegram", "--target", target.target, "--json"];
       if (replyToMessageId && index === 0) {
         args.push("--reply-to", replyToMessageId);
+      }
+      if (markup && index === 0) {
+        if (markup.parseMode) {
+          args.push("--parse-mode", markup.parseMode);
+        }
+        args.push("--reply-markup", JSON.stringify(markup.replyMarkup));
       }
       if (segment) {
         args.push("--message", segment);

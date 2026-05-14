@@ -65,6 +65,7 @@ import {
 } from "./registration-helpers.js";
 import {
   buildNativeStatusOutput,
+  buildNativeStatusPanelOutput,
   buildNativeTaskActionPayload,
   normalizeTaskActionFormat,
   parseTaskAction,
@@ -91,6 +92,7 @@ export {
 } from "./dispatch-logic.js";
 export {
   buildNativeStatusOutput,
+  buildNativeStatusPanelOutput,
   buildNativeTaskActionPayload,
   dispatchSpawnEvidence,
   hasNonNewWorkFollowupEvidence,
@@ -470,10 +472,16 @@ export function warnToolLogger(ctx: UnknownRecord, message: string): void {
 }
 
 
-function statusToolResponse(rawOutput: string, format: string, imType: string = "plain"): Record<string, unknown> {
-  // For Slack, don't wrap in a code block — mrkdwn formatting should be preserved.
-  // For other IMs / plain text, use the existing code block + verbatim instruction.
-  const text = imType === "slack"
+export function statusToolResponse(
+  rawOutput: string,
+  format: string,
+  imType: string = "plain",
+  interactiveBlocks?: Array<Record<string, unknown>>,
+): Record<string, unknown> {
+  const nativeCard = Array.isArray(interactiveBlocks) && interactiveBlocks.length > 0;
+  // Native IM renderers should preserve mrkdwn/card fallback text. Plain text
+  // keeps the existing code block behavior for CLI-style surfaces.
+  const text = imType === "slack" || nativeCard
     ? [
         "OctoClaw status panel below. Return it to the user as-is without wrapping in a code block or reformatting.",
         "",
@@ -492,6 +500,10 @@ function statusToolResponse(rawOutput: string, format: string, imType: string = 
       source: "native_runtime",
       raw_output: rawOutput,
       return_verbatim: true,
+      ...(nativeCard ? {
+        interactive_blocks: interactiveBlocks,
+        im_native_card: true,
+      } : {}),
     },
   };
 }
@@ -1323,8 +1335,8 @@ export function getToolRegistrations(options: ToolRegistrationOptions = {}): Too
         );
         const imType = sessionKey ? detectIMType(sessionKey) : "plain";
         checkActiveTaskRecovery();
-        const output = await buildNativeStatusOutput(format, imType, ctx);
-        return statusToolResponse(output, format, imType);
+        const output = await buildNativeStatusPanelOutput(format, imType, ctx);
+        return statusToolResponse(output.text, format, imType, output.interactiveBlocks);
       },
     },
     {

@@ -188,6 +188,35 @@ describe("FeishuAdapter", () => {
     ]));
   });
 
+  it("sends Feishu card blocks as card messages", async () => {
+    const adapter = new FeishuAdapter();
+    const spy = vi.spyOn(env, "runCommand")
+      .mockResolvedValueOnce({ code: 0, stdout: JSON.stringify({ ok: true, message_id: "om_card" }), stderr: "", timedOut: false });
+
+    const card = {
+      schema: "2.0",
+      header: { title: { tag: "plain_text", content: "status" }, template: "blue" },
+      body: { elements: [{ tag: "markdown", content: "running" }] },
+    };
+    const result = await adapter.send({
+      sessionKey: "agent:main:feishu:default:direct:ou_user1",
+      message: "status fallback",
+      interactiveBlocks: [{ type: "feishu_card", card }],
+    });
+
+    expect(result.sent).toBe(true);
+    const args = spy.mock.calls[0]![1] as string[];
+    expect(args).toEqual(expect.arrayContaining([
+      "message", "send",
+      "--channel", "feishu",
+      "--target", "ou_user1",
+      "--type", "card",
+      "--card", JSON.stringify(card),
+      "--json",
+    ]));
+    expect(args).not.toContain("--message");
+  });
+
   it("react returns not_supported (L2 without emoji reactions)", async () => {
     const adapter = new FeishuAdapter();
     const result = await adapter.react({

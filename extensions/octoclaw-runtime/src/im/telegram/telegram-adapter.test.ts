@@ -72,6 +72,25 @@ describe("TelegramAdapter", () => {
     ]));
   });
 
+  it("passes Telegram reply markup blocks to openclaw CLI", async () => {
+    const adapter = new TelegramAdapter();
+    const spy = mockRun(0, JSON.stringify({ ok: true, message_id: 12 }));
+    const replyMarkup = { inline_keyboard: [[{ text: "刷新", callback_data: "octoclaw_status_refresh" }]] };
+
+    await adapter.send({
+      sessionKey: "telegram:chat:12345",
+      message: "status fallback",
+      interactiveBlocks: [{ type: "telegram_reply_markup", parse_mode: "Markdown", reply_markup: replyMarkup }],
+    });
+
+    const args = spy.mock.calls[0]![1] as string[];
+    expect(args).toEqual(expect.arrayContaining([
+      "--parse-mode", "Markdown",
+      "--reply-markup", JSON.stringify(replyMarkup),
+      "--message", "status fallback",
+    ]));
+  });
+
   it("send returns CLI error payload on failure", async () => {
     const adapter = new TelegramAdapter();
     mockRun(1, JSON.stringify({ ok: false, description: "chat_not_found" }));

@@ -81,6 +81,17 @@ function discordMessageId(payload: DiscordPayload | null): string | undefined {
   return value === undefined || value === null || value === "" ? undefined : String(value);
 }
 
+function firstDiscordEmbed(blocks?: Array<Record<string, unknown>>): Record<string, unknown> | undefined {
+  for (const block of blocks ?? []) {
+    if (String(block.type ?? "").toLowerCase() !== "discord_embed") continue;
+    const embed = block.embed;
+    if (embed && typeof embed === "object" && !Array.isArray(embed)) {
+      return embed as Record<string, unknown>;
+    }
+  }
+  return undefined;
+}
+
 function parseSendResult(code: number, stdout: string, stderr: string): IMSendResult {
   const stdoutPayload = extractDiscordPayload(stdout);
   const stderrPayload = extractDiscordPayload(stderr);
@@ -139,7 +150,7 @@ export class DiscordAdapter implements IMAdapter {
   }
 
   async send(params: IMSendParams): Promise<IMSendResult> {
-    const { sessionKey, replyToMessageId, timeoutMs = 5000, cwd } = params;
+    const { sessionKey, interactiveBlocks, replyToMessageId, timeoutMs = 5000, cwd } = params;
     const target = this.resolveTarget(sessionKey);
     if (!target.target) {
       return { sent: false, delivered: false, error: "unresolvable_session_target" };
@@ -148,6 +159,7 @@ export class DiscordAdapter implements IMAdapter {
     const message = params.projectionFooter && !params.suppressProjectionFooter
       ? this.renderProjectionFooter(params.message, params.projectionFooter)
       : params.message;
+    const embed = firstDiscordEmbed(interactiveBlocks);
     const segments = splitIMText(message, DISCORD_CAPABILITIES.maxMessageLength);
     const sends = segments.length > 0 ? segments : [""];
     let lastResult: IMSendResult = { sent: true, delivered: true };
@@ -159,6 +171,9 @@ export class DiscordAdapter implements IMAdapter {
       }
       if (replyToMessageId && index === 0) {
         args.push("--reply-to", replyToMessageId);
+      }
+      if (embed && index === 0) {
+        args.push("--embed", JSON.stringify(embed));
       }
       if (segment) {
         args.push("--message", segment);

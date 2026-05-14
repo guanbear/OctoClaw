@@ -12,7 +12,7 @@ import {
 import { createOctoClawRuntimePlugin } from "../plugin.js";
 import { projectNativeStatus, type NativeStatusProjection, type NativeStatusProjectorInput } from "../state/native-status-projector.js";
 import { captureTmuxEvidence, isTmuxEvidenceEnabled, type TmuxEvidenceSnapshot, type TmuxPaneMapping } from "../runtime-ledger/tmux-evidence.js";
-import { buildSlackStatusOutput, type StatusTaskSummary } from "../im-status-renderer.js";
+import { buildSlackStatusOutput, buildStatusInteractiveBlocks, type IMType, type StatusTaskSummary } from "../im-status-renderer.js";
 import { normalizeLiveRoute } from "../resolve/route-helpers.js";
 import { firstDisplayModel } from "../model-display.js";
 import type { NativeBindingRef } from "@octoclaw/contracts/work-contract";
@@ -1286,7 +1286,39 @@ export async function buildNativeTaskActionPayload(rawText: string, format: "tex
   return { summary, payload };
 }
 
-export async function buildNativeStatusOutput(format: string, imType: string = "plain", ctx: UnknownRecord = {}): Promise<string> {
+export interface NativeStatusPanelOutput {
+  text: string;
+  interactiveBlocks?: Array<Record<string, unknown>>;
+}
+
+function statusTaskSummaryFromView(t: RuntimeStatusTaskView): StatusTaskSummary {
+  return {
+    taskId: t.taskId,
+    status: t.status,
+    rawStatus: t.rawStatus,
+    title: t.title,
+    summary: t.summary,
+    model: t.model,
+    complexityBand: t.complexityBand,
+    elapsedText: t.elapsedText,
+    delegatedAt: t.delegatedAt,
+    completedAt: t.completedAt,
+    startedAtDisplay: t.startedAtDisplay,
+    completedAtDisplay: t.completedAtDisplay,
+    statusReason: t.statusReason,
+    route: t.route,
+  };
+}
+
+function nativeStatusBlocks(imType: string, tasks: RuntimeStatusTaskView[], totalCount: number, hiddenCount: number): Array<Record<string, unknown>> | undefined {
+  const supported = new Set(["slack", "feishu", "discord", "telegram"]);
+  if (!supported.has(imType)) return undefined;
+  const summaries = tasks.slice(0, 8).map(statusTaskSummaryFromView);
+  const blocks = buildStatusInteractiveBlocks(imType as IMType, summaries, { totalCount, hiddenCount });
+  return blocks.length > 0 ? blocks : undefined;
+}
+
+export async function buildNativeStatusPanelOutput(format: string, imType: string = "plain", ctx: UnknownRecord = {}): Promise<NativeStatusPanelOutput> {
   const normalizedFormat = format || "anchors";
   const nowMs = Date.now();
   const includeExpired = shouldIncludeExpiredStatus(normalizedFormat);
@@ -1316,31 +1348,20 @@ export async function buildNativeStatusOutput(format: string, imType: string = "
   // ── Slack mrkdwn rendering ───────────────────────────────────────────────
   if (imType === "slack" && normalizedFormat === "anchors") {
     const limit = 6;  // 6 tasks is enough for a readable Slack panel
-    const slackTasks: StatusTaskSummary[] = sortedVisibleTasks.slice(0, limit).map((t) => ({
-      taskId: t.taskId,
-      status: t.status,
-      rawStatus: t.rawStatus,
-      title: t.title,
-      summary: t.summary,
-      model: t.model,
-      complexityBand: t.complexityBand,
-      elapsedText: t.elapsedText,
-      delegatedAt: t.delegatedAt,
-      completedAt: t.completedAt,
-      startedAtDisplay: t.startedAtDisplay,
-      completedAtDisplay: t.completedAtDisplay,
-      statusReason: t.statusReason,
-      route: t.route,
-    }));
+    const slackTasks = sortedVisibleTasks.slice(0, limit).map(statusTaskSummaryFromView);
     const slackOutput = buildSlackStatusOutput(slackTasks, {
       totalCount: allTasks.length,
       hiddenCount: hiddenExpiredCount,
       format: normalizedFormat,
     });
-    return slackOutput.text;
+    return {
+      text: slackOutput.text,
+      interactiveBlocks: buildStatusInteractiveBlocks("slack", slackTasks, {
+        totalCount: allTasks.length,
+        hiddenCount: hiddenExpiredCount,
+      }),
+    };
   }
-  // ── Feishu card: TODO — needs IMAdapter.sendCard() support ───────────────
-  // if (imType === "feishu") { ... return feishu card JSON as text ... }
 
   // ── Beautified anchors format (default) ─────────────────────────────────
   if (normalizedFormat === "anchors") {
@@ -1420,7 +1441,10 @@ export async function buildNativeStatusOutput(format: string, imType: string = "
       lines.push("");
       lines.push(`… ${sortedVisibleTasks.length - limit} more tasks hidden; use format=raw for full details.`);
     }
-    return lines.join("\n");
+    return {
+      text: lines.join("\n"),
+      interactiveBlocks: nativeStatusBlocks(imType, sortedVisibleTasks, allTasks.length, hiddenExpiredCount),
+    };
   }
 
   const counts = visibleTasks.reduce<Record<string, number>>((acc, task) => {
@@ -1473,5 +1497,9 @@ export async function buildNativeStatusOutput(format: string, imType: string = "
   if (allTasks.length === 0) {
     lines.push("No runtime task state is currently available.");
   }
-  return lines.join("\n");
+  return { text: lines.join("\n") };
+}
+
+export async function buildNativeStatusOutput(format: string, imType: string = "plain", ctx: UnknownRecord = {}): Promise<string> {
+  return (await buildNativeStatusPanelOutput(format, imType, ctx)).text;
 }

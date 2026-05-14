@@ -46,6 +46,10 @@ type FeishuAttachment = {
   name?: string;
 };
 
+type FeishuCardBlock = {
+  card: Record<string, unknown>;
+};
+
 function stringValue(value: unknown): string {
   return String(value ?? "").trim();
 }
@@ -172,6 +176,20 @@ function extractFeishuAttachments(blocks?: Array<Record<string, unknown>>): Feis
   return attachments;
 }
 
+function extractFeishuCards(blocks?: Array<Record<string, unknown>>): FeishuCardBlock[] {
+  if (!blocks?.length) return [];
+
+  const cards: FeishuCardBlock[] = [];
+  for (const block of blocks) {
+    const type = stringValue(block.type).toLowerCase();
+    if (type !== "feishu_card") continue;
+    const card = block.card;
+    if (!card || typeof card !== "object" || Array.isArray(card)) continue;
+    cards.push({ card: card as Record<string, unknown> });
+  }
+  return cards;
+}
+
 /**
  * IM adapter for Feishu (L2 tier).
  * Supports text delivery, thread replies, image attachments, and file attachments.
@@ -215,17 +233,37 @@ export class FeishuAdapter implements IMAdapter {
     const textSegments = splitIMText(message, FEISHU_CAPABILITIES.maxMessageLength, {
       markers: this.config.segmentMarkers,
     });
+    const cards = extractFeishuCards(interactiveBlocks);
     const attachments = extractFeishuAttachments(interactiveBlocks);
     const cwdValue = cwd ?? resolveWorkspaceRoot();
     const timeoutValue = Math.max(500, timeoutMs);
     let lastResult: IMSendResult = { sent: true, delivered: true };
 
-    if (textSegments.length === 0 && attachments.length === 0) {
+    if (textSegments.length === 0 && attachments.length === 0 && cards.length === 0) {
       const emptyResult = await this.deliver(["message", "send", "--channel", "feishu", "--target", target.target, "--json"], cwdValue, timeoutValue);
       return emptyResult;
     }
 
-    for (const segment of textSegments) {
+    for (const card of cards) {
+      const args = [
+        "message", "send",
+        "--channel", "feishu",
+        "--target", target.target,
+        "--type", "card",
+        "--card", JSON.stringify(card.card),
+        "--json",
+      ];
+      if (replyToMessageId && this.config.replyToMode !== "off") {
+        args.push("--reply-to", replyToMessageId);
+      }
+
+      lastResult = await this.deliver(args, cwdValue, timeoutValue);
+      if (!lastResult.sent) {
+        return { ...lastResult, error: "IM_SEND_FAILED" };
+      }
+    }
+
+    for (const segment of cards.length > 0 ? [] : textSegments) {
       const args = ["message", "send", "--channel", "feishu", "--target", target.target, "--json", "--message", segment];
       if (replyToMessageId && this.config.replyToMode !== "off") {
         args.push("--reply-to", replyToMessageId);

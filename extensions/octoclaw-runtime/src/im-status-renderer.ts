@@ -3,21 +3,24 @@
  *
  * The status panel needs to look different in different IM channels:
  *   - Slack:  mrkdwn formatting (*bold*, `code`, emoji) — implemented here
- *   - Feishu: interactive card (card JSON via sendCard API) — interface stubbed, needs adapter support
+ *   - Feishu: interactive card (card JSON via OpenClaw card send)
+ *   - Discord: embed payload
+ *   - Telegram: Markdown text + reply markup
  *   - Plain:  existing dense text format for agent context / CLI
  *
  * Architecture note:
  *   The `text` field returned by octoclaw_status is what the agent sends back
  *   to the user. Making it IM-native means no reformatting needed.
- *   For Feishu cards we'll need IMAdapter.sendCard() — tracked as future work.
  */
 
-export type IMType = "slack" | "feishu" | "dingtalk" | "wechat" | "plain";
+export type IMType = "slack" | "feishu" | "discord" | "telegram" | "dingtalk" | "wechat" | "plain";
 
 export function detectIMType(sessionKey: string): IMType {
   const lower = sessionKey.toLowerCase();
   if (lower.includes("slack")) return "slack";
   if (lower.includes("feishu") || lower.includes("lark")) return "feishu";
+  if (lower.includes("discord")) return "discord";
+  if (lower.includes("telegram")) return "telegram";
   if (lower.includes("dingtalk") || lower.includes("dingding")) return "dingtalk";
   if (lower.includes("wechat") || lower.includes("weixin")) return "wechat";
   return "plain";
@@ -149,10 +152,7 @@ export function buildSlackStatusOutput(
   };
 }
 
-// ─── Feishu card stub ─────────────────────────────────────────────────────────
-// Feishu interactive cards use a JSON structure sent via sendCard() API.
-// This requires IMAdapter.sendCard() support — tracked as future work.
-// The structure below is the intended format when implemented.
+// ─── Native card/block builders ───────────────────────────────────────────────
 
 export interface FeishuCardElement {
   tag: string;
@@ -165,7 +165,6 @@ export interface FeishuCard {
   body: { elements: FeishuCardElement[] };
 }
 
-/** Stub — returns card JSON structure. Actual delivery requires adapter.sendCard(). */
 export function buildFeishuStatusCard(
   tasks: StatusTaskSummary[],
 ): FeishuCard {
@@ -192,4 +191,97 @@ export function buildFeishuStatusCard(
     },
     body: { elements },
   };
+}
+
+export interface StatusInteractiveBlockOptions {
+  totalCount?: number;
+  hiddenCount?: number;
+}
+
+function compactTaskLine(task: StatusTaskSummary): string {
+  const title = task.title || task.summary || "未命名任务";
+  const meta = [
+    task.elapsedText && task.elapsedText !== "unknown" ? task.elapsedText : "",
+    task.model && task.model !== "unknown" ? task.model : "",
+    task.complexityBand && task.complexityBand !== "unknown" ? task.complexityBand : "",
+  ].filter(Boolean).join(" · ");
+  return `${statusEmoji(task.status)} ${task.status} · ${title.slice(0, 90)}${meta ? ` · ${meta}` : ""}`;
+}
+
+function buildSlackStatusBlocks(tasks: StatusTaskSummary[], options: StatusInteractiveBlockOptions): Array<Record<string, unknown>> {
+  const total = options.totalCount ?? tasks.length;
+  const blocks: Array<Record<string, unknown>> = [
+    {
+      type: "header",
+      text: { type: "plain_text", text: `OctoClaw status · ${tasks.length}/${total}` },
+    },
+  ];
+  if (tasks.length === 0) {
+    blocks.push({ type: "section", text: { type: "mrkdwn", text: "_No active delegated tasks._" } });
+  } else {
+    for (const task of tasks.slice(0, 8)) {
+      blocks.push({
+        type: "section",
+        text: { type: "mrkdwn", text: `*${compactTaskLine(task)}*\n${task.summary ? task.summary.slice(0, 160) : ""}`.trim() },
+      });
+    }
+  }
+  if (options.hiddenCount && options.hiddenCount > 0) {
+    blocks.push({ type: "context", elements: [{ type: "mrkdwn", text: `${options.hiddenCount} expired records hidden.` }] });
+  }
+  return blocks;
+}
+
+function buildDiscordStatusEmbed(tasks: StatusTaskSummary[], options: StatusInteractiveBlockOptions): Record<string, unknown> {
+  const failed = tasks.some((task) => ["failed", "timed_out", "lost", "degraded"].includes(task.status));
+  const running = tasks.some((task) => ["running", "running_slow", "queued", "materializing"].includes(task.status));
+  return {
+    title: `OctoClaw status · ${tasks.length}/${options.totalCount ?? tasks.length}`,
+    color: failed ? 0xd92d20 : running ? 0x2e90fa : 0x12b76a,
+    fields: tasks.slice(0, 10).map((task) => ({
+      name: `${statusEmoji(task.status)} ${task.status} · ${(task.title || task.summary || task.taskId).slice(0, 80)}`,
+      value: [
+        task.elapsedText && task.elapsedText !== "unknown" ? `elapsed: ${task.elapsedText}` : "",
+        task.model && task.model !== "unknown" ? `model: ${task.model}` : "",
+        task.summary ? task.summary.slice(0, 180) : "",
+      ].filter(Boolean).join("\n") || task.taskId,
+      inline: false,
+    })),
+    footer: options.hiddenCount && options.hiddenCount > 0 ? { text: `${options.hiddenCount} expired records hidden` } : undefined,
+  };
+}
+
+function buildTelegramReplyMarkup(): Record<string, unknown> {
+  return {
+    inline_keyboard: [
+      [
+        { text: "Refresh", callback_data: "octoclaw_status_refresh" },
+        { text: "Details", callback_data: "octoclaw_status_table" },
+      ],
+    ],
+  };
+}
+
+export function buildStatusInteractiveBlocks(
+  imType: IMType,
+  tasks: StatusTaskSummary[],
+  options: StatusInteractiveBlockOptions = {},
+): Array<Record<string, unknown>> {
+  if (imType === "slack") {
+    return buildSlackStatusBlocks(tasks, options);
+  }
+  if (imType === "feishu") {
+    return [{ type: "feishu_card", card: buildFeishuStatusCard(tasks) }];
+  }
+  if (imType === "discord") {
+    return [{ type: "discord_embed", embed: buildDiscordStatusEmbed(tasks, options) }];
+  }
+  if (imType === "telegram") {
+    return [{
+      type: "telegram_reply_markup",
+      parse_mode: "Markdown",
+      reply_markup: buildTelegramReplyMarkup(),
+    }];
+  }
+  return [];
 }
