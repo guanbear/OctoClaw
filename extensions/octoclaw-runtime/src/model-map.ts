@@ -6,7 +6,7 @@
  *   default     = most capable (main model)
  *   fallback#1  = balanced
  *   fallback#2  = fast/cheap
- *   local       = fastest/cheapest
+ *   local       = cheap when no explicit cheap fallback exists
  *
  * Users can override any band in ~/.octoclaw/config.json models.overrides.
  * Falls back to hardcoded defaults if openclaw CLI is unavailable.
@@ -74,8 +74,8 @@ function mapFromOpenClawModels(models: OpenClawModel[]): ResolvedModelMap {
   const fallback3     = available.find((m) => m.tags?.includes("fallback#3"))?.key;
   const localModel    = available.find((m) => m.local === true)?.key;
 
-  // cheap = local model or highest-numbered fallback
-  const cheap = localModel ?? fallback3 ?? fallback2 ?? fallback1 ?? defaultModel ?? "";
+  // cheap = highest-numbered fallback, then local model
+  const cheap = fallback3 ?? fallback2 ?? localModel ?? fallback1 ?? defaultModel ?? "";
   const balanced = fallback1 ?? defaultModel ?? cheap;
   const capable = defaultModel ?? fallback1 ?? balanced;
 
