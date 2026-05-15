@@ -40,6 +40,7 @@ import {
   BUDGETED_MAIN_MAX_WALL_MS,
   MAIN_FAST_PATH_READ_ONLY_TOOL_LIMIT,
   isBudgetedMainDecision,
+  maybeStartBudgetedMain,
   readBudgetedMainState,
 } from "../budgeted-main.js";
 import {
@@ -52,24 +53,28 @@ import { stringValue } from "../extension-entry-shared.js";
 import { buildPromptContextProjection, extractPromptText } from "../extension-entry-helpers.js";
 import { extractInboundMessageTimestampWithSource, type InboundMessageTimestampSource } from "../inbound-timestamps.js";
 import {
+  buildImmutableDeliveryTarget,
+  deliveryTargetReplyTo,
+} from "./footer-mode.js";
+import {
   getPolicyStateForContext,
   updatePolicyState,
   handleNativeAnnounceCompletion,
   nativeAnnounceSendOverride,
-  buildImmutableDeliveryTarget,
-  deliveryTargetReplyTo,
   syncPolicyStateAliases,
   buildRecentExecutionFacts,
   collectRecentExecutionReceipts,
-  maybeStartBudgetedMain,
-  maybeInjectSpeculativePreload,
+} from "../extension-entry.js";
+import { maybeInjectSpeculativePreload } from "./speculative-preload-handler.js";
+
+import {
   resolveSlimMainContextEnabled,
   OCTOCLAW_DELEGATION_SYSTEM_CONTEXT,
   OCTOCLAW_DELEGATION_SLIM_SYSTEM_CONTEXT,
   OCTOCLAW_ROUTE_HINT_SYSTEM_CONTEXT,
   OCTOCLAW_TASK_ACTION_SYSTEM_CONTEXT,
   OCTOCLAW_PRE_DELEGATION_CONFIRM_CONTEXT,
-} from "../extension-entry.js";
+} from "./system-context.js";
 
 export interface BeforePromptBuildDeps {
   pi: PluginInterface;

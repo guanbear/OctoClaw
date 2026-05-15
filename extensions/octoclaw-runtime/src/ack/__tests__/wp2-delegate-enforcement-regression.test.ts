@@ -327,8 +327,8 @@ describe("WP2 regression: delegate ack text honesty", () => {
     const replayPayload = replayCall![1] as Record<string, unknown>;
     const ackMessage = String(replayPayload.ackMessage ?? "");
 
-    expect(ackMessage).not.toMatch(/running|started|completed|运行|已启动|已完成/i);
-    expect(ackMessage).toMatch(/委派|派发|delegation|dispatch|status/i);
+    expect(ackMessage).not.toMatch(/running|started|completed|运行|已启动|已完成|委派|派发|delegation|delegated|dispatch/i);
+    expect(ackMessage).toMatch(/收到|处理|状态|got it|working|status/i);
 
     runCommandSpy.mockRestore();
     replaySpy.mockRestore();

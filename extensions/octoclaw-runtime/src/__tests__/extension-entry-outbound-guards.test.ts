@@ -3,7 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ContextCoverageSnapshot } from "@octoclaw/contracts/work-contract";
-import { deliverNativeAnnounceCompletion, guardOutboundMessageForPolicyState, plugin, wrapReplyDispatchFooterProjection } from "../extension-entry.js";
+import { deliverNativeAnnounceCompletion, plugin, wrapReplyDispatchFooterProjection } from "../extension-entry.js";
+import { guardOutboundMessageForPolicyState } from "../hooks/footer-mode.js";
 import { guardAssistantMessageForPolicyState } from "../replay/message-guard.js";
 import { nativeSpawnIntentStore } from "../delegate/native-spawn-intent-store.js";
 import { policyState } from "../state/policy-state.js";
@@ -220,7 +221,7 @@ describe("guardOutboundMessageForPolicyState", () => {
     });
 
     const guarded = guardOutboundMessageForPolicyState(
-      { to: "C0AS4DAPPU3", replyToMessageId: "1777368523.770689", content: "这次任务还没派发成功，等我拿到真实执行结果后回复。" },
+      { to: "C0AS4DAPPU3", replyToMessageId: "1777368523.770689", content: "暂时不能启动后台任务，我会基于当前可用信息处理。" },
       { channelId: "slack", inboundMessageTs: "1777368523.770689" },
       now,
     );
@@ -484,7 +485,7 @@ describe("guardOutboundMessageForPolicyState", () => {
 
     expect(guarded?.content).toContain("最新版是 OpenClaw 2026.4.25。");
     expect(guarded?.content).toContain("route=reply | model=");
-    expect(guarded?.content).not.toContain("这次任务还没派发成功");
+    expect(guarded?.content).not.toContain("还没派发成功");
     policyState.clearState(key);
   });
 
@@ -731,6 +732,30 @@ describe("guardOutboundMessageForPolicyState", () => {
 
     expect(guarded?.content).toContain("model=zhipu/GLM-5.1");
     expect(guarded?.content).not.toContain("model=Anno");
+    policyState.clearState(key);
+  });
+
+  it("renders complexity band in outbound projection footer", () => {
+    const now = Date.now();
+    const key = "agent:main:slack:channel:c0complexity";
+    policyState.setState(key, {
+      decision: {
+        route_decision: { route: "reply", _judge_complexity_band: "deep" },
+        model_policy: { selected_model: "zhipu/GLM-5.1" },
+        request: { metadata: { message_id: "1777380004.000001" } },
+      },
+      inboundMessageTs: "1777380004.000001",
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    const guarded = guardOutboundMessageForPolicyState(
+      { to: "C0COMPLEXITY", content: "测试。", metadata: { channelId: "C0COMPLEXITY", threadTs: "1777380004.000001" } },
+      { channelId: "slack" },
+      now,
+    );
+
+    expect(guarded?.content).toContain("difficulty=deep");
     policyState.clearState(key);
   });
 

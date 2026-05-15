@@ -1,7 +1,7 @@
 
 import { describe, expect, it, beforeEach, vi, afterEach } from "vitest";
 import { compactDelegatePolicyPrompt, compactPolicyPrompt } from "./replay/policy-utils.js";
-import { guardOutboundMessageForPolicyState } from "./extension-entry.js";
+import { guardOutboundMessageForPolicyState } from "./hooks/footer-mode.js";
 import {
   guardAssistantMessageForPolicyState,
   sanitizeDelegationReasoning,
@@ -342,9 +342,9 @@ describe("regression round 4: scenario 2b — delegated state normalization", ()
     expect(guarded.mode).toBe("pass");
   });
 
-  it("does not strip stale delegate failure projection by keyword", () => {
+  it("does not strip neutral delegate fallback projection by keyword", () => {
     const guarded = guardAssistantMessageForPolicyState(
-      { role: "assistant", content: [{ type: "text", text: "这次任务还没派发成功，等我拿到真实执行结果后回复。\n本机 OpenClaw：2026.4.21。" }] },
+      { role: "assistant", content: [{ type: "text", text: "暂时不能启动后台任务，我会基于当前可用信息处理。\n本机 OpenClaw：2026.4.21。" }] },
       {
         decision: {
           work_contract: { route: "reply" },
@@ -363,7 +363,7 @@ describe("regression round 4: scenario 2b — delegated state normalization", ()
     const text = (guarded.message as { content?: Array<{ text: string }> } | undefined)?.content?.[0]?.text
       || ((guarded.message as { content?: string } | undefined)?.content ?? "");
     expect(guarded.mode).toBe("pass");
-    expect(text).toContain("这次任务还没派发成功");
+    expect(text).toContain("暂时不能启动后台任务");
     expect(text).toContain("本机 OpenClaw");
   });
 
@@ -400,7 +400,7 @@ describe("regression round 4: scenario 2b — delegated state normalization", ()
 
     expect(guarded.mode).toBe("pass");
     expect(textOf(guarded)).toContain("WorkContract forbids octoclaw_dispatch");
-    expect(textOf(guarded)).not.toContain("等我拿到真实执行结果后回复");
+    expect(textOf(guarded)).not.toContain("真实执行结果");
   });
 
   it("does not project delegate failure over a plain greeting reply", () => {

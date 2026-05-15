@@ -66,8 +66,8 @@ export function delegationFailureReply(state: Record<string, unknown>): { mode: 
     String(asRecord(decision).executionProfile ?? "").trim(),
   );
   const text = observe && ["fresh_live_lookup", "local_surface_lookup"].includes(intentClass)
-    ? "这次查询还没拿到结果，等我拿到真实执行结果后回复。"
-    : "这次任务还没派发成功，等我拿到真实执行结果后回复。";
+    ? "这次查询还没拿到结果，我会基于当前可用信息处理。"
+    : "暂时不能启动后台任务，我会基于当前可用信息处理。";
   return { mode: "replace", message: { role: "assistant", content: [{ type: "text", text }] } };
 }
 

@@ -250,8 +250,8 @@ export function projectRouteCommitAckText(packet: RouteCommitAckPacket): RouteCo
   if (packet.route === "delegate") {
     return {
       text: packet.language === "en"
-        ? "Classified for delegation, preparing dispatch. You can check status later."
-        : "已判定为委派任务，正在准备派发。稍后可查看状态。",
+        ? "Got it, working on it. You can check status later."
+        : "收到，正在处理。稍后可查看状态。",
       route: "delegate",
       truthful: true,
     };

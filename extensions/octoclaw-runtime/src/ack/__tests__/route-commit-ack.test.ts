@@ -86,16 +86,16 @@ describe("route commit ACK", () => {
   it("projects truthful zh delegate text without execution claims", () => {
     const result = projectRouteCommitAckText(packet({ route: "delegate", language: "zh" }));
 
-    expect(result.text).not.toMatch(/运行|已启动|完成/);
-    expect(result.text).toMatch(/委派|派发|状态/);
+    expect(result.text).not.toMatch(/运行|已启动|完成|委派|派发/);
+    expect(result.text).toMatch(/收到|处理|状态/);
     expect(result.truthful).toBe(true);
   });
 
   it("projects truthful en delegate text without execution claims", () => {
     const result = projectRouteCommitAckText(packet({ route: "delegate", language: "en" }));
 
-    expect(result.text.toLowerCase()).not.toMatch(/running|started|completed/);
-    expect(result.text.toLowerCase()).toMatch(/delegation|dispatch|status/);
+    expect(result.text.toLowerCase()).not.toMatch(/running|started|completed|delegation|delegated|dispatch/);
+    expect(result.text.toLowerCase()).toMatch(/got it|working|status/);
     expect(result.truthful).toBe(true);
   });
 
@@ -555,7 +555,7 @@ describe("route commit ACK", () => {
     expect(result.reason).toBe("reaction_ack_failed_text_fallback");
     expect(imAdapter.react).toHaveBeenCalledOnce();
     expect(imAdapter.send).toHaveBeenCalledWith(expect.objectContaining({
-      message: "已判定为委派任务，正在准备派发。稍后可查看状态。",
+      message: "收到，正在处理。稍后可查看状态。",
       replyToMessageId: "1700000000.000100",
     }));
     expect(runCommandSpy).not.toHaveBeenCalled();
@@ -629,8 +629,8 @@ describe("route commit ACK", () => {
     );
     const replayPayload = replayCall![1] as Record<string, unknown>;
     const ackMessage = String(replayPayload.ackMessage ?? "");
-    expect(ackMessage).not.toMatch(/running|started|completed/i);
-    expect(ackMessage).toMatch(/委派|派发|状态/);
+    expect(ackMessage).not.toMatch(/running|started|completed|委派|派发|delegation|delegated|dispatch/i);
+    expect(ackMessage).toMatch(/收到|处理|状态|got it|working/i);
 
     runCommandSpy.mockRestore();
     replaySpy.mockRestore();

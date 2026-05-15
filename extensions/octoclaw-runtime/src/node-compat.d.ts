@@ -8,6 +8,7 @@ declare const process: {
   execPath: string;
   cwd(): string;
   env: Record<string, string | undefined>;
+  platform: string;
   pid: number;
   stdin: unknown;
   stdout: { write(chunk: string): boolean };
@@ -58,10 +59,16 @@ declare module "node:crypto" {
     update(data: string): Hash;
     digest(encoding: "hex"): string;
   }
+  interface Hmac {
+    update(data: string): Hmac;
+    digest(encoding: "base64url"): string;
+  }
   export function createHash(algorithm: string): Hash;
+  export function createHmac(algorithm: string, key: string): Hmac;
   export function randomUUID(): string;
   const crypto: {
     createHash: typeof createHash;
+    createHmac: typeof createHmac;
     randomUUID: typeof randomUUID;
   };
   export default crypto;
@@ -100,6 +107,34 @@ declare module "node:fs" {
 
 declare module "fs/promises" {
   export function readFile(path: string, encoding: string): Promise<string>;
+}
+
+declare module "node:fs/promises" {
+  export interface FileHandle {
+    sync(): Promise<void>;
+    close(): Promise<void>;
+  }
+  export function mkdir(path: string, options?: { recursive?: boolean }): Promise<void>;
+  export function mkdtemp(prefix: string): Promise<string>;
+  export function open(path: string, flags: string): Promise<FileHandle>;
+  export function readFile(path: string, encoding: string): Promise<string>;
+  export function readdir(path: string): Promise<string[]>;
+  export function rename(oldPath: string, newPath: string): Promise<void>;
+  export function rm(path: string, options?: { recursive?: boolean; force?: boolean }): Promise<void>;
+  export function stat(path: string): Promise<unknown>;
+  export function writeFile(path: string, data: string, encoding: string): Promise<void>;
+  const fsPromises: {
+    mkdir: typeof mkdir;
+    mkdtemp: typeof mkdtemp;
+    open: typeof open;
+    readFile: typeof readFile;
+    readdir: typeof readdir;
+    rename: typeof rename;
+    rm: typeof rm;
+    stat: typeof stat;
+    writeFile: typeof writeFile;
+  };
+  export default fsPromises;
 }
 
 declare module "node:readline" {

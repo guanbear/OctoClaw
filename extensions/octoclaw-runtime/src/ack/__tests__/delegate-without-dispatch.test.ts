@@ -31,8 +31,8 @@ describe("delegate without dispatch notice", () => {
     const packet = buildDelegateWithoutDispatchPacket(decision(), { decision: decision() }, "slack:channel:C1")!;
     const text = projectDelegateWithoutDispatchText(packet, { decision: decision() });
 
-    expect(text).toMatch(/还没派发成功/);
-    expect(text).not.toMatch(/running|started|completed|运行|已启动|已完成|处理中/i);
+    expect(text).toMatch(/暂时不能启动后台任务/);
+    expect(text).not.toMatch(/还没派发成功|真实执行结果|running|started|completed|运行|已启动|已完成|处理中/i);
   });
 
   it("projects observe lookup correction text", () => {
@@ -139,7 +139,8 @@ describe("delegate without dispatch notice", () => {
 
     const ackMessage = String(findReplayPayload(replaySpy).ackMessage ?? "");
     expect(ackMessage).not.toMatch(/running|started|completed|运行|已启动|已完成|处理中/i);
-    expect(ackMessage).toMatch(/还没派发成功/);
+    expect(ackMessage).toMatch(/暂时不能启动后台任务/);
+    expect(ackMessage).not.toMatch(/还没派发成功|真实执行结果/);
   });
 
   it("uses provided sessionKey as delivery target", async () => {

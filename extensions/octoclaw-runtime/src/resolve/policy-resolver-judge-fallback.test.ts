@@ -1235,7 +1235,7 @@ describe("policy resolver WorkContract integration", () => {
     const decision = await resolveStatelessPolicyDecision(
       `[Thread history - for context]
 [Slack guanbear] 八爪鱼状态
-[Slack OpenClaw Macmini] 已判定为委派任务，正在准备派发。
+[Slack OpenClaw Macmini] 收到，正在处理。稍后可查看状态。
 
 System: [2026-04-27 23:25 GMT+8] Slack DM from guanbear: 你都已经查过了 并且给过架构了 你忘了吗
 

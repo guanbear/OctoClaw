@@ -25,10 +25,18 @@ import { evaluateNativeSessionsSendGate, evaluateNativeSpawnGate } from "../dele
 import { isPlannerAllowedForSession, resolveSpawnBackend, resolveSpeculativePreloadEnabled } from "../config/index.js";
 import {
   buildBudgetedMainState,
+  budgetedMainSpawnIntentId,
+  budgetedMainVisibleStartAt,
+  budgetedMainWorkContractId,
   budgetedMainToolEscalationReason,
   classifyBudgetedMainTool,
+  escalateBudgetedMainForTool,
   hasBudgetedMainEscalationEvidence,
+  promoteBudgetedMainDispatch,
   readBudgetedMainState,
+  recordBudgetedMainEvent,
+  scheduleBudgetedMainTimeout,
+  updateBudgetedMainForContext,
   updateBudgetedMainToolState,
 } from "../budgeted-main.js";
 import { explicitDelegateDispatchRequest } from "../dispatch-admission.js";
@@ -47,14 +55,6 @@ import {
   isNativeAnnounceDeliveryState,
   NATIVE_ANNOUNCE_BLOCKED_TOOLS,
   bindRouteHintPromptToCurrentContext,
-  escalateBudgetedMainForTool,
-  updateBudgetedMainForContext,
-  scheduleBudgetedMainTimeout,
-  promoteBudgetedMainDispatch,
-  recordBudgetedMainEvent,
-  budgetedMainVisibleStartAt,
-  budgetedMainWorkContractId,
-  budgetedMainSpawnIntentId,
   stateWorkContractId,
 } from "../extension-entry.js";
 

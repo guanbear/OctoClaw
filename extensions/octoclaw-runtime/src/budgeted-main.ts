@@ -4,6 +4,17 @@ import {
   asString,
   type UnknownRecord,
 } from "./util/type-coercion.js";
+import { pendingBudgetedMainTimers } from "./ack/ack-scheduler.js";
+import { stableId } from "./resolve/env.js";
+import { recordPolicyReplay } from "./replay/replay.js";
+import { policyState, type PolicyStateEntry } from "./state/policy-state.js";
+import { loadWorkContract, saveWorkContract } from "./work-contract/store.js";
+import { compactWorkContractView, type ContextCoverageSnapshot, type DelegateContract, type IntentClass, type WorkDecisionSource } from "@octoclaw/contracts/work-contract";
+import { buildWorkContractFromPolicy, buildWorkDecisionSeal } from "./work-contract/builders.js";
+import { buildExecutionCoverageLayer } from "./resolve/execution-coverage-precheck.js";
+import { buildMemoryCoverageLayer } from "./resolve/memory-coverage-precheck.js";
+import type { LoggerLike } from "./extension-entry-shared.js";
+import { stringValue } from "./extension-entry-shared.js";
 
 export const BUDGETED_MAIN_MAX_WALL_MS = 30_000;
 export const MAIN_FAST_PATH_READ_ONLY_TOOL_LIMIT = 2;
@@ -555,4 +566,524 @@ export function buildBudgetedMainMetrics(input: {
     budgetElapsedMs: elapsedMs,
     budgetEscalationReason: input.reason.startsWith("completed") ? "" : input.reason,
   };
+}
+
+function budgetedMainStateKeys(stateKey: string, ctx: UnknownRecord, state: UnknownRecord): string[] {
+  return Array.from(new Set([
+    stringValue(stateKey),
+    stringValue(state.canonicalSessionKey || state.canonical_session_key),
+    stringValue(state.ackGuardKey || state.ack_guard_key),
+    stringValue(ctx.sessionKey || ctx.session_key),
+    stringValue(ctx.canonicalSessionKey || ctx.canonical_session_key),
+    stringValue(ctx.sessionId || ctx.session_id),
+  ].filter(Boolean)));
+}
+
+export function budgetedMainWorkContractId(state: UnknownRecord, decision: UnknownRecord): string {
+  const workContract = asRecord(decision.work_contract);
+  return stringValue(state.workContractId || state.work_contract_id)
+    || stringValue(workContract.workContractId || workContract.work_contract_id)
+    || stringValue(decision.workContractId || decision.work_contract_id);
+}
+
+export function budgetedMainSpawnIntentId(state: UnknownRecord): string {
+  return stringValue(state.spawnIntentId || state.spawn_intent_id);
+}
+
+export function budgetedMainVisibleStartAt(state: UnknownRecord, now: number): number {
+  const candidate = Number(state.inboundObservedAt || state.inbound_observed_at || state.createdAt || 0);
+  return Number.isFinite(candidate) && candidate > 0 ? candidate : now;
+}
+
+function budgetedMainContractSessionKey(stateKey: string, ctx: UnknownRecord, state: UnknownRecord): string {
+  return stringValue(state.canonicalSessionKey || state.canonical_session_key)
+    || stringValue(state.ackGuardKey || state.ack_guard_key)
+    || stringValue(ctx.sessionKey || ctx.session_key)
+    || stringValue(ctx.canonicalSessionKey || ctx.canonical_session_key)
+    || stringValue(stateKey);
+}
+
+function budgetedMainIntentClass(decision: UnknownRecord): IntentClass {
+  const routeDecision = asRecord(decision.route_decision);
+  const request = asRecord(decision.request);
+  const metadata = asRecord(request.metadata);
+  const conversationControl = asRecord(metadata.conversation_control);
+  const raw = stringValue(
+    decision.intent_class
+      || routeDecision.intent_class
+      || conversationControl.intent_class
+      || "delegated_work",
+  );
+  return raw === "plain_chat"
+    || raw === "runtime_read_model"
+    || raw === "execution_followup"
+    || raw === "local_surface_lookup"
+    || raw === "fresh_live_lookup"
+    || raw === "delegated_work"
+    || raw === "undetermined"
+    ? raw
+    : "delegated_work";
+}
+
+function budgetedMainDecisionSource(decision: UnknownRecord): WorkDecisionSource {
+  const routeDecision = asRecord(decision.route_decision);
+  const raw = stringValue(decision._judge_source || routeDecision.final_judge_source || routeDecision.route_source || "local_judge");
+  if (raw === "continuation"
+    || raw === "execution_coverage"
+    || raw === "memory_coverage"
+    || raw === "local_judge"
+    || raw === "remote_judge"
+    || raw === "validator"
+    || raw === "main_agent_route_hint"
+    || raw === "policy_rule"
+  ) {
+    return raw;
+  }
+  return "local_judge";
+}
+
+function budgetedMainCoverageSnapshot(stateKey: string): ContextCoverageSnapshot {
+  const execution = buildExecutionCoverageLayer([stateKey]);
+  const memory = buildMemoryCoverageLayer();
+  const conflict = Boolean((execution.coverage && execution.coverage !== "none") && (memory.coverage && memory.coverage !== "none"));
+  return {
+    precheckOrder: [
+      "conversation_grounding",
+      "continuation_route_reuse",
+      "execution_coverage",
+      "memory_coverage",
+      "build_judge_context_packet",
+      "local_judge",
+      "validator_or_remote",
+      "route_seal_commit",
+    ],
+    execution,
+    memory,
+    conflict,
+    authority: conflict
+      ? "execution_wins"
+      : execution.coverage && execution.coverage !== "none"
+        ? "execution_wins"
+        : memory.coverage && memory.coverage !== "none"
+          ? "memory_only"
+          : "none",
+  };
+}
+
+function attachBudgetedMainDelegateWorkContract(input: {
+  stateKey: string;
+  ctx: UnknownRecord;
+  state: UnknownRecord;
+  decision: UnknownRecord;
+  reason: string;
+  now: number;
+}): { decision: UnknownRecord; workContractId: string; contractSessionKey: string } {
+  const existingContract = asRecord(input.decision.work_contract);
+  if (stringValue(existingContract.route) === "delegate") {
+    const existingId = stringValue(existingContract.workContractId || existingContract.work_contract_id || input.decision.workContractId || input.decision.work_contract_id);
+    const existing = existingId ? loadWorkContract(existingId) : null;
+    if (existing?.route === "delegate") {
+      return { decision: input.decision, workContractId: existingId, contractSessionKey: existing.sessionKey };
+    }
+  }
+
+  const contractSessionKey = budgetedMainContractSessionKey(input.stateKey, input.ctx, input.state);
+  const routeDecision = asRecord(input.decision.route_decision);
+  const expectedDeliverable = stringValue(
+    input.decision.expected_deliverable
+      || input.decision.expectedDeliverable
+      || routeDecision.expected_deliverable
+      || routeDecision.expectedDeliverable
+      || input.state.prompt,
+  );
+  const userAsk = stringValue(input.state.prompt)
+    || stringValue(asRecord(input.decision.request).prompt)
+    || expectedDeliverable
+    || "Budgeted main escalation";
+  const reasonCodes = Array.from(new Set([
+    ...stringArray(routeDecision.reason_codes),
+    "budgeted_main_escalated",
+    `budgeted_main_escalation:${input.reason}`,
+  ]));
+  const coverage = budgetedMainCoverageSnapshot(contractSessionKey);
+  const decisionSeal = buildWorkDecisionSeal(
+    budgetedMainDecisionSource(input.decision),
+    "delegate",
+    reasonCodes,
+    {
+      delegateRole: "default",
+      confidence: typeof input.decision.judge_confidence === "number" ? input.decision.judge_confidence : undefined,
+    },
+  );
+  const delegateTaskId = stableId("delegate-task", [
+    contractSessionKey,
+    userAsk,
+    input.reason,
+    String(input.now),
+  ]);
+  const delegate: DelegateContract = {
+    delegateTaskId,
+    currentAttemptId: `${delegateTaskId}:attempt:1`,
+    role: "default",
+    coordinationMode: "solo_worker",
+    acceptanceCriteria: [expectedDeliverable || "Return a compact result that satisfies the original request."],
+    scope: {
+      read: ["workspace"],
+      write: ["workspace"],
+      workspaceMode: "write_allowed",
+      scopeFingerprint: stableId("scope", [contractSessionKey, userAsk, input.reason]),
+    },
+    modelProfile: stringValue(routeDecision.worker_pool || routeDecision.model || asRecord(input.decision.request).model) || "default",
+    nativeBinding: null,
+    childSessions: [],
+    artifactRefs: [],
+    nextAction: "dispatch",
+  };
+  const contract = buildWorkContractFromPolicy(
+    contractSessionKey,
+    userAsk,
+    budgetedMainIntentClass(input.decision),
+    coverage,
+    decisionSeal,
+    { delegate },
+  );
+  if (!saveWorkContract(contract)) {
+    return { decision: input.decision, workContractId: "", contractSessionKey };
+  }
+
+  return {
+    decision: {
+      ...input.decision,
+      workContractId: contract.workContractId,
+      work_contract_id: contract.workContractId,
+      work_contract: compactWorkContractView(contract),
+    },
+    workContractId: contract.workContractId,
+    contractSessionKey,
+  };
+}
+
+export function updateBudgetedMainForContext(input: {
+  stateKey: string;
+  ctx: UnknownRecord;
+  state: UnknownRecord;
+  budgetState: BudgetedMainState;
+  decision?: UnknownRecord;
+  extra?: UnknownRecord;
+}): PolicyStateEntry | null {
+  let selected: PolicyStateEntry | null = null;
+  const serialized = serializeBudgetedMainState(input.budgetState);
+  const canonicalSessionKey = stringValue(input.state.canonicalSessionKey || input.state.canonical_session_key || input.stateKey);
+  for (const key of budgetedMainStateKeys(input.stateKey, input.ctx, input.state)) {
+    policyState.update(key, (current) => {
+      const next = {
+        ...(current ?? {}),
+        ...(input.extra ?? {}),
+        ...(input.decision ? { decision: input.decision } : {}),
+        canonicalSessionKey,
+        canonical_session_key: canonicalSessionKey,
+        budgetedMain: serialized,
+        budgeted_main: serialized,
+      } as PolicyStateEntry;
+      if (!selected || key === input.stateKey) selected = next;
+      return next;
+    });
+  }
+  return selected;
+}
+
+export async function recordBudgetedMainEvent(input: {
+  event: string;
+  stateKey: string;
+  ctx: UnknownRecord;
+  state: UnknownRecord;
+  decision: UnknownRecord;
+  budgetState: BudgetedMainState;
+  reason: string;
+  logger?: LoggerLike;
+  now?: number;
+}): Promise<void> {
+  const now = input.now ?? Date.now();
+  const metrics = buildBudgetedMainMetrics({
+    state: input.budgetState,
+    now,
+    reason: input.reason,
+    sessionKey: input.stateKey,
+    workContractId: input.budgetState.workContractId || budgetedMainWorkContractId(input.state, input.decision),
+    spawnIntentId: input.budgetState.spawnIntentId || budgetedMainSpawnIntentId(input.state),
+  });
+  await recordPolicyReplay(
+    input.event,
+    {
+      ...metrics,
+      stateKey: input.stateKey,
+      sessionId: stringValue(input.ctx.sessionId),
+    },
+    input.logger,
+    null,
+  );
+}
+
+export function clearBudgetedMainTimer(stateKey: string): void {
+  const timer = pendingBudgetedMainTimers.get(stateKey);
+  if (!timer) return;
+  clearTimeout(timer);
+  pendingBudgetedMainTimers.delete(stateKey);
+}
+
+export function scheduleBudgetedMainTimeout(input: {
+  stateKey: string;
+  ctx: UnknownRecord;
+  state: UnknownRecord;
+  decision: UnknownRecord;
+  budgetState: BudgetedMainState;
+  logger?: LoggerLike;
+}): void {
+  if (!input.stateKey || pendingBudgetedMainTimers.has(input.stateKey)) return;
+  const remainingMs = Math.max(0, input.budgetState.maxWallMs - (Date.now() - input.budgetState.startedAt));
+  const timer = setTimeout(() => {
+    pendingBudgetedMainTimers.delete(input.stateKey);
+    const liveState = asRecord(policyState.get(input.stateKey));
+    const liveBudget = readBudgetedMainState(liveState);
+    if (!liveBudget || !liveBudget.active || liveBudget.completedAt || liveBudget.escalatedAt || liveBudget.escalatedPending) return;
+    if (liveState.formal_reply_visible === true
+      || liveState.formalReplyVisible === true
+      || liveState.dispatchExecuted === true
+      || liveState.dispatch_executed === true
+      || liveState.spawnExecuted === true
+      || liveState.spawn_executed === true
+    ) return;
+    const now = Date.now();
+    const pendingBudget: BudgetedMainState = {
+      ...liveBudget,
+      escalatedPending: true,
+      reason: "wall_time_over_budget",
+    };
+    updateBudgetedMainForContext({
+      stateKey: input.stateKey,
+      ctx: input.ctx,
+      state: liveState,
+      budgetState: pendingBudget,
+      extra: {
+        budgeted_main_escalated_pending: true,
+        budgeted_main_escalated_pending_at: new Date(now).toISOString(),
+      },
+    });
+    void recordBudgetedMainEvent({
+      event: "budgeted_main_escalated_pending",
+      stateKey: input.stateKey,
+      ctx: input.ctx,
+      state: liveState,
+      decision: asRecord(liveState.decision || input.decision),
+      budgetState: pendingBudget,
+      reason: "wall_time_over_budget",
+      logger: input.logger,
+      now,
+    }).catch(() => {});
+  }, remainingMs);
+  (timer as unknown as { unref?: () => void }).unref?.();
+  pendingBudgetedMainTimers.set(input.stateKey, timer);
+}
+
+export function maybeStartBudgetedMain(input: {
+  stateKey: string;
+  ctx: UnknownRecord;
+  state: UnknownRecord;
+  decision: UnknownRecord;
+  logger?: LoggerLike;
+}): void {
+  if (!input.stateKey || !isBudgetedMainDecision(input.decision)) return;
+  const liveState = asRecord(policyState.get(input.stateKey) || input.state);
+  const existingBudget = readBudgetedMainState(liveState);
+  if (existingBudget?.completedAt || existingBudget?.escalatedAt) return;
+  if (existingBudget?.active) {
+    scheduleBudgetedMainTimeout({
+      ...input,
+      state: liveState,
+      budgetState: existingBudget,
+    });
+    return;
+  }
+  const now = Date.now();
+  const budgetState = buildBudgetedMainState({
+    now,
+    decision: input.decision,
+    visibleStartAt: budgetedMainVisibleStartAt(liveState, now),
+    budgetStartSource: "before_prompt_build_complete",
+    workContractId: budgetedMainWorkContractId(liveState, input.decision),
+    spawnIntentId: budgetedMainSpawnIntentId(liveState),
+  });
+  updateBudgetedMainForContext({
+    stateKey: input.stateKey,
+    ctx: input.ctx,
+    state: liveState,
+    budgetState,
+  });
+  void recordBudgetedMainEvent({
+    event: "budgeted_main_started",
+    stateKey: input.stateKey,
+    ctx: input.ctx,
+    state: liveState,
+    decision: input.decision,
+    budgetState,
+    reason: "budgeted_main_started",
+    logger: input.logger,
+    now,
+  }).catch(() => {});
+  scheduleBudgetedMainTimeout({
+    ...input,
+    state: liveState,
+    budgetState,
+  });
+}
+
+export function completeBudgetedMainIfActive(input: {
+  stateKey: string;
+  ctx: UnknownRecord;
+  state: UnknownRecord;
+  decision: UnknownRecord;
+  logger?: LoggerLike;
+}): void {
+  const budgetState = readBudgetedMainState(input.state);
+  if (!input.stateKey || !budgetState?.active || budgetState.completedAt || budgetState.escalatedAt) return;
+  const now = Date.now();
+  const late = budgetState.escalatedPending === true || now - budgetState.startedAt > budgetState.maxWallMs;
+  const reason = late ? "completed_late" : "completed";
+  const completedBudget: BudgetedMainState = {
+    ...budgetState,
+    active: false,
+    completedAt: now,
+    reason,
+  };
+  clearBudgetedMainTimer(input.stateKey);
+  updateBudgetedMainForContext({
+    stateKey: input.stateKey,
+    ctx: input.ctx,
+    state: input.state,
+    budgetState: completedBudget,
+    extra: {
+      budgeted_main_completed: true,
+      budgeted_main_completed_at: new Date(now).toISOString(),
+      ...(late ? { budgeted_main_completed_late: true } : {}),
+    },
+  });
+  void recordBudgetedMainEvent({
+    event: late ? "budgeted_main_completed_late" : "budgeted_main_completed",
+    stateKey: input.stateKey,
+    ctx: input.ctx,
+    state: input.state,
+    decision: input.decision,
+    budgetState: completedBudget,
+    reason,
+    logger: input.logger,
+    now,
+  }).catch(() => {});
+}
+
+export async function escalateBudgetedMainForTool(input: {
+  stateKey: string;
+  ctx: UnknownRecord;
+  state: UnknownRecord;
+  decision: UnknownRecord;
+  budgetState: BudgetedMainState;
+  reason: string;
+  logger?: LoggerLike;
+}): Promise<{ state: PolicyStateEntry | null; decision: UnknownRecord }> {
+  const now = Date.now();
+  const escalatedBaseDecision = escalateBudgetedMainDecision(input.decision, input.reason);
+  const attached = attachBudgetedMainDelegateWorkContract({
+    stateKey: input.stateKey,
+    ctx: input.ctx,
+    state: input.state,
+    decision: escalatedBaseDecision,
+    reason: input.reason,
+    now,
+  });
+  const escalatedDecision = attached.decision;
+  const escalatedBudget: BudgetedMainState = {
+    ...input.budgetState,
+    active: false,
+    escalatedAt: now,
+    escalatedPending: false,
+    reason: input.reason,
+    workContractId: attached.workContractId || input.budgetState.workContractId,
+  };
+  clearBudgetedMainTimer(input.stateKey);
+  const nextState = updateBudgetedMainForContext({
+    stateKey: input.stateKey,
+    ctx: input.ctx,
+    state: input.state,
+    budgetState: escalatedBudget,
+    decision: escalatedDecision,
+    extra: {
+      routeHintSubmitted: true,
+      delegated: false,
+      dispatchRoute: "delegate",
+      dispatchStatus: "budgeted_main_escalated",
+      dispatchExecuted: false,
+      spawnExecuted: false,
+      budgeted_main_escalated: true,
+      budgeted_main_escalated_at: new Date(now).toISOString(),
+      ...(attached.contractSessionKey ? { canonicalSessionKey: attached.contractSessionKey, canonical_session_key: attached.contractSessionKey } : {}),
+      ...(attached.workContractId ? { workContractId: attached.workContractId, work_contract_id: attached.workContractId } : {}),
+    },
+  });
+  await recordBudgetedMainEvent({
+    event: "budgeted_main_escalated",
+    stateKey: input.stateKey,
+    ctx: input.ctx,
+    state: input.state,
+    decision: escalatedDecision,
+    budgetState: escalatedBudget,
+    reason: input.reason,
+    logger: input.logger,
+    now,
+  });
+  return { state: nextState, decision: escalatedDecision };
+}
+
+export async function promoteBudgetedMainDispatch(input: {
+  stateKey: string;
+  ctx: UnknownRecord;
+  state: UnknownRecord;
+  decision: UnknownRecord;
+  task: string;
+  logger?: LoggerLike;
+}): Promise<{ state: PolicyStateEntry | null; decision: UnknownRecord; promoted: boolean }> {
+  const alreadyEscalated = hasBudgetedMainEscalationEvidence(input.state, input.decision);
+  if (!input.stateKey || (!isBudgetedMainDecision(input.decision) && !alreadyEscalated)) {
+    return { state: input.state as PolicyStateEntry | null, decision: input.decision, promoted: false };
+  }
+  if (stringValue(asRecord(input.decision.route_decision).route) === "delegate") {
+    return { state: input.state as PolicyStateEntry | null, decision: input.decision, promoted: false };
+  }
+  const stateForEscalation = {
+    ...input.state,
+    ...(input.task ? { prompt: input.task } : {}),
+  };
+  const now = Date.now();
+  const existingBudget = readBudgetedMainState(input.state);
+  const budgetState = existingBudget && !existingBudget.completedAt
+    ? existingBudget
+    : {
+        ...buildBudgetedMainState({
+          now,
+          decision: input.decision,
+          visibleStartAt: budgetedMainVisibleStartAt(input.state, now),
+          budgetStartSource: "main_agent_called_dispatch",
+          workContractId: budgetedMainWorkContractId(input.state, input.decision),
+          spawnIntentId: budgetedMainSpawnIntentId(input.state),
+        }),
+        reason: "main_agent_called_dispatch",
+      };
+  const escalated = await escalateBudgetedMainForTool({
+    stateKey: input.stateKey,
+    ctx: input.ctx,
+    state: stateForEscalation,
+    decision: input.decision,
+    budgetState,
+    reason: "main_agent_called_dispatch",
+    logger: input.logger,
+  });
+  return { ...escalated, promoted: true };
 }
