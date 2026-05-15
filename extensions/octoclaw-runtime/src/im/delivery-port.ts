@@ -25,6 +25,7 @@ export interface MessageDeliveryProvenance {
   model?: string;
   modelId?: string;
   via?: string;
+  complexityBand?: string;
   workContractId?: string;
   runId?: string;
   childSessionKey?: string;

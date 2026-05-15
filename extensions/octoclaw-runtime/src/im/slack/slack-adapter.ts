@@ -240,6 +240,7 @@ function envelopeProjectionFooter(envelope: MessageDeliveryEnvelope): IMProjecti
     route: envelope.provenance.route === "delegate" ? "delegate" : "reply",
     model: firstDisplayModel(envelope.provenance.model, envelope.provenance.modelId, "direct_main"),
     via: envelope.provenance.via,
+    complexityBand: envelope.provenance.complexityBand,
     workContractId: envelope.provenance.workContractId,
     thread: Boolean(normalizeSlackMessageTs(envelope.target.replyToMessageId || envelope.target.threadTs)),
   };
@@ -265,7 +266,12 @@ export function renderSlackProjectionFooter(message: string, projection: IMProje
   if (!content || hasProjectionFooter(content)) return message;
   const route = projection.route === "delegate" ? "delegate" : "reply";
   const model = firstDisplayModel(projection.model, "direct_main");
-  const primaryFooter = [`route=${route}`, `model=${model}`].join(" | ") + (projection.thread ? " · thread" : "");
+  const difficulty = stringValue(projection.complexityBand);
+  const primaryFooter = [
+    `route=${route}`,
+    `model=${model}`,
+    difficulty && `difficulty=${difficulty}`,
+  ].filter(Boolean).join(" | ") + (projection.thread ? " · thread" : "");
   const debugParts = [
     stringValue(projection.workerPool) && `worker=${stringValue(projection.workerPool)}`,
     stringValue(projection.workContractId) && `wc=${stringValue(projection.workContractId).slice(0, 8)}`,

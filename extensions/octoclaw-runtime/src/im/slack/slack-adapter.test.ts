@@ -39,11 +39,12 @@ describe("SlackAdapter", () => {
     expect(adapter.renderProjectionFooter("北京天气很好。", {
       route: "reply",
       model: "zhipu/GLM-5.1",
+      complexityBand: "deep",
       via: "judge",
       workerPool: "octoclaw-main",
       workContractId: "wc-1234567890",
       thread: true,
-    })).toBe("北京天气很好。\n\n• octoclaw: route=reply | model=zhipu/GLM-5.1 · thread | via=judge | worker=octoclaw-main | wc=wc-12345");
+    })).toBe("北京天气很好。\n\n• octoclaw: route=reply | model=zhipu/GLM-5.1 | difficulty=deep · thread | via=judge | worker=octoclaw-main | wc=wc-12345");
   });
 
   it("resolves Slack message turn anchors from Slack ts aliases", () => {

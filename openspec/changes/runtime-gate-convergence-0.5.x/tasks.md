@@ -170,15 +170,15 @@ Write scope:
 
 Tasks:
 
-- [ ] Ensure `model` footer uses actual selected/spawn model when available.
-- [ ] Ensure "started/delegated" wording requires native accepted run plus confirm.
-- [ ] Add "main fallback" status when dispatch was rejected and main executed bounded fallback.
-- [ ] Remove misleading generic "还没派发成功" on structured admission reject.
+- [x] Ensure `model` footer uses actual selected/spawn model when available.
+- [x] Ensure "started/delegated" wording requires native accepted run plus confirm.
+- [x] Add "main fallback" status when dispatch was rejected and main executed bounded fallback.
+- [x] Remove misleading generic "还没派发成功" on structured admission reject.
 
 Acceptance:
 
-- [ ] No user-visible started/delegated claim without native evidence.
-- [ ] Footer does not show policy default model when child spawn used explicit model.
+- [x] No user-visible started/delegated claim without native evidence.
+- [x] Footer does not show policy default model when child spawn used explicit model.
 
 ## WP-F Verification And Deploy
 

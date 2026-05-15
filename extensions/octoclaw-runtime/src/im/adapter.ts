@@ -8,6 +8,7 @@ export interface IMProjectionFooter {
   via?: string;
   workerPool?: string;
   workContractId?: string;
+  complexityBand?: string;
   thread?: boolean;
 }
 

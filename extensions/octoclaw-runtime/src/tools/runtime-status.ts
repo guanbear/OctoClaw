@@ -268,14 +268,25 @@ const STATUS_PANEL_STALE_VISIBLE_MS = 30 * 60 * 1000;
 const STATUS_PANEL_TERMINAL_VISIBLE_MS = 4 * 60 * 60 * 1000;
 
 
-function runtimeStatusEvidence(record: RuntimeTaskStateRecord): { hasDispatchEvidence: boolean; hasSpawnEvidence: boolean; resultMaterialized: boolean; childSessionKey: string; runId: string } {
+function runtimeStatusEvidence(record: RuntimeTaskStateRecord): {
+  hasDispatchEvidence: boolean;
+  hasSpawnEvidence: boolean;
+  resultMaterialized: boolean;
+  dispatchRejected: boolean;
+  mainFallbackExecuted: boolean;
+  childSessionKey: string;
+  runId: string;
+} {
   const artifacts = asRecord(record.artifacts);
   const runtimeTruth = asRecord(artifacts.runtime_truth);
   const evidence = asRecord(runtimeTruth.evidence);
+  const metadata = asRecord(record.metadata);
   const delegateAttempt = asRecord(runtimeTruth.delegateAttempt);
   const nativeBinding = asRecord(delegateAttempt.nativeBinding);
   const nativeTaskBinding = asRecord(runtimeTruth.nativeTaskBinding);
   const delivery = asRecord(runtimeTruth.delivery || runtimeTruth.resultDelivery);
+  const workContract = workContractRecord(record);
+  const telemetry = asRecord(workContract.telemetry);
   const continuity = asRecord(runtimeTruth.childSessionContinuity || runtimeTruth.continuity);
   const childSessionKey = optionalString(
     record.childSessionKey,
@@ -338,7 +349,28 @@ function runtimeStatusEvidence(record: RuntimeTaskStateRecord): { hasDispatchEvi
     || asBoolean(delivery.resultMaterialized)
     || asBoolean(delivery.result_materialized)
     || Boolean(asString(record.report_path || delivery.artifact_path || delivery.result_path));
-  return { hasDispatchEvidence, hasSpawnEvidence, resultMaterialized, childSessionKey, runId };
+  const dispatchRejected = asBoolean(record.dispatchRejected)
+    || asBoolean(record.dispatch_rejected)
+    || asBoolean(metadata.dispatchRejected)
+    || asBoolean(metadata.dispatch_rejected)
+    || asBoolean(evidence.dispatchRejected)
+    || asBoolean(evidence.dispatch_rejected)
+    || asBoolean(runtimeTruth.dispatchRejected)
+    || asBoolean(runtimeTruth.dispatch_rejected)
+    || asBoolean(telemetry.dispatchRejected)
+    || asBoolean(telemetry.dispatch_rejected)
+    || ["rejected", "admission_rejected", "dispatch_rejected"].includes(asString(record.status).toLowerCase());
+  const mainFallbackExecuted = asBoolean(record.mainFallbackExecuted)
+    || asBoolean(record.main_fallback_executed)
+    || asBoolean(metadata.mainFallbackExecuted)
+    || asBoolean(metadata.main_fallback_executed)
+    || asBoolean(evidence.mainFallbackExecuted)
+    || asBoolean(evidence.main_fallback_executed)
+    || asBoolean(runtimeTruth.mainFallbackExecuted)
+    || asBoolean(runtimeTruth.main_fallback_executed)
+    || asBoolean(telemetry.mainFallbackExecuted)
+    || asBoolean(telemetry.main_fallback_executed);
+  return { hasDispatchEvidence, hasSpawnEvidence, resultMaterialized, dispatchRejected, mainFallbackExecuted, childSessionKey, runId };
 }
 
 function hasDelegatedExecutionIdentity(record: RuntimeTaskStateRecord): boolean {
@@ -923,9 +955,10 @@ function projectRuntimeStatus(record: RuntimeTaskStateRecord, nowMs = Date.now()
   if (["timed_out", "timeout", "expired"].includes(completionStatus)) return { status: "timed_out", reason: "timeout_receipt" };
 
   if (route === "delegate") {
+    if (evidence.dispatchRejected && evidence.mainFallbackExecuted) {
+      return { status: "main_fallback", reason: "dispatch_rejected_main_fallback" };
+    }
     if (!evidence.hasDispatchEvidence) return { status: "registered", reason: "no_dispatch_evidence" };
-    // TODO(WP-E): Add "main_fallback" status when dispatch was rejected and main executed bounded fallback.
-    // Requires evidence.dispatchRejected + evidence.mainFallbackExecuted fields in @octoclaw/contracts.
     if (!evidence.hasSpawnEvidence && !["failed", "canceled", "blocked", "timed_out"].includes(terminalStatus)) {
       return { status: "queued", reason: "dispatch_materialized_but_no_spawn_evidence" };
     }
@@ -978,7 +1011,7 @@ function statusPanelRelevantMs(task: RuntimeStatusTaskView): number | null {
 function statusPanelRetentionMs(task: RuntimeStatusTaskView): number | null {
   if (["failed", "completed", "canceled"].includes(task.status)) return STATUS_PANEL_TERMINAL_VISIBLE_MS;
   if (task.status === "queued" && task.statusReason === "dispatch_materialized_but_no_spawn_evidence") return STATUS_PANEL_STALE_VISIBLE_MS;
-  if (["timed_out", "blocked", "registered", "deliverable_ready", "degraded", "lost"].includes(task.status)) return STATUS_PANEL_STALE_VISIBLE_MS;
+  if (["timed_out", "blocked", "registered", "main_fallback", "deliverable_ready", "degraded", "lost"].includes(task.status)) return STATUS_PANEL_STALE_VISIBLE_MS;
   return null;
 }
 
