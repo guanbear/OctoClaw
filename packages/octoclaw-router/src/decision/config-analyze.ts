@@ -36,7 +36,7 @@ const SCENARIO_KEYS = [
 function priceScore(model: ModelIntelLite): number {
   const input = model.marketPrice.inputUsdPerMTok;
   const output = model.marketPrice.outputUsdPerMTok;
-  if (input === undefined && output === undefined) return Number.POSITIVE_INFINITY;
+  if (input === undefined && output === undefined) return model.marketPrice.blendedUsdPerMTok ?? Number.POSITIVE_INFINITY;
   return Math.max(input ?? 0, output ?? 0);
 }
 

@@ -67,6 +67,29 @@ export interface RouterLiteCapability {
   confidence: RouterLiteConfidence;
   evidence: RouterLiteCapabilityEvidence[];
   sources: string[];
+  scoreByScenario?: RouterLiteScoreByScenario;
+}
+
+export interface RouterLiteScoredSourceContribution {
+  source: string;
+  rawScore: number;
+  baseWeight: number;
+  freshnessFactor: number;
+  sourceHealth: number;
+  effectiveWeight: number;
+}
+
+export interface RouterLiteFusedScore {
+  score: number;
+  confidence: RouterLiteConfidence;
+  contributions: RouterLiteScoredSourceContribution[];
+  reasonCodes: string[];
+}
+
+export interface RouterLiteScoreByScenario {
+  coding_worker?: RouterLiteFusedScore;
+  research?: RouterLiteFusedScore;
+  agentic?: RouterLiteFusedScore;
 }
 
 export interface RouterLiteHealth {

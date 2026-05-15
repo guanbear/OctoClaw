@@ -4,12 +4,16 @@
 分支：`v0.5.0`
 状态：落地计划（与 `octoclaw-ts-rebuild-design-v2.md` 配套，作为下一轮执行的具体任务拆分）
 
+> **2026-05-15 更新**：W-1（router-lite 接线）和 W-2（流式 ACK skip）已完成并归档。
+> 对应 openspec change 已移至 `openspec/changes/archive/`。
+> 当前 active 工作：W-3（拆 extension-entry）、W-4（删 placeholder）、W-5/W-6（见 roadmap）。
+
 本文只描述**未完成**的改进项。已经在 2026-05-12 作为"性价比快改"落地的三件事见本文最后的附录。
 
 关联的 OpenSpec change 包：
 
-- `openspec/changes/autorouter-lite-wiring-0.5.x/`（W-1，本文 §1）
-- `openspec/changes/runtime-streaming-ack-skip-0.5.x/`（W-2，本文 §2）
+- `openspec/changes/archive/autorouter-lite-wiring-0.5.x/`（W-1，**已完成**）
+- `openspec/changes/archive/runtime-streaming-ack-skip-0.5.x/`（W-2，**已完成**）
 - `openspec/changes/runtime-extension-entry-slim-0.5.x/`（W-3，本文 §3）
 - `openspec/changes/runtime-dead-placeholder-removal-0.5.x/`（W-4，本文 §4）
 

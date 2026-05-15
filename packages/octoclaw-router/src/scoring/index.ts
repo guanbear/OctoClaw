@@ -71,7 +71,7 @@ export function scoreModel(
   const override = context.scoreOverrides[model.modelKey]?.[context.complexity];
   if (override !== undefined) return override;
 
-  const capabilityScore = capabilityScoreFor(model);
+  const capabilityScore = capabilityScoreFor(model, context.complexity);
   const qualityFloorPass = qualityFloorPassesFor(model, context.complexity) ? 100 : 0;
   const costScore = costScoreFor(model, context);
   const stabilityScore = stabilityScoreFor(model);
@@ -132,13 +132,22 @@ export function buildRecommendation(models: ModelIntelLite[], context: ScoringCo
   };
 }
 
-export function capabilityScoreFor(model: ModelIntelLite): number {
+export function capabilityScoreFor(model: ModelIntelLite, complexity: Complexity): number {
+  const scenario = scenarioForComplexity(complexity);
+  const fused = model.capability.scoreByScenario?.[scenario];
+  if (fused !== undefined && fused.confidence !== "unknown") {
+    return fused.score;
+  }
   const baseScore = TIER_SCORE[model.capability.codingTier] ?? 30;
   const multiplier = model.capability.confidence === "high" ? 1
     : model.capability.confidence === "medium" ? 0.9
       : model.capability.confidence === "low" ? 0.75
         : 0.5;
   return baseScore * multiplier;
+}
+
+function scenarioForComplexity(_complexity: Complexity): "coding_worker" {
+  return "coding_worker";
 }
 
 export function qualityFloorPassesFor(model: ModelIntelLite, complexity: Complexity): boolean {

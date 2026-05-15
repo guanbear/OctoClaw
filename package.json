@@ -19,6 +19,8 @@
   "devDependencies": {
     "@vitest/coverage-v8": "3.2.4",
     "typescript": "~6.0.0",
-    "vitest": "^3.2.1"
+    "vitest": "^3.2.1",
+    "yaml": "^2.9.0",
+    "zod": "^4.4.3"
   }
 }

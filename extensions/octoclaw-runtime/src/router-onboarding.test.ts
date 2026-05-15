@@ -256,6 +256,39 @@ describe("router wizard Slack onboarding", () => {
     expect(sends[0]!.message).toContain("默认配置已启用");
   });
 
+  it("handles V3.1 step button ids through the Slack state wizard", async () => {
+    writeOpenclawConfig();
+    const sends: Parameters<RouterWizardOnboardingSendMessage>[0][] = [];
+    const common = {
+      sessionKey: "agent:main:slack:default:direct:u123abc",
+      replyToMessageId: "1777770000.000001",
+      openclawHome: tempHome,
+      now: new Date("2026-05-15T00:00:00.000Z"),
+      sendMessage: async (params: Parameters<RouterWizardOnboardingSendMessage>[0]) => {
+        sends.push(params);
+        return { sent: true, messageId: `1777770001.${String(sends.length).padStart(6, "0")}` };
+      },
+    };
+
+    const started = await handleRouterWizardAction({
+      ...common,
+      event: { actions: [{ action_id: "step:1:answer:start", value: "start" }] },
+    });
+    expect(started).toMatchObject({ handled: true, action: "step:1:start" });
+    expect(sends.at(-1)?.message).toContain("是按订阅计费还是按用量计费");
+
+    await handleRouterWizardAction({ ...common, now: new Date("2026-05-15T00:00:01.000Z"), event: { actions: [{ action_id: "step:2:answer:subscription", value: "subscription" }] } });
+    await handleRouterWizardAction({ ...common, now: new Date("2026-05-15T00:00:02.000Z"), event: { actions: [{ action_id: "step:2:answer:pay_as_you_go", value: "pay_as_you_go" }] } });
+    await handleRouterWizardAction({ ...common, now: new Date("2026-05-15T00:00:03.000Z"), event: { actions: [{ action_id: "step:3:answer:skip", value: "skip" }] } });
+    await handleRouterWizardAction({ ...common, now: new Date("2026-05-15T00:00:04.000Z"), event: { actions: [{ action_id: "step:4:answer:cloud_ok", value: "cloud_ok" }] } });
+    await handleRouterWizardAction({ ...common, now: new Date("2026-05-15T00:00:05.000Z"), event: { actions: [{ action_id: "step:6:answer:skip", value: "skip" }] } });
+
+    expect(sends.at(-1)?.message).toContain("配置完成");
+    const state = JSON.parse(fs.readFileSync(path.join(tempHome, "octoclaw", "router-wizard.state.json"), "utf8"));
+    expect(state.step).toBe("step-7-done");
+    expect(state.answers.models["openai/gpt-5.5"].planType).toBe("subscription");
+  });
+
   it("runs a Slack question wizard and writes selected answers on confirm", async () => {
     writeOpenclawConfig();
     writeModelIntelSnapshot();
@@ -574,8 +607,10 @@ describe("router wizard Slack onboarding", () => {
     await handleRouterWizardAction({ ...common, event: { actions: [{ action_id: "octoclaw_router_wizard_restricted_none" }] } });
 
     const sameProviderMessage = sends.at(-1)?.message ?? "";
-    expect(sameProviderMessage).toContain("openai/gpt-5-mini");
-    expect(sameProviderMessage).toContain("openai/gpt-5.4-mini");
+    expect(sameProviderMessage).toContain("cliproxyapi/gpt-5-mini");
+    expect(sameProviderMessage).toContain("cliproxyapi/gpt-5.4-mini");
+    expect(sameProviderMessage).not.toContain("openai/gpt-5-mini");
+    expect(sameProviderMessage).not.toContain("openai/gpt-5.4-mini");
     expect(sameProviderMessage).not.toContain("zhipu/glm-4.7");
   });
 

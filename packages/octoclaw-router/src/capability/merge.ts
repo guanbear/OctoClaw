@@ -1,5 +1,94 @@
-import type { ModelIntelLite, ModelIntelSnapshot, RouterLiteCodingTier, RouterLiteConfidence } from "../decision/contracts.js";
+import type {
+  ModelIntelLite,
+  ModelIntelSnapshot,
+  RouterLiteCodingTier,
+  RouterLiteConfidence,
+  RouterLiteFusedScore,
+  RouterLiteScoreByScenario,
+} from "../decision/contracts.js";
 import type { CapabilityOverrideConfig, CapabilitySourceRecord, LeaderboardSnapshot, MergedCapabilitySnapshot } from "./types.js";
+
+export type ScoredSourceContribution = RouterLiteFusedScore["contributions"][number];
+export type FusedScore = RouterLiteFusedScore;
+
+export function computeFreshnessFactor(lastVerifiedAt: string | undefined, now = Date.now()): number {
+  const timestamp = Date.parse(lastVerifiedAt ?? "");
+  if (Number.isNaN(timestamp)) return 0.15;
+  const ageDays = (now - timestamp) / (1000 * 60 * 60 * 24);
+  if (ageDays < 30) return 1;
+  if (ageDays < 90) return 0.7;
+  if (ageDays < 180) return 0.4;
+  return 0.15;
+}
+
+export function computeSourceHealth(recentOutcomes: boolean[]): number {
+  const lastFour = recentOutcomes.slice(-4);
+  if (lastFour.length === 0) return 0;
+  return lastFour.filter(Boolean).length / 4;
+}
+
+export function fuseScenarioScore(
+  contributions: Array<{ source: string; rawScore: number; lastVerifiedAt?: string }>,
+  weights: Record<string, number>,
+  health: Record<string, number>,
+  now: number,
+): FusedScore {
+  if (contributions.length === 0) {
+    return { score: 0, confidence: "unknown", contributions: [], reasonCodes: ["no_contributions"] };
+  }
+
+  const normalized = contributions
+    .filter((entry) => Number.isFinite(entry.rawScore) && entry.rawScore >= 0 && entry.rawScore <= 100)
+    .map<ScoredSourceContribution>((entry) => {
+      const baseWeight = weights[entry.source] ?? 0;
+      const freshnessFactor = computeFreshnessFactor(entry.lastVerifiedAt, now);
+      const sourceHealth = health[entry.source] ?? 0;
+      return {
+        source: entry.source,
+        rawScore: entry.rawScore,
+        baseWeight,
+        freshnessFactor,
+        sourceHealth,
+        effectiveWeight: baseWeight * freshnessFactor * sourceHealth,
+      };
+    });
+
+  const totalEffectiveWeight = normalized.reduce((sum, entry) => sum + entry.effectiveWeight, 0);
+  const reasonCodes = normalized.flatMap((entry) => {
+    const codes: string[] = [];
+    if (entry.sourceHealth === 0) codes.push(`${entry.source}_health_zero`);
+    if (entry.freshnessFactor === 0.7) codes.push(`${entry.source}_stale_30d`);
+    if (entry.freshnessFactor === 0.4) codes.push(`${entry.source}_stale_90d`);
+    if (entry.freshnessFactor === 0.15) codes.push(`${entry.source}_stale_180d`);
+    if (entry.baseWeight === 0) codes.push(`${entry.source}_weight_missing`);
+    return codes;
+  });
+
+  if (totalEffectiveWeight <= 0) {
+    return {
+      score: 0,
+      confidence: "unknown",
+      contributions: normalized,
+      reasonCodes: reasonCodes.length > 0 ? reasonCodes : ["no_usable_contributions"],
+    };
+  }
+
+  const score = normalized.reduce(
+    (sum, entry) => sum + entry.rawScore * (entry.effectiveWeight / totalEffectiveWeight),
+    0,
+  );
+
+  const confidence = totalEffectiveWeight >= 0.7 ? "high"
+    : totalEffectiveWeight >= 0.4 ? "medium"
+      : "low";
+
+  return {
+    score: Math.round(score * 100) / 100,
+    confidence,
+    contributions: normalized,
+    reasonCodes: [`fusion_sources:${normalized.filter((entry) => entry.effectiveWeight > 0).length}`, ...reasonCodes],
+  };
+}
 
 export function mergePriceData(
   _model: string,
@@ -64,6 +153,7 @@ export function modelFromSourceRecord(record: CapabilitySourceRecord, fallbackSo
     source: record.source ?? fallbackSource,
     freshness: record.lastVerifiedAt,
     configured: false,
+    scoreByScenario: record.scoreByScenario,
   });
 }
 
@@ -103,8 +193,9 @@ function createModelIntel(input: {
   confidence: RouterLiteConfidence;
   source: string;
   freshness?: string;
-  configured?: boolean;
-}): ModelIntelLite {
+	  configured?: boolean;
+	  scoreByScenario?: RouterLiteScoreByScenario;
+	}): ModelIntelLite {
   const [provider = "unknown", model = input.modelKey] = input.modelKey.split("/");
   const configured = input.configured ?? false;
   return {
@@ -133,10 +224,11 @@ function createModelIntel(input: {
       reasoning: input.reasoning ?? "yes",
       promptCache: input.promptCache ?? "unknown",
       codingTier: input.tier,
-      confidence: input.confidence,
-      evidence: [input.source === "heuristic" ? "heuristic" : "declared"],
-      sources: [input.source],
-    },
+	      confidence: input.confidence,
+	      evidence: [input.source === "heuristic" ? "heuristic" : "declared"],
+	      sources: [input.source],
+	      scoreByScenario: input.scoreByScenario,
+	    },
     health: {
       available: "yes",
       cooldown: false,

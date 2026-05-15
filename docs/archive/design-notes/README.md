@@ -1,12 +1,37 @@
 # OctoClaw 历史设计归档索引
 
-> 本目录保存 2026-03-19 到 2026-04-02 期间的设计、分析、路线图与专题笔记。  
-> 它们**不再是当前 source of truth**；当前真相源请看：
+> 本目录保存历史设计文档。**不再是当前 source of truth**；当前真相源请看：
 >
+> - [`../../octoclaw-ts-rebuild-design-v2.md`](../../octoclaw-ts-rebuild-design-v2.md)
 > - [`../../octoclaw-design-foundation.md`](../../octoclaw-design-foundation.md)
-> - [`../../octoclaw-execution-plan.md`](../../octoclaw-execution-plan.md)
+> - [`../../octoclaw-improvement-plan-2026-05-12.md`](../../octoclaw-improvement-plan-2026-05-12.md)
 
-## 归档说明
+## 2026-05-15 归档批次（Cut 2）
+
+以下文档从 `docs/` 移入，对应 v0.6.0 瘦身。
+
+| 文档 | 状态 | 被取代原因 |
+|------|------|-----------|
+| `octoclaw-auto-router-v3-design-2026-05-13.md` | Historical reference | v3 已实现，设计文档变历史记录 |
+| `octoclaw-auto-router-v3-algorithms.md` | Historical reference | v3 配套，随主文档归档 |
+| `octoclaw-auto-router-v3-bdd.md` | Historical reference | v3 配套，随主文档归档 |
+| `octoclaw-auto-router-v3-handoff.md` | Historical reference | v3 配套，随主文档归档 |
+| `octoclaw-auto-router-lite-cost-model-design-2026-05-08.md` | Historical reference | 被 v3 design 取代 |
+| `octoclaw-phase5-auto-router-design-2026-04-30.md` | Historical reference | 被 v3 design 取代 |
+| `octoclaw-auto-router-design.md` | Historical reference | 早期战略底稿，被 v3 取代 |
+| `octoclaw-n1-runtime-ledger-implementation-plan-2026-05-01.md` | Historical reference | N1 已完成 |
+| `octoclaw-runtime-convergence-cleanup-plan-2026-05-07.md` | Historical reference | 对应 openspec change 已归档 |
+| `octoclaw-state-convergence-4-4-design.md` | Historical reference | `refactor/0.4.0-stable` 时代 |
+| `octoclaw-work-contract-centered-delegation-design-2026-04-25.md` | Historical reference | 被 v2 baseline 吸收 |
+| `octoclaw-feedback-loop-contracts.md` | Historical reference | `refactor/0.4.0-stable` 时代 |
+| `octoclaw-repo-debt-cleanup-plan-2026-05-09.md` | Historical reference | 已完成的 hygiene plan |
+| `octoclaw-v0.6.0-handoff.md` | Historical reference | v3 handoff 配套，随 v3 归档 |
+
+---
+
+## 2026-03 到 2026-04 归档批次（原有）
+
+
 
 这些旧文档仍然有三类价值：
 

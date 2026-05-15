@@ -495,6 +495,54 @@ function modelsFromOpenClawConfig(config: unknown): PartialModelIntel[] {
   return models;
 }
 
+function isOpenAiFamilyModel(modelId: string): boolean {
+  const normalized = modelId.toLowerCase();
+  return /^gpt-\d/u.test(normalized) || normalized.startsWith("chatgpt-") || /^o\d/u.test(normalized);
+}
+
+function gptMajor(modelId: string): string | undefined {
+  return /^gpt-(\d+)/u.exec(modelId.toLowerCase())?.[1];
+}
+
+function isMiniCandidate(modelId: string): boolean {
+  return modelId.toLowerCase().includes("mini");
+}
+
+function mirrorOpenAiCandidatesForCompatibleProviders(partials: PartialModelIntel[]): PartialModelIntel[] {
+  const existing = new Set(partials.map((model) => model.modelKey));
+  const proxyProviders = new Map<string, Set<string>>();
+  for (const model of partials) {
+    const major = gptMajor(model.model);
+    if (model.configured === true && model.provider !== "openai" && major) {
+      const majors = proxyProviders.get(model.provider) ?? new Set<string>();
+      majors.add(major);
+      proxyProviders.set(model.provider, majors);
+    }
+  }
+  if (proxyProviders.size === 0) return [];
+
+  const openAiCandidates = partials.filter((model) => model.provider === "openai" && isOpenAiFamilyModel(model.model) && isMiniCandidate(model.model));
+  const mirrored: PartialModelIntel[] = [];
+  for (const [provider, majors] of proxyProviders) {
+    for (const candidate of openAiCandidates) {
+      const major = gptMajor(candidate.model);
+      if (!major || !majors.has(major)) continue;
+      const modelKey = `${provider}/${candidate.model}`;
+      if (existing.has(modelKey)) continue;
+      existing.add(modelKey);
+      mirrored.push({
+        ...candidate,
+        provider,
+        modelKey,
+        configured: false,
+        tags: (candidate.tags ?? []).filter((tag) => tag !== "configured"),
+        sources: unique([...candidate.sources, "provider_alias:openai"]),
+      });
+    }
+  }
+  return mirrored;
+}
+
 function effectiveCostBandFromPrice(input?: number, output?: number): RouterLiteEffectiveCostBand {
   if (input === 0 && output === 0) return "free_or_sunk";
   const blended = Math.max(input ?? 0, output ?? 0);
@@ -744,6 +792,7 @@ export function buildModelIntelSnapshot(input: BuildModelIntelSnapshotInput): Mo
     ...modelsFromLegacyCatalog(input.legacyCatalog),
     ...modelsFromModelIntelSnapshot(input.packagedSnapshot),
   ];
+  partials.push(...mirrorOpenAiCandidatesForCompatibleProviders(partials));
 
   const merged = new Map<string, ModelIntelLite>();
   for (const partial of partials) {

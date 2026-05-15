@@ -20,6 +20,7 @@ import type { CalibrationInputFile } from "./calibration/types.js";
 import type { SlackAcceptanceFormat } from "./slack-acceptance/types.js";
 import type { NightlyEvalConfig, LaunchAgentConfig } from "./nightly-eval/index.js";
 import { installLaunchAgent, uninstallLaunchAgent } from "./platform.js";
+import { runRouterWizardCli } from "./commands/router-wizard.js";
 
 // Lazy-loaded workspace modules — only loaded when their commands are used.
 // This allows `init` to work standalone without workspace packages installed.
@@ -124,6 +125,8 @@ interface ParsedCliArgs {
   drift: boolean;
   once: boolean;
   incremental: boolean;
+  cliMode: boolean;
+  resume: boolean;
   input?: string;
   baseline?: string;
   candidate?: string;
@@ -1021,6 +1024,8 @@ export function parseCliArgs(argv: string[]): ParsedCliArgs {
   let drift = false;
   let once = false;
   let incremental = false;
+  let cliMode = false;
+  let resume = false;
   let input: string | undefined;
   let baseline: string | undefined;
   let candidate: string | undefined;
@@ -1125,6 +1130,14 @@ export function parseCliArgs(argv: string[]): ParsedCliArgs {
     }
     if (argument === "--incremental") {
       incremental = true;
+      continue;
+    }
+    if (argument === "--cli") {
+      cliMode = true;
+      continue;
+    }
+    if (argument === "--resume") {
+      resume = true;
       continue;
     }
     if (argument === "--input") {
@@ -1417,6 +1430,8 @@ export function parseCliArgs(argv: string[]): ParsedCliArgs {
     drift,
     once,
     incremental,
+    cliMode,
+    resume,
     input,
     baseline,
     candidate,
@@ -1492,6 +1507,8 @@ export function printUsage(): string {
     "  octoclawctl nightly-eval print-plist --config <eval-config.json> --output-dir <dir> [--schedule-hour 2]",
     "  octoclawctl nightly-eval deliver-slack --config <slack-acceptance.json> --output-dir <nightly-report-dir> [--format markdown|json]",
     "  octoclawctl router wizard [--incremental]",
+    "  octoclawctl router wizard --cli [--resume]",
+    "  octoclawctl router wizard accept-proposal <model>",
     "  octoclawctl router decisions [--since 7d] [--format text|json]",
     "  octoclawctl router promotion review [--input <shadow.jsonl>] [--format text|json]",
     "  octoclawctl router promotion nightly-review [--input <shadow.jsonl>] [--format text|json]",
@@ -1503,6 +1520,7 @@ export function printUsage(): string {
     "  octoclawctl router capability list [--input <snapshot.json>] [--format text|json]",
     "  octoclawctl router capability show <model> [--input <snapshot.json>] [--format text|json]",
     "  octoclawctl router capability snapshot show [--input <snapshot.json>] [--format text|json]",
+    "  octoclawctl router capability lookup <model> [--input <snapshot.json>] [--format text|json]",
     "  octoclawctl router capability probe <model> [--input <snapshot.json>] [--format text|json]",
     "  octoclawctl router model-intel refresh [--output-dir <dir>] [--openclaw-home <dir>] [--format json]",
     "  octoclawctl router model-config analyze [--input <snapshot.json>] [--output-dir <dir>] [--format json]",
@@ -2110,13 +2128,46 @@ function formatCapabilitySnapshotShow(snapshot: ModelIntelSnapshot, format: "jso
   ].join("\n");
 }
 
-function formatCapabilityProbe(snapshot: ModelIntelSnapshot, modelKey: string, format: "json" | "text"): string {
+function formatCapabilityLookup(snapshot: ModelIntelSnapshot, modelKey: string, format: "json" | "text"): string {
   const normalized = modelKey.toLowerCase();
   const model = snapshot.models.find((item) => item.modelKey.toLowerCase() === normalized);
   const result = model
     ? { model: model.modelKey, ok: model.available !== "no", reason: model.available === "no" ? "known_unavailable" : "known_available", sources: model.sources }
     : { model: modelKey, ok: false, reason: "unknown_model", sources: [] };
-  return format === "json" ? JSON.stringify(result, null, 2) : `Capability probe ${result.model}: ${result.ok ? "ok" : "failed"} (${result.reason})`;
+  return format === "json" ? JSON.stringify(result, null, 2) : `Capability lookup ${result.model}: ${result.ok ? "ok" : "failed"} (${result.reason})`;
+}
+
+async function runCapabilityProbe(input: {
+  snapshot: ModelIntelSnapshot;
+  modelKey: string;
+  openclawHome: string;
+  format: "json" | "text";
+  env: Record<string, string | undefined>;
+}): Promise<string> {
+  const router = await loadRouter();
+  const openclawConfig = await readJsonFile(path.join(input.openclawHome, "openclaw.json"));
+  const providerConfig = router.resolveProviderForModel(input.modelKey, openclawConfig);
+  if (!providerConfig) {
+    throw new Error(`No configured provider found for ${input.modelKey}. Configure the provider/model in openclaw.json first.`);
+  }
+  const model = input.snapshot.models.find((item) => item.modelKey.toLowerCase() === input.modelKey.toLowerCase());
+  const mockProbe = input.env.OCTOCLAW_ROUTER_PROBE_MOCK_JSON;
+  const result = await router.probeModel({
+    modelKey: input.modelKey,
+    providerConfig,
+    estimatedBlendedUsdPerMTok: model?.marketPrice.blendedUsdPerMTok,
+    fetch: mockProbe ? async () => new Response(mockProbe, { status: 200, headers: { "content-type": "application/json" } }) : undefined,
+  });
+  if (result.ok) {
+    await router.recordProbeSuccess(input.modelKey, input.openclawHome);
+  }
+  if (input.format === "json") return JSON.stringify(result, null, 2);
+  return [
+    `Capability probe ${result.modelKey}: ${result.ok ? "ok" : "failed"}`,
+    `authOk=${result.authOk} modelExists=${result.modelExists} toolUseOk=${result.toolUseOk}`,
+    `latencyMs=${result.latencyMs ?? "unknown"} costUsd=${result.costUsd ?? "unknown"}`,
+    ...(result.error ? [`error=${result.error.code}: ${result.error.message}`] : []),
+  ].join("\n");
 }
 
 interface RouterDecisionRow {
@@ -2492,7 +2543,24 @@ async function runRouterLiteCommand(parsed: ParsedCliArgs, env: Record<string, s
   const wantsJson = parsed.format === "json";
 
   if (area === "wizard") {
+    if (action === "accept-proposal") {
+      const modelKey = parsed.extraArgs[2];
+      if (!modelKey) throw new Error("router wizard accept-proposal expects <model>");
+      const result = await (await loadRouter()).acceptProposal(modelKey, openclawHome);
+      return wantsJson
+        ? JSON.stringify(result, null, 2)
+        : `Router proposal accepted: ${result.modelKey}\nopenclawConfig=${result.openclawConfigPath}\nbackup=${result.backupPath}`;
+    }
     const configured = await discoverConfiguredRouterModels(openclawHome);
+    if (parsed.cliMode) {
+      return runRouterWizardCli({
+        openclawHome,
+        models: configured,
+        nonInteractive: parsed.nonInteractive,
+        resume: parsed.resume,
+        format: wantsJson ? "json" : "text",
+      });
+    }
     const answers = await loadRouterWizardAnswers(parsed.config);
     const existing = parsed.incremental ? await loadRouterWizardFile(openclawHome) : defaultRouterWizardFile([]);
     const now = new Date().toISOString();
@@ -2669,13 +2737,14 @@ async function runRouterLiteCommand(parsed: ParsedCliArgs, env: Record<string, s
     return formatCapabilitySnapshotShow(snapshot, wantsJson ? "json" : "text");
   }
 
-  if (area === "capability" && (action === "list" || action === "show" || action === "probe")) {
+  if (area === "capability" && (action === "list" || action === "show" || action === "lookup" || action === "probe")) {
     const snapshot = await readModelIntelSnapshot(resolveCapabilitySnapshotPath(parsed, openclawHome));
     if (action === "list") return formatCapabilityList(snapshot, wantsJson ? "json" : "text");
     const modelKey = parsed.extraArgs[2];
     if (!modelKey) throw new Error(`router capability ${action} expects <model>`);
     if (action === "show") return formatCapabilityShow(snapshot, modelKey, wantsJson ? "json" : "text");
-    return formatCapabilityProbe(snapshot, modelKey, wantsJson ? "json" : "text");
+    if (action === "lookup") return formatCapabilityLookup(snapshot, modelKey, wantsJson ? "json" : "text");
+    return runCapabilityProbe({ snapshot, modelKey, openclawHome, format: wantsJson ? "json" : "text", env });
   }
 
   if (area === "model-intel" && action === "refresh") {
@@ -2776,7 +2845,7 @@ async function runRouterLiteCommand(parsed: ParsedCliArgs, env: Record<string, s
     return lines.join("\n");
   }
 
-  throw new Error("router command expects: router wizard | router capability refresh/list/show/snapshot show/probe | router model-intel refresh | router model-config analyze | router shadow-report | router decisions | router promotion review/nightly-review | router cost report | router score override/reset | router model mark/ban/list-overrides");
+  throw new Error("router command expects: router wizard | router capability refresh/list/show/snapshot show/lookup/probe | router model-intel refresh | router model-config analyze | router shadow-report | router decisions | router promotion review/nightly-review | router cost report | router score override/reset | router model mark/ban/list-overrides");
 }
 
 async function runCommandFromSnapshot(parsed: ParsedCliArgs, env: Record<string, string | undefined>): Promise<string> {

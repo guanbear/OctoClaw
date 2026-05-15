@@ -9,6 +9,16 @@ import {
   type ModelIntelLite,
 } from "@octoclaw/router";
 import { sendIMMessage, type SendIMResult } from "./im/send.js";
+import {
+  applyWizardAction as applySlackStateWizardAction,
+  createRouterWizardState as createSlackRouterWizardState,
+  decodeWizardButtonId,
+  loadRouterWizardState,
+  renderWizardMessage,
+  saveRouterWizardState,
+  type RouterWizardButtonAction,
+  type RouterWizardState as SlackRouterWizardState,
+} from "./im/slack/wizard/index.js";
 import type { LoggerLike } from "./extension-entry-shared.js";
 import { stringValue } from "./extension-entry-shared.js";
 import { asRecord, type UnknownRecord } from "./util/type-coercion.js";
@@ -354,6 +364,19 @@ function extractRouterWizardActionDetails(event: unknown): { action: RouterWizar
   return null;
 }
 
+function extractSlackStateWizardAction(event: unknown): RouterWizardButtonAction | null {
+  for (const action of collectActionCandidates(event)) {
+    const actionId = stringValue(action.action_id || action.actionId);
+    const value = stringValue(action.value);
+    for (const candidate of [actionId, value]) {
+      if (!candidate.startsWith("step:")) continue;
+      const decoded = decodeWizardButtonId(candidate);
+      if (decoded.ok) return decoded.action;
+    }
+  }
+  return null;
+}
+
 export function discoverConfiguredRouterModels(openclawHome = ""): string[] {
   try {
     const raw = JSON.parse(fsSync.readFileSync(path.join(resolveOpenclawHome(openclawHome), "openclaw.json"), "utf8")) as UnknownRecord;
@@ -431,10 +454,37 @@ function modelFamilyFor(modelKey: string): string {
   return "";
 }
 
+function gptMajorFor(modelKey: string): string | undefined {
+  return /(?:^|[\/_-])gpt[-_.]?(\d+)/u.exec(normalizedModelKey(modelKey))?.[1];
+}
+
+function modelNameFor(modelKey: string): string {
+  const slash = modelKey.indexOf("/");
+  return slash > 0 ? modelKey.slice(slash + 1) : modelKey;
+}
+
+function isGptMiniCandidate(modelKey: string): boolean {
+  return modelFamilyFor(modelKey) === "openai:gpt" && normalizedModelKey(modelKey).includes("mini");
+}
+
+function configuredGptProxyProviders(configuredModels: string[]): Map<string, Set<string>> {
+  const providers = new Map<string, Set<string>>();
+  for (const model of configuredModels) {
+    const provider = providerForModel(model);
+    const major = gptMajorFor(model);
+    if (!provider || provider === "openai" || !major) continue;
+    const majors = providers.get(provider) ?? new Set<string>();
+    majors.add(major);
+    providers.set(provider, majors);
+  }
+  return providers;
+}
+
 function discoverSameProviderRouterModels(openclawHome = "", configuredModels = discoverConfiguredRouterModels(openclawHome)): string[] {
   const configured = new Set(configuredModels.map(normalizedModelKey).filter(Boolean));
   const configuredProviders = new Set(configuredModels.map(providerForModel).filter(Boolean));
   const configuredFamilies = new Set(configuredModels.map(modelFamilyFor).filter(Boolean));
+  const gptProxyProviders = configuredGptProxyProviders(configuredModels);
   const discovered = new Map<string, string>();
   for (const model of loadRouterWizardSnapshotModels(openclawHome)) {
     const modelKey = stringValue(model.modelKey);
@@ -443,6 +493,16 @@ function discoverSameProviderRouterModels(openclawHome = "", configuredModels = 
     const sameProvider = configuredProviders.has(providerForModel(modelKey));
     const sameFamily = configuredFamilies.has(modelFamilyFor(modelKey));
     if ((!sameProvider && !sameFamily) || configured.has(normalized)) continue;
+    if (!sameProvider && isGptMiniCandidate(modelKey)) {
+      const major = gptMajorFor(modelKey);
+      for (const [provider, majors] of gptProxyProviders) {
+        if (!major || !majors.has(major)) continue;
+        const mirrored = `${provider}/${modelNameFor(modelKey)}`;
+        const mirroredNormalized = normalizedModelKey(mirrored);
+        if (!configured.has(mirroredNormalized) && !discovered.has(mirroredNormalized)) discovered.set(mirroredNormalized, mirrored);
+      }
+      continue;
+    }
     if (!discovered.has(normalized)) discovered.set(normalized, modelKey);
   }
   return [...discovered.values()].slice(0, 8);
@@ -502,6 +562,16 @@ async function writeWizardConfig(
   fsSync.mkdirSync(path.dirname(filePath), { recursive: true });
   fsSync.writeFileSync(filePath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
   return filePath;
+}
+
+function answersFromSlackStateWizard(state: SlackRouterWizardState): RouterWizardAnswers {
+  return {
+    privacy: state.answers.privacy === "local_only" ? "local_only" : "standard",
+    modelPlanTypes: Object.fromEntries(Object.entries(state.answers.models).map(([model, answer]) => [model, answer.planType])),
+    restrictedModels: state.answers.restrictedModels,
+    sameProviderModels: state.answers.sameProviderCandidates,
+    ...(state.answers.budget?.monthlyUsd !== undefined ? { monthlyBudget: state.answers.budget.monthlyUsd } : {}),
+  };
 }
 
 function actionButton(text: string, actionId: string, value: string, style?: "primary" | "danger"): Record<string, unknown> {
@@ -786,6 +856,40 @@ export async function handleRouterWizardAction(input: {
     ? state.active
     : undefined;
   const text = extractEventText(input.event);
+  const slackStateAction = extractSlackStateWizardAction(input.event);
+  if (slackStateAction) {
+    const loaded = await loadRouterWizardState({ openclawHome });
+    const configuredModels = discoverConfiguredRouterModels(openclawHome);
+    const currentState = loaded.state ?? createSlackRouterWizardState({
+      models: configuredModels,
+      sameProviderCandidates: discoverSameProviderRouterModels(openclawHome, configuredModels),
+      now: now.toISOString(),
+    });
+    const result = applySlackStateWizardAction(currentState, slackStateAction, { now: now.toISOString() });
+    if (result.kind !== "duplicate") {
+      await saveRouterWizardState(result.state, { openclawHome });
+    }
+    let filePath: string | undefined;
+    if (result.state.completedAt) {
+      filePath = await writeWizardConfig(openclawHome, configuredModels, now, answersFromSlackStateWizard(result.state));
+      state.completedAt = now.toISOString();
+      await writeOnboardingState(openclawHome, state);
+    }
+    for (const message of (result.messages.length ? result.messages : result.kind === "duplicate" ? [] : [renderWizardMessage(result.state)])) {
+      await sendMessage({
+        sessionKey: input.sessionKey,
+        message: message.text,
+        interactiveBlocks: message.blocks,
+        replyToMessageId: input.replyToMessageId,
+        cwd: input.cwd,
+        suppressProjectionFooter: true,
+        deliveryKind: "router_wizard_onboarding",
+        deliveryTargetSource: input.replyToMessageId ? "inbound_anchor" : "session_fallback",
+        footerMode: "off",
+      });
+    }
+    return { handled: true, action: `step:${slackStateAction.step}:${slackStateAction.value}`, path: filePath };
+  }
   const actionDetails = extractRouterWizardActionDetails(input.event);
   let action = actionDetails?.action ?? null;
   const actionValue = actionDetails?.value ?? "";

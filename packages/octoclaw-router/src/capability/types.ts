@@ -1,4 +1,4 @@
-import type { ModelIntelLite, ModelIntelSnapshot, RouterLiteCodingTier, RouterLiteConfidence } from "../decision/contracts.js";
+import type { ModelIntelLite, ModelIntelSnapshot, RouterLiteCodingTier, RouterLiteConfidence, RouterLiteScoreByScenario } from "../decision/contracts.js";
 
 export interface LeaderboardScore {
   score: number;
@@ -42,6 +42,7 @@ export interface CapabilitySourceRecord {
   available?: "yes" | "no" | "unknown";
   lastVerifiedAt?: string;
   source?: string;
+  scoreByScenario?: RouterLiteScoreByScenario;
 }
 
 export interface CapabilitySource {

@@ -1,0 +1,21 @@
+{
+  "schemaVersion": "octoclaw.router.source_weights/v1",
+  "weights": {
+    "coding_worker": {
+      "aider": 0.4,
+      "pinchbench": 0.3,
+      "bfcl": 0.1,
+      "artificial_analysis": 0.2
+    },
+    "research": {
+      "artificial_analysis": 0.5,
+      "pinchbench": 0.3,
+      "lmarena": 0.2
+    },
+    "agentic": {
+      "bfcl": 0.5,
+      "pinchbench": 0.3,
+      "artificial_analysis": 0.2
+    }
+  }
+}

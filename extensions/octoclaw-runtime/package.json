@@ -38,6 +38,10 @@
       "types": "./src/bridge.ts",
       "default": "./dist/bridge.js"
     },
+    "./slack-wizard": {
+      "types": "./src/im/slack/wizard/index.ts",
+      "default": "./dist/im/slack/wizard/index.js"
+    },
     "./extension-entry": {
       "types": "./src/extension-entry.ts",
       "default": "./dist/extension-entry.js"

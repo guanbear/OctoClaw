@@ -4,7 +4,58 @@ Date: 2026-05-13
 Branch: `v0.5.0` → 后续切 `v0.6.0` 或临时分支
 Status: 落地计划（与 `octoclaw-improvement-plan-2026-05-12.md` 接续）
 
+> **2026-05-15 更新**：S1 / S3 / A1 / A3-Discord / A3-Telegram 已完成并归档。
+> 当前 active：**A2（稳定性收尾）** + **A3-飞书（分段）**。
+> Auto Router v3 已实现（Phase A+B+C+D 大部分），设计文档已归档至
+> `docs/archive/design-notes/`。
+
 ## 一句话
+
+v0.5.x 把项目"做出来"了。v0.6.0 的目标是把它**做成开源人能用的样子**：
+能装、能跑、能告诉用户哪儿坏了、Slack 之外的 IM 也能用、GitHub 主页看着像个项目。
+
+## 范围（当前状态）
+
+| 包 | 主题 | 状态 | OpenSpec 包名 |
+|---|---|---|---|
+| **S1** | npm 发包 + `npx octoclaw init` | ✅ 已完成 | `archive/v0.6-npm-cli-distribution` |
+| **S3** | 友好错误体系 + `octoclawctl doctor` | ✅ 已完成 | `archive/v0.6-friendly-errors-doctor` |
+| **A1** | GitHub 主页 / banner / badges / community 文件 | ✅ 已完成 | `archive/v0.6-github-presence` |
+| **A2** | 稳定性收尾（W-5 WP-F、W-6 Phase 2、judge cooldown、shadow 隔离 invariant） | 🔄 进行中 | `v0.6-stability-hardening` |
+| **A3-飞书** | 飞书分段 / 图片 / attachment 完善 | 🔄 进行中 | `v0.6-im-feishu-deepen` |
+| **A3-Discord** | Discord 适配器 | ✅ 已完成（experimental） | `archive/v0.6-im-discord-adapter` |
+| **A3-Telegram** | Telegram 适配器 | ✅ 已完成（experimental） | `archive/v0.6-im-telegram-adapter` |
+
+## Acceptance（v0.6.0 整体）
+
+- [x] 用户可以 `npx @octoclaw/cli init` 在 5 步内完成首次配置
+- [x] 任何错误输出包含 `code` / 中文/英文消息 / actionable hint
+- [x] `octoclawctl doctor` 检测 Node / OpenClaw / judge model / IM token / 配置 5 项
+- [x] GitHub README 顶部有 banner + badges
+- [x] Discord adapter 注册并通过单元测试
+- [x] Telegram adapter 注册并通过单元测试
+- [ ] Slack smoke 5 case 全过
+- [ ] watchdog Phase 2（degraded / delivered / operator surface）落地
+- [ ] judge 连续失败 30 分钟 cooldown 落地 + 测试
+- [ ] shadow lane 失败 invariant 测试通过（至少 3 个回归点）
+- [ ] 飞书分段策略测试通过
+
+## 硬约束（每个 WP 都要遵守）
+
+1. **不破坏现有 IM 适配器接口**（`IMAdapter` 接口是 contract）
+2. **错误码必须中英双语**（`userMessageZh` + `userMessageEn` 都不能省）
+3. **新加的 IM 适配器必须有 capabilityLevel 标注**（L0/L1/L2）
+4. **doctor 命令不能 throw**（任何检测项失败也要继续跑完，输出汇总）
+5. **npx 包不能依赖 monorepo 内部相对路径**（必须能独立解压到 `node_modules` 跑）
+6. **Cooldown / 健康策略必须可关闭**（环境变量 `OCTOCLAW_DISABLE_HEALTH_GATES=1`，方便 e2e 测试）
+7. **新文档必须中文友好**（错误消息、帮助文本、CLI 输出都要中文）
+
+## References
+
+- `docs/octoclaw-improvement-plan-2026-05-12.md` — 上一阶段（v0.5.x）改进计划
+- `docs/archive/design-notes/octoclaw-auto-router-v3-design-2026-05-13.md` — v3 设计历史记录
+- `openspec/changes/parking/router-v3-wizard-and-release/` — v3 剩余工作（wizard / quota / release polish）
+
 
 v0.5.x 把项目"做出来"了。v0.6.0 的目标是把它**做成开源人能用的样子**：
 能装、能跑、能告诉用户哪儿坏了、Slack 之外的 IM 也能用、GitHub 主页看着像个项目。

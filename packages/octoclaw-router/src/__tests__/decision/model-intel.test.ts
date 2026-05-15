@@ -292,6 +292,70 @@ describe("model intelligence and shadow reporting", () => {
     });
   });
 
+  it("mirrors OpenAI packaged candidates under configured OpenAI-compatible proxy providers", () => {
+    const snapshot = buildModelIntelSnapshot({
+      generatedAt: "2026-05-14T00:00:00.000Z",
+      openClawConfig: {
+        models: {
+          providers: {
+            cliproxyapi: {
+              baseUrl: "https://clip.example.test/v1",
+              models: [{ id: "gpt-5.5", cost: { input: 30, output: 90 } }],
+            },
+          },
+        },
+      },
+      packagedSnapshot: {
+        schemaVersion: "octoclaw.router_lite.model_intel_snapshot/v1",
+        snapshotId: "packaged",
+        generatedAt: "2026-05-13T00:00:00.000Z",
+        models: [
+          {
+            provider: "openai",
+            model: "gpt-5-mini",
+            modelKey: "openai/gpt-5-mini",
+            configured: false,
+            available: "yes",
+            marketPrice: {
+              blendedUsdPerMTok: 1,
+              confidence: "medium",
+              sources: ["packaged_leaderboard"],
+            },
+            capability: {
+              input: ["text"],
+              toolUse: "yes",
+              structuredOutput: "yes",
+              reasoning: "yes",
+              promptCache: "unknown",
+              codingTier: "mini",
+              confidence: "medium",
+              evidence: ["declared"],
+              sources: ["packaged_leaderboard"],
+            },
+            sources: ["packaged_leaderboard"],
+          },
+        ],
+      },
+    });
+
+    expect(snapshot.models.find((model) => model.modelKey === "cliproxyapi/gpt-5-mini")).toMatchObject({
+      provider: "cliproxyapi",
+      model: "gpt-5-mini",
+      configured: false,
+      proposalOnly: true,
+      marketPrice: { blendedUsdPerMTok: 1 },
+      capability: { codingTier: "mini" },
+      sources: expect.arrayContaining(["packaged_model_intel", "provider_alias:openai"]),
+    });
+    const proposal = analyzeModelConfig(snapshot, "2026-05-14T00:00:00.000Z");
+    expect(proposal.proposals).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        action: "add_configured_model",
+        candidateModel: "cliproxyapi/gpt-5-mini",
+      }),
+    ]));
+  });
+
   it("RT-C-010 writes shadow events fail-open and reports local JSONL aggregates", () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "octoclaw-shadow-report-"));
     const jsonlPath = path.join(tempDir, "shadow.jsonl");

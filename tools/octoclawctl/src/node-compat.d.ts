@@ -55,6 +55,16 @@ declare module "node:path" {
   export default path;
 }
 
+declare module "node:readline/promises" {
+  export interface Interface {
+    question(query: string): Promise<string>;
+    close(): void;
+  }
+  export function createInterface(options: { input: unknown; output: unknown }): Interface;
+  const readline: { createInterface: typeof createInterface };
+  export default readline;
+}
+
 declare module "node:child_process" {
   export interface SpawnOptions {
     cwd?: string;

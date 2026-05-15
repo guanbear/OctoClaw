@@ -30,6 +30,7 @@ export * from "./replay/replay.js";
 export * from "./replay/message-guard.js";
 export * from "./replay/policy-utils.js";
 export * from "./tools/registration.js";
+export * from "./im/slack/wizard/index.js";
 export { plugin as default } from "./extension-entry.js";
 export { plugin } from "./extension-entry.js";
 export { openRuntimeLedger, MIGRATIONS } from "./runtime-ledger/index.js";

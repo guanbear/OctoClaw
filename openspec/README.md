@@ -16,6 +16,15 @@ This directory is a lightweight, repo-local spec-driven workflow for larger Octo
 4. Do not mark a task complete until tests prove the real live path, not only a standalone helper.
 5. Do not promote recommendations or policy changes into the live path unless the spec gate says `pass`.
 
+## Layout
+
+- `openspec/changes/<id>/` — active work for the current release.
+- `openspec/changes/archive/<id>/` — shipped to `main`, retained for history.
+- `openspec/changes/parking/<id>/` — designs deferred from the current release.
+
+See `openspec/changes/README.md` for the rules that move a change between
+active, archive, and parking.
+
 ## Hard Invariants
 
 - Native TaskFlow is execution lifecycle truth.

@@ -219,7 +219,7 @@ export function buildPromotionState(
 
   for (const decision of sorted) {
     const key = promotionStateKey(decision.model, decision.tier);
-    const isConfigured = configured.size === 0 || configured.has(decision.model);
+    const isConfigured = configured.has(decision.model);
     const runtimeState: PromotionRuntimeState = decision.decision === "promote" && isConfigured
       ? "live"
       : decision.decision === "mark_failed"
