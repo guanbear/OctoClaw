@@ -282,7 +282,7 @@ describe("router-lite model intel", () => {
     expect(model?.marketPrice.sources).toEqual(expect.arrayContaining(["openclaw_config", "legacy_model_catalog"]));
   });
 
-  it("scenarioAbility uses inferred tier only as low-confidence cold-start when no scenario data", () => {
+  it("scenarioAbility treats OpenClaw declared models as operator-backed evidence when no scenario data exists", () => {
     const snapshot = buildModelIntelSnapshot({
       generatedAt: "2026-05-10T00:00:00.000Z",
       openClawModelsList: {
@@ -291,12 +291,13 @@ describe("router-lite model intel", () => {
     });
     const model = snapshot.models.find((entry) => entry.modelKey === "cliproxyapi/gpt-5.5");
 
-    expect(model?.scenarioAbility?.codingWorker).toMatchObject({ tier: "S", confidence: "low", sources: [] });
-    expect(model?.scenarioAbility?.agenticToolTask).toMatchObject({ tier: "S", confidence: "low", sources: [] });
-    expect(model?.scenarioAbility?.researchLookup).toMatchObject({ tier: "S", confidence: "low", sources: [] });
-    expect(model?.scenarioAbility?.dataLogAnalysis).toMatchObject({ tier: "S", confidence: "low", sources: [] });
-    expect(model?.scenarioAbility?.mainReasoning).toMatchObject({ tier: "S", confidence: "low", sources: [] });
-    expect(model?.scenarioAbility?.defaultDelegate).toMatchObject({ tier: "S", confidence: "low", sources: [] });
+    for (const score of Object.values(model?.scenarioAbility ?? {})) {
+      expect(score).toMatchObject({
+        tier: "S",
+        confidence: "high",
+        sources: [expect.objectContaining({ source: "operator_override" })],
+      });
+    }
   });
 
   it("merges scenario ability from multiple sources", () => {
@@ -382,8 +383,10 @@ describe("router-lite model intel", () => {
     const model = snapshot.models.find((m) => m.modelKey === "cliproxyapi/gpt-5.5");
     expect(model?.scenarioAbility).toBeDefined();
     expect(model?.scenarioAbility?.codingWorker.tier).toBe("S");
-    expect(model?.scenarioAbility?.codingWorker.confidence).toBe("low");
-    expect(model?.scenarioAbility?.codingWorker.sources).toEqual([]);
+    expect(model?.scenarioAbility?.codingWorker.confidence).toBe("high");
+    expect(model?.scenarioAbility?.codingWorker.sources).toEqual(expect.arrayContaining([
+      expect.objectContaining({ source: "operator_override" }),
+    ]));
   });
 
   it("detects price conflicts between sources", () => {

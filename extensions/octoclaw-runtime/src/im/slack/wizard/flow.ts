@@ -254,7 +254,11 @@ export function applyWizardAction(
   }
 
   if (state.step === "step-6-same-provider") {
-    state.answers.sameProviderCandidates = action.value === "all" ? [...state.sameProviderCandidates] : [];
+    state.answers.sameProviderCandidates = action.value === "all"
+      ? [...state.sameProviderCandidates]
+      : action.value.startsWith("only:")
+        ? state.sameProviderCandidates.filter((model) => model === action.value.slice(5))
+        : [];
     markAnswered(state, state.step);
     finalize(state, now);
     if (!shouldShowRestrictedStep(state)) markAnswered(state, "step-5-restricted-models");

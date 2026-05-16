@@ -924,6 +924,115 @@ describe("octoclawctl cli", () => {
     }
   });
 
+  it("router capability probe canaries same-provider proposals through a temporary OpenClaw config", async () => {
+    const tempDir = path.join(os.homedir(), ".octoclawctl-test-tmp", `router-capability-probe-temp-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    const openclawHome = path.join(tempDir, "home");
+    const outputDir = path.join(tempDir, "out");
+    const snapshotPath = path.join(outputDir, "model-intel-snapshot.json");
+    const markerPath = path.join(tempDir, "probe-marker.json");
+    const fakeOpenClawPath = path.join(tempDir, "bin", "openclaw");
+    try {
+      await fs.mkdir(outputDir, { recursive: true });
+      await fs.mkdir(path.join(openclawHome, "octoclaw"), { recursive: true });
+      await fs.mkdir(path.dirname(fakeOpenClawPath), { recursive: true });
+      await fs.writeFile(fakeOpenClawPath, `#!/usr/bin/env node
+const fs = require("node:fs");
+const path = require("node:path");
+const home = process.env.OPENCLAW_HOME;
+const configPath = process.env.OPENCLAW_CONFIG_PATH || path.join(home, "openclaw.json");
+const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+const models = config.models.providers.cliproxyapi.models.map((model) => model.id || model);
+fs.writeFileSync(process.env.PROBE_MARKER, JSON.stringify({ home, configPath, models }, null, 2));
+if (!models.includes("gpt-5-mini")) {
+  console.error("Unknown model: cliproxyapi/gpt-5-mini");
+  process.exit(1);
+}
+console.log(JSON.stringify({ choices: [{ message: { content: "pong" } }] }));
+`, "utf8");
+      await runTestCommand("chmod", ["755", fakeOpenClawPath]);
+      await fs.writeFile(path.join(openclawHome, "openclaw.json"), JSON.stringify({
+        models: {
+          providers: {
+            cliproxyapi: {
+              baseUrl: "https://clip.example.test/v1",
+              apiKey: "clip-secret",
+              models: [{ id: "gpt-5.5" }],
+            },
+          },
+        },
+      }, null, 2), "utf8");
+      await fs.writeFile(path.join(openclawHome, "octoclaw", "router-wizard.json"), JSON.stringify({
+        schemaVersion: "octoclaw.router_wizard/v1",
+        completedAt: "2026-05-15T00:00:00.000Z",
+        models: {
+          "cliproxyapi/gpt-5.5": { planType: "pay_as_you_go", configuredAt: "2026-05-15T00:00:00.000Z", source: "configured" },
+          "cliproxyapi/gpt-5-mini": {
+            planType: "pay_as_you_go",
+            configuredAt: "2026-05-15T00:00:00.000Z",
+            source: "same_provider_discovery",
+            state: "proposal_candidate",
+          },
+        },
+        privacy: "standard",
+        language: "auto",
+        restrictedModels: [],
+        overrides: { scoreOverrides: {}, userBans: {}, userDispreferred: {}, entries: [] },
+      }, null, 2), "utf8");
+      await fs.writeFile(snapshotPath, JSON.stringify({
+        schemaVersion: "octoclaw.router_lite.model_intel_snapshot/v1",
+        snapshotId: "snapshot",
+        generatedAt: "2026-05-15T00:00:00.000Z",
+        sourceStatus: [],
+        models: [
+          {
+            provider: "cliproxyapi",
+            model: "gpt-5-mini",
+            modelKey: "cliproxyapi/gpt-5-mini",
+            configured: false,
+            proposalOnly: true,
+            available: "yes",
+            tags: [],
+            marketPrice: { blendedUsdPerMTok: 0.2, confidence: "medium", sources: ["test"] },
+            capability: { codingTier: "mini", confidence: "medium", evidence: ["declared"], sources: ["test"], input: ["text"], toolUse: "yes", structuredOutput: "yes", reasoning: "yes", promptCache: "unknown" },
+            health: { available: "yes", cooldown: false, quotaPressure: "unknown", sources: [] },
+            plan: { type: "unknown", quotaPressure: "unknown", effectiveCostBand: "unknown", sources: [] },
+            sources: ["test"],
+          },
+        ],
+      }, null, 2), "utf8");
+
+      const capture = createIo();
+      const exitCode = await main([
+        "router",
+        "capability",
+        "probe",
+        "cliproxyapi/gpt-5-mini",
+        "--openclaw-home",
+        openclawHome,
+        "--input",
+        snapshotPath,
+        "--format",
+        "json",
+      ], {
+        OPENCLAW_BIN: fakeOpenClawPath,
+        PROBE_MARKER: markerPath,
+      }, capture.io);
+
+      expect(exitCode).toBe(0);
+      expect(JSON.parse(capture.stdout[0] ?? "{}")).toMatchObject({ ok: true, modelKey: "cliproxyapi/gpt-5-mini" });
+      const marker = JSON.parse(await fs.readFile(markerPath, "utf8"));
+      expect(marker.home).not.toBe(openclawHome);
+      expect(marker.configPath).toBe(path.join(marker.home, "openclaw.json"));
+      expect(marker.models).toEqual([{ id: "gpt-5.5" }, { id: "gpt-5-mini" }].map((model) => model.id));
+      const realConfig = JSON.parse(await fs.readFile(path.join(openclawHome, "openclaw.json"), "utf8"));
+      expect(realConfig.models.providers.cliproxyapi.models).toEqual([{ id: "gpt-5.5" }]);
+      const wizard = JSON.parse(await fs.readFile(path.join(openclawHome, "octoclaw", "router-wizard.json"), "utf8"));
+      expect(wizard.models["cliproxyapi/gpt-5-mini"].state).toBe("probed_ok");
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("router capability show reports stale data age in text output", async () => {
     const tempDir = path.join(os.homedir(), ".octoclawctl-test-tmp", `router-capability-stale-${Date.now()}-${Math.random().toString(36).slice(2)}`);
     const snapshotPath = path.join(tempDir, "model-intel-snapshot.json");

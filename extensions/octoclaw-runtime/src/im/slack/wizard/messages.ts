@@ -16,6 +16,10 @@ function actions(elements: Record<string, unknown>[]): Array<Record<string, unkn
   return [{ type: "actions", elements }];
 }
 
+function truncateButtonText(text: string): string {
+  return text.length <= 72 ? text : `${text.slice(0, 69)}...`;
+}
+
 function currentModel(state: RouterWizardState): string {
   return state.remainingModels[0] ?? state.configuredModels[0] ?? "(none)";
 }
@@ -84,13 +88,17 @@ export function renderWizardMessage(state: RouterWizardState, options: { lang?: 
   }
   if (state.step === "step-6-same-provider") {
     const candidates = state.sameProviderCandidates.map((model) => ` • \`${model}\``).join("\n") || " • (none)";
+    const candidateButtons = state.sameProviderCandidates.slice(0, 20).map((model) => {
+      const label = lang === "en" ? `Only ${model}` : `只加 ${model}`;
+      return button(truncateButtonText(label), 6, `only:${model}`);
+    });
     return {
       text: lang === "en"
         ? `Same-provider shadow candidates:\n${candidates}\nAdd them as shadow candidates?`
         : `我在你已经配置的供应商下面发现了：\n${candidates}\n加进 shadow 候选？（不会影响 live 路由）`,
       blocks: actions([
         button(lang === "en" ? "Add all" : "全部加", 6, "all"),
-        button(lang === "en" ? "Let me choose" : "我来选", 6, "select"),
+        ...candidateButtons,
         button(lang === "en" ? "Skip" : "跳过", 6, "skip"),
       ]),
     };

@@ -74,6 +74,30 @@ describe("Slack router wizard flow", () => {
     expect(renderWizardMessage(picked.state, { lang: "en" }).text).toContain("Which models must be disabled");
   });
 
+  it("lets users add a single same-provider candidate from Slack buttons", () => {
+    let state = createRouterWizardState({
+      models: ["cliproxyapi/gpt-5.5"],
+      sameProviderCandidates: ["cliproxyapi/gpt-5-mini", "cliproxyapi/gpt-5.4-mini"],
+      now: START,
+    });
+    for (const [step, value, now] of [
+      [1, "start", "2026-05-15T00:00:01.000Z"],
+      [2, "pay_as_you_go", "2026-05-15T00:00:02.000Z"],
+      [3, "skip", "2026-05-15T00:00:03.000Z"],
+      [4, "cloud_ok", "2026-05-15T00:00:04.000Z"],
+    ] as const) {
+      state = applyWizardAction(state, { step, value }, { now }).state;
+    }
+
+    const message = renderWizardMessage(state, { lang: "zh" });
+    expect(JSON.stringify(message.blocks)).toContain("only%3Acliproxyapi%2Fgpt-5-mini");
+
+    const result = applyWizardAction(state, { step: 6, value: "only:cliproxyapi/gpt-5-mini" }, { now: "2026-05-15T00:00:05.000Z" });
+
+    expect(result.state.step).toBe("step-7-done");
+    expect(result.state.answers.sameProviderCandidates).toEqual(["cliproxyapi/gpt-5-mini"]);
+  });
+
   it("drops duplicate clicks within 30 seconds and reports out-of-order clicks", () => {
     const initial = createRouterWizardState({ models: ["openai/gpt-5.5"], now: START });
     const started = applyWizardAction(initial, { step: 1, value: "start" }, { now: "2026-05-15T00:00:01.000Z" }).state;

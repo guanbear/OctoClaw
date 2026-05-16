@@ -62,7 +62,7 @@ describe("proposal/shadow isolation", () => {
       const openclaw = JSON.parse(fsSync.readFileSync(path.join(openclawHome, "openclaw.json"), "utf8")) as {
         models: { providers: { openai: { models: Array<{ id: string }> } } };
       };
-      expect(openclaw.models.providers.openai.models).toEqual([{ id: "gpt-5.5" }, { id: "gpt-5-mini" }]);
+      expect(openclaw.models.providers.openai.models).toEqual([{ id: "gpt-5.5" }, { id: "gpt-5-mini", name: "gpt-5-mini" }]);
       expect(fsSync.existsSync(path.join(openclawHome, "openclaw.json.octoclaw-bak-2026-05-15T00:00:00.000Z"))).toBe(true);
       const updatedWizard = JSON.parse(fsSync.readFileSync(path.join(openclawHome, "octoclaw", "router-wizard.json"), "utf8"));
       expect(updatedWizard.models["openai/gpt-5-mini"].state).toBe("shadow_candidate");

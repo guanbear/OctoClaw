@@ -47,7 +47,7 @@ function sanitizedError(code: string, message: string): ProbeResult["error"] {
 }
 
 export async function probeModel(request: ProbeRequest): Promise<ProbeResult> {
-  const timeoutMs = request.timeoutMs ?? 5000;
+  const timeoutMs = request.timeoutMs ?? 15000;
   const budgetUsdMax = request.budgetUsdMax ?? 0.001;
   const costUsd = estimatedCostUsd(request.estimatedBlendedUsdPerMTok);
   if (costUsd !== undefined && costUsd > budgetUsdMax) {
@@ -170,6 +170,14 @@ function classifyOpenClawFailure(result: ProbeCommandResult): {
     return {
       code: "429",
       message: "OpenClaw infer reported a rate limit.",
+      authOk: "yes",
+      modelExists: "yes",
+    };
+  }
+  if (text.includes("no text output returned")) {
+    return {
+      code: "PROBE_NO_TEXT_OUTPUT",
+      message: "OpenClaw infer reached the model but did not return usable text.",
       authOk: "yes",
       modelExists: "yes",
     };

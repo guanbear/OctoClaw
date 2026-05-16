@@ -191,8 +191,12 @@ function tierFromCodingTier(tier: RouterLiteCodingTier | undefined): ScenarioAbi
 function scenarioAbilitySourceFromCapabilitySource(source: string): ScenarioAbilitySource | undefined {
   switch (source) {
     case "operator_override": return "operator_override";
+    case "openclaw_config": return "operator_override";
+    case "openclaw_models_list": return "operator_override";
     case "local_replay": return "local_replay";
     case "artificial_analysis": return "artificial_analysis";
+    case "packaged_leaderboard": return "artificial_analysis";
+    case "packaged_model_intel": return "artificial_analysis";
     case "pinchbench": return "pinchbench";
     case "aider": return "aider";
     case "swe_bench": return "swe_bench";
@@ -396,6 +400,13 @@ function emptyModel(partial: PartialModelIntel): ModelIntelLite {
   };
 }
 
+function mergeAvailable(base: RouterLiteTriState, incoming?: RouterLiteTriState): RouterLiteTriState {
+  if (!incoming || incoming === "unknown") return base;
+  if (base === "no" || incoming === "no") return "no";
+  if (incoming === "yes") return "yes";
+  return base;
+}
+
 function mergeModel(base: ModelIntelLite | undefined, incoming: PartialModelIntel): ModelIntelLite {
   const next = base ?? emptyModel(incoming);
   return {
@@ -405,7 +416,7 @@ function mergeModel(base: ModelIntelLite | undefined, incoming: PartialModelInte
     modelKey: next.modelKey || incoming.modelKey,
     name: incoming.name || next.name,
     configured: next.configured || incoming.configured === true,
-    available: incoming.available && incoming.available !== "unknown" ? incoming.available : next.available,
+    available: mergeAvailable(next.available, incoming.available),
     proposalOnly: !(next.configured || incoming.configured === true),
     tags: unique([...next.tags, ...(incoming.tags ?? [])]),
     marketPrice: mergePrice(next.marketPrice, incoming.marketPrice),
@@ -455,7 +466,7 @@ function modelFromOpenClawList(item: unknown): PartialModelIntel | undefined {
   return {
     ...identity,
     name: asString(record.name) || undefined,
-    configured: tags.includes("configured") || record.missing === false,
+    configured: tags.includes("configured"),
     available: available === undefined ? "unknown" : available ? "yes" : "no",
     tags,
     capability: {
@@ -492,13 +503,17 @@ function modelsFromOpenClawConfig(config: unknown): PartialModelIntel[] {
         ...identity,
         name: asString(modelRecord.name) || undefined,
         configured: true,
-        available: "unknown",
+        available: "yes",
         capability: {
           contextWindow,
           input: normalizeInputModalities(modelRecord.input),
           reasoning,
           confidence: "high",
           evidence: ["declared"],
+          sources: ["openclaw_config"],
+        },
+        health: {
+          available: "yes",
           sources: ["openclaw_config"],
         },
         marketPrice,
@@ -522,6 +537,15 @@ function isMiniCandidate(modelId: string): boolean {
   return modelId.toLowerCase().includes("mini");
 }
 
+function hasPortableOpenAiFacts(model: PartialModelIntel): boolean {
+  const sources = unique([
+    ...model.sources,
+    ...(model.marketPrice?.sources ?? []),
+    ...(model.capability?.sources ?? []),
+  ]);
+  return sources.some((source) => source !== "openclaw_models_list" && source !== "openclaw_config");
+}
+
 function mirrorOpenAiCandidatesForCompatibleProviders(partials: PartialModelIntel[]): PartialModelIntel[] {
   const existing = new Set(partials.map((model) => model.modelKey));
   const proxyProviders = new Map<string, Set<string>>();
@@ -535,20 +559,22 @@ function mirrorOpenAiCandidatesForCompatibleProviders(partials: PartialModelInte
   }
   if (proxyProviders.size === 0) return [];
 
-  const openAiCandidates = partials.filter((model) => model.provider === "openai" && isOpenAiFamilyModel(model.model) && isMiniCandidate(model.model));
+  const openAiCandidates = partials.filter((model) => model.provider === "openai" && isOpenAiFamilyModel(model.model) && hasPortableOpenAiFacts(model));
   const mirrored: PartialModelIntel[] = [];
   for (const [provider, majors] of proxyProviders) {
     for (const candidate of openAiCandidates) {
       const major = gptMajor(candidate.model);
       if (!major || !majors.has(major)) continue;
       const modelKey = `${provider}/${candidate.model}`;
-      if (existing.has(modelKey)) continue;
-      existing.add(modelKey);
+      const alreadyExists = existing.has(modelKey);
+      if (!alreadyExists) existing.add(modelKey);
+      if (!alreadyExists && !isMiniCandidate(candidate.model)) continue;
       mirrored.push({
         ...candidate,
         provider,
         modelKey,
         configured: false,
+        available: candidate.available === "no" ? "yes" : candidate.available,
         tags: (candidate.tags ?? []).filter((tag) => tag !== "configured"),
         sources: unique([...candidate.sources, "provider_alias:openai"]),
       });

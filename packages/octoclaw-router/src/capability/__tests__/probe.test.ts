@@ -95,7 +95,7 @@ describe("probeModel", () => {
     });
     expect(calls).toEqual([{
       args: ["infer", "model", "run", "--model", "openai/gpt-5-mini", "--prompt", "Reply with exactly: pong", "--json"],
-      timeoutMs: 5000,
+      timeoutMs: 15000,
     }]);
     expect(JSON.stringify(result)).not.toContain("secret-token");
     expect(result.latencyMs).toBeGreaterThanOrEqual(0);
@@ -123,6 +123,25 @@ describe("probeModel", () => {
       source: "probe",
       success: false,
       errorCode: "PROBE_AUTH_FAILED",
+    });
+  });
+
+  it("classifies no text output as reached model but unusable for routing", async () => {
+    const result = await probeModel({
+      modelKey: "openai/gpt-5-mini",
+      providerConfig,
+      runOpenClaw: async () => ({
+        exitCode: 1,
+        stdout: "",
+        stderr: 'Error: No text output returned for provider "openai" model "gpt-5-mini".',
+      }),
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      authOk: "yes",
+      modelExists: "yes",
+      error: { code: "PROBE_NO_TEXT_OUTPUT" },
     });
   });
 

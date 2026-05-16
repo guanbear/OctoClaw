@@ -2048,6 +2048,15 @@ async function runOpenClawJsonCommand(args: string[], env: Record<string, string
   return parseFirstJsonRecord(result.stdout);
 }
 
+function openClawHomeEnv(openclawHome: string, env: Record<string, string | undefined>): Record<string, string | undefined> {
+  return {
+    ...env,
+    OPENCLAW_HOME: openclawHome,
+    OPENCLAW_STATE_DIR: openclawHome,
+    OPENCLAW_CONFIG_PATH: path.join(openclawHome, "openclaw.json"),
+  };
+}
+
 function assertModelIntelSnapshot(value: unknown, filePath: string): ModelIntelSnapshot {
   if (!isRecord(value) || value.schemaVersion !== "octoclaw.router_lite.model_intel_snapshot/v1" || !Array.isArray(value.models)) {
     throw new Error(`Invalid router-lite model intel snapshot: ${filePath}`);
@@ -2166,20 +2175,28 @@ async function runCapabilityProbe(input: {
   const providerConfig = router.resolveProviderForModel(input.modelKey, openclawConfig) ?? nativeOpenClawProviderConfig(input.modelKey);
   const model = input.snapshot.models.find((item) => item.modelKey.toLowerCase() === input.modelKey.toLowerCase());
   const mockProbe = input.env.OCTOCLAW_ROUTER_PROBE_MOCK_JSON;
+  const probeRunner = mockProbe
+    ? { runOpenClaw: async () => ({ exitCode: 0, stdout: mockProbe }), cleanup: async () => {} }
+    : await createOpenClawProbeRunner(input.modelKey, input.openclawHome, openclawConfig, input.env);
   const healthSink = router.createHealthEventSink({
     jsonlPath: path.join(input.openclawHome, "octoclaw", "router-lite", "model-health.jsonl"),
     snapshotPath: path.join(input.openclawHome, "octoclaw", "router-lite", "model-health-snapshot.json"),
   });
-  const result = await router.probeModel({
-    modelKey: input.modelKey,
-    providerConfig,
-    estimatedBlendedUsdPerMTok: model?.marketPrice.blendedUsdPerMTok,
-    runOpenClaw: mockProbe ? async () => ({ exitCode: 0, stdout: mockProbe }) : undefined,
-    recordHealthEvent: (event) => healthSink.recordCall(event),
-  });
-  await healthSink.flush();
-  if (result.ok) {
-    await router.recordProbeSuccess(input.modelKey, input.openclawHome);
+  let result: Awaited<ReturnType<RouterModule["probeModel"]>>;
+  try {
+    result = await router.probeModel({
+      modelKey: input.modelKey,
+      providerConfig,
+      estimatedBlendedUsdPerMTok: model?.marketPrice.blendedUsdPerMTok,
+      runOpenClaw: probeRunner.runOpenClaw,
+      recordHealthEvent: (event) => healthSink.recordCall(event),
+    });
+    await healthSink.flush();
+    if (result.ok) {
+      await router.recordProbeSuccess(input.modelKey, input.openclawHome);
+    }
+  } finally {
+    await probeRunner.cleanup();
   }
   if (input.format === "json") return JSON.stringify(result, null, 2);
   return [
@@ -2188,6 +2205,78 @@ async function runCapabilityProbe(input: {
     `latencyMs=${result.latencyMs ?? "unknown"} costUsd=${result.costUsd ?? "unknown"}`,
     ...(result.error ? [`error=${result.error.code}: ${result.error.message}`] : []),
   ].join("\n");
+}
+
+function modelKeyParts(modelKey: string): { providerId: string; modelId: string } {
+  const slash = modelKey.indexOf("/");
+  return slash > 0
+    ? { providerId: modelKey.slice(0, slash), modelId: modelKey.slice(slash + 1) }
+    : { providerId: "openclaw", modelId: modelKey };
+}
+
+function providerModelsForProbe(providerBlock: JsonRecord): unknown[] {
+  return Array.isArray(providerBlock.models) ? providerBlock.models : [];
+}
+
+function providerHasProbeModel(providerBlock: JsonRecord, modelId: string, modelKey: string): boolean {
+  return providerModelsForProbe(providerBlock).some((entry) => {
+    if (typeof entry === "string") return entry === modelId || entry === modelKey;
+    const id = asString(asRecord(entry).id);
+    return id === modelId || id === modelKey;
+  });
+}
+
+function cloneJsonRecord<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T;
+}
+
+async function createOpenClawProbeHome(
+  modelKey: string,
+  openclawHome: string,
+  openclawConfig: unknown,
+): Promise<{ home: string; cleanup: () => Promise<void> }> {
+  const { providerId, modelId } = modelKeyParts(modelKey);
+  const configCopy = cloneJsonRecord(openclawConfig);
+  const providers = asRecord(asRecord(asRecord(configCopy).models).providers);
+  const providerBlock = asRecord(providers[providerId]);
+  if (!isRecord(providerBlock) || providerHasProbeModel(providerBlock, modelId, modelKey)) {
+    return { home: openclawHome, cleanup: async () => {} };
+  }
+
+  providerBlock.models = [...providerModelsForProbe(providerBlock), { id: modelId, name: modelId }];
+  providers[providerId] = providerBlock;
+  const tempHome = path.join(
+    path.dirname(openclawHome),
+    `.octoclaw-probe-openclaw-home-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+  );
+  await fs.mkdir(tempHome, { recursive: false });
+  await fs.writeFile(path.join(tempHome, "openclaw.json"), `${JSON.stringify(configCopy, null, 2)}\n`, "utf8");
+  return {
+    home: tempHome,
+    cleanup: async () => {
+      await fs.rm(tempHome, { recursive: true, force: true });
+    },
+  };
+}
+
+async function createOpenClawProbeRunner(
+  modelKey: string,
+  openclawHome: string,
+  openclawConfig: unknown,
+  env: Record<string, string | undefined>,
+): Promise<{ runOpenClaw: RouterModule["probeModel"] extends (request: infer Request) => unknown ? NonNullable<Request extends { runOpenClaw?: infer Runner } ? Runner : never> : never; cleanup: () => Promise<void> }> {
+  const binaryPath = resolveOpenClawBinary(env);
+  const probeHome = await createOpenClawProbeHome(modelKey, openclawHome, openclawConfig);
+  return {
+    runOpenClaw: async (args, options) => {
+      const result = await spawnAndCollect(binaryPath, args, {
+        env: { ...process.env, ...openClawHomeEnv(probeHome.home, env) },
+        timeout: options.timeoutMs,
+      });
+      return { exitCode: result.code, stdout: result.stdout, stderr: result.stderr };
+    },
+    cleanup: probeHome.cleanup,
+  };
 }
 
 function nativeOpenClawProviderConfig(modelKey: string): NonNullable<ReturnType<RouterModule["resolveProviderForModel"]>> {
@@ -2881,7 +2970,7 @@ async function runRouterLiteCommand(parsed: ParsedCliArgs, env: Record<string, s
   }
 
   if (area === "model-intel" && action === "refresh") {
-    const commandEnv = { ...env, OPENCLAW_HOME: openclawHome };
+    const commandEnv = openClawHomeEnv(openclawHome, env);
     const openClawModelsList = await runOpenClawJsonCommand(["models", "list", "--json"], commandEnv);
     const nativeFallbackOrder = await runOpenClawJsonCommand(["models", "fallbacks", "list", "--json"], commandEnv);
     const usageStatus = await runOpenClawJsonCommand(["status", "--usage", "--json"], commandEnv);

@@ -110,7 +110,7 @@ function loadBudgetStatus(logger: LoggerLike): BudgetStatus | undefined {
   }
 }
 
-function loadNativeFallbackOrder(logger: LoggerLike): string[] {
+function loadNativeFallbackOrder(): string[] {
   try {
     const stdout = execFileSync("openclaw", ["models", "fallbacks", "list", "--json"], {
       encoding: "utf8",
@@ -121,11 +121,7 @@ function loadNativeFallbackOrder(logger: LoggerLike): string[] {
     const parsed = parseFirstJsonRecord(stdout);
     const fallbacks = parsed?.fallbacks;
     return Array.isArray(fallbacks) ? fallbacks.map((entry) => String(entry).trim()).filter(Boolean) : [];
-  } catch (error) {
-    const code = typeof error === "object" && error !== null ? (error as { code?: unknown }).code : undefined;
-    if (code !== "ENOENT") {
-      logger?.warn?.(`[router-lite] native fallback order load failed: ${String(error)}`);
-    }
+  } catch {
     return [];
   }
 }
@@ -170,7 +166,7 @@ export function emitRouterLiteShadowEvent(input: ShadowBridgeInput): void {
 
     const promotionDecisions = loadPromotionDecisions(input.logger);
     const budget = loadBudgetStatus(input.logger);
-    const nativeFallbackOrder = loadNativeFallbackOrder(input.logger);
+    const nativeFallbackOrder = loadNativeFallbackOrder();
     const recommendation = selectShadowRecommendation(request, snapshot, "balanced", { promotionDecisions, budget, nativeFallbackOrder });
     appendFallbackSuggestionDecision({ snapshot, recommendation, nativeFallbackOrder, tier: request.judge.complexity, logger: input.logger });
     const estimatedCostDeltaUsd = computeCostDelta(snapshot, actualModel, recommendation.recommendedModel);

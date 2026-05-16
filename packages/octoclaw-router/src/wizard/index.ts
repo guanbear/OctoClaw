@@ -251,7 +251,7 @@ export async function acceptProposal(
 
   const models = providerModels(providerBlock);
   if (!modelListContains(models, modelId, modelKey)) {
-    providerBlock.models = [...models, { id: modelId }];
+    providerBlock.models = [...models, { id: modelId, name: modelId }];
   }
   providers[provider] = providerBlock;
 
