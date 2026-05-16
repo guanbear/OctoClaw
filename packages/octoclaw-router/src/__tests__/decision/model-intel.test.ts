@@ -95,6 +95,7 @@ describe("model intelligence and shadow reporting", () => {
           },
         },
       },
+      nativeFallbackOrder: { fallbacks: ["openai/gpt-5.5", "zhipu/glm-5.1"] },
       scenarioData: {
         "openai/gpt-5.5": {
           codingWorker: {
@@ -107,6 +108,8 @@ describe("model intelligence and shadow reporting", () => {
     });
 
     expect(snapshot.sourceStatus).toContainEqual({ source: "scenario_data", status: "ok" });
+    expect(snapshot.sourceStatus).toContainEqual({ source: "openclaw_native_fallbacks", status: "ok" });
+    expect(snapshot.nativeFallbackOrder).toEqual(["openai/gpt-5.5", "zhipu/glm-5.1"]);
     expect(snapshot.models.map((model) => model.modelKey)).toEqual([
       "openai/gpt-5-mini",
       "openai/gpt-5.5",
@@ -354,6 +357,55 @@ describe("model intelligence and shadow reporting", () => {
         candidateModel: "cliproxyapi/gpt-5-mini",
       }),
     ]));
+  });
+
+  it("merges router health snapshots into model intel with provider aliases", () => {
+    const snapshot = buildModelIntelSnapshot({
+      generatedAt: "2026-05-16T00:00:00.000Z",
+      openClawModelsList: {
+        models: [
+          { key: "zhipu/glm-4.7", available: true, tags: ["configured"] },
+        ],
+      },
+      healthSnapshot: {
+        schemaVersion: "octoclaw.router.health_snapshot/v1",
+        generatedAt: 1_778_900_000_000,
+        models: {
+          "zai/glm-4.7": {
+            sampleCount: 12,
+            recentFailureRate: 0.25,
+            toolCallFailureRate: 0.08,
+            timeoutRate: 0.17,
+            p50LatencyMs: 900,
+            p95LatencyMs: 3000,
+            lastErrorCodes: [{ code: "429", count: 1 }],
+            lastSuccessfulCallAt: 1_778_899_900_000,
+            lastFailedCallAt: 1_778_900_000_000,
+            cooldown: true,
+            cooldownUntil: 1_778_900_600_000,
+            cooldownReason: "rate_limit_429",
+          },
+        },
+      },
+    });
+
+    expect(snapshot.sourceStatus).toContainEqual({ source: "router_health_snapshot", status: "ok" });
+    expect(snapshot.models.find((model) => model.modelKey === "zhipu/glm-4.7")).toMatchObject({
+      health: {
+        cooldown: true,
+        cooldownUntil: 1_778_900_600_000,
+        cooldownReason: "rate_limit_429",
+        recentFailureRate: 0.25,
+        toolCallFailureRate: 0.08,
+        timeoutRate: 0.17,
+        p50LatencyMs: 900,
+        p95LatencyMs: 3000,
+        lastSuccessfulCallAt: "2026-05-16T02:51:40.000Z",
+        lastFailedCallAt: "2026-05-16T02:53:20.000Z",
+        lastErrorCodes: [{ code: "429", count: 1 }],
+        sources: expect.arrayContaining(["router_health_snapshot"]),
+      },
+    });
   });
 
   it("RT-C-010 writes shadow events fail-open and reports local JSONL aggregates", () => {

@@ -278,6 +278,7 @@ export function renderSlackProjectionFooter(message: string, projection: IMProje
   ].filter(Boolean).join(" | ");
   const detailFooter = [
     stringValue(projection.via) && `via=${stringValue(projection.via)}`,
+    stringValue(projection.healthNote) && `health=${stringValue(projection.healthNote)}`,
     debugParts,
   ].filter(Boolean).join(" | ");
   const footer = [primaryFooter, detailFooter].filter(Boolean).join(" | ");

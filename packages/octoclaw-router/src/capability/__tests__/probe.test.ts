@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import { resolveProviderForModel } from "../openclaw-bridge.js";
-import { probeModel, type ProbeFetch } from "../probe.js";
+import { probeModel, type ProbeCommandRunner } from "../probe.js";
+import type { HealthEventInput } from "../../health/event.js";
 
 const providerConfig = {
   providerId: "openai",
@@ -9,10 +10,6 @@ const providerConfig = {
   authHeader: { name: "authorization", value: "secret-token" },
   format: "openai_chat" as const,
 };
-
-function response(status: number, body: unknown): Response {
-  return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
-}
 
 describe("resolveProviderForModel", () => {
   it("resolves configured provider blocks without mutating config", () => {
@@ -63,9 +60,9 @@ describe("probeModel", () => {
       providerConfig,
       budgetUsdMax: 0.000001,
       estimatedBlendedUsdPerMTok: 100,
-      fetch: async () => {
+      runOpenClaw: async () => {
         calls += 1;
-        return response(200, {});
+        return { exitCode: 0, stdout: "{}" };
       },
     });
 
@@ -76,15 +73,18 @@ describe("probeModel", () => {
     });
   });
 
-  it("marks a 200 canary response as available and does not expose auth", async () => {
+  it("runs OpenClaw native infer canary and records probe success health", async () => {
+    const calls: Array<{ args: string[]; timeoutMs: number }> = [];
+    const healthEvents: HealthEventInput[] = [];
     const result = await probeModel({
       modelKey: "openai/gpt-5-mini",
       providerConfig,
       estimatedBlendedUsdPerMTok: 1,
-      fetch: async (_url, init) => {
-        expect(JSON.stringify(init)).toContain("secret-token");
-        return response(200, { choices: [{ message: { content: "pong" } }] });
+      runOpenClaw: async (args, options) => {
+        calls.push({ args, timeoutMs: options.timeoutMs });
+        return { exitCode: 0, stdout: JSON.stringify({ output: "pong" }) };
       },
+      recordHealthEvent: (event) => healthEvents.push(event),
     });
 
     expect(result).toMatchObject({
@@ -93,36 +93,50 @@ describe("probeModel", () => {
       modelExists: "yes",
       toolUseOk: "unknown",
     });
+    expect(calls).toEqual([{
+      args: ["infer", "model", "run", "--model", "openai/gpt-5-mini", "--prompt", "Reply with exactly: pong", "--json"],
+      timeoutMs: 5000,
+    }]);
     expect(JSON.stringify(result)).not.toContain("secret-token");
     expect(result.latencyMs).toBeGreaterThanOrEqual(0);
+    expect(healthEvents).toHaveLength(1);
+    expect(healthEvents[0]).toMatchObject({
+      modelKey: "openai/gpt-5-mini",
+      source: "probe",
+      success: true,
+    });
   });
 
-  it("classifies 401 and 404 without leaking credentials", async () => {
-    const unauthorized = await probeModel({
+  it("classifies OpenClaw failures without leaking credentials and records health failure", async () => {
+    const healthEvents: HealthEventInput[] = [];
+    const result = await probeModel({
       modelKey: "openai/gpt-5-mini",
       providerConfig,
-      fetch: async () => response(401, { error: { message: "bad key secret-token" } }),
-    });
-    const missing = await probeModel({
-      modelKey: "openai/gpt-5-mini",
-      providerConfig,
-      fetch: async () => response(404, { error: { message: "missing model" } }),
+      runOpenClaw: async () => ({ exitCode: 1, stdout: "", stderr: "bad key secret-token" }),
+      recordHealthEvent: (event) => healthEvents.push(event),
     });
 
-    expect(unauthorized).toMatchObject({ ok: false, authOk: "no", modelExists: "unknown" });
-    expect(missing).toMatchObject({ ok: false, authOk: "yes", modelExists: "no" });
-    expect(JSON.stringify(unauthorized)).not.toContain("secret-token");
+    expect(result).toMatchObject({ ok: false, authOk: "no", modelExists: "unknown" });
+    expect(JSON.stringify(result)).not.toContain("secret-token");
+    expect(healthEvents[0]).toMatchObject({
+      modelKey: "openai/gpt-5-mini",
+      source: "probe",
+      success: false,
+      errorCode: "PROBE_AUTH_FAILED",
+    });
   });
 
   it("returns timeout result for aborted probes", async () => {
-    const timeoutFetch: ProbeFetch = async () => {
-      throw new DOMException("operation timed out", "AbortError");
+    const timeoutRunner: ProbeCommandRunner = async () => {
+      const error = new Error("operation timed out");
+      error.name = "AbortError";
+      throw error;
     };
 
     const result = await probeModel({
       modelKey: "openai/gpt-5-mini",
       providerConfig,
-      fetch: timeoutFetch,
+      runOpenClaw: timeoutRunner,
     });
 
     expect(result).toMatchObject({

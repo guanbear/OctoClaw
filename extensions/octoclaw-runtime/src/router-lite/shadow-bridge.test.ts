@@ -258,4 +258,48 @@ describe("emitRouterLiteShadowEvent", () => {
     });
     expect(event.recommendation.reasonCodes).toContain("budget_exceeded_plan_only");
   });
+
+  it("writes fallback suggestion decisions when native fallback models are cooled down", () => {
+    process.env[SNAPSHOT_ENV] = writeValidSnapshot(tempDir, [
+      testModel("cliproxyapi/gpt-5.5", 20, {
+        tags: ["default"],
+        health: {
+          available: "yes",
+          cooldown: true,
+          cooldownReason: "rate_limit_429",
+          quotaPressure: "low",
+          recentFailureRate: 1,
+          sources: ["router_health_snapshot"],
+        },
+      }),
+      testModel("zai/glm-4.7", 2, { tags: ["fallback#1"] }),
+    ]);
+    process.env[SHADOW_ENV] = path.join(tempDir, "cooldown-shadow.jsonl");
+    process.env[DECISIONS_ENV] = path.join(tempDir, "cooldown-decisions.log");
+
+    emitRouterLiteShadowEvent({
+      sessionKey: "test",
+      turnId: "t1",
+      decision: makeDecision(),
+    });
+
+    const [line] = fsSync.readFileSync(process.env[DECISIONS_ENV], "utf8").trim().split("\n");
+    const decision = JSON.parse(line!) as Record<string, unknown>;
+    expect(decision).toMatchObject({
+      event: "router_native_fallback_suggestion",
+      modelKey: "cliproxyapi/gpt-5.5",
+      model: "cliproxyapi/gpt-5.5",
+      tier: "normal",
+      decision: "hold",
+      reason: "fallback_update_suggested",
+      currentNativePosition: "default",
+      cooldownReason: "rate_limit_429",
+      suggestedAction: {
+        command: "openclaw models fallbacks remove cliproxyapi/gpt-5.5",
+      },
+      evidence: {
+        reasonCodes: ["cooldown:rate_limit_429:cliproxyapi/gpt-5.5"],
+      },
+    });
+  });
 });

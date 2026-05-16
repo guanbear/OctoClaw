@@ -90,6 +90,7 @@ declare module "node:fs" {
     accessSync(path: string, mode?: number): void;
     mkdirSync(path: string, options?: { recursive?: boolean }): void;
     writeFileSync(path: string | number, data: string, encoding?: string): void;
+    appendFileSync(path: string | number, data: string, encoding?: string): void;
     realpathSync(path: string): string;
     statSync(path: string): StatsLike;
     readFileSync(path: string, encoding: string): string;

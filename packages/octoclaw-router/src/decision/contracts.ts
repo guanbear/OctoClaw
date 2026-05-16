@@ -95,6 +95,8 @@ export interface RouterLiteScoreByScenario {
 export interface RouterLiteHealth {
   available: RouterLiteTriState;
   cooldown: boolean;
+  cooldownUntil?: number;
+  cooldownReason?: string;
   quotaPressure: RouterLiteQuotaPressure;
   p50FirstTokenMs?: number;
   p95FirstTokenMs?: number;
@@ -104,6 +106,9 @@ export interface RouterLiteHealth {
   recentFailureRate?: number;
   toolCallFailureRate?: number;
   timeoutRate?: number;
+  lastSuccessfulCallAt?: string;
+  lastFailedCallAt?: string;
+  lastErrorCodes?: Array<{ code: string; count: number }>;
   sources: string[];
 }
 
@@ -137,6 +142,7 @@ export interface ModelIntelSnapshot {
   schemaVersion: "octoclaw.router_lite.model_intel_snapshot/v1";
   snapshotId: string;
   generatedAt: string;
+  nativeFallbackOrder?: string[];
   sourceStatus: Array<{ source: string; status: "ok" | "missing" | "error"; detail?: string }>;
   models: ModelIntelLite[];
 }

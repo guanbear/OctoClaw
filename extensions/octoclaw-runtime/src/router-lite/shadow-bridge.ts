@@ -1,10 +1,12 @@
 import fsSync from "node:fs";
 import path from "node:path";
 import os from "node:os";
+import { execFileSync } from "node:child_process";
 import {
   evaluateBudget,
   generateCostReport,
   openSqliteCostEventStore,
+  evaluateNativeFallbackSuggestions,
 } from "@octoclaw/router";
 import { selectShadowRecommendation, writeShadowEvent } from "@octoclaw/router/decision";
 import type { RouterLiteShadowEvent, ModelIntelSnapshot } from "@octoclaw/router/decision";
@@ -108,6 +110,36 @@ function loadBudgetStatus(logger: LoggerLike): BudgetStatus | undefined {
   }
 }
 
+function loadNativeFallbackOrder(logger: LoggerLike): string[] {
+  try {
+    const stdout = execFileSync("openclaw", ["models", "fallbacks", "list", "--json"], {
+      encoding: "utf8",
+      env: { ...process.env, OPENCLAW_HOME: resolveOpenclawHome() },
+      timeout: 3000,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    const parsed = parseFirstJsonRecord(stdout);
+    const fallbacks = parsed?.fallbacks;
+    return Array.isArray(fallbacks) ? fallbacks.map((entry) => String(entry).trim()).filter(Boolean) : [];
+  } catch (error) {
+    const code = typeof error === "object" && error !== null ? (error as { code?: unknown }).code : undefined;
+    if (code !== "ENOENT") {
+      logger?.warn?.(`[router-lite] native fallback order load failed: ${String(error)}`);
+    }
+    return [];
+  }
+}
+
+function parseFirstJsonRecord(text: string): UnknownRecord | null {
+  const start = text.indexOf("{");
+  if (start < 0) return null;
+  try {
+    return JSON.parse(text.slice(start)) as UnknownRecord;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Emit a router-lite shadow event comparing actual vs recommended model.
  * 
@@ -138,7 +170,9 @@ export function emitRouterLiteShadowEvent(input: ShadowBridgeInput): void {
 
     const promotionDecisions = loadPromotionDecisions(input.logger);
     const budget = loadBudgetStatus(input.logger);
-    const recommendation = selectShadowRecommendation(request, snapshot, "balanced", { promotionDecisions, budget });
+    const nativeFallbackOrder = loadNativeFallbackOrder(input.logger);
+    const recommendation = selectShadowRecommendation(request, snapshot, "balanced", { promotionDecisions, budget, nativeFallbackOrder });
+    appendFallbackSuggestionDecision({ snapshot, recommendation, nativeFallbackOrder, tier: request.judge.complexity, logger: input.logger });
     const estimatedCostDeltaUsd = computeCostDelta(snapshot, actualModel, recommendation.recommendedModel);
 
     const event: RouterLiteShadowEvent = {
@@ -161,4 +195,59 @@ export function emitRouterLiteShadowEvent(input: ShadowBridgeInput): void {
     // Belt-and-suspenders: never let shadow emission affect the live path.
     input.logger?.warn?.(`[router-lite] shadow bridge error: ${String(error)}`);
   }
+}
+
+function appendFallbackSuggestionDecision(input: {
+  snapshot: ModelIntelSnapshot;
+  recommendation: ReturnType<typeof selectShadowRecommendation>;
+  nativeFallbackOrder: string[];
+  tier: string;
+  logger: LoggerLike;
+}): void {
+  const cooldownCodes = input.recommendation.reasonCodes.filter((code) => code.startsWith("cooldown:"));
+  if (cooldownCodes.length === 0) return;
+  const suggestions = evaluateNativeFallbackSuggestions(input.snapshot.models, input.nativeFallbackOrder);
+  for (const code of cooldownCodes) {
+    const [, reason, modelKey] = code.split(":");
+    if (!modelKey) continue;
+    const model = input.snapshot.models.find((candidate) => candidate.modelKey === modelKey);
+    if (!model || !isNativeFallbackModel(model)) continue;
+    const suggestion = suggestions.find((entry) => entry.modelKey === model.modelKey);
+    const event = {
+      event: "router_native_fallback_suggestion",
+      ts: new Date().toISOString(),
+      modelKey: model.modelKey,
+      model: model.modelKey,
+      tier: input.tier,
+      decision: "hold",
+      reason: "fallback_update_suggested",
+      currentNativePosition: suggestion?.currentNativePosition ?? (model.tags.includes("default") ? "default" : model.tags.find((tag) => /^fallback#\d+$/iu.test(tag))),
+      cooldownReason: suggestion?.cooldownReason ?? reason ?? "cooldown",
+      suggestedAction: suggestion?.suggestedAction ?? {
+        command: `openclaw models fallbacks remove ${model.modelKey}`,
+        explanation: "Cooldown observed; consider demoting this fallback while it stabilizes",
+      },
+      evidence: {
+        reasonCodes: [code],
+        reason: reason || "cooldown",
+        suggestedActions: [
+          { binary: "openclaw", args: ["models", "fallbacks", "remove", model.modelKey] },
+          ...(input.recommendation.recommendedModel
+            ? [{ binary: "openclaw", args: ["models", "fallbacks", "add", input.recommendation.recommendedModel] }]
+            : []),
+        ],
+      },
+    };
+    try {
+      const target = resolvePromotionDecisionsPath();
+      fsSync.mkdirSync(path.dirname(target), { recursive: true });
+      fsSync.appendFileSync(target, `${JSON.stringify(event)}\n`, "utf8");
+    } catch (error) {
+      input.logger?.warn?.(`[router-lite] fallback suggestion write failed: ${String(error)}`);
+    }
+  }
+}
+
+function isNativeFallbackModel(model: ModelIntelSnapshot["models"][number]): boolean {
+  return model.tags.includes("default") || model.tags.some((tag) => /^fallback#\d+$/iu.test(tag));
 }

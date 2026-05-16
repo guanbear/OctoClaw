@@ -28,6 +28,7 @@ import {
   SlackAdapter,
   auditSlackFacingToolExposure,
   isSlackTargetAllowed,
+  renderSlackProjectionFooter,
 } from "./slack-adapter.js";
 import { ERROR_CODES } from "@octoclaw/errors";
 
@@ -83,6 +84,14 @@ describe("SlackAdapter", () => {
     expect(rendered).toContain("route=reply | model=");
     expect(rendered).not.toContain("model=direct_main");
     expect(rendered).not.toContain("model=unknown");
+  });
+
+  it("renders router health downgrade reasons in projection footers", () => {
+    expect(renderSlackProjectionFooter("done", {
+      route: "delegate",
+      model: "zai/glm-4.7",
+      healthNote: "downgraded: rate_limit_429 on zhipu/glm-5.1",
+    })).toContain("health=downgraded: rate_limit_429 on zhipu/glm-5.1");
   });
 
   it("sends Slack messages through Slack Web API by default without invoking OpenClaw CLI", async () => {

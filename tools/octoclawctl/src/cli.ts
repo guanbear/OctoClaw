@@ -149,6 +149,7 @@ interface ParsedCliArgs {
   scheduleHour?: number;
   logDir?: string;
   nonInteractive: boolean;
+  cooldownOnly: boolean;
   lang?: "zh" | "en";
   nightlyEvalSubcommand?: "run" | "install-launchagent" | "uninstall-launchagent" | "print-plist" | "deliver-slack" | "promote" | "clear-baseline" | "show-baseline";
   slackAcceptanceFormat: SlackAcceptanceFormat;
@@ -1048,6 +1049,7 @@ export function parseCliArgs(argv: string[]): ParsedCliArgs {
   let scheduleHour: number | undefined;
   let logDir: string | undefined;
   let nonInteractive = false;
+  let cooldownOnly = false;
   let lang: "zh" | "en" | undefined;
   let nightlyEvalSubcommand: ParsedCliArgs["nightlyEvalSubcommand"];
   let slackAcceptanceFormat: SlackAcceptanceFormat = "markdown";
@@ -1308,6 +1310,10 @@ export function parseCliArgs(argv: string[]): ParsedCliArgs {
       nonInteractive = true;
       continue;
     }
+    if (argument === "--cooldown-only") {
+      cooldownOnly = true;
+      continue;
+    }
     if (argument === "--lang") {
       lang = parseEnumValue(argv[index + 1], INIT_LANGUAGES, "language");
       index += 1;
@@ -1454,6 +1460,7 @@ export function parseCliArgs(argv: string[]): ParsedCliArgs {
     scheduleHour,
     logDir,
     nonInteractive,
+    cooldownOnly,
     lang,
     nightlyEvalSubcommand,
     slackAcceptanceFormat,
@@ -1523,6 +1530,7 @@ export function printUsage(): string {
     "  octoclawctl router capability lookup <model> [--input <snapshot.json>] [--format text|json]",
     "  octoclawctl router capability probe <model> [--input <snapshot.json>] [--format text|json]",
     "  octoclawctl router model-intel refresh [--output-dir <dir>] [--openclaw-home <dir>] [--format json]",
+    "  octoclawctl router health aggregate|list|show <model>|suggest-fallbacks [--format text|json]",
     "  octoclawctl router model-config analyze [--input <snapshot.json>] [--output-dir <dir>] [--format json]",
     "  octoclawctl router shadow-report [--input <shadow.jsonl>] [--format json]",
     "  octoclawctl slack-acceptance --config <acceptance.json> --output-dir <dir> [--format markdown|json]",
@@ -2054,6 +2062,15 @@ function countModels(snapshot: ModelIntelSnapshot): { configured: number; propos
   };
 }
 
+function countHealthModels(healthSnapshot: unknown): { models: number; cooldown: number } {
+  const models = asRecord(asRecord(healthSnapshot).models);
+  const values = Object.values(models).map((value) => asRecord(value));
+  return {
+    models: values.length,
+    cooldown: values.filter((model) => model.cooldown === true).length,
+  };
+}
+
 function resolveCapabilitySnapshotPath(parsed: ParsedCliArgs, openclawHome: string): string {
   return resolvePath(parsed.input ?? path.join(openclawHome, "octoclaw", "router-lite", "model-intel-snapshot.json"));
 }
@@ -2146,18 +2163,21 @@ async function runCapabilityProbe(input: {
 }): Promise<string> {
   const router = await loadRouter();
   const openclawConfig = await readJsonFile(path.join(input.openclawHome, "openclaw.json"));
-  const providerConfig = router.resolveProviderForModel(input.modelKey, openclawConfig);
-  if (!providerConfig) {
-    throw new Error(`No configured provider found for ${input.modelKey}. Configure the provider/model in openclaw.json first.`);
-  }
+  const providerConfig = router.resolveProviderForModel(input.modelKey, openclawConfig) ?? nativeOpenClawProviderConfig(input.modelKey);
   const model = input.snapshot.models.find((item) => item.modelKey.toLowerCase() === input.modelKey.toLowerCase());
   const mockProbe = input.env.OCTOCLAW_ROUTER_PROBE_MOCK_JSON;
+  const healthSink = router.createHealthEventSink({
+    jsonlPath: path.join(input.openclawHome, "octoclaw", "router-lite", "model-health.jsonl"),
+    snapshotPath: path.join(input.openclawHome, "octoclaw", "router-lite", "model-health-snapshot.json"),
+  });
   const result = await router.probeModel({
     modelKey: input.modelKey,
     providerConfig,
     estimatedBlendedUsdPerMTok: model?.marketPrice.blendedUsdPerMTok,
-    fetch: mockProbe ? async () => new Response(mockProbe, { status: 200, headers: { "content-type": "application/json" } }) : undefined,
+    runOpenClaw: mockProbe ? async () => ({ exitCode: 0, stdout: mockProbe }) : undefined,
+    recordHealthEvent: (event) => healthSink.recordCall(event),
   });
+  await healthSink.flush();
   if (result.ok) {
     await router.recordProbeSuccess(input.modelKey, input.openclawHome);
   }
@@ -2168,6 +2188,108 @@ async function runCapabilityProbe(input: {
     `latencyMs=${result.latencyMs ?? "unknown"} costUsd=${result.costUsd ?? "unknown"}`,
     ...(result.error ? [`error=${result.error.code}: ${result.error.message}`] : []),
   ].join("\n");
+}
+
+function nativeOpenClawProviderConfig(modelKey: string): NonNullable<ReturnType<RouterModule["resolveProviderForModel"]>> {
+  const slash = modelKey.indexOf("/");
+  return {
+    providerId: slash > 0 ? modelKey.slice(0, slash) : "openclaw",
+    baseUrl: "openclaw-native",
+    authHeader: { name: "openclaw-native", value: "redacted" },
+    format: "openai_chat",
+  };
+}
+
+async function runRouterHealthCommand(input: {
+  action: string;
+  modelKey?: string;
+  openclawHome: string;
+  env: Record<string, string | undefined>;
+  format: "json" | "text";
+  cooldownOnly?: boolean;
+}): Promise<string> {
+  type RouterHealthCliModel = JsonRecord & { modelKey: string };
+  const router = await loadRouter();
+  const healthPaths = resolveRouterHealthPaths(input.openclawHome, input.env);
+  const sink = router.createHealthEventSink({
+    jsonlPath: healthPaths.jsonlPath,
+    snapshotPath: healthPaths.snapshotPath,
+  });
+  const snapshot = await sink.aggregate(Date.now());
+  const models: RouterHealthCliModel[] = Object.entries(asRecord(snapshot.models))
+    .map(([modelKey, health]): RouterHealthCliModel => ({
+      modelKey,
+      ...asRecord(health),
+    }))
+    .filter((model) => input.cooldownOnly !== true || model.cooldown === true)
+    .sort(compareRouterHealthCliModels);
+
+  if (input.action === "aggregate") {
+    const summary = { ...countHealthModels(snapshot), snapshotPath: healthPaths.snapshotPath };
+    return input.format === "json"
+      ? JSON.stringify(summary, null, 2)
+      : `Health: ${summary.models} models, ${summary.cooldown} in cooldown`;
+  }
+
+  if (input.action === "list") {
+    return input.format === "json"
+      ? JSON.stringify({ models }, null, 2)
+      : [
+          "Router model health",
+          ...models.map((model) => `${model.modelKey} cooldown=${model.cooldown === true ? "yes" : "no"} failureRate=${model.recentFailureRate ?? "unknown"} p95=${model.p95LatencyMs ?? "unknown"}`),
+        ].join("\n");
+  }
+
+  if (input.action === "show") {
+    if (!input.modelKey) throw new Error("router health show expects <model>");
+    const model = models.find((entry) => entry.modelKey.toLowerCase() === input.modelKey!.toLowerCase());
+    if (!model) throw new Error(`No health data for ${input.modelKey}`);
+    return input.format === "json"
+      ? JSON.stringify(model, null, 2)
+      : `${model.modelKey}: cooldown=${model.cooldown === true ? "yes" : "no"} reason=${model.cooldownReason ?? "none"} failureRate=${model.recentFailureRate ?? "unknown"}`;
+  }
+
+  const suggestions = models
+    .filter((model) => model.cooldown === true)
+    .map((model) => ({
+      modelKey: model.modelKey,
+      reason: asString(model.cooldownReason) || "cooldown",
+      suggestedActions: [
+        { binary: "openclaw", args: ["models", "fallbacks", "remove", model.modelKey] },
+      ],
+    }));
+  return input.format === "json"
+    ? JSON.stringify({ suggestions }, null, 2)
+    : suggestions.length === 0
+      ? "No fallback suggestions."
+      : ["Fallback suggestions", ...suggestions.map((item) => `${item.modelKey}: ${item.reason}`)].join("\n");
+}
+
+function resolveRouterHealthPaths(openclawHome: string, env: Record<string, string | undefined>): { jsonlPath: string; snapshotPath: string } {
+  const overridePath = env.OCTOCLAW_ROUTER_HEALTH_PATH;
+  if (overridePath && overridePath.trim()) {
+    const jsonlPath = resolvePath(overridePath.trim());
+    const snapshotPath = jsonlPath.endsWith(".jsonl")
+      ? `${jsonlPath.slice(0, -".jsonl".length)}-snapshot.json`
+      : path.join(jsonlPath, "model-health-snapshot.json");
+    return {
+      jsonlPath: jsonlPath.endsWith(".jsonl") ? jsonlPath : path.join(jsonlPath, "model-health.jsonl"),
+      snapshotPath,
+    };
+  }
+  return {
+    jsonlPath: path.join(openclawHome, "octoclaw", "router-lite", "model-health.jsonl"),
+    snapshotPath: path.join(openclawHome, "octoclaw", "router-lite", "model-health-snapshot.json"),
+  };
+}
+
+function compareRouterHealthCliModels(left: JsonRecord & { modelKey: string }, right: JsonRecord & { modelKey: string }): number {
+  const leftCooldown = left.cooldown === true ? 1 : 0;
+  const rightCooldown = right.cooldown === true ? 1 : 0;
+  if (leftCooldown !== rightCooldown) return rightCooldown - leftCooldown;
+  const failureDiff = (asNumber(right.recentFailureRate) ?? 0) - (asNumber(left.recentFailureRate) ?? 0);
+  if (failureDiff !== 0) return failureDiff;
+  return left.modelKey.localeCompare(right.modelKey);
 }
 
 interface RouterDecisionRow {
@@ -2747,15 +2869,31 @@ async function runRouterLiteCommand(parsed: ParsedCliArgs, env: Record<string, s
     return runCapabilityProbe({ snapshot, modelKey, openclawHome, format: wantsJson ? "json" : "text", env });
   }
 
+  if (area === "health" && (action === "aggregate" || action === "list" || action === "show" || action === "suggest-fallbacks")) {
+    return runRouterHealthCommand({
+      action,
+      modelKey: parsed.extraArgs[2],
+      openclawHome,
+      env,
+      format: wantsJson ? "json" : "text",
+      cooldownOnly: parsed.cooldownOnly,
+    });
+  }
+
   if (area === "model-intel" && action === "refresh") {
     const commandEnv = { ...env, OPENCLAW_HOME: openclawHome };
     const openClawModelsList = await runOpenClawJsonCommand(["models", "list", "--json"], commandEnv);
+    const nativeFallbackOrder = await runOpenClawJsonCommand(["models", "fallbacks", "list", "--json"], commandEnv);
     const usageStatus = await runOpenClawJsonCommand(["status", "--usage", "--json"], commandEnv);
     const usageCost = await runOpenClawJsonCommand(["gateway", "usage-cost", "--days", "3", "--json"], commandEnv);
     const openClawConfig = await readJsonFile(path.join(openclawHome, "openclaw.json"));
     const legacyCatalog = await readJsonFile(path.join(openclawHome, "workspace", "tmp", "octopus", "model-catalog.json"));
     const routerLite = await loadPolicyRouterLite();
     const router = await loadRouter();
+    const healthSnapshot = await router.createHealthEventSink({
+      jsonlPath: path.join(openclawHome, "octoclaw", "router-lite", "model-health.jsonl"),
+      snapshotPath: path.join(openclawHome, "octoclaw", "router-lite", "model-health-snapshot.json"),
+    }).aggregate(Date.now()).catch(() => undefined);
     const snapshot = routerLite.buildModelIntelSnapshot({
       openClawModelsList,
       openClawConfig,
@@ -2763,11 +2901,14 @@ async function runRouterLiteCommand(parsed: ParsedCliArgs, env: Record<string, s
       packagedSnapshot: router.loadPackagedModelIntelSnapshot(),
       usageStatus,
       usageCost,
+      healthSnapshot,
+      nativeFallbackOrder,
     });
     const snapshotPath = path.join(outputDir, "model-intel-snapshot.json");
     await ensureDir(outputDir);
     await fs.writeFile(snapshotPath, `${JSON.stringify(snapshot, null, 2)}\n`, "utf8");
     const counts = countModels(snapshot);
+    const healthCounts = countHealthModels(healthSnapshot);
     if (wantsJson) {
       return JSON.stringify({
         snapshotPath,
@@ -2775,6 +2916,7 @@ async function runRouterLiteCommand(parsed: ParsedCliArgs, env: Record<string, s
         generatedAt: snapshot.generatedAt,
         models: snapshot.models.length,
         ...counts,
+        health: healthCounts,
         sourceStatus: snapshot.sourceStatus,
       }, null, 2);
     }
@@ -2782,6 +2924,7 @@ async function runRouterLiteCommand(parsed: ParsedCliArgs, env: Record<string, s
       `Model intel snapshot written: ${snapshotPath}`,
       `snapshotId=${snapshot.snapshotId}`,
       `models=${snapshot.models.length} configured=${counts.configured} proposalOnly=${counts.proposalOnly}`,
+      `Health: ${healthCounts.models} models, ${healthCounts.cooldown} in cooldown`,
       `sources=${snapshot.sourceStatus.map((source) => `${source.source}:${source.status}`).join(", ")}`,
     ].join("\n");
   }

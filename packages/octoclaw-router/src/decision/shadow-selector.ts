@@ -25,6 +25,7 @@ export interface ShadowRecommendationOptions {
   promotionDecisions?: PromotionDecisionEvent[];
   promotionState?: PromotionStateMap;
   budget?: BudgetStatus;
+  nativeFallbackOrder?: string[];
 }
 
 const SCORING_WEIGHTS: Record<RouterLiteScoringMode, ScoreWeights> = {
@@ -123,12 +124,15 @@ export function selectShadowRecommendation(
 
   const scoredModels = eligible
     .map((model) => ({
-      model: model.modelKey,
+      model,
       score: scoreModel(request, model, mode, maxBlendedPrice, maxP50),
     }))
-    .sort((left, right) => right.score - left.score || left.model.localeCompare(right.model));
+    .sort((left, right) => {
+      if (Math.abs(right.score - left.score) > 0.01) return right.score - left.score;
+      return compareNativeFallbackTieBreak(left.model, right.model, options.nativeFallbackOrder ?? []);
+    });
 
-  const eligibleModels = scoredModels.map((entry) => entry.model);
+  const eligibleModels = scoredModels.map((entry) => entry.model.modelKey);
   const recommendedModel = eligibleModels[0];
   const ignoredReason = getIgnoredReason(request, rejectedModels, eligibleModels.length, options.budget);
   const promotionState = options.promotionState ?? buildPromotionState(
@@ -145,6 +149,7 @@ export function selectShadowRecommendation(
     `quality_floor_${qualityFloor}`,
     isLivePromotion ? "promotion_live" : "promotion_shadow",
     ...(options.budget?.reasonCodes ?? []),
+    ...cooldownReasonCodes(rejectedModels, snapshot.models),
     ...(ignoredReason ? [`ignored_${ignoredReason}`] : []),
   ];
 
@@ -411,6 +416,38 @@ function getScenario(request: RouterLiteRequest): RouterLiteScenario | undefined
 
 function clampScore(score: number): number {
   return Math.max(0, Math.min(100, score));
+}
+
+function cooldownReasonCodes(rejectedModels: Rejection[], models: ModelIntelLite[]): string[] {
+  return rejectedModels.flatMap((rejected) => {
+    if (rejected.reason !== "cooldown_active") return [];
+    const model = models.find((candidate) => candidate.modelKey === rejected.model);
+    return model?.health.cooldownReason ? [`cooldown:${model.health.cooldownReason}:${model.modelKey}`] : [];
+  });
+}
+
+function compareNativeFallbackTieBreak(left: ModelIntelLite, right: ModelIntelLite, nativeFallbackOrder: string[]): number {
+  const leftRank = nativeFallbackRank(left, nativeFallbackOrder);
+  const rightRank = nativeFallbackRank(right, nativeFallbackOrder);
+  if (leftRank !== rightRank) return leftRank - rightRank;
+  const priceDiff = (left.marketPrice.blendedUsdPerMTok ?? Number.POSITIVE_INFINITY)
+    - (right.marketPrice.blendedUsdPerMTok ?? Number.POSITIVE_INFINITY);
+  if (priceDiff !== 0) return priceDiff;
+  return left.modelKey.localeCompare(right.modelKey);
+}
+
+function nativeFallbackRank(model: ModelIntelLite, nativeFallbackOrder: string[]): number {
+  if (model.tags.includes("default")) return 0;
+  const explicitIndex = nativeFallbackOrder.findIndex((entry) => entry.toLowerCase() === model.modelKey.toLowerCase());
+  if (explicitIndex >= 0) return 1 + explicitIndex;
+  const tagRank = model.tags
+    .map((tag) => /^fallback#(\d+)$/iu.exec(tag)?.[1])
+    .filter((value): value is string => value !== undefined)
+    .map((value) => Number.parseInt(value, 10))
+    .filter((value) => Number.isFinite(value))
+    .sort((left, right) => left - right)[0];
+  if (tagRank !== undefined) return 1 + tagRank;
+  return 10_000;
 }
 
 function isPlanIncluded(model: ModelIntelLite): boolean {

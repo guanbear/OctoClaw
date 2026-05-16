@@ -179,4 +179,18 @@ describe("selectShadowRecommendation promotion state", () => {
     expect(recommendation.ignoredReason).toBe("budget_exceeded_no_plan");
     expect(recommendation.reasonCodes).toContain("budget_exceeded_plan_only");
   });
+
+  it("uses OpenClaw fallback order as the tie-break before price", () => {
+    const recommendation = selectShadowRecommendation(
+      request(),
+      snapshot([
+        model("provider/cheap", 1),
+        model("provider/fallback1", 1),
+      ]),
+      "balanced",
+      { nativeFallbackOrder: ["provider/fallback1"] },
+    );
+
+    expect(recommendation.recommendedModel).toBe("provider/fallback1");
+  });
 });

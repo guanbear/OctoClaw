@@ -4,6 +4,12 @@ export interface ModelHealthCallResult {
   latencyMs?: number;
 }
 
+export * from "./cooldown.js";
+export * from "./event.js";
+export * from "./sink.js";
+export * from "./snapshot.js";
+export * from "./suggestions.js";
+
 export interface ModelHealthSnapshot {
   recentFailureRate: number;
   cooldown: boolean;

@@ -270,6 +270,7 @@ export function appendReplyProjectionFooter(content: string, state: UnknownRecor
     complexityBand: resolveFooterComplexityBand(state),
     via: resolveRouteSource(state),
     thread: hasThreadProjection(event, ctx),
+    healthNote: resolveHealthFooterNote(state),
     ...(debug ? {
       workerPool: stringValue(routeDecision.worker_pool || snapshot.workerPool || snapshot.worker_pool),
       workContractId: stringValue(workContract.workContractId || decision.workContractId || snapshot.workContractId || snapshot.work_contract_id),
@@ -281,6 +282,28 @@ export function appendReplyProjectionFooter(content: string, state: UnknownRecor
     sessionKey: stringValue(ctx.sessionKey || event.sessionKey || event.session_key),
     channel: resolveProjectionChannel(event, ctx),
   });
+}
+
+function resolveHealthFooterNote(state: UnknownRecord): string | undefined {
+  const decision = asRecord(state.decision);
+  const routeDecision = asRecord(decision.route_decision);
+  const codes = [
+    ...stringArray(state.routerLiteReasonCodes),
+    ...stringArray(state.router_lite_reason_codes),
+    ...stringArray(decision.reasonCodes),
+    ...stringArray(decision.reason_codes),
+    ...stringArray(routeDecision.reasonCodes),
+    ...stringArray(routeDecision.reason_codes),
+  ];
+  const cooldown = codes.find((code) => code.startsWith("cooldown:"));
+  if (!cooldown) return undefined;
+  const [, reason, model] = cooldown.split(":");
+  return `downgraded: ${reason || "cooldown"}${model ? ` on ${model}` : ""}`;
+}
+
+function stringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.map((item) => stringValue(item)).filter(Boolean);
 }
 
 export function resolveProjectionChannel(event: UnknownRecord, ctx: UnknownRecord): string {

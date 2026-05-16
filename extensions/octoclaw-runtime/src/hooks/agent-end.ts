@@ -11,6 +11,7 @@ import { recordPolicyReplay } from "../replay/replay.js";
 import { policyState } from "../state/policy-state.js";
 import { buildTurnExecutionReceipt } from "../receipt.js";
 import { recordRuntimeCostEventAndBudget } from "../router-cost-runtime.js";
+import { recordRuntimeHealthCall } from "../router-lite/health-recorder.js";
 import { type UnknownRecord, asRecord } from "../util/type-coercion.js";
 import type { PluginInterface } from "../extension-entry-shared.js";
 import { stringValue } from "../extension-entry-shared.js";
@@ -73,6 +74,20 @@ export function makeAgentEndHook(deps: AgentEndDeps) {
       Math.max(0, finalNow - Number(state?.createdAt || state?.updatedAt || finalNow)),
       finalNow,
     );
+    const displayModel = resolveDisplayModel(asRecord(state), event, asRecord(ctx));
+    recordRuntimeHealthCall({
+      event: {
+        ...event,
+        latencyMs: finalReceipt.durationMs,
+        errorCode: finalReceipt.outcome === "timeout" ? "TIMEOUT" : (finalReceipt.outcome === "failed" ? "RUNTIME_ERROR" : undefined),
+      },
+      ctx,
+      state,
+      stateKey,
+      model: displayModel,
+      success: finalReceipt.outcome === "completed",
+      logger: deps.pi.logger,
+    });
     void recordPolicyReplay("agent_end", {
       sessionKey: stateKey,
       sessionId: stringValue(ctx.sessionId),

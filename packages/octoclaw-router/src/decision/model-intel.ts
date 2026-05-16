@@ -26,6 +26,8 @@ export interface BuildModelIntelSnapshotInput {
   packagedSnapshot?: unknown;
   usageStatus?: unknown;
   usageCost?: unknown;
+  healthSnapshot?: unknown;
+  nativeFallbackOrder?: unknown;
   scenarioData?: unknown;
 }
 
@@ -304,6 +306,8 @@ function mergeHealth(base: RouterLiteHealth, incoming?: Partial<RouterLiteHealth
   return {
     available: incoming.available && incoming.available !== "unknown" ? incoming.available : base.available,
     cooldown: incoming.cooldown ?? base.cooldown,
+    cooldownUntil: incoming.cooldownUntil ?? base.cooldownUntil,
+    cooldownReason: incoming.cooldownReason ?? base.cooldownReason,
     quotaPressure: incoming.quotaPressure && incoming.quotaPressure !== "unknown" ? incoming.quotaPressure : base.quotaPressure,
     p50FirstTokenMs: incoming.p50FirstTokenMs ?? base.p50FirstTokenMs,
     p95FirstTokenMs: incoming.p95FirstTokenMs ?? base.p95FirstTokenMs,
@@ -313,6 +317,9 @@ function mergeHealth(base: RouterLiteHealth, incoming?: Partial<RouterLiteHealth
     recentFailureRate: incoming.recentFailureRate ?? base.recentFailureRate,
     toolCallFailureRate: incoming.toolCallFailureRate ?? base.toolCallFailureRate,
     timeoutRate: incoming.timeoutRate ?? base.timeoutRate,
+    lastSuccessfulCallAt: mostRecentTimestamp(base.lastSuccessfulCallAt, incoming.lastSuccessfulCallAt),
+    lastFailedCallAt: mostRecentTimestamp(base.lastFailedCallAt, incoming.lastFailedCallAt),
+    lastErrorCodes: incoming.lastErrorCodes ?? base.lastErrorCodes,
     sources: unique([...base.sources, ...(incoming.sources ?? [])]),
   };
 }
@@ -746,6 +753,79 @@ function addUsageSignals(models: ModelIntelLite[], usageStatus: unknown, usageCo
   });
 }
 
+function addHealthSnapshotSignals(models: ModelIntelLite[], healthSnapshot: unknown): ModelIntelLite[] {
+  const healthByModel = modelSignalEntries(healthSnapshot);
+  if (healthByModel.size === 0) return models;
+  const normalized = new Map<string, JsonRecord>();
+  for (const [key, value] of healthByModel) normalized.set(key.toLowerCase(), value);
+
+  return models.map((model) => {
+    const health = findRouterHealthSignal(normalized, model);
+    return {
+      ...model,
+      health: mergeHealth(model.health, healthFromRouterHealthSnapshot(health)),
+    };
+  });
+}
+
+function findRouterHealthSignal(map: Map<string, JsonRecord>, model: ModelIntelLite): JsonRecord {
+  for (const key of healthLookupKeys(model)) {
+    const found = map.get(key.toLowerCase());
+    if (found) return found;
+  }
+  return {};
+}
+
+function healthLookupKeys(model: ModelIntelLite): string[] {
+  const keys = [model.modelKey, model.model];
+  const slash = model.modelKey.indexOf("/");
+  if (slash > 0) {
+    const provider = model.modelKey.slice(0, slash).toLowerCase();
+    const id = model.modelKey.slice(slash + 1);
+    if (provider === "zhipu") keys.push(`zai/${id}`);
+    if (provider === "zai") keys.push(`zhipu/${id}`);
+  }
+  return unique(keys);
+}
+
+function healthFromRouterHealthSnapshot(status: JsonRecord): Partial<RouterLiteHealth> | undefined {
+  if (Object.keys(status).length === 0) return undefined;
+  return {
+    cooldown: asBoolean(status.cooldown),
+    cooldownUntil: asNumber(status.cooldownUntil ?? status.cooldown_until),
+    cooldownReason: asString(status.cooldownReason ?? status.cooldown_reason) || undefined,
+    p50LatencyMs: asNumber(status.p50LatencyMs ?? status.p50_latency_ms),
+    p95LatencyMs: asNumber(status.p95LatencyMs ?? status.p95_latency_ms),
+    recentFailureRate: asNumber(status.recentFailureRate ?? status.recent_failure_rate),
+    toolCallFailureRate: asNumber(status.toolCallFailureRate ?? status.tool_call_failure_rate),
+    timeoutRate: asNumber(status.timeoutRate ?? status.timeout_rate),
+    lastSuccessfulCallAt: timestampToIso(status.lastSuccessfulCallAt ?? status.last_successful_call_at),
+    lastFailedCallAt: timestampToIso(status.lastFailedCallAt ?? status.last_failed_call_at),
+    lastErrorCodes: parseLastErrorCodes(status.lastErrorCodes ?? status.last_error_codes),
+    sources: ["router_health_snapshot"],
+  };
+}
+
+function timestampToIso(value: unknown): string | undefined {
+  const millis = asNumber(value);
+  if (millis !== undefined) return new Date(millis).toISOString();
+  const text = asString(value);
+  if (!text) return undefined;
+  const parsed = Date.parse(text);
+  return Number.isFinite(parsed) ? new Date(parsed).toISOString() : undefined;
+}
+
+function parseLastErrorCodes(value: unknown): Array<{ code: string; count: number }> | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const parsed = value.flatMap((item) => {
+    const record = asRecord(item);
+    const code = asString(record.code);
+    const count = asNumber(record.count);
+    return code && count !== undefined ? [{ code, count }] : [];
+  });
+  return parsed.length > 0 ? parsed : undefined;
+}
+
 function normalizeModelName(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, "");
 }
@@ -802,28 +882,29 @@ export function buildModelIntelSnapshot(input: BuildModelIntelSnapshotInput): Mo
       scenarioAbility: partial.scenarioAbility ?? (scenarioData.size > 0 ? scenarioData.get(partial.modelKey) : undefined) ?? inferScenarioAbility(enrichedPartial, generatedAt),
     }));
   }
-  const models = addPriceRatios(addUsageSignals(
-    Array.from(merged.values()).map((model) => ({
-      ...model,
-      proposalOnly: !model.configured,
-      marketPrice: model.marketPrice.sources.length > 0
-        ? model.marketPrice
-        : { ...model.marketPrice, missingCostReason: model.marketPrice.missingCostReason ?? "cost_not_observed" },
-      capability: {
-        ...model.capability,
-        confidence: model.capability.evidence.includes("declared") ? maxConfidence([model.capability.confidence, "medium"], "low") : model.capability.confidence,
-      },
-      scenarioAbility: model.scenarioAbility ?? (scenarioData.size > 0 ? scenarioData.get(model.modelKey) : undefined) ?? inferScenarioAbility(model, model.freshness ?? generatedAt),
-      freshness: mostRecentTimestamp(model.freshness, generatedAt) ?? generatedAt,
-    })),
-    input.usageStatus,
-    input.usageCost,
+  const normalizedModels = Array.from(merged.values()).map((model) => ({
+    ...model,
+    proposalOnly: !model.configured,
+    marketPrice: model.marketPrice.sources.length > 0
+      ? model.marketPrice
+      : { ...model.marketPrice, missingCostReason: model.marketPrice.missingCostReason ?? "cost_not_observed" },
+    capability: {
+      ...model.capability,
+      confidence: model.capability.evidence.includes("declared") ? maxConfidence([model.capability.confidence, "medium"], "low") : model.capability.confidence,
+    },
+    scenarioAbility: model.scenarioAbility ?? (scenarioData.size > 0 ? scenarioData.get(model.modelKey) : undefined) ?? inferScenarioAbility(model, model.freshness ?? generatedAt),
+    freshness: mostRecentTimestamp(model.freshness, generatedAt) ?? generatedAt,
+  }));
+  const models = addPriceRatios(addHealthSnapshotSignals(
+    addUsageSignals(normalizedModels, input.usageStatus, input.usageCost),
+    input.healthSnapshot,
   )).sort((a, b) => a.modelKey.localeCompare(b.modelKey));
 
   return {
     schemaVersion: "octoclaw.router_lite.model_intel_snapshot/v1",
     snapshotId: `model-intel:${Date.parse(generatedAt) || Date.now()}`,
     generatedAt,
+    nativeFallbackOrder: parseNativeFallbackOrder(input.nativeFallbackOrder),
     sourceStatus: [
       sourceStatus("openclaw_models_list", input.openClawModelsList),
       sourceStatus("openclaw_config", input.openClawConfig),
@@ -831,8 +912,16 @@ export function buildModelIntelSnapshot(input: BuildModelIntelSnapshotInput): Mo
       sourceStatus("packaged_model_intel", input.packagedSnapshot),
       sourceStatus("openclaw_usage_status", input.usageStatus),
       sourceStatus("openclaw_usage_cost", input.usageCost),
+      sourceStatus("router_health_snapshot", input.healthSnapshot),
+      sourceStatus("openclaw_native_fallbacks", input.nativeFallbackOrder),
       sourceStatus("scenario_data", input.scenarioData),
     ],
     models,
   };
+}
+
+function parseNativeFallbackOrder(value: unknown): string[] | undefined {
+  const rawFallbacks = isRecord(value) ? asRecord(value).fallbacks : value;
+  const fallbacks = asStringArray(rawFallbacks);
+  return fallbacks.length > 0 ? fallbacks : undefined;
 }

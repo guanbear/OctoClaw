@@ -1,6 +1,14 @@
+import { execFile } from "node:child_process";
 import type { ProviderConfig } from "./openclaw-bridge.js";
+import type { HealthEventInput } from "../health/event.js";
 
-export type ProbeFetch = (url: string, init: RequestInit) => Promise<Response>;
+export interface ProbeCommandResult {
+  exitCode: number;
+  stdout: string;
+  stderr?: string;
+}
+
+export type ProbeCommandRunner = (args: string[], options: { timeoutMs: number }) => Promise<ProbeCommandResult>;
 
 export interface ProbeRequest {
   modelKey: string;
@@ -8,7 +16,8 @@ export interface ProbeRequest {
   timeoutMs?: number;
   budgetUsdMax?: number;
   estimatedBlendedUsdPerMTok?: number;
-  fetch?: ProbeFetch;
+  runOpenClaw?: ProbeCommandRunner;
+  recordHealthEvent?: (event: HealthEventInput) => void;
 }
 
 export interface ProbeResult {
@@ -27,52 +36,7 @@ export interface ProbeResult {
 }
 
 const PROBE_TOKEN_BUDGET = 80;
-
-function probeUrl(config: ProviderConfig): string {
-  const base = config.baseUrl.replace(/\/+$/u, "");
-  if (config.format === "ollama") return `${base}/api/chat`;
-  if (base.endsWith("/chat/completions") || base.endsWith("/messages")) return base;
-  return config.format === "anthropic_messages" ? `${base}/messages` : `${base}/chat/completions`;
-}
-
-function canaryBody(modelKey: string, config: ProviderConfig): unknown {
-  const model = modelKey.includes("/") ? modelKey.slice(modelKey.indexOf("/") + 1) : modelKey;
-  if (config.format === "anthropic_messages") {
-    return {
-      model,
-      messages: [{ role: "user", content: "Reply with exactly: pong" }],
-      max_tokens: 16,
-      temperature: 0,
-    };
-  }
-  if (config.format === "ollama") {
-    return {
-      model,
-      messages: [{ role: "user", content: "Reply with exactly: pong" }],
-      stream: false,
-      options: { temperature: 0, num_predict: 16 },
-    };
-  }
-  return {
-    model,
-    messages: [{ role: "user", content: "Reply with exactly: pong" }],
-    tools: [{
-      type: "function",
-      function: {
-        name: "echo",
-        description: "echo input",
-        parameters: {
-          type: "object",
-          properties: { value: { type: "string" } },
-          required: ["value"],
-        },
-      },
-    }],
-    tool_choice: { type: "function", function: { name: "echo" } },
-    max_tokens: 16,
-    temperature: 0,
-  };
-}
+const CANARY_PROMPT = "Reply with exactly: pong";
 
 function estimatedCostUsd(priceUsdPerMTok: number | undefined): number | undefined {
   return priceUsdPerMTok === undefined ? undefined : (priceUsdPerMTok * PROBE_TOKEN_BUDGET) / 1_000_000;
@@ -80,12 +44,6 @@ function estimatedCostUsd(priceUsdPerMTok: number | undefined): number | undefin
 
 function sanitizedError(code: string, message: string): ProbeResult["error"] {
   return { code, message };
-}
-
-function toolUseStatus(body: unknown): "yes" | "no" | "unknown" {
-  const text = JSON.stringify(body);
-  if (text.includes("tool_calls") || text.includes("\"echo\"")) return "yes";
-  return "unknown";
 }
 
 export async function probeModel(request: ProbeRequest): Promise<ProbeResult> {
@@ -105,77 +63,54 @@ export async function probeModel(request: ProbeRequest): Promise<ProbeResult> {
     };
   }
 
-  const fetchImpl = request.fetch ?? fetch;
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  void request.providerConfig;
+  const runOpenClaw = request.runOpenClaw ?? defaultOpenClawRunner;
   const started = Date.now();
   try {
-    const response = await fetchImpl(probeUrl(request.providerConfig), {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        [request.providerConfig.authHeader.name]: request.providerConfig.authHeader.value,
-      },
-      body: JSON.stringify(canaryBody(request.modelKey, request.providerConfig)),
-      signal: controller.signal,
-    });
+    const commandResult = await runOpenClaw([
+      "infer",
+      "model",
+      "run",
+      "--model",
+      request.modelKey,
+      "--prompt",
+      CANARY_PROMPT,
+      "--json",
+    ], { timeoutMs });
     const latencyMs = Date.now() - started;
-    const body = await response.json().catch(() => ({})) as unknown;
-    if (response.ok) {
-      return {
+    if (commandResult.exitCode === 0) {
+      const result: ProbeResult = {
         modelKey: request.modelKey,
         ok: true,
         authOk: "yes",
         modelExists: "yes",
-        toolUseOk: toolUseStatus(body),
+        toolUseOk: "unknown" as const,
         latencyMs,
         ...(costUsd !== undefined ? { costUsd } : {}),
         evidence: [
-          { source: "http_status", detail: `HTTP ${response.status}` },
-          { source: "response_body", detail: "canary_response_received" },
+          { source: "response_body" as const, detail: "openclaw_canary_response_received" },
         ],
       };
+      recordProbeHealth(request, result, latencyMs);
+      return result;
     }
-    if (response.status === 401 || response.status === 403) {
-      return {
-        modelKey: request.modelKey,
-        ok: false,
-        authOk: "no",
-        modelExists: "unknown",
-        toolUseOk: "unknown",
-        latencyMs,
-        ...(costUsd !== undefined ? { costUsd } : {}),
-        error: sanitizedError("PROBE_AUTH_FAILED", `Provider returned HTTP ${response.status}.`),
-        evidence: [{ source: "http_status", detail: `HTTP ${response.status}` }],
-      };
-    }
-    if (response.status === 404) {
-      return {
-        modelKey: request.modelKey,
-        ok: false,
-        authOk: "yes",
-        modelExists: "no",
-        toolUseOk: "unknown",
-        latencyMs,
-        ...(costUsd !== undefined ? { costUsd } : {}),
-        error: sanitizedError("PROBE_MODEL_NOT_FOUND", "Provider returned HTTP 404."),
-        evidence: [{ source: "http_status", detail: "HTTP 404" }],
-      };
-    }
-    return {
+    const classified = classifyOpenClawFailure(commandResult);
+    const result: ProbeResult = {
       modelKey: request.modelKey,
       ok: false,
-      authOk: "unknown",
-      modelExists: "unknown",
-      toolUseOk: "unknown",
+      authOk: classified.authOk,
+      modelExists: classified.modelExists,
+      toolUseOk: "unknown" as const,
       latencyMs,
       ...(costUsd !== undefined ? { costUsd } : {}),
-      error: sanitizedError("PROBE_HTTP_ERROR", `Provider returned HTTP ${response.status}.`),
-      evidence: [{ source: "http_status", detail: `HTTP ${response.status}` }],
+      error: sanitizedError(classified.code, classified.message),
+      evidence: [{ source: "exception" as const, detail: `openclaw_exit_${commandResult.exitCode}` }],
     };
+    recordProbeHealth(request, result, latencyMs);
+    return result;
   } catch (error) {
-    const isAbort = error instanceof DOMException && error.name === "AbortError";
-    return {
+    const isAbort = error instanceof Error && (error.name === "AbortError" || error.name === "TimeoutError");
+    const result: ProbeResult = {
       modelKey: request.modelKey,
       ok: false,
       authOk: "unknown",
@@ -185,7 +120,80 @@ export async function probeModel(request: ProbeRequest): Promise<ProbeResult> {
       error: sanitizedError(isAbort ? "PROBE_TIMEOUT" : "PROBE_EXCEPTION", isAbort ? "Probe timed out." : "Probe request failed."),
       evidence: [{ source: "exception", detail: isAbort ? "AbortError" : "request_failed" }],
     };
-  } finally {
-    clearTimeout(timeout);
+    recordProbeHealth(request, result, Date.now() - started);
+    return result;
+  }
+}
+
+function defaultOpenClawRunner(args: string[], options: { timeoutMs: number }): Promise<ProbeCommandResult> {
+  return new Promise((resolve, reject) => {
+    execFile("openclaw", args, { timeout: options.timeoutMs, maxBuffer: 1024 * 1024 }, (error, stdout, stderr) => {
+      if (error && error.code === "ETIMEDOUT") {
+        const timeoutError = new Error("OpenClaw probe timed out.");
+        timeoutError.name = "TimeoutError";
+        reject(timeoutError);
+        return;
+      }
+      resolve({
+        exitCode: typeof error?.code === "number" ? error.code : 0,
+        stdout,
+        stderr,
+      });
+    });
+  });
+}
+
+function classifyOpenClawFailure(result: ProbeCommandResult): {
+  code: string;
+  message: string;
+  authOk: ProbeResult["authOk"];
+  modelExists: ProbeResult["modelExists"];
+} {
+  const text = `${result.stdout}\n${result.stderr ?? ""}`.toLowerCase();
+  if (text.includes("401") || text.includes("403") || text.includes("unauthorized") || text.includes("auth") || text.includes("api key") || text.includes("bad key")) {
+    return {
+      code: "PROBE_AUTH_FAILED",
+      message: "OpenClaw infer rejected provider authentication.",
+      authOk: "no",
+      modelExists: "unknown",
+    };
+  }
+  if (text.includes("404") || text.includes("not found") || text.includes("unknown model")) {
+    return {
+      code: "PROBE_MODEL_NOT_FOUND",
+      message: "OpenClaw infer reported the model is unavailable.",
+      authOk: "yes",
+      modelExists: "no",
+    };
+  }
+  if (text.includes("429") || text.includes("rate limit")) {
+    return {
+      code: "429",
+      message: "OpenClaw infer reported a rate limit.",
+      authOk: "yes",
+      modelExists: "yes",
+    };
+  }
+  return {
+    code: "PROBE_HTTP_ERROR",
+    message: "OpenClaw infer canary failed.",
+    authOk: "unknown",
+    modelExists: "unknown",
+  };
+}
+
+function recordProbeHealth(request: ProbeRequest, result: ProbeResult, latencyMs: number | undefined): void {
+  try {
+    request.recordHealthEvent?.({
+      modelKey: request.modelKey,
+      source: "probe",
+      success: result.ok,
+      latencyMs,
+      errorCode: result.error?.code,
+      timeout: result.error?.code === "PROBE_TIMEOUT",
+      evidence: { command: "openclaw infer model run" },
+    });
+  } catch {
+    // Probe health recording must not change probe semantics.
   }
 }

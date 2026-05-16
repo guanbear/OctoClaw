@@ -130,6 +130,11 @@ describe("octoclawctl cli", () => {
       resume: true,
       extraArgs: ["wizard"],
     });
+    expect(parseCliArgs(["router", "health", "list", "--cooldown-only"])).toMatchObject({
+      command: "router",
+      cooldownOnly: true,
+      extraArgs: ["health", "list"],
+    });
   });
 
   it("router wizard writes language and configured model source metadata", async () => {
@@ -636,11 +641,23 @@ describe("octoclawctl cli", () => {
           },
         ],
       }), "utf8");
+      await fs.mkdir(path.join(openclawHome, "octoclaw", "router-lite"), { recursive: true });
+      await fs.writeFile(path.join(openclawHome, "octoclaw", "router-lite", "model-health.jsonl"), `${JSON.stringify({
+        schemaVersion: "octoclaw.router.health_event/v1",
+        ts: Date.now() - 1000,
+        modelKey: "cliproxyapi/gpt-5.5",
+        source: "runtime",
+        success: false,
+        latencyMs: 2500,
+        errorCode: "429",
+      })}\n`, "utf8");
       await fs.writeFile(fakeOpenClaw, [
         "#!/bin/sh",
         "if [ \"$*\" = \"models list --json\" ]; then",
         "  echo 'config warning before json'",
         "  echo '{\"models\":[{\"key\":\"cliproxyapi/gpt-5.5\",\"input\":[\"text\"],\"contextWindow\":1000000,\"available\":true,\"tags\":[\"configured\"],\"missing\":false}]}'",
+        "elif [ \"$*\" = \"models fallbacks list --json\" ]; then",
+        "  echo '{\"fallbacks\":[\"cliproxyapi/gpt-5.5\",\"zai/glm-4.7\"]}'",
         "elif [ \"$*\" = \"status --usage --json\" ]; then",
         "  echo '{\"usage\":{}}'",
         "elif [ \"$*\" = \"gateway usage-cost --days 3 --json\" ]; then",
@@ -667,6 +684,7 @@ describe("octoclawctl cli", () => {
       expect(refreshExitCode).toBe(0);
       const refreshSummary = JSON.parse(refreshCapture.stdout[0] ?? "{}");
       expect(refreshSummary).toMatchObject({ configured: 1 });
+      expect(refreshSummary.health).toMatchObject({ models: 1, cooldown: 1 });
       expect(refreshSummary.proposalOnly).toBeGreaterThanOrEqual(4);
       expect(refreshSummary.models).toBeGreaterThanOrEqual(5);
 
@@ -677,6 +695,16 @@ describe("octoclawctl cli", () => {
         "openai/gpt-5-mini",
       ]));
       expect(snapshot.sourceStatus).toContainEqual({ source: "packaged_model_intel", status: "ok" });
+      expect(snapshot.sourceStatus).toContainEqual({ source: "router_health_snapshot", status: "ok" });
+      expect(snapshot.sourceStatus).toContainEqual({ source: "openclaw_native_fallbacks", status: "ok" });
+      expect(snapshot.nativeFallbackOrder).toEqual(["cliproxyapi/gpt-5.5", "zai/glm-4.7"]);
+      expect(snapshot.models.find((model: { modelKey: string }) => model.modelKey === "cliproxyapi/gpt-5.5")).toMatchObject({
+        health: {
+          cooldown: true,
+          recentFailureRate: 1,
+          p95LatencyMs: 2500,
+        },
+      });
 
       const analyzeCapture = createIo();
       const analyzeExitCode = await main([
@@ -1028,6 +1056,100 @@ describe("octoclawctl cli", () => {
       expect(capture.stdout[0]).not.toContain("a/old");
     } finally {
       await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("router health commands aggregate, list, show, and suggest fallback updates", async () => {
+    const tempDir = path.join(os.homedir(), ".octoclawctl-test-tmp", `router-health-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    const openclawHome = path.join(tempDir, "home");
+    try {
+      const healthDir = path.join(openclawHome, "octoclaw", "router-lite");
+      await fs.mkdir(healthDir, { recursive: true });
+      const jsonlPath = path.join(healthDir, "model-health.jsonl");
+      await fs.writeFile(jsonlPath, [
+        JSON.stringify({ schemaVersion: "octoclaw.router.health_event/v1", ts: Date.now() - 1000, modelKey: "cliproxyapi/gpt-5.5", source: "runtime", success: false, errorCode: "429", latencyMs: 1000 }),
+        JSON.stringify({ schemaVersion: "octoclaw.router.health_event/v1", ts: Date.now() - 500, modelKey: "zai/glm-4.7", source: "runtime", success: true, latencyMs: 700 }),
+      ].join("\n") + "\n", "utf8");
+
+      const aggregateCapture = createIo();
+      expect(await main(["router", "health", "aggregate", "--openclaw-home", openclawHome, "--format", "json"], {}, aggregateCapture.io)).toBe(0);
+      expect(JSON.parse(aggregateCapture.stdout[0] ?? "{}")).toMatchObject({ models: 2, cooldown: 1 });
+
+      const listCapture = createIo();
+      expect(await main(["router", "health", "list", "--openclaw-home", openclawHome, "--format", "json"], {}, listCapture.io)).toBe(0);
+      expect(JSON.parse(listCapture.stdout[0] ?? "{}").models).toEqual(expect.arrayContaining([
+        expect.objectContaining({ modelKey: "cliproxyapi/gpt-5.5", cooldown: true }),
+      ]));
+
+      const cooldownOnlyCapture = createIo();
+      expect(await main(["router", "health", "list", "--cooldown-only", "--openclaw-home", openclawHome, "--format", "json"], {}, cooldownOnlyCapture.io)).toBe(0);
+      expect(JSON.parse(cooldownOnlyCapture.stdout[0] ?? "{}").models.map((model: { modelKey: string }) => model.modelKey)).toEqual(["cliproxyapi/gpt-5.5"]);
+
+      const showCapture = createIo();
+      expect(await main(["router", "health", "show", "cliproxyapi/gpt-5.5", "--openclaw-home", openclawHome, "--format", "json"], {}, showCapture.io)).toBe(0);
+      expect(JSON.parse(showCapture.stdout[0] ?? "{}")).toMatchObject({
+        modelKey: "cliproxyapi/gpt-5.5",
+        cooldown: true,
+        cooldownReason: "rate_limit_429",
+      });
+
+      const suggestCapture = createIo();
+      expect(await main(["router", "health", "suggest-fallbacks", "--openclaw-home", openclawHome, "--format", "json"], {}, suggestCapture.io)).toBe(0);
+      expect(JSON.parse(suggestCapture.stdout[0] ?? "{}").suggestions).toEqual(expect.arrayContaining([
+        expect.objectContaining({ modelKey: "cliproxyapi/gpt-5.5", reason: "rate_limit_429" }),
+      ]));
+
+      const overrideDir = path.join(tempDir, "override");
+      await fs.mkdir(overrideDir, { recursive: true });
+      const overridePath = path.join(overrideDir, "custom-health.jsonl");
+      await fs.writeFile(overridePath, `${JSON.stringify({ schemaVersion: "octoclaw.router.health_event/v1", ts: Date.now() - 1000, modelKey: "override/model", source: "runtime", success: false, errorCode: "PROBE_HTTP_ERROR", latencyMs: 1000 })}\n`, "utf8");
+      const overrideCapture = createIo();
+      expect(await main(
+        ["router", "health", "list", "--openclaw-home", openclawHome, "--format", "json"],
+        { OCTOCLAW_ROUTER_HEALTH_PATH: overridePath },
+        overrideCapture.io,
+      )).toBe(0);
+      expect(JSON.parse(overrideCapture.stdout[0] ?? "{}").models.map((model: { modelKey: string }) => model.modelKey)).toEqual(["override/model"]);
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("router capability probe lets OpenClaw native runner decide provider availability", async () => {
+    const tempDir = path.join(os.homedir(), ".octoclawctl-test-tmp", `router-capability-probe-native-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    const openclawHome = path.join(tempDir, "home");
+    const outputDir = path.join(tempDir, "out");
+    const snapshotPath = path.join(outputDir, "model-intel-snapshot.json");
+    try {
+      await fs.mkdir(outputDir, { recursive: true });
+      await fs.writeFile(snapshotPath, JSON.stringify({
+        schemaVersion: "octoclaw.router_lite.model_intel_snapshot/v1",
+        snapshotId: "snapshot",
+        generatedAt: "2026-05-15T00:00:00.000Z",
+        sourceStatus: [],
+        models: [],
+      }, null, 2), "utf8");
+
+      const capture = createIo();
+      const exitCode = await main([
+        "router",
+        "capability",
+        "probe",
+        "cliproxyapi/gpt-5-mini",
+        "--openclaw-home",
+        openclawHome,
+        "--input",
+        snapshotPath,
+        "--format",
+        "json",
+      ], {
+        OCTOCLAW_ROUTER_PROBE_MOCK_JSON: JSON.stringify({ choices: [{ message: { content: "pong" } }] }),
+      }, capture.io);
+
+      expect(exitCode).toBe(0);
+      expect(JSON.parse(capture.stdout[0] ?? "{}")).toMatchObject({ ok: true, modelKey: "cliproxyapi/gpt-5-mini" });
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
     }
   });
 

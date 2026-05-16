@@ -180,6 +180,35 @@ describe("scoring engine RT-S-001..010", () => {
     expect(recommendation.reasonCodes).toContain("user_dispreferred_tiebreak");
   });
 
+  it("uses OpenClaw default and fallback order for near-tied models", () => {
+    const models = [
+      model("provider/cheap", "standard", { marketPrice: { blendedUsdPerMTok: 1, confidence: "high", sources: ["test"] } }),
+      model("provider/default", "standard", { tags: ["default"], marketPrice: { blendedUsdPerMTok: 1, confidence: "high", sources: ["test"] } }),
+      model("provider/fallback1", "standard", { marketPrice: { blendedUsdPerMTok: 1, confidence: "high", sources: ["test"] } }),
+    ];
+
+    expect(buildRecommendation(models, context("normal", models, {
+      nativeFallbackOrder: ["provider/fallback1"],
+    })).recommendedModel).toBe("provider/default");
+  });
+
+  it("emits cooldown reason codes for excluded fallback models", () => {
+    const models = [
+      model("provider/default", "standard", {
+        tags: ["default"],
+        health: { ...model("x/y", "standard").health, cooldown: true, cooldownReason: "rate_limit_429" },
+      }),
+      model("provider/fallback1", "standard", { tags: ["fallback#1"] }),
+    ];
+
+    const recommendation = buildRecommendation(models, context("normal", models, {
+      nativeFallbackOrder: ["provider/fallback1"],
+    }));
+
+    expect(recommendation.recommendedModel).toBe("provider/fallback1");
+    expect(recommendation.reasonCodes).toContain("cooldown:rate_limit_429:provider/default");
+  });
+
   it("RT-S-010 emits clear ignored reasons", () => {
     expect(buildRecommendation([model("a/b", "frontier", { configured: false })], context("deep", [model("a/b", "frontier", { configured: false })])).ignoredReason).toBe("all_unconfigured");
     expect(buildRecommendation([model("a/b", "frontier", { health: { ...model("x/y", "frontier").health, cooldown: true } })], context("deep", [model("a/b", "frontier")])).ignoredReason).toBe("all_cooldown");

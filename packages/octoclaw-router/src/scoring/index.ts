@@ -28,6 +28,7 @@ export interface ScoringContext {
   scoreOverrides: Record<string, Partial<Record<Complexity, number>>>;
   promotionState?: PromotionStateMap;
   budget?: BudgetStatus;
+  nativeFallbackOrder?: string[];
 }
 
 export const BALANCED_WEIGHTS: ScoringWeights = {
@@ -107,9 +108,8 @@ export function buildRecommendation(models: ModelIntelLite[], context: ScoringCo
       return TIER_LEVEL[candidate.model.capability.codingTier] === minEligibleLevel;
     })
     .sort((left, right) => {
-      if (right.score !== left.score) return right.score - left.score;
-      return (left.model.marketPrice.blendedUsdPerMTok ?? Number.POSITIVE_INFINITY)
-        - (right.model.marketPrice.blendedUsdPerMTok ?? Number.POSITIVE_INFINITY);
+      if (Math.abs(right.score - left.score) > 0.01) return right.score - left.score;
+      return compareNativeFallbackTieBreak(left.model, right.model, context.nativeFallbackOrder ?? []);
     });
 
   const ignoredReason = getIgnoredReason(models, rejectedModels);
@@ -257,7 +257,37 @@ function buildReasonCodes(
       && rejected?.capability.codingTier === model.capability.codingTier;
   });
   if (switchedFromCooldownPeer) reasonCodes.push("switched_provider_for_stability");
+  for (const rejected of rejectedModels) {
+    const rejectedModel = allModels.find((candidate) => candidate.modelKey === rejected.model);
+    if (rejected.reason === "cooldown_active" && rejectedModel?.health.cooldownReason) {
+      reasonCodes.push(`cooldown:${rejectedModel.health.cooldownReason}:${rejectedModel.modelKey}`);
+    }
+  }
   return reasonCodes;
+}
+
+function compareNativeFallbackTieBreak(left: ModelIntelLite, right: ModelIntelLite, nativeFallbackOrder: string[]): number {
+  const leftRank = nativeFallbackRank(left, nativeFallbackOrder);
+  const rightRank = nativeFallbackRank(right, nativeFallbackOrder);
+  if (leftRank !== rightRank) return leftRank - rightRank;
+  const priceDiff = (left.marketPrice.blendedUsdPerMTok ?? Number.POSITIVE_INFINITY)
+    - (right.marketPrice.blendedUsdPerMTok ?? Number.POSITIVE_INFINITY);
+  if (priceDiff !== 0) return priceDiff;
+  return left.modelKey.localeCompare(right.modelKey);
+}
+
+function nativeFallbackRank(model: ModelIntelLite, nativeFallbackOrder: string[]): number {
+  if (model.tags.includes("default")) return 0;
+  const explicitIndex = nativeFallbackOrder.findIndex((entry) => entry.toLowerCase() === model.modelKey.toLowerCase());
+  if (explicitIndex >= 0) return 1 + explicitIndex;
+  const tagRank = model.tags
+    .map((tag) => /^fallback#(\d+)$/iu.exec(tag)?.[1])
+    .filter((value): value is string => value !== undefined)
+    .map((value) => Number.parseInt(value, 10))
+    .filter((value) => Number.isFinite(value))
+    .sort((left, right) => left - right)[0];
+  if (tagRank !== undefined) return 1 + tagRank;
+  return 10_000;
 }
 
 function outputBudgetFor(complexity: Complexity): RouterLiteRecommendation["outputBudget"] {

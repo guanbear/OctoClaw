@@ -10,6 +10,7 @@ export interface IMProjectionFooter {
   workContractId?: string;
   complexityBand?: string;
   thread?: boolean;
+  healthNote?: string;
 }
 
 export interface IMMessageTurnAnchorParams {
