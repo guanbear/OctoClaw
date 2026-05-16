@@ -22,8 +22,6 @@ toward "merged + tasks fully checked + archive" or be moved to `parking/`.
 
 | Change | Intent |
 |--------|--------|
-| `runtime-extension-entry-slim-0.5.x` | Slice `extension-entry.ts` (3,981 lines) into focused modules so future edits stop being scary |
-| `runtime-dead-placeholder-removal-0.5.x` | Remove no-op stubs (`compound`, no-op aggregators) left from the TS rebuild |
 | `runtime-gate-convergence-0.5.x` | Finish footer/started-wording/main-fallback evidence loop (WP-E + smoke) |
 | `runtime-timeout-watchdog-evidence-0.5.x` | Persist transition events + startup reconcile (Phase 2) |
 | `v0.6-stability-hardening` | Slack smoke 5 cases + `degraded`/`delivered` operator surface + judge cooldown + shadow-lane invariants |

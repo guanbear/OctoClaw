@@ -22,6 +22,8 @@ the remaining work is created as a fresh change (or moved to `parking/`).
 | `v0.6-im-discord-adapter` | Discord adapter + registration | — |
 | `v0.6-im-telegram-adapter` | Telegram adapter + registration | — |
 | `v0.6-github-presence` | Issue/PR templates, code of conduct, security policy, contributing guide | Repo Settings (Discussions, social preview) — manual operator action |
+| `runtime-dead-placeholder-removal-0.5.x` | All 3 slices: no-op aggregators, compound delegation placeholder, compound policy placeholder | — |
+| `runtime-extension-entry-slim-0.5.x` | All 5 slices + 3 additional extractions: extension-entry.ts 3981→909 lines (16 new files) | — |
 
 Each archived change's `tasks.md` keeps its original checklist plus a short
 preamble headed `## Archive note` recording what shipped, what was skipped, and
