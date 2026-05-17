@@ -10,6 +10,8 @@ export interface RouterModelHealthSnapshot {
   timeoutRate: number;
   p50LatencyMs?: number;
   p95LatencyMs?: number;
+  baselineP95LatencyMs?: number;
+  baselineP95WindowCount?: number;
   lastErrorCodes: Array<{ code: string; count: number }>;
   lastSuccessfulCallAt?: number;
   lastFailedCallAt?: number;
@@ -34,11 +36,15 @@ export interface AggregateHealthOptions {
 
 const DEFAULT_WINDOW_MS = 30 * 60_000;
 const DEFAULT_WINDOW_SIZE = 50;
+const DAY_MS = 24 * 60 * 60_000;
+const BASELINE_DAILY_WINDOW_COUNT = 7;
+const MIN_BASELINE_DAILY_WINDOWS = 3;
 
 export function aggregateHealth(events: HealthEvent[], now: number, options: AggregateHealthOptions = {}): RouterHealthSnapshot {
   const windowMs = options.windowMs ?? DEFAULT_WINDOW_MS;
   const windowSize = options.windowSize ?? DEFAULT_WINDOW_SIZE;
   const grouped = new Map<string, HealthEvent[]>();
+  const baselineByModel = computeBaselineP95ByModel(events, now);
 
   for (const event of events) {
     if (now - event.ts > windowMs) continue;
@@ -52,13 +58,16 @@ export function aggregateHealth(events: HealthEvent[], now: number, options: Agg
     const selected = grouped.get(modelKey)!
       .sort(compareHealthEvents)
       .slice(-windowSize);
+    const computedBaseline = baselineByModel.get(modelKey);
+    const baselineP95Ms = options.baselineP95ByModel?.[modelKey] ?? computedBaseline?.p95LatencyMs;
     models[modelKey] = summarizeModelHealth(
       selected,
       evaluateCooldown({
         events: selected,
         now,
-        baselineP95Ms: options.baselineP95ByModel?.[modelKey],
+        baselineP95Ms,
       }),
+      computedBaseline,
     );
   }
 
@@ -79,7 +88,11 @@ export function serializeHealthSnapshot(snapshot: RouterHealthSnapshot): string 
   return `${JSON.stringify({ ...snapshot, models }, null, 2)}\n`;
 }
 
-function summarizeModelHealth(events: HealthEvent[], cooldown: ReturnType<typeof evaluateCooldown>): RouterModelHealthSnapshot {
+function summarizeModelHealth(
+  events: HealthEvent[],
+  cooldown: ReturnType<typeof evaluateCooldown>,
+  baseline?: { p95LatencyMs: number; windowCount: number },
+): RouterModelHealthSnapshot {
   const sorted = [...events].sort(compareHealthEvents);
   const latencies = sorted
     .map((event) => event.latencyMs)
@@ -97,6 +110,8 @@ function summarizeModelHealth(events: HealthEvent[], cooldown: ReturnType<typeof
     timeoutRate: rate(sorted.filter((event) => event.timeout === true).length, sorted.length),
     p50LatencyMs: percentile(latencies, 0.5),
     p95LatencyMs: percentile(latencies, 0.95),
+    baselineP95LatencyMs: baseline?.p95LatencyMs,
+    baselineP95WindowCount: baseline?.windowCount,
     lastErrorCodes: countErrorCodes(sorted),
     lastSuccessfulCallAt: lastSuccess?.ts,
     lastFailedCallAt: lastFailure?.ts,
@@ -107,6 +122,38 @@ function summarizeModelHealth(events: HealthEvent[], cooldown: ReturnType<typeof
     summary.cooldownReason = cooldown.reason;
   }
   return summary;
+}
+
+function computeBaselineP95ByModel(events: HealthEvent[], now: number): Map<string, { p95LatencyMs: number; windowCount: number }> {
+  const currentDayStart = Math.floor(now / DAY_MS) * DAY_MS;
+  const oldestIncludedDayStart = currentDayStart - BASELINE_DAILY_WINDOW_COUNT * DAY_MS;
+  const dailyLatenciesByModel = new Map<string, Map<number, number[]>>();
+
+  for (const event of events) {
+    if (event.ts >= currentDayStart || event.ts < oldestIncludedDayStart) continue;
+    if (typeof event.latencyMs !== "number") continue;
+    const dayStart = Math.floor(event.ts / DAY_MS) * DAY_MS;
+    const byDay = dailyLatenciesByModel.get(event.modelKey) ?? new Map<number, number[]>();
+    const latencies = byDay.get(dayStart) ?? [];
+    latencies.push(event.latencyMs);
+    byDay.set(dayStart, latencies);
+    dailyLatenciesByModel.set(event.modelKey, byDay);
+  }
+
+  const baselines = new Map<string, { p95LatencyMs: number; windowCount: number }>();
+  for (const [modelKey, byDay] of dailyLatenciesByModel) {
+    const dailyP95s = [...byDay.entries()]
+      .sort(([leftDay], [rightDay]) => leftDay - rightDay)
+      .slice(-BASELINE_DAILY_WINDOW_COUNT)
+      .map(([, latencies]) => percentile([...latencies].sort((left, right) => left - right), 0.95))
+      .filter((latency): latency is number => typeof latency === "number");
+    if (dailyP95s.length < MIN_BASELINE_DAILY_WINDOWS) continue;
+    baselines.set(modelKey, {
+      p95LatencyMs: median(dailyP95s),
+      windowCount: dailyP95s.length,
+    });
+  }
+  return baselines;
 }
 
 function compareHealthEvents(left: HealthEvent, right: HealthEvent): number {
@@ -138,4 +185,11 @@ function percentile(values: number[], p: number): number | undefined {
   if (values.length === 0) return undefined;
   const index = Math.min(values.length - 1, Math.ceil(values.length * p) - 1);
   return values[index];
+}
+
+function median(values: number[]): number {
+  const sorted = [...values].sort((left, right) => left - right);
+  const middle = Math.floor(sorted.length / 2);
+  if (sorted.length % 2 === 1) return sorted[middle]!;
+  return (sorted[middle - 1]! + sorted[middle]!) / 2;
 }

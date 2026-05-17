@@ -103,6 +103,8 @@ export interface RouterLiteHealth {
   p50OutputTokensPerSecond?: number;
   p50LatencyMs?: number;
   p95LatencyMs?: number;
+  baselineP95LatencyMs?: number;
+  baselineP95WindowCount?: number;
   recentFailureRate?: number;
   toolCallFailureRate?: number;
   timeoutRate?: number;

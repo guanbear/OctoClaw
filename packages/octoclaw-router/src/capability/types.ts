@@ -13,6 +13,7 @@ export interface LeaderboardModelRecord {
     research?: LeaderboardScore;
     agentic?: LeaderboardScore;
   };
+  scoreByScenario?: RouterLiteScoreByScenario;
   lastVerifiedAt?: string;
 }
 

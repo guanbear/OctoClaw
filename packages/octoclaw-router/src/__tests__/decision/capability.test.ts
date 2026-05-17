@@ -26,6 +26,10 @@ describe("capability snapshot RT-C-001..007", () => {
     expect(snapshot.models.length).toBeGreaterThan(0);
     expect(snapshot.models.every((model) => model.configured === false)).toBe(true);
     expect(snapshot.models.every((model) => model.proposalOnly === true)).toBe(true);
+    expect(snapshot.models.find((model) => model.modelKey === "openai/gpt-5.5")?.capability.scoreByScenario?.coding_worker).toMatchObject({
+      score: expect.any(Number),
+      confidence: expect.stringMatching(/^(high|medium|low)$/u),
+    });
   });
 
   it("RT-C-002 fails open to empty capability data on corrupt snapshot", () => {

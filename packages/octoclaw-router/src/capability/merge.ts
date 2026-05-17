@@ -129,6 +129,7 @@ export function modelFromLeaderboard(modelKey: string, snapshot: LeaderboardSnap
     source: "packaged_leaderboard",
     freshness: record.lastVerifiedAt,
     configured: false,
+    scoreByScenario: record.scoreByScenario,
   });
 }
 

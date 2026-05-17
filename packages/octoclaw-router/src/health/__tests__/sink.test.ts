@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createHealthEventSink, readHealthEventsFromJsonl } from "../sink.js";
 
 let tempDir = "";
@@ -45,6 +45,40 @@ describe("createHealthEventSink", () => {
     const sink = createHealthEventSink({ jsonlPath: path.join(tempDir, "missing", "file.jsonl") });
 
     expect(() => sink.recordCall({ modelKey: "a/b", source: "probe", success: false })).not.toThrow();
+  });
+
+  it("warns once when an async jsonl write fails", async () => {
+    const blockingFile = path.join(tempDir, "not-a-dir");
+    await fs.writeFile(blockingFile, "block", "utf8");
+    const logger = { warn: vi.fn() };
+    const sink = createHealthEventSink({
+      jsonlPath: path.join(blockingFile, "model-health.jsonl"),
+      logger,
+    });
+
+    sink.recordCall({ modelKey: "a/b", source: "probe", success: false });
+    sink.recordCall({ modelKey: "a/b", source: "probe", success: false });
+    await sink.flush();
+
+    expect(logger.warn).toHaveBeenCalledTimes(1);
+    expect(logger.warn.mock.calls[0]?.join(" ")).toContain("health");
+  });
+
+  it("returns an empty snapshot and warns when aggregate cannot read jsonl", async () => {
+    const blockingFile = path.join(tempDir, "not-a-dir");
+    await fs.writeFile(blockingFile, "block", "utf8");
+    const logger = { warn: vi.fn() };
+    const sink = createHealthEventSink({
+      jsonlPath: path.join(blockingFile, "model-health.jsonl"),
+      logger,
+    });
+
+    await expect(sink.aggregate(2000)).resolves.toMatchObject({
+      schemaVersion: "octoclaw.router.health_snapshot/v1",
+      generatedAt: 2000,
+      models: {},
+    });
+    expect(logger.warn).toHaveBeenCalledTimes(1);
   });
 
   it("prunes events outside retention while aggregating", async () => {

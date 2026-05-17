@@ -9,6 +9,7 @@ export interface HealthEventSinkOptions {
   now?: () => number;
   retentionMs?: number;
   aggregateOptions?: AggregateHealthOptions;
+  logger?: { warn: (...args: unknown[]) => void };
 }
 
 export interface HealthEventSink {
@@ -23,6 +24,17 @@ export function createHealthEventSink(options: HealthEventSinkOptions): HealthEv
   const now = options.now ?? (() => Date.now());
   const pending: HealthEvent[] = [];
   let writeChain = Promise.resolve();
+  let warnedWriteFailure = false;
+
+  function warnOnce(message: string, error: unknown): void {
+    if (warnedWriteFailure) return;
+    warnedWriteFailure = true;
+    try {
+      options.logger?.warn(message, error instanceof Error ? error.message : String(error));
+    } catch {
+      // Health logging must never affect routing or CLI calls.
+    }
+  }
 
   function scheduleWrite(): void {
     writeChain = writeChain.then(async () => {
@@ -36,8 +48,9 @@ export function createHealthEventSink(options: HealthEventSinkOptions): HealthEv
       } finally {
         await handle.close();
       }
-    }).catch(() => {
+    }).catch((error) => {
       pending.splice(0, pending.length);
+      warnOnce("octoclaw router health write failed", error);
     });
   }
 
@@ -57,14 +70,28 @@ export function createHealthEventSink(options: HealthEventSinkOptions): HealthEv
 
     async aggregate(aggregateNow = now()): Promise<RouterHealthSnapshot> {
       await this.flush();
-      const retained = (await readHealthEventsFromJsonl(options.jsonlPath))
+      let events: HealthEvent[] = [];
+      try {
+        events = await readHealthEventsFromJsonl(options.jsonlPath);
+      } catch (error) {
+        warnOnce("octoclaw router health aggregate read failed", error);
+      }
+      const retained = events
         .filter((event) => aggregateNow - event.ts <= (options.retentionMs ?? DEFAULT_RETENTION_MS))
         .sort((left, right) => left.ts - right.ts || left.modelKey.localeCompare(right.modelKey));
-      await rewriteJsonl(options.jsonlPath, retained);
       const snapshot = aggregateHealth(retained, aggregateNow, options.aggregateOptions);
+      try {
+        await rewriteJsonl(options.jsonlPath, retained);
+      } catch (error) {
+        warnOnce("octoclaw router health aggregate rewrite failed", error);
+      }
       if (options.snapshotPath) {
-        await fs.mkdir(path.dirname(options.snapshotPath), { recursive: true });
-        await fs.writeFile(options.snapshotPath, serializeHealthSnapshot(snapshot), "utf8");
+        try {
+          await fs.mkdir(path.dirname(options.snapshotPath), { recursive: true });
+          await fs.writeFile(options.snapshotPath, serializeHealthSnapshot(snapshot), "utf8");
+        } catch (error) {
+          warnOnce("octoclaw router health snapshot write failed", error);
+        }
       }
       return snapshot;
     },

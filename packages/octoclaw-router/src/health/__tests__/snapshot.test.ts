@@ -77,4 +77,45 @@ describe("aggregateHealth", () => {
       { code: "C", count: 1 },
     ]);
   });
+
+  it("persists a 7-day daily p95 baseline and uses it for p95 drift cooldown", () => {
+    const dayMs = 24 * 60 * 60_000;
+    const previousDailyWindows = [900, 1000, 1100].flatMap((latency, dayIndex) => [
+      event("a/model", { ts: now - (dayIndex + 1) * dayMs + 1000, latencyMs: 100, success: true }),
+      event("a/model", { ts: now - (dayIndex + 1) * dayMs + 2000, latencyMs: latency, success: true }),
+    ]);
+    const currentWindow = Array.from({ length: 10 }, (_, index) => event("a/model", {
+      ts: now - (10 - index) * 1000,
+      latencyMs: index === 9 ? 3000 : 200,
+      success: true,
+    }));
+
+    const snapshot = aggregateHealth([...previousDailyWindows, ...currentWindow], now, { windowMs: 30 * 60_000 });
+
+    expect(snapshot.models["a/model"]).toMatchObject({
+      baselineP95LatencyMs: 1000,
+      baselineP95WindowCount: 3,
+      cooldown: true,
+      cooldownReason: "high_p95_drift",
+    });
+  });
+
+  it("skips p95 drift cooldown until at least three daily baseline windows exist", () => {
+    const dayMs = 24 * 60 * 60_000;
+    const previousDailyWindows = [1000, 1100].flatMap((latency, dayIndex) => [
+      event("a/model", { ts: now - (dayIndex + 1) * dayMs + 1000, latencyMs: latency, success: true }),
+    ]);
+    const currentWindow = Array.from({ length: 10 }, (_, index) => event("a/model", {
+      ts: now - (10 - index) * 1000,
+      latencyMs: index === 9 ? 3000 : 200,
+      success: true,
+    }));
+
+    const snapshot = aggregateHealth([...previousDailyWindows, ...currentWindow], now, { windowMs: 30 * 60_000 });
+
+    expect(snapshot.models["a/model"]).toMatchObject({
+      cooldown: false,
+    });
+    expect(snapshot.models["a/model"].baselineP95LatencyMs).toBeUndefined();
+  });
 });
