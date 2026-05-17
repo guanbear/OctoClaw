@@ -9,6 +9,8 @@ export interface DeliveryRelayVerdict {
   finalVisible: boolean;
   nativeDelivered: boolean;
   relayCompensationNeeded: boolean;
+  relayCompensationRan: boolean;
+  relayCompensationReason: string;
   duplicateRisk: boolean;
   source: DeliveryTruthSource;
   reason: string;
@@ -71,6 +73,8 @@ export function deliveryRelayVerdict(input: {
       finalVisible: true,
       nativeDelivered: true,
       relayCompensationNeeded: false,
+      relayCompensationRan: false,
+      relayCompensationReason: duplicateRisk ? "duplicate_no_compensation_needed" : "native_delivered_no_compensation_needed",
       duplicateRisk,
       source: "native_delivery",
       reason: duplicateRisk ? "duplicate_final_suppressed" : "native_delivery_success",
@@ -81,13 +85,16 @@ export function deliveryRelayVerdict(input: {
     if (!nativeDeliveryStructured) {
       recordDeliveryProjectionLegacyBoundary("delivery_status_string_match");
     }
+    const failureDetail = error || status;
     return {
       finalVisible: false,
       nativeDelivered: false,
       relayCompensationNeeded: true,
+      relayCompensationRan: false,
+      relayCompensationReason: `compensation_needed:native_delivery_failed:${failureDetail}`,
       duplicateRisk: false,
       source: "native_delivery",
-      reason: `native_delivery_failed:${error || status}`,
+      reason: `native_delivery_failed:${failureDetail}`,
     };
   }
 
@@ -95,13 +102,16 @@ export function deliveryRelayVerdict(input: {
     if (!nativeDeliveryStructured) {
       recordDeliveryProjectionLegacyBoundary("delivery_status_string_match");
     }
+    const degradedDetail = error || status;
     return {
       finalVisible: false,
       nativeDelivered: false,
       relayCompensationNeeded: true,
+      relayCompensationRan: false,
+      relayCompensationReason: `compensation_needed:native_delivery_degraded:${degradedDetail}`,
       duplicateRisk: false,
       source: "native_delivery",
-      reason: `native_delivery_degraded:${error || status}`,
+      reason: `native_delivery_degraded:${degradedDetail}`,
     };
   }
 
@@ -110,6 +120,8 @@ export function deliveryRelayVerdict(input: {
       finalVisible: false,
       nativeDelivered: false,
       relayCompensationNeeded: true,
+      relayCompensationRan: false,
+      relayCompensationReason: "compensation_needed:native_delivery_missing_after_timeout",
       duplicateRisk: false,
       source: "none",
       reason: "native_delivery_missing_after_timeout",
@@ -120,6 +132,8 @@ export function deliveryRelayVerdict(input: {
     finalVisible: false,
     nativeDelivered: false,
     relayCompensationNeeded: false,
+    relayCompensationRan: false,
+    relayCompensationReason: "no_native_delivery_data",
     duplicateRisk: false,
     source: "none",
     reason: "native_delivery_pending",

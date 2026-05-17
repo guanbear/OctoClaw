@@ -1202,6 +1202,8 @@ describe("guardOutboundMessageForPolicyState", () => {
           finalVisible: true,
           nativeDelivered: true,
           relayCompensationNeeded: false,
+          relayCompensationRan: false,
+          relayCompensationReason: "native_delivered_no_compensation_needed",
           reason: "native_delivery_success",
         }),
         delivery_transport: "slack_api",
@@ -1323,6 +1325,8 @@ describe("guardOutboundMessageForPolicyState", () => {
           finalVisible: true,
           nativeDelivered: true,
           relayCompensationNeeded: false,
+          relayCompensationRan: false,
+          relayCompensationReason: "duplicate_no_compensation_needed",
         }),
       }));
     } finally {
@@ -1674,6 +1678,7 @@ describe("guardOutboundMessageForPolicyState", () => {
           finalVisible: true,
           nativeDelivered: true,
           relayCompensationNeeded: false,
+          relayCompensationRan: false,
         }),
       }));
       expect(readReplayEvents()).toContainEqual(expect.objectContaining({

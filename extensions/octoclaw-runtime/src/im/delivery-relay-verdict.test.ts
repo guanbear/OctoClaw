@@ -6,37 +6,46 @@ import {
 } from "./delivery-relay-verdict.js";
 
 describe("delivery relay verdict", () => {
-  it("uses native delivery success as audit-only truth", () => {
+  // BDD: NTR-P3-001
+  it("NTR-P3-001: native delivery success creates audit-only verdict", () => {
     expect(deliveryRelayVerdict({
       nativeDelivery: { status: "delivered", messageId: "1778573724.032469" },
     })).toMatchObject({
       finalVisible: true,
       nativeDelivered: true,
       relayCompensationNeeded: false,
+      relayCompensationRan: false,
+      relayCompensationReason: "native_delivered_no_compensation_needed",
       duplicateRisk: false,
       source: "native_delivery",
       reason: "native_delivery_success",
     });
   });
 
-  it("compensates native delivery failures", () => {
+  // BDD: NTR-P3-002
+  it("NTR-P3-002: native delivery failure still compensates", () => {
     expect(deliveryRelayVerdict({
       nativeDelivery: { status: "failed", error: "channel_not_found" },
     })).toMatchObject({
       nativeDelivered: false,
       relayCompensationNeeded: true,
+      relayCompensationRan: false,
+      relayCompensationReason: "compensation_needed:native_delivery_failed:channel_not_found",
       source: "native_delivery",
       reason: "native_delivery_failed:channel_not_found",
     });
   });
 
-  it("compensates missing native delivery after timeout when a native result exists", () => {
+  // BDD: NTR-P3-003
+  it("NTR-P3-003: native delivery missing with native result compensates after timeout", () => {
     expect(deliveryRelayVerdict({
       nativeResultExists: true,
       nativeDeliveryTimedOut: true,
     })).toMatchObject({
       nativeDelivered: false,
       relayCompensationNeeded: true,
+      relayCompensationRan: false,
+      relayCompensationReason: "compensation_needed:native_delivery_missing_after_timeout",
       source: "none",
       reason: "native_delivery_missing_after_timeout",
     });

@@ -162,16 +162,28 @@ Tests:
 
 ### P3-A: Delivery relay verdict
 
-- [ ] Add or complete `DeliveryRelayVerdict`.
-- [ ] Record whether native delivery succeeded, failed, or is missing.
-- [ ] Record whether OctoClaw relay compensation ran and why.
-- [ ] Keep current compensation behavior in this slice.
+- [x] Add or complete `DeliveryRelayVerdict`.
+  - Evidence: `extensions/octoclaw-runtime/src/im/delivery-relay-verdict.ts`
+    includes native visibility, duplicate, compensation-needed, and
+    compensation audit fields.
+- [x] Record whether native delivery succeeded, failed, or is missing.
+  - Evidence: `deliveryRelayVerdict()` covers delivered, failed/degraded,
+    missing-after-timeout, and pending native delivery states.
+- [x] Record whether OctoClaw relay compensation ran and why.
+  - Evidence: `relayCompensationRan` and `relayCompensationReason` are emitted
+    in the verdict and replay assertions cover native success/duplicate paths.
+- [x] Keep current compensation behavior in this slice.
+  - Evidence: `shouldSendRelayCompensation()` behavior and delivery relay mode
+    resolution were not changed.
 
 Tests:
 
-- [ ] `NTR-P3-001`
-- [ ] `NTR-P3-002`
-- [ ] `NTR-P3-003`
+- [x] `NTR-P3-001` — native delivery success creates audit-only verdict
+      (delivery-relay-verdict.test.ts)
+- [x] `NTR-P3-002` — native delivery failure still compensates
+      (delivery-relay-verdict.test.ts)
+- [x] `NTR-P3-003` — native delivery missing with native result compensates
+      after timeout (delivery-relay-verdict.test.ts)
 
 ### P3-B: Native success audit-only mode
 
