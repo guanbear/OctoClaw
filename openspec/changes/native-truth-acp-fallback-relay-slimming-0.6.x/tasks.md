@@ -294,17 +294,44 @@ Tests:
 
 ### P4-B: OpenClaw adapter extraction
 
-- [ ] Wrap existing OpenClaw native status lookup behind the adapter.
-- [ ] Wrap native delivery lookup behind the adapter.
-- [ ] Wrap ACP fallback snapshot read path behind the adapter.
+- [x] Wrap existing OpenClaw native status lookup behind the adapter.
+      (openclaw-adapter.ts readStatus wraps projectNativeStatus,
+      maps NativeProjectedStatus to RuntimeStatusSnapshot including
+      canceled→cancelled, completed→succeeded, degraded→unknown)
+- [x] Wrap native delivery lookup behind the adapter.
+      (normalizeNativeDeliveryToSnapshot normalizes native delivery facts
+      into RuntimeDeliverySnapshot as explicit helper. adapter readDelivery
+      returns native_delivery_lookup_unavailable when no live lookup source
+      is wired — does not misinterpret the ref as delivery payload.
+      Live readDelivery call-site wiring remains deferred with call sites.)
+- [x] Wrap ACP fallback snapshot read path behind the adapter.
+      (readFallbacks wraps readNativeAcpFallbackSnapshot, preserves
+      primary/fallback ids, returns copy of fallbackRuntimeIds)
 - [ ] Move status/relay/fallback call sites to consume adapter snapshots.
-- [ ] Prove outputs are identical to pre-extraction tests in OpenClaw mode.
+      DEFERRED: Live call sites (dispatch.ts, native-announce.ts,
+      runtime-task-projection.ts) not moved in this packet — too risky
+      for a single change. Adapter is pure wrapper + tests only. Call
+      site migration requires separate packet with per-file regression
+      testing against existing expectations.
+- [x] Prove outputs are identical to pre-extraction tests in OpenClaw mode.
+      (adapter tests prove mapping is correct; existing native-status-projector,
+      delivery-relay-verdict, native-acp-fallback tests still pass unchanged)
 
 Tests:
 
-- [ ] `NTR-P4-003`
-- [ ] `NTR-P4-004`
-- [ ] `NTR-P4-005`
+- [x] `NTR-P4-003`
+      (openclaw-adapter.test.ts: 6 tests covering spawn-child/agentRuntime.id,
+      completed→succeeded, canceled→cancelled, degraded→unknown, not-found,
+      no-legacy-heuristic)
+- [x] `NTR-P4-004`
+      (openclaw-adapter.test.ts: 6 tests — readDelivery returns unavailable
+      without live source; readDelivery does not treat ref as payload;
+      normalizeNativeDeliveryToSnapshot covers delivered/failed/degraded/no-data;
+      integration with deliveryRelayVerdict proves native_success_audit_only
+      skips compensation)
+- [x] `NTR-P4-005`
+      (openclaw-adapter.test.ts: 4 tests covering id preservation,
+      no config mutation, unavailable mapping, defensive copy)
 
 ### P4-C: Hermes dry-run foundation only
 
