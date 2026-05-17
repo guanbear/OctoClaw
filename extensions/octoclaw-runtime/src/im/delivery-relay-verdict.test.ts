@@ -92,4 +92,79 @@ describe("delivery relay verdict", () => {
     expect(resolveDeliveryRelayMode({ OCTOCLAW_DELIVERY_RELAY_MODE: "compensate" })).toBe("compensate");
     expect(resolveDeliveryRelayMode({ OCTOCLAW_DELIVERY_RELAY_MODE: "delete_relay" })).toBe("compensate");
   });
+
+  // BDD: NTR-P3-004
+  it("NTR-P3-004: native success audit-only mode does not resend", () => {
+    const verdict = deliveryRelayVerdict({
+      nativeDelivery: { status: "delivered", messageId: "1778573724.032469" },
+    });
+
+    expect(verdict).toMatchObject({
+      finalVisible: true,
+      nativeDelivered: true,
+      relayCompensationNeeded: false,
+      relayCompensationRan: false,
+      relayCompensationReason: "native_delivered_no_compensation_needed",
+      duplicateRisk: false,
+      source: "native_delivery",
+      reason: "native_delivery_success",
+    });
+
+    expect(shouldSendRelayCompensation({ mode: "native_success_audit_only", verdict })).toBe(false);
+    expect(shouldSendRelayCompensation({ mode: "compensate", verdict })).toBe(false);
+  });
+
+  // BDD: NTR-P3-005
+  it("NTR-P3-005: message-tool-only reply not compensated when native visible", () => {
+    const verdict = deliveryRelayVerdict({
+      nativeDelivery: { status: "delivered", messageId: "1778573724.032469" },
+      presentation: "message_tool",
+    });
+
+    expect(verdict).toMatchObject({
+      nativeDelivered: true,
+      relayCompensationReason: "native_delivered_no_compensation_needed",
+      reason: "native_delivery_success",
+    });
+
+    expect(shouldSendRelayCompensation({ mode: "native_success_audit_only", verdict })).toBe(false);
+  });
+
+  // BDD: NTR-P3-006
+  it("NTR-P3-006: card/button-only reply not compensated, audit records rich native delivery success", () => {
+    const verdict = deliveryRelayVerdict({
+      nativeDelivery: { status: "delivered", messageId: "1778573724.032470" },
+      presentation: "rich",
+    });
+
+    expect(verdict).toMatchObject({
+      nativeDelivered: true,
+      relayCompensationNeeded: false,
+      relayCompensationRan: false,
+      relayCompensationReason: "rich_native_delivered_no_compensation_needed",
+      duplicateRisk: false,
+      source: "native_delivery",
+      reason: "rich_native_delivery_success",
+    });
+
+    expect(shouldSendRelayCompensation({ mode: "native_success_audit_only", verdict })).toBe(false);
+  });
+
+  // BDD: NTR-P3-007
+  it("NTR-P3-007: native degraded still allows fallback compensation", () => {
+    const verdict = deliveryRelayVerdict({
+      nativeDelivery: { status: "degraded", error: "native_status_uncertain" },
+    });
+
+    expect(verdict).toMatchObject({
+      nativeDelivered: false,
+      relayCompensationNeeded: true,
+      relayCompensationRan: false,
+      relayCompensationReason: "compensation_needed:native_delivery_degraded:native_status_uncertain",
+      reason: "native_delivery_degraded:native_status_uncertain",
+    });
+
+    expect(shouldSendRelayCompensation({ mode: "native_success_audit_only", verdict })).toBe(true);
+    expect(shouldSendRelayCompensation({ mode: "compensate", verdict })).toBe(true);
+  });
 });

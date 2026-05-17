@@ -193,19 +193,23 @@ Precondition:
 
 Tasks:
 
-- [ ] Add feature flag `deliveryRelayMode`.
-- [ ] In `native_success_audit_only` mode, do not compensate when native
+- [x] Add feature flag `deliveryRelayMode`.
+- [x] In `native_success_audit_only` mode, do not compensate when native
       delivery success is proven.
-- [ ] Still write audit event.
-- [ ] Still suppress duplicate final.
-- [ ] Still compensate on native missing/failed/degraded.
+- [x] Still write audit event.
+- [x] Still suppress duplicate final.
+- [x] Still compensate on native missing/failed/degraded.
 
 Tests:
 
-- [ ] `NTR-P3-004`
-- [ ] `NTR-P3-005`
-- [ ] `NTR-P3-006`
-- [ ] `NTR-P3-007`
+- [x] `NTR-P3-004`
+      (delivery-relay-verdict.test.ts)
+- [x] `NTR-P3-005`
+      (delivery-relay-verdict.test.ts)
+- [x] `NTR-P3-006`
+      (delivery-relay-verdict.test.ts)
+- [x] `NTR-P3-007`
+      (delivery-relay-verdict.test.ts)
 
 ### P3-C: Remove redundant delivery branches
 

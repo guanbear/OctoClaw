@@ -53,11 +53,14 @@ function recordDeliveryProjectionLegacyBoundary(reason: string): void {
   }
 }
 
+export type DeliveryPresentation = "plain" | "message_tool" | "rich";
+
 export function deliveryRelayVerdict(input: {
   nativeDelivery?: unknown;
   nativeResultExists?: boolean;
   nativeDeliveryTimedOut?: boolean;
   relayResultHash?: string;
+  presentation?: DeliveryPresentation;
 }): DeliveryRelayVerdict {
   const status = nativeDeliveryStatus(input.nativeDelivery);
   const error = nativeDeliveryError(input.nativeDelivery);
@@ -69,15 +72,18 @@ export function deliveryRelayVerdict(input: {
       recordDeliveryProjectionLegacyBoundary("delivery_status_string_match");
     }
     const duplicateRisk = Boolean(resultHash && input.relayResultHash && resultHash === input.relayResultHash);
+    const isRich = input.presentation === "rich";
+    const successReason = duplicateRisk ? "duplicate_final_suppressed" : isRich ? "rich_native_delivery_success" : "native_delivery_success";
+    const compensationReason = duplicateRisk ? "duplicate_no_compensation_needed" : isRich ? "rich_native_delivered_no_compensation_needed" : "native_delivered_no_compensation_needed";
     return {
       finalVisible: true,
       nativeDelivered: true,
       relayCompensationNeeded: false,
       relayCompensationRan: false,
-      relayCompensationReason: duplicateRisk ? "duplicate_no_compensation_needed" : "native_delivered_no_compensation_needed",
+      relayCompensationReason: compensationReason,
       duplicateRisk,
       source: "native_delivery",
-      reason: duplicateRisk ? "duplicate_final_suppressed" : "native_delivery_success",
+      reason: successReason,
     };
   }
 
@@ -144,6 +150,11 @@ export function shouldSendRelayCompensation(input: {
   mode: DeliveryRelayMode;
   verdict: DeliveryRelayVerdict;
 }): boolean {
-  void input.mode;
-  return input.verdict.relayCompensationNeeded && !input.verdict.nativeDelivered && !input.verdict.duplicateRisk;
+  const { mode, verdict } = input;
+
+  if (verdict.duplicateRisk) return false;
+
+  if (mode === "native_success_audit_only" && verdict.nativeDelivered) return false;
+
+  return verdict.relayCompensationNeeded && !verdict.nativeDelivered;
 }
