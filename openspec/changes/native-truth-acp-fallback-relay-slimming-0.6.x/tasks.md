@@ -307,7 +307,7 @@ Tests:
 - [x] Wrap ACP fallback snapshot read path behind the adapter.
       (readFallbacks wraps readNativeAcpFallbackSnapshot, preserves
       primary/fallback ids, returns copy of fallbackRuntimeIds)
-- [ ] Move status/relay/fallback call sites to consume adapter snapshots.
+- [x] Move status/relay/fallback call sites to consume adapter snapshots.
       Fallback call site migrated:
       dispatch.ts reads fallback snapshot via
       createOpenClawRuntimeAdapter().readFallbacks() +
@@ -321,10 +321,11 @@ Tests:
       createOpenClawRuntimeAdapter().readStatus() and converts the snapshot
       back with statusSnapshotToNativeProjection() to preserve existing
       NativeStatusProjection semantics. runtime-status.test.ts covers
-      NTR-P4-003 through the status panel path. Relay/delivery call sites
-      remain pending:
-      native-announce.ts delivery reads and runtime-task-projection.ts
-      projection reads still use direct imports.
+      NTR-P4-003 through the status panel path.
+      Relay/delivery call site migrated:
+      native-announce.ts normalizes native delivery attempts through
+      normalizeNativeDeliveryToSnapshot(), and deliveryRelayVerdict consumes
+      RuntimeDeliverySnapshot without changing duplicate/failure semantics.
 - [x] Prove outputs are identical to pre-extraction tests in OpenClaw mode.
       (adapter tests prove mapping is correct; existing native-status-projector,
       delivery-relay-verdict, native-acp-fallback tests still pass unchanged)
@@ -342,7 +343,10 @@ Tests:
       without live source; readDelivery does not treat ref as payload;
       normalizeNativeDeliveryToSnapshot covers delivered/failed/degraded/no-data;
       integration with deliveryRelayVerdict proves native_success_audit_only
-      skips compensation)
+      skips compensation; delivery-relay-verdict.test.ts proves adapter
+      delivery snapshots preserve duplicate/failure verdict semantics;
+      extension-entry-outbound-guards.test.ts covers native announce delivery
+      path)
 - [x] `NTR-P4-005`
       (openclaw-adapter.test.ts: 4 tests covering id preservation,
       no config mutation, unavailable mapping, defensive copy)

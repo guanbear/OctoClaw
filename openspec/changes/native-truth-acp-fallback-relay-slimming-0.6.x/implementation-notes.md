@@ -33,6 +33,8 @@ Recorded 2026-05-17. This is the "before" snapshot for P5-B deletion closeout.
 | P4-B | `runtime-host/types.ts` | +27 | Extended status snapshot/ref with optional reversible projection fields; no new adapter methods. |
 | P4-B | `runtime-host/openclaw-adapter.ts` | +52 | Added `statusSnapshotToNativeProjection()` and full status ref forwarding for status call-site migration. |
 | P4-B | `tools/runtime-status.ts` | ~848 | Replaced direct `projectNativeStatus()` status-panel read with `createOpenClawRuntimeAdapter().readStatus()` + reversible projection conversion. |
+| P4-B | `im/delivery-relay-verdict.ts` | ~143 | Delivery verdict now consumes `RuntimeDeliverySnapshot` shape directly while preserving native delivered/failed/degraded semantics. |
+| P4-B | `resolve/native-announce.ts` | ~432 | Native announce delivery attempts now normalize through `normalizeNativeDeliveryToSnapshot()` before relay verdict/audit. |
 | P4-B | `runtime-host/index.ts` | 10 | Added `adapterFallbackToNativeSnapshot`, `statusSnapshotToNativeProjection`, and `RuntimeStatusRef` to exports |
 | P4-C | `runtime-host/hermes-capabilities.ts` | 57 | New: `HermesCapabilityMatrix`, `RuntimeHostMode`, `resolveRuntimeHostMode`, `hermesDryRunSpawn`, `hermesDryRunDeliver` |
 
@@ -56,9 +58,9 @@ Threshold: all production `.ts` files with ≥100 lines in `extensions/octoclaw-
 | File | LOC | Retained Reason |
 |------|-----|-----------------|
 | `tools/handlers/dispatch.ts` | 1,511 | Main dispatch handler. Calls into delivery relay and ACP fallback. Deferred call-site migration target for P4-B adapter consumption. Not a deletion candidate. |
-| `tools/runtime-status.ts` | 848 | Runtime status tool. Consumes `projectNativeStatus`. Not modified by this change. |
+| `tools/runtime-status.ts` | 848 | Runtime status tool. P4-B migrated status panel native reads through the RuntimeAdapter; still retained as the status rendering surface. |
 | `delegate/native-spawn-confirm.ts` | 712 | Spawn confirmation flow. Adjacent to spawn/child-session truth but outside ACP fallback scope. Not a deletion candidate. |
-| `resolve/native-announce.ts` | 432 | Native announcement sender. Deferred call-site migration target for P4-B adapter consumption. |
+| `resolve/native-announce.ts` | 432 | Native announcement sender. P4-B migrated relay verdict input to consume normalized RuntimeAdapter delivery snapshots; retained for delivery/audit orchestration. |
 | `resolve/native-announce-delivery.ts` | 267 | Delivery path for native announcements. Adjacent to delivery relay verdict but owns the actual send path. |
 | `resolve/native-announce-state.ts` | 226 | State management for native announcements. |
 | `state/legacy-heuristics.ts` | 69 | Legacy heuristics catalog created in P1-B. Marked read-only boundary. Retained: needed for old-record display. P5-B deletion candidate. |
@@ -198,7 +200,7 @@ The following are identified for potential deletion in P5-B, pending BDD evidenc
 | P3-B | ✓ Complete | 50 pass | `deliveryRelayMode` wired; `DeliveryPresentation` added |
 | P3-C | ✓ Complete | 70 pass | Redundant branches removed; `hasDeliveryAck` tightened |
 | P4-A | ✓ Complete | 18 pass | Minimal type boundary; no live behavior changes |
-| P4-B | Partial (fallback + status panel migrated) | adapter/status/projector 38 pass, runtime check pass; previous planner 32 pass +1 skip, fallback 17 pass | Adapter wrapper created; fallback call site in dispatch.ts and status panel in runtime-status.ts migrated. Relay/delivery call sites remain pending. |
+| P4-B | ✓ Complete | adapter/status/projector 38 pass; delivery/adapter/native-announce 75 pass; runtime check pass; previous planner 32 pass +1 skip, fallback 17 pass | Adapter wrapper created; fallback call site in dispatch.ts, status panel in runtime-status.ts, and native announce relay verdict input migrated to adapter snapshots. |
 | P4-C | ✓ Complete | 44 pass | Hermes dry-run foundation; fail-closed spawn/deliver |
 | P5-A | ✓ This ledger | LOC baseline recorded | See tables above |
 | P5-B | Pending | — | — |

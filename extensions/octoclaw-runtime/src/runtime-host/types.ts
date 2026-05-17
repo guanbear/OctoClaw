@@ -41,8 +41,11 @@ export interface RuntimeDeliverySnapshot {
   found: boolean;
   delivered: boolean;
   degraded: boolean;
+  status?: string;
   messageId?: string;
   channelId?: string;
+  resultHash?: string;
+  error?: string;
   reason: string;
 }
 

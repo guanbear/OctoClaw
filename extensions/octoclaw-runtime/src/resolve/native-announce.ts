@@ -13,6 +13,7 @@ import { extractNativeAnnounceBlocker, extractNativeAnnounceCompletion, readNati
 import { contractNativeIds, deliverNativeAnnounceCompletion, markNativeAnnounceCompletionOnContract, nativeAnnounceDeliveryAlreadySent, nativeAnnounceDirectDeliveryEnabled } from "./native-announce-delivery.js";
 import { applyNativeAnnounceCompletionState } from "./native-announce-state.js";
 import { buildLegacyHeuristicFallbackEvent, legacyHeuristicVerdict } from "../state/legacy-heuristics.js";
+import { normalizeNativeDeliveryToSnapshot } from "../runtime-host/openclaw-adapter.js";
 
 export { NATIVE_ANNOUNCE_BLOCKED_TOOLS } from "./native-announce-types.js";
 export type { NativeAnnounceBlocker, NativeAnnounceCompletion, NativeAnnounceSendMessage } from "./native-announce-types.js";
@@ -188,16 +189,17 @@ export async function handleNativeAnnounceCompletion(input: {
         replyToMessageId: "",
       };
   const delivered = alreadyDelivered || directDelivery.sent;
+  const nativeDeliverySnapshot = normalizeNativeDeliveryToSnapshot(delivered
+    ? {
+        status: "delivered",
+        messageId: directDelivery.messageId || "",
+        resultHash: nativeAnnounceCompletion.resultHash,
+      }
+    : directDeliveryAttempted
+      ? { status: "failed", error: directDelivery.error || "native_delivery_send_failed" }
+      : undefined);
   const nativeDeliveryVerdict = deliveryRelayVerdict({
-    nativeDelivery: delivered
-      ? {
-          status: "delivered",
-          messageId: directDelivery.messageId || "",
-          resultHash: nativeAnnounceCompletion.resultHash,
-        }
-      : directDeliveryAttempted
-        ? { status: "failed", error: directDelivery.error || "native_delivery_send_failed" }
-        : {},
+    nativeDelivery: nativeDeliverySnapshot,
     nativeResultExists: true,
     relayResultHash: alreadyDelivered ? nativeAnnounceCompletion.resultHash : "",
   });
@@ -346,16 +348,17 @@ export async function handleNativeSubagentEndedCompletion(input: {
     })
     : { sent: false, error: "direct_delivery_disabled", sessionKey: "", replyToMessageId: "" };
   const delivered = directDelivery.sent;
+  const nativeDeliverySnapshot = normalizeNativeDeliveryToSnapshot(delivered
+    ? {
+        status: "delivered",
+        messageId: directDelivery.messageId || "",
+        resultHash: completion.resultHash,
+      }
+    : directDeliveryEnabled
+      ? { status: "failed", error: directDelivery.error || "native_delivery_send_failed" }
+      : undefined);
   const nativeDeliveryVerdict = deliveryRelayVerdict({
-    nativeDelivery: delivered
-      ? {
-          status: "delivered",
-          messageId: directDelivery.messageId || "",
-          resultHash: completion.resultHash,
-        }
-      : directDeliveryEnabled
-        ? { status: "failed", error: directDelivery.error || "native_delivery_send_failed" }
-        : {},
+    nativeDelivery: nativeDeliverySnapshot,
     nativeResultExists: true,
   });
   const now = Date.now();

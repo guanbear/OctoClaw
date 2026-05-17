@@ -164,13 +164,18 @@ describe("NTR-P4-004: OpenClaw adapter delivery snapshot preserves delivery verd
     const snapshot = normalizeNativeDeliveryToSnapshot({
       status: "delivered",
       messageId: "msg-1",
+      channelId: "C123",
+      resultHash: "hash-1",
     });
 
     expect(snapshot).toMatchObject({
       found: true,
       delivered: true,
       degraded: false,
+      status: "delivered",
       messageId: "msg-1",
+      channelId: "C123",
+      resultHash: "hash-1",
       reason: "native_delivery_success",
     });
 

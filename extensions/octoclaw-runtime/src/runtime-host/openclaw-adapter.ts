@@ -83,12 +83,17 @@ function normalizeDeliverySnapshot(input: {
     const delivered = status === "delivered";
     const messageId = rec.messageId ? String(rec.messageId) : undefined;
     const channelId = rec.channelId ? String(rec.channelId) : undefined;
+    const resultHash = rec.resultHash || rec.result_hash ? String(rec.resultHash || rec.result_hash) : undefined;
+    const error = rec.error || rec.reason || rec.code ? String(rec.error || rec.reason || rec.code) : undefined;
     return {
       found: true,
       delivered,
       degraded: status === "degraded" || status === "unknown",
+      status,
       messageId,
       channelId,
+      resultHash,
+      error,
       reason: delivered ? "native_delivery_success" : status ? `native_delivery_${status}` : "native_delivery_pending",
     };
   }

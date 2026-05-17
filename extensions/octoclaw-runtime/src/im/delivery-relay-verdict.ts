@@ -21,7 +21,10 @@ export function resolveDeliveryRelayMode(env: Record<string, string | undefined>
 }
 
 function nativeDeliveryStatus(nativeDelivery: unknown): string {
-  return isRecord(nativeDelivery) ? asString(nativeDelivery.status || nativeDelivery.deliveryStatus).toLowerCase() : "";
+  const record = isRecord(nativeDelivery) ? nativeDelivery : null;
+  if (!record) return "";
+  if (record.delivered === true) return "delivered";
+  return asString(record.status || record.deliveryStatus).toLowerCase();
 }
 
 function nativeDeliveryError(nativeDelivery: unknown): string {

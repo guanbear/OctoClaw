@@ -4,6 +4,7 @@ import {
   resolveDeliveryRelayMode,
   shouldSendRelayCompensation,
 } from "./delivery-relay-verdict.js";
+import { normalizeNativeDeliveryToSnapshot } from "../runtime-host/openclaw-adapter.js";
 
 describe("delivery relay verdict", () => {
   // BDD: NTR-P3-001
@@ -58,6 +59,27 @@ describe("delivery relay verdict", () => {
 
     expect(shouldSendRelayCompensation({ mode: "native_success_audit_only", verdict })).toBe(false);
     expect(shouldSendRelayCompensation({ mode: "compensate", verdict })).toBe(false);
+  });
+
+  it("NTR-P4-004: consumes adapter delivery snapshots without changing verdict semantics", () => {
+    const snapshot = normalizeNativeDeliveryToSnapshot({
+      status: "delivered",
+      messageId: "1778573724.032469",
+      resultHash: "abc",
+    });
+    const verdict = deliveryRelayVerdict({
+      nativeDelivery: snapshot,
+      relayResultHash: "abc",
+    });
+
+    expect(verdict).toMatchObject({
+      finalVisible: true,
+      nativeDelivered: true,
+      relayCompensationNeeded: false,
+      duplicateRisk: true,
+      source: "native_delivery",
+      reason: "duplicate_final_suppressed",
+    });
   });
 
   it("allows fallback delivery when native delivery is degraded", () => {
