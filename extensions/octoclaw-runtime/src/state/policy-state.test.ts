@@ -89,4 +89,22 @@ describe("policyState 4.4 cache boundary", () => {
       },
     });
   });
+
+  it("does not fuzzy-rebind dispatch context to an arbitrary recent reply state", () => {
+    const store = new PolicyStateStore();
+    store.set("session-unrelated-reply", {
+      prompt: "整理 OctoClaw 当前任务状态面板需要展示哪些字段，完成后给摘要。",
+      decision: {
+        request: { session_key: "session-unrelated-reply" },
+        route_decision: { route: "reply" },
+      },
+    });
+
+    const resolved = store.getDispatchPolicyContext(
+      {},
+      "调研 OctoClaw 当前任务状态面板需要展示哪些字段，完成后给摘要。",
+    );
+
+    expect(resolved).toEqual({ key: "", state: null });
+  });
 });

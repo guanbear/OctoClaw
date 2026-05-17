@@ -361,6 +361,37 @@ export async function executeOctoclawDispatch(params: Record<string, unknown>, _
             admissionReason: dispatchAdmissionResult.reason,
           }, toolLogger(ctx), cachedDecision);
           workContractDispatchError = null;
+          const overrideConversationControl = {
+            ...asRecord(initialMetadata.conversation_control),
+            source: "explicit_conversation_control",
+            explicit_delegate_request: true,
+            intent_class: "delegated_work",
+          };
+          initialMetadata = {
+            ...initialMetadata,
+            conversation_control: overrideConversationControl,
+            requested_route: "delegate",
+            route_request_source: "force_route",
+            route_request_trusted: true,
+            is_new_work: true,
+            expected_deliverable: asString(initialMetadata.expected_deliverable || initialMetadata.expectedDeliverable || params.task).slice(0, 200),
+          };
+          cachedDecision = await resolveStatelessPolicyDecision(asString(params.task), {
+            command: asString(params.command),
+            metadata: initialMetadata,
+            forceRoute: "delegate",
+          });
+          freshDecisionSource = "stale_reply_delegate_dispatch_override";
+          hadCachedDecision = true;
+          const overrideWorkContractId = selectDispatchWorkContractId(asRecord(params), cachedDecision);
+          if (overrideWorkContractId) {
+            const validation = validateDispatchWorkContract(loadWorkContract(overrideWorkContractId), overrideWorkContractId);
+            if (validation.ok) {
+              dispatchWorkContract = validation.contract;
+            }
+          }
+          routeSealState = { routeSeal: cachedDecision.routeSeal };
+          cachedRouteSeal = validCachedRouteSeal(routeSealState, cachedDecision, initialMetadata);
         }
         if (cachedRouteSeal && resolvedRoute !== cachedRouteSeal.route && !dispatchAdmissionResult.allowed) {
           const driftSummary = `sealed_decision_required: managed session ${managedSessionKey.slice(0, 40)}… requires sealed route=${cachedRouteSeal.route}; got dispatch route=${resolvedRoute}. This violates §4.6.1 (dispatch must not re-route after seal).`;
@@ -405,6 +436,14 @@ export async function executeOctoclawDispatch(params: Record<string, unknown>, _
         let metadata = initialMetadata;
         metadata = finalizeDispatchMetadata(ctx, metadata, { stateKey, state, cachedDecision });
         metadata.requested_route = normalizeLiveRoute(resolvedRoute, "reply");
+        if (isDelegatedRoute && !hasNonNewWorkFollowupEvidence(cachedDecision, metadata)) {
+          if (typeof metadata.is_new_work !== "boolean" && typeof metadata.isNewWork !== "boolean") {
+            metadata.is_new_work = true;
+          }
+          if (!asString(metadata.expected_deliverable || metadata.expectedDeliverable)) {
+            metadata.expected_deliverable = asString(params.task).slice(0, 200);
+          }
+        }
         await recordPolicyReplay("dispatch_tool_started", {
           sessionKey: managedSessionKey || stateKey || asString(params.sessionKey),
           sessionId: asString(ctx.sessionId),
@@ -544,6 +583,10 @@ export async function executeOctoclawDispatch(params: Record<string, unknown>, _
             asRecord(state?.delivery_target).sessionKey,
             asRecord(state?.delivery_target).session_key,
             resolveDispatchSessionKey(ctx, metadata, { stateKey, state, cachedDecision }),
+            dispatchWorkContract?.sessionKey,
+            dispatchWorkContract?.continuity?.parentSessionKey,
+            asString(asRecord(cachedDecision.work_contract).sessionKey),
+            asString(asRecord(asRecord(cachedDecision.work_contract).continuity).parentSessionKey),
           );
           const plannerAllowedCandidates = plannerSessionCandidates.filter((candidate) => isPlannerAllowedForSession(candidate));
           const plannerEnabled = spawnBackend === "planner"

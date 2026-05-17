@@ -227,6 +227,12 @@ function stringValue(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
 
+function stringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.map((item) => stringValue(item)).filter(Boolean)
+    : [];
+}
+
 function entryRouteSource(entry: PolicyStateEntry): string {
   const routeDecision = recordValue(recordValue(entry.decision).route_decision);
   return stringValue(routeDecision.route_source);
@@ -237,6 +243,23 @@ function entryBudgetedMainEscalated(entry: PolicyStateEntry): boolean {
   return stringValue(entry.dispatchStatus || entry.dispatch_status) === "budgeted_main_escalated"
     || Boolean(budgetedMain.escalatedAt || budgetedMain.escalated_at)
     || entryRouteSource(entry) === "budgeted_main_escalation";
+}
+
+function entryHasDispatchArbiterEvidence(entry: PolicyStateEntry): boolean {
+  const decision = recordValue(entry.decision);
+  const replyContract = recordValue(decision.reply_contract);
+  const workContract = recordValue(decision.work_contract);
+  const toolPolicy = recordValue(decision.tool_policy);
+  const forbidden = new Set(
+    [
+      ...stringArray(replyContract.forbiddenTools),
+      ...stringArray(replyContract.forbidden_tools),
+      ...stringArray(workContract.forbiddenTools),
+      ...stringArray(workContract.forbidden_tools),
+      ...stringArray(toolPolicy.block_tool_patterns),
+    ].map((item) => item.trim()).filter(Boolean),
+  );
+  return forbidden.has("octoclaw_dispatch") || Boolean(entry.routeSeal || decision.routeSeal);
 }
 
 function entryLooksTerminal(entry: PolicyStateEntry): boolean {
@@ -441,6 +464,42 @@ export class PolicyStateStore {
     return best;
   }
 
+  private findRecentPromptMatch(prompt: string, maxAgeMs = RECENT_DELEGATED_MAX_AGE_MS): { key: string; entry: PolicyStateEntry } | null {
+    this.prune();
+    const now = Date.now();
+    const normalizedPrompt = promptLookupCandidates(prompt)[0] || String(prompt || "").trim();
+    if (!normalizedPrompt) {
+      return null;
+    }
+
+    let best: { key: string; entry: PolicyStateEntry } | null = null;
+    let bestScore = -1;
+    let bestUpdatedAt = 0;
+    for (const [key, entry] of this._entries.entries()) {
+      if (entryLooksTerminal(entry)) {
+        continue;
+      }
+      if (!entryHasDispatchArbiterEvidence(entry)) {
+        continue;
+      }
+      const updatedAt = entryTimestamp(entry);
+      if (!updatedAt || now - updatedAt > maxAgeMs) {
+        continue;
+      }
+      const score = promptTokenScore(normalizedPrompt, extractPrompt(entry));
+      if (score < 2) {
+        continue;
+      }
+      if (score > bestScore || (score === bestScore && updatedAt > bestUpdatedAt)) {
+        best = { key, entry: cloneEntry(entry) };
+        bestScore = score;
+        bestUpdatedAt = updatedAt;
+      }
+    }
+
+    return best;
+  }
+
   resolveForContext(ctx: Record<string, unknown>): { key: string; state: PolicyStateEntry | null } {
     this.prune();
     const keys = this.resolveContextKeys(ctx);
@@ -489,6 +548,11 @@ export class PolicyStateStore {
     const byPrompt = this.findByPrompt(prompt);
     if (byPrompt) {
       return { key: byPrompt.key, state: byPrompt.entry };
+    }
+
+    const recentPromptMatch = this.findRecentPromptMatch(prompt);
+    if (recentPromptMatch) {
+      return { key: recentPromptMatch.key, state: recentPromptMatch.entry };
     }
 
     const recent = this.findRecentDelegated(prompt);

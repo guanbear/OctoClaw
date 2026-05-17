@@ -2,6 +2,7 @@ import fsSync from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ROUTE_SEAL_SCHEMA_VERSION } from "@octoclaw/contracts/route-seal";
 import type { ContextCoverageSnapshot } from "@octoclaw/contracts/work-contract";
 import { nativeSpawnIntentStore } from "../delegate/native-spawn-intent-store.js";
 import { buildExecutionCoverageLayer } from "../resolve/execution-coverage-precheck.js";
@@ -410,6 +411,134 @@ describe("octoclaw_dispatch planner backend", () => {
       "agent:main:slack:channel:c0as4dappu3",
     ]));
     expect(backendSelected!.planner_enabled).toBe(true);
+  });
+
+  it("rebinds explicit delegate dispatch to recent Slack thread policy state when tool ctx is empty", async () => {
+    process.env.OCTOCLAW_SPAWN_BACKEND = "planner";
+    const sessionKey = "agent:main:slack:channel:c0as4dappu3:thread:1779019848.438849";
+    const originalPrompt = "[OCTOCLAW_ACCEPTANCE] run=smoke case=delegated_work-1 acceptance=true\n<@U0ARU7EKGCQ> 请委派子 agent 调研 OctoClaw 当前任务状态面板需要展示哪些字段，完成后给摘要。";
+    const dispatchTask = "调研 OctoClaw 当前任务状态面板需要展示哪些字段，完成后给摘要。";
+    const contract = buildWorkContractFromPolicy(
+      sessionKey,
+      originalPrompt,
+      "fresh_live_lookup",
+      coverageSnapshot(),
+      buildWorkDecisionSeal("local_judge", "reply", ["initial_reply"]),
+      { status: "sealed" },
+    );
+    saveWorkContract(contract);
+    policyState.set(sessionKey, {
+      prompt: originalPrompt,
+      decision: {
+        request: { session_key: sessionKey },
+        routeSeal: {
+          schemaVersion: ROUTE_SEAL_SCHEMA_VERSION,
+          requestId: "request-acceptance",
+          route: "reply",
+          source: "local_judge",
+          reasonCodes: ["initial_reply"],
+          turnId: "turn-acceptance",
+          threadBindingKey: sessionKey,
+          createdAt: new Date().toISOString(),
+          inputHash: "",
+          stateGeneration: 0,
+        },
+        route_decision: { route: "reply" },
+        workContractId: contract.workContractId,
+        work_contract: { workContractId: contract.workContractId, route: "reply" },
+        reply_contract: { forbiddenTools: ["octoclaw_dispatch"] },
+        tool_policy: { block_tool_patterns: ["octoclaw_dispatch"] },
+      },
+    });
+
+    const response = await dispatchTool().execute({
+      task: dispatchTask,
+      forceRoute: "delegate",
+      timeoutSeconds: 900,
+    }, {
+      cwd: tempWorkspace,
+    });
+
+    const body = JSON.parse(String(response.text));
+    const events = readReplayEvents();
+    expect(body.ok).toBe(true);
+    expect(body.status).toBe("requires_native_spawn");
+    const backendSelected = events.find((e) => e.event === "dispatch_backend_selected");
+    expect(backendSelected).toBeTruthy();
+    expect(backendSelected!.planner_session_candidates).toEqual(expect.arrayContaining([
+      sessionKey,
+      "agent:main:slack:channel:c0as4dappu3",
+    ]));
+    expect(backendSelected!.planner_allowed_candidates).toEqual(expect.arrayContaining([
+      "agent:main:slack:channel:c0as4dappu3",
+    ]));
+    expect(backendSelected!.planner_enabled).toBe(true);
+  });
+
+  it("recovers planner session from work contract when tool ctx is fully empty", async () => {
+    process.env.OCTOCLAW_SPAWN_BACKEND = "planner";
+    const sessionKey = "agent:main:slack:channel:c0as4dappu3:thread:1779019848.438849";
+    const contract = buildWorkContractFromPolicy(
+      sessionKey,
+      "请委派子 agent 调研 OctoClaw 当前任务状态面板需要展示哪些字段，完成后给摘要。",
+      "fresh_live_lookup",
+      coverageSnapshot(),
+      buildWorkDecisionSeal("local_judge", "delegate", ["planner_dispatch_test"]),
+      { status: "sealed" },
+    );
+    saveWorkContract(contract);
+
+    const response = await dispatchTool().execute({
+      task: contract.userAsk,
+      workContractId: contract.workContractId,
+      timeoutSeconds: 900,
+    }, {
+      cwd: tempWorkspace,
+    });
+
+    const body = JSON.parse(String(response.text));
+    expect(body.ok).toBe(true);
+    expect(body.status).toBe("requires_native_spawn");
+    const events = readReplayEvents();
+    const backendSelected = events.find((e) => e.event === "dispatch_backend_selected");
+    expect(backendSelected).toBeTruthy();
+    expect(backendSelected!.planner_session_candidates).toEqual(expect.arrayContaining([
+      sessionKey,
+      "agent:main:slack:channel:c0as4dappu3",
+    ]));
+    expect(backendSelected!.planner_enabled).toBe(true);
+  });
+
+  it("still fails closed for non-allowlisted session when work contract carries the session key", async () => {
+    process.env.OCTOCLAW_SPAWN_BACKEND = "planner";
+    process.env.OCTOCLAW_PLANNER_ALLOWLIST = "agent:main:slack:default:direct:u0al9t5u89z";
+    const sessionKey = "agent:main:slack:channel:c0as4dappu3:thread:1779019848.438849";
+    const contract = buildWorkContractFromPolicy(
+      sessionKey,
+      "请委派子 agent 调研 OctoClaw 当前任务状态面板需要展示哪些字段，完成后给摘要。",
+      "fresh_live_lookup",
+      coverageSnapshot(),
+      buildWorkDecisionSeal("local_judge", "delegate", ["planner_dispatch_test"]),
+      { status: "sealed" },
+    );
+    saveWorkContract(contract);
+
+    const response = await dispatchTool().execute({
+      task: contract.userAsk,
+      workContractId: contract.workContractId,
+      timeoutSeconds: 900,
+    }, {
+      cwd: tempWorkspace,
+    });
+
+    const body = JSON.parse(String(response.text));
+    expect(body.ok).toBe(false);
+    expect(body.error).toBe("planner_not_allowed_for_session");
+    const events = readReplayEvents();
+    expect(events).toContainEqual(expect.objectContaining({
+      event: "dispatch_planner_not_allowed",
+      error: "planner_not_allowed_for_session",
+    }));
   });
 
   it("derives planner session candidates from resolveDispatchSessionKey when ctx.sessionKey is absent but sessionId is present", async () => {
