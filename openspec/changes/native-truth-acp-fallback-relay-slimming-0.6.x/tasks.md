@@ -102,21 +102,23 @@ Tests:
 
 ### P2-A: Observe-only native ACP fallback snapshot
 
-- [ ] Implement read-only native ACP fallback snapshot.
+- [x] Implement read-only native ACP fallback snapshot.
   - Suggested type: `NativeAcpFallbackSnapshot`
   - Do not mutate OpenClaw config.
-- [ ] Add snapshot to delegated run replay/status metadata.
-- [ ] If OpenClaw CLI/config cannot expose `acp.fallbacks`, return:
+- [x] Add snapshot to delegated run replay/status metadata.
+- [x] If OpenClaw CLI/config cannot expose `acp.fallbacks`, return:
   - `status="unavailable"`
   - `source="none"`
   - explicit `reason`.
-- [ ] Do not change dispatch behavior in this slice.
+- [x] Do not change dispatch behavior in this slice.
+- [x] Default `nativeAcpFallbackMode` to `"observe"` (conservative initial value per handoff/proposal).
+  - Fixed drift: previous default was `"delegate_backend_unavailable"` which is the enforce mode.
 
 Tests:
 
-- [ ] `NTR-P2-001`
-- [ ] `NTR-P2-002`
-- [ ] `NTR-P2-003`
+- [x] `NTR-P2-001` — config loading returns ok with source=openclaw_config without mutation (native-acp-fallback.test.ts)
+- [x] `NTR-P2-002` — missing config returns unavailable with reason=native_acp_fallback_unavailable (native-acp-fallback.test.ts)
+- [x] `NTR-P2-003` — observe mode records fallback metadata without behavior change; replay includes mode="observe" by default (native-acp-fallback.test.ts, registration-planner.test.ts)
 
 ### P2-B: Separate backend failover from task recovery
 

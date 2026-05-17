@@ -42,10 +42,10 @@ describe("native ACP fallback integration", () => {
     });
   });
 
-  it("defaults native ACP fallback mode to delegate backend-unavailable", async () => {
+  it("defaults native ACP fallback mode to observe", async () => {
     const { resolveNativeAcpFallbackMode } = await import("./native-acp-fallback.js");
 
-    expect(resolveNativeAcpFallbackMode({})).toBe("delegate_backend_unavailable");
+    expect(resolveNativeAcpFallbackMode({})).toBe("observe");
     expect(resolveNativeAcpFallbackMode({ OCTOCLAW_NATIVE_ACP_FALLBACK_MODE: "observe" })).toBe("observe");
     expect(resolveNativeAcpFallbackMode({ OCTOCLAW_NATIVE_ACP_FALLBACK_MODE: "delegate_backend_unavailable" })).toBe("delegate_backend_unavailable");
   });

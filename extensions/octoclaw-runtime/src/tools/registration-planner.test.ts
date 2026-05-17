@@ -245,7 +245,7 @@ describe("octoclaw_dispatch planner backend", () => {
       planner_enabled: true,
       planner_allowed_candidates: expect.arrayContaining([contract.sessionKey]),
       native_acp_fallback: expect.objectContaining({
-        mode: "delegate_backend_unavailable",
+        mode: "observe",
         primaryRuntimeId: "acpx",
         fallbackRuntimeIds: ["acpx", "codex-native"],
         fallbackAttempted: false,
@@ -256,7 +256,7 @@ describe("octoclaw_dispatch planner backend", () => {
       work_contract_id: contract.workContractId,
       spawn_intent_id: body.spawnIntentId,
       native_acp_fallback: expect.objectContaining({
-        mode: "delegate_backend_unavailable",
+        mode: "observe",
         primaryRuntimeId: "acpx",
         fallbackRuntimeIds: ["acpx", "codex-native"],
         fallbackAttempted: false,

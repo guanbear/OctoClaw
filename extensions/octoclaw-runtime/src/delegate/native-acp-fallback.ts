@@ -38,8 +38,8 @@ export interface NativeAcpFallbackReplayMetadata {
 
 export function resolveNativeAcpFallbackMode(env: Record<string, string | undefined> = process.env): NativeAcpFallbackMode {
   const value = String(env.OCTOCLAW_NATIVE_ACP_FALLBACK_MODE ?? "").trim().toLowerCase();
-  if (value === "observe") return "observe";
-  return "delegate_backend_unavailable";
+  if (value === "delegate_backend_unavailable") return "delegate_backend_unavailable";
+  return "observe";
 }
 
 export function loadNativeAcpFallbackSnapshot(openclawConfig: unknown, now = new Date()): NativeAcpFallbackSnapshot {
