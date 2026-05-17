@@ -215,16 +215,36 @@ Tests:
 
 Only after P3-B smoke passes:
 
-- [ ] Remove redundant message-tool-only compensation branch.
-- [ ] Remove redundant rich/card/button-only compensation branch.
-- [ ] Remove stale task-state-only delivery success inference.
-- [ ] Keep fallback delivery on failure/missing/degraded.
-- [ ] Keep audit and duplicate detection.
+- [x] Remove redundant message-tool-only compensation branch.
+      (sent/acknowledged/acked no longer treated as delivered in
+      delivery-relay-verdict.ts)
+- [x] Remove redundant rich/card/button-only compensation branch.
+      (presentation="rich" uses same delivered-only gate)
+- [x] Remove stale task-state-only delivery success inference.
+      delivery-relay-verdict.ts: done — only "delivered" = proven.
+      runtime-task-projection.ts: done — hasDeliveryAck now requires
+      deliveryStatus === "delivered" OR concrete messageId/resultHash.
+      No longer treats "sent"/"acknowledged"/"acked" as delivery ack.
+      (runtime-task-projection.test.ts + runtime-status.test.ts)
+- [x] Keep fallback delivery on failure/missing/degraded.
+- [x] Keep audit and duplicate detection.
 
 Tests:
 
-- [ ] `NTR-P3-008`
-- [ ] `NTR-P3-009`
+- [x] `NTR-P3-008`
+      (delivery-relay-verdict.test.ts, duplicate suppression audit)
+- [x] `NTR-P3-009`
+      (delivery-relay-verdict.test.ts, mock coverage matrix —
+      live Slack evidence for plain text, delegated, duplicate;
+      unit/mock only for Feishu/rich presentation, failure, degraded,
+      missing after timeout. No live Feishu smoke.)
+
+Smoke evidence:
+
+- Slack: P3-B long-window smoke passed 2026-05-17T13:53:15Z,
+  overallGate=pass, finalMs=233174, duplicateFinalCount=0,
+  footerVia=native_announce, workContractId=wc-c716f907647651d5.
+- Feishu/rich: unit/mock evidence only (no live Feishu smoke).
 
 ## Phase 4: RuntimeAdapter And Hermes Foundation
 

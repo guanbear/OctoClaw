@@ -177,4 +177,76 @@ describe("buildRuntimeTaskProjection", () => {
       resultLocation: "none",
     });
   });
+
+  it("does not treat delivery_status sent/acknowledged/acked as delivered result evidence", () => {
+    for (const unconfirmedStatus of ["sent", "acknowledged", "acked"]) {
+      const view = buildRuntimeTaskProjection({
+        id: `wc-unconfirmed-${unconfirmedStatus}`,
+        route: "delegate",
+        status: "completed",
+        dispatchExecuted: true,
+        spawnExecuted: true,
+        runId: "run-1",
+        completed_at: "2026-05-12T12:09:00.000Z",
+        delivery_status: unconfirmedStatus,
+      }, {
+        nowMs,
+        nativeProjection: native("completed"),
+      });
+
+      expect(view.status).not.toBe("delivered");
+      expect(view.statusReason).not.toBe("delivered_with_ack");
+    }
+  });
+
+  it("still shows delivered_with_ack when delivery_status is delivered with messageId", () => {
+    const view = buildRuntimeTaskProjection({
+      id: "wc-confirmed-delivery",
+      route: "delegate",
+      status: "completed",
+      dispatchExecuted: true,
+      spawnExecuted: true,
+      runId: "run-1",
+      completed_at: "2026-05-12T12:09:00.000Z",
+      delivery_status: "delivered",
+      delivery: {
+        status: "delivered",
+        messageId: "1778573724.032469",
+        resultHash: "f1c04ee36a4f1a42",
+      },
+    }, {
+      nowMs,
+      nativeProjection: native("completed"),
+    });
+
+    expect(view).toMatchObject({
+      status: "delivered",
+      statusReason: "delivered_with_ack",
+      resultLocation: "delivered:1778573724.032469",
+    });
+  });
+
+  it("proves delivery ack from concrete messageId even without delivered status", () => {
+    const view = buildRuntimeTaskProjection({
+      id: "wc-message-id-evidence",
+      route: "delegate",
+      status: "completed",
+      dispatchExecuted: true,
+      spawnExecuted: true,
+      runId: "run-1",
+      completed_at: "2026-05-12T12:09:00.000Z",
+      delivery: {
+        status: "sent",
+        messageId: "1778573724.032470",
+      },
+    }, {
+      nowMs,
+      nativeProjection: native("completed"),
+    });
+
+    expect(view).toMatchObject({
+      status: "delivered",
+      statusReason: "delivered_with_ack",
+    });
+  });
 });

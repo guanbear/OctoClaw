@@ -167,4 +167,19 @@ describe("runtime status lifecycle projection", () => {
     expect(view.status).toBe("lost");
     expect(view.statusReason).toBe("native_accepted_result_not_reconciled");
   });
+
+  it("does not treat delivery_status sent as delivered result evidence", () => {
+    const view = buildRuntimeStatusTaskView(
+      task({
+        status: "completed",
+        completed_at: "2026-05-12T12:09:00.000Z",
+        delivery_status: "sent",
+      }),
+      nowMs,
+      native("completed"),
+    );
+
+    expect(view.status).not.toBe("delivered");
+    expect(view.statusReason).not.toBe("delivered_with_ack");
+  });
 });

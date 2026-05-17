@@ -439,7 +439,7 @@ function runtimeResultEvidence(record: RuntimeTaskProjectionRecord, evidence: Re
       delivery.summary,
       compactPacket.summary,
     )),
-    hasDeliveryAck: ["delivered", "acknowledged", "acked", "sent"].includes(deliveryStatus)
+    hasDeliveryAck: deliveryStatus === "delivered"
       || Boolean(optionalString(deliveryEvidenceRecord.messageId, deliveryEvidenceRecord.resultHash)),
   };
 }
