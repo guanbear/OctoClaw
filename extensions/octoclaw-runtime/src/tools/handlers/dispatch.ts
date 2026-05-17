@@ -32,6 +32,8 @@ import { emitExecutionTransitionNotification } from "../../ack/execution-transit
 import { isPlannerAllowedForSession, resolvePlannerAllowlist, resolveSpawnBackend, resolveSpawnIntentTtlMs, resolveSpeculativePreloadEnabled } from "../../config/index.js";
 import { nativeSpawnIntentStore } from "../../delegate/native-spawn-intent-store.js";
 import {
+  buildEnforceFallbackReplayMetadata,
+  classifyNativeAcpFallback,
   nativeAcpFallbackMetadata,
   readNativeAcpFallbackSnapshot,
   resolveNativeAcpFallbackMode,
@@ -559,10 +561,15 @@ export async function executeOctoclawDispatch(params: Record<string, unknown>, _
 
         if (isDelegatedRoute) {
           const spawnBackend = resolveSpawnBackend();
-          const nativeAcpFallback = nativeAcpFallbackMetadata(
-            readNativeAcpFallbackSnapshot(),
-            resolveNativeAcpFallbackMode(),
-          );
+          const fallbackMode = resolveNativeAcpFallbackMode();
+          const fallbackSnapshot = readNativeAcpFallbackSnapshot();
+          const nativeAcpFallback = fallbackMode === "delegate_backend_unavailable"
+            ? buildEnforceFallbackReplayMetadata(
+              fallbackSnapshot,
+              fallbackMode,
+              classifyNativeAcpFallback({}),
+            )
+            : nativeAcpFallbackMetadata(fallbackSnapshot, fallbackMode);
           const plannerSessionCandidates = dispatchPlannerSessionCandidates(
             managedSessionKey,
             stateKey,

@@ -133,6 +133,32 @@ export function shouldDelegateBackendUnavailableToNative(input: {
     && input.classification.nativeFallbackEligible;
 }
 
+export function buildEnforceFallbackReplayMetadata(
+  snapshot: NativeAcpFallbackSnapshot,
+  mode: NativeAcpFallbackMode,
+  classification: NativeAcpFallbackClassification,
+  exposedFallbackRuntimeId = "",
+): NativeAcpFallbackReplayMetadata {
+  const delegated = shouldDelegateBackendUnavailableToNative({ mode, classification });
+  const selectedId = delegated && exposedFallbackRuntimeId
+    ? exposedFallbackRuntimeId
+    : "";
+  return {
+    mode,
+    primaryRuntimeId: snapshot.primaryRuntimeId,
+    fallbackRuntimeIds: [...snapshot.fallbackRuntimeIds],
+    fallbackAttempted: delegated,
+    fallbackSelectedRuntimeId: selectedId,
+    reason: delegated
+      ? (selectedId
+        ? "backend_unavailable_delegated_to_native"
+        : "backend_unavailable_delegated_selected_runtime_not_exposed")
+      : classification.reason === "none"
+        ? "no_backend_failure_observed"
+        : `octoclaw_recovery_owned:${classification.reason}`,
+  };
+}
+
 export function nativeAcpFallbackSnapshotFromStatus(status: UnknownRecord, now = new Date()): NativeAcpFallbackSnapshot {
   return loadNativeAcpFallbackSnapshot({ acp: { fallbacks: status.fallbacks } }, now);
 }

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildEnforceFallbackReplayMetadata,
   classifyNativeAcpFallback,
   loadNativeAcpFallbackSnapshot,
   nativeAcpFallbackMetadata,
@@ -146,5 +147,61 @@ describe("native ACP fallback integration", () => {
     expect(shouldDelegateBackendUnavailableToNative({ mode, classification: badResult })).toBe(false);
     expect(shouldDelegateBackendUnavailableToNative({ mode, classification: policyViolation })).toBe(false);
     expect(shouldDelegateBackendUnavailableToNative({ mode, classification: none })).toBe(false);
+  });
+
+  it("NTR-P2-007: before-output classification delegates to native with empty selected id when not exposed", () => {
+    const snapshot = loadNativeAcpFallbackSnapshot({ acp: { fallbacks: ["acpx", "codex-native"] } });
+    const classification = classifyNativeAcpFallback({ backendUnavailable: true, outputStarted: false });
+    const replay = buildEnforceFallbackReplayMetadata(snapshot, "delegate_backend_unavailable", classification);
+
+    expect(replay.mode).toBe("delegate_backend_unavailable");
+    expect(replay.primaryRuntimeId).toBe("acpx");
+    expect(replay.fallbackRuntimeIds).toEqual(["acpx", "codex-native"]);
+    expect(replay.fallbackAttempted).toBe(true);
+    expect(replay.fallbackSelectedRuntimeId).toBe("");
+    expect(replay.reason).toBe("backend_unavailable_delegated_selected_runtime_not_exposed");
+  });
+
+  it("NTR-P2-007: explicit exposed fallback runtime id is recorded without guessing", () => {
+    const snapshot = loadNativeAcpFallbackSnapshot({ acp: { fallbacks: ["acpx", "codex-native"] } });
+    const classification = classifyNativeAcpFallback({ backendUnavailable: true, outputStarted: false });
+    const replay = buildEnforceFallbackReplayMetadata(snapshot, "delegate_backend_unavailable", classification, "codex-native");
+
+    expect(replay.fallbackAttempted).toBe(true);
+    expect(replay.fallbackSelectedRuntimeId).toBe("codex-native");
+    expect(replay.reason).toBe("backend_unavailable_delegated_to_native");
+  });
+
+  it("NTR-P2-007: normal dispatch in enforce mode records no_backend_failure_observed", () => {
+    const snapshot = loadNativeAcpFallbackSnapshot({ acp: { fallbacks: ["acpx", "codex-native"] } });
+    const classification = classifyNativeAcpFallback({});
+    const replay = buildEnforceFallbackReplayMetadata(snapshot, "delegate_backend_unavailable", classification);
+
+    expect(replay.mode).toBe("delegate_backend_unavailable");
+    expect(replay.fallbackAttempted).toBe(false);
+    expect(replay.fallbackSelectedRuntimeId).toBe("");
+    expect(replay.reason).toBe("no_backend_failure_observed");
+  });
+
+  it("NTR-P2-007: enforce mode keeps octoclaw recovery for task_timeout with explicit reason", () => {
+    const snapshot = loadNativeAcpFallbackSnapshot({ acp: { fallbacks: ["acpx", "codex-native"] } });
+    const classification = classifyNativeAcpFallback({ timedOut: true });
+    const replay = buildEnforceFallbackReplayMetadata(snapshot, "delegate_backend_unavailable", classification);
+
+    expect(replay.fallbackAttempted).toBe(false);
+    expect(replay.fallbackSelectedRuntimeId).toBe("");
+    expect(replay.reason).toBe("octoclaw_recovery_owned:task_timeout");
+  });
+
+  it("NTR-P2-009: output-started primary failure is not rerouted to native in enforce mode", () => {
+    const snapshot = loadNativeAcpFallbackSnapshot({ acp: { fallbacks: ["acpx", "codex-native"] } });
+    const classification = classifyNativeAcpFallback({ backendUnavailable: true, outputStarted: true });
+    const replay = buildEnforceFallbackReplayMetadata(snapshot, "delegate_backend_unavailable", classification);
+
+    expect(classification.nativeFallbackEligible).toBe(false);
+    expect(classification.octoclawRecoveryOwner).toBe(true);
+    expect(shouldDelegateBackendUnavailableToNative({ mode: "delegate_backend_unavailable", classification })).toBe(false);
+    expect(replay.fallbackAttempted).toBe(false);
+    expect(replay.reason).toBe("octoclaw_recovery_owned:backend_unavailable_after_output");
   });
 });

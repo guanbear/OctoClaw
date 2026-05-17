@@ -20,7 +20,7 @@ const fs = fsSync as unknown as {
 };
 const osModule = os as unknown as { tmpdir(): string };
 
-const ENV_KEYS = ["OCTOCLAW_SPAWN_BACKEND", "OCTOCLAW_PLANNER_ALLOWLIST", "OCTOCLAW_SPAWN_INTENT_TTL_MS", "OCTOCLAW_RUNTIME_LEDGER", "OCTOCLAW_SPECULATIVE_PRELOAD", "OPENCLAW_HOME"];
+const ENV_KEYS = ["OCTOCLAW_SPAWN_BACKEND", "OCTOCLAW_PLANNER_ALLOWLIST", "OCTOCLAW_SPAWN_INTENT_TTL_MS", "OCTOCLAW_RUNTIME_LEDGER", "OCTOCLAW_SPECULATIVE_PRELOAD", "OCTOCLAW_NATIVE_ACP_FALLBACK_MODE", "OPENCLAW_HOME"];
 let originalEnv: Record<string, string | undefined>;
 let tempWorkspace = "";
 
@@ -1358,5 +1358,90 @@ describe("runtime convergence invariants (WP-A)", () => {
     const spawn = tools.find((t) => t.name === "octoclaw_spawn");
 
     expect(spawn).toBeUndefined();
+  });
+
+  it("NTR-P2-007: enforce mode dispatch keeps one WorkContract, no native failover in normal dispatch", async () => {
+    process.env.OCTOCLAW_SPAWN_BACKEND = "planner";
+    process.env.OCTOCLAW_NATIVE_ACP_FALLBACK_MODE = "delegate_backend_unavailable";
+    process.env.OPENCLAW_HOME = tempWorkspace;
+    fsSync.writeFileSync(path.join(tempWorkspace, "openclaw.json"), JSON.stringify({
+      acp: { fallbacks: ["acpx", "codex-native"] },
+    }));
+    const contract = seedWorkContract();
+
+    const response = await dispatchTool().execute({
+      task: contract.userAsk,
+      workContractId: contract.workContractId,
+      policyJson: JSON.stringify(delegateDecision(contract)),
+      timeoutSeconds: 900,
+    }, {
+      sessionKey: contract.sessionKey,
+      sessionId: "session-p2c-enforce-007",
+      cwd: tempWorkspace,
+    });
+
+    const body = JSON.parse(String(response.text));
+    expect(body.ok).toBe(true);
+    expect(body.status).toBe("requires_native_spawn");
+    expect(body.workContractId).toBe(contract.workContractId);
+    const events = readReplayEvents();
+    const backendSelected = events.find((e) => e.event === "dispatch_backend_selected");
+    expect(backendSelected).toBeTruthy();
+    expect(backendSelected!.native_acp_fallback).toMatchObject({
+      mode: "delegate_backend_unavailable",
+      primaryRuntimeId: "acpx",
+      fallbackRuntimeIds: ["acpx", "codex-native"],
+      fallbackAttempted: false,
+      fallbackSelectedRuntimeId: "",
+      reason: "no_backend_failure_observed",
+    });
+    const intentCreated = events.find((e) => e.event === "dispatch_planner_intent_created");
+    expect(intentCreated).toBeTruthy();
+    expect(intentCreated!.native_acp_fallback).toMatchObject({
+      mode: "delegate_backend_unavailable",
+      fallbackAttempted: false,
+      fallbackSelectedRuntimeId: "",
+    });
+    const dispatchStarted = events.find((e) => e.event === "dispatch_tool_started");
+    expect(dispatchStarted).toBeTruthy();
+    expect(dispatchStarted!.work_contract_id).toBe(contract.workContractId);
+    const duplicateDispatches = events.filter((e) => e.event === "dispatch_tool_started");
+    expect(duplicateDispatches.length).toBe(1);
+  });
+
+  it("NTR-P2-008: enforce mode dispatch produces one spawn intent, no duplicate final path", async () => {
+    process.env.OCTOCLAW_SPAWN_BACKEND = "planner";
+    process.env.OCTOCLAW_NATIVE_ACP_FALLBACK_MODE = "delegate_backend_unavailable";
+    process.env.OPENCLAW_HOME = tempWorkspace;
+    fsSync.writeFileSync(path.join(tempWorkspace, "openclaw.json"), JSON.stringify({
+      acp: { fallbacks: ["acpx", "codex-native"] },
+    }));
+    const contract = seedWorkContract("session-p2c-enforce-008");
+
+    const response = await dispatchTool().execute({
+      task: contract.userAsk,
+      workContractId: contract.workContractId,
+      policyJson: JSON.stringify(delegateDecision(contract)),
+      timeoutSeconds: 900,
+    }, {
+      sessionKey: contract.sessionKey,
+      sessionId: "session-p2c-enforce-008",
+      cwd: tempWorkspace,
+    });
+
+    const body = JSON.parse(String(response.text));
+    expect(body.ok).toBe(true);
+    expect(body.spawnIntentId).toBeTruthy();
+    const events = readReplayEvents();
+    const intentCreated = events.filter((e) => e.event === "dispatch_planner_intent_created");
+    expect(intentCreated.length).toBe(1);
+    expect(events).not.toContainEqual(expect.objectContaining({ event: "legacy_outbox_queued" }));
+    expect(events).not.toContainEqual(expect.objectContaining({ event: "child_finalizer_scheduled" }));
+    const terminalFailures = events.filter((e) => e.event === "dispatch_terminal_failure");
+    expect(terminalFailures.length).toBe(0);
+    const backendSelected = events.find((e) => e.event === "dispatch_backend_selected");
+    const fallbackMeta = backendSelected!.native_acp_fallback as Record<string, unknown>;
+    expect(fallbackMeta.fallbackAttempted).toBe(false);
+    expect(fallbackMeta.fallbackSelectedRuntimeId).toBe("");
   });
 });
