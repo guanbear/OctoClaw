@@ -236,6 +236,7 @@ export async function acceptProposal(
   const { provider, modelId } = modelIdFromKey(modelKey);
   const openclawConfigPath = path.join(openclawHome, "openclaw.json");
   const openclawConfig = await readJsonFile(openclawConfigPath);
+  const originalOpenclawConfigText = `${JSON.stringify(openclawConfig, null, 2)}\n`;
   const providers = asRecord(asRecord(asRecord(openclawConfig).models).providers);
   const rawProviderBlock = providers[provider];
   if (!isRecord(rawProviderBlock)) {
@@ -257,7 +258,7 @@ export async function acceptProposal(
 
   const backupPath = path.join(openclawHome, `openclaw.json.octoclaw-bak-${nowText}`);
   if (fsSync.existsSync(backupPath)) throw new Error(`Backup already exists: ${backupPath}`);
-  fsSync.writeFileSync(backupPath, `${JSON.stringify(openclawConfig, null, 2)}\n`, "utf8");
+  fsSync.writeFileSync(backupPath, originalOpenclawConfigText, "utf8");
   fsSync.writeFileSync(openclawConfigPath, `${JSON.stringify(openclawConfig, null, 2)}\n`);
 
   wizard.models[modelKey] = {

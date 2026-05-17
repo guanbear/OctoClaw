@@ -24,6 +24,12 @@ function currentModel(state: RouterWizardState): string {
   return state.remainingModels[0] ?? state.configuredModels[0] ?? "(none)";
 }
 
+function modelPlanProgress(state: RouterWizardState): string {
+  const total = Math.max(state.configuredModels.length, 1);
+  const current = Math.min(state.configuredModels.length - state.remainingModels.length + 1, total);
+  return `${current}/${total}`;
+}
+
 function budgetSummary(state: RouterWizardState): string {
   if (!state.answers.budget) return "不设上限";
   return `$${state.answers.budget.monthlyUsd ?? 0}/月`;
@@ -47,14 +53,24 @@ export function renderWizardMessage(state: RouterWizardState, options: { lang?: 
   }
   if (state.step === "step-2-models") {
     const model = currentModel(state);
+    const progress = modelPlanProgress(state);
+    const remainingCount = state.remainingModels.length;
+    const allRemainingButtons = remainingCount > 1
+      ? [
+          button(lang === "en" ? "All remaining: subscription" : "剩余全部订阅", 2, "all_remaining:subscription"),
+          button(lang === "en" ? "All remaining: pay-as-you-go" : "剩余全部按量", 2, "all_remaining:pay_as_you_go"),
+          button(lang === "en" ? "All remaining: not sure" : "剩余全部不确定", 2, "all_remaining:unknown"),
+        ]
+      : [];
     return {
       text: lang === "en"
-        ? `Is \`${model}\` billed as subscription or pay-as-you-go?`
-        : `\`${model}\` 是按订阅计费还是按用量计费？`,
+        ? `Plan type ${progress}\nIs \`${model}\` billed as subscription or pay-as-you-go?`
+        : `Plan 类型 ${progress}\n\`${model}\` 是按订阅计费还是按用量计费？订阅 / 套餐内请选择订阅。`,
       blocks: actions([
         button(lang === "en" ? "Subscription" : "订阅 / 套餐", 2, "subscription"),
         button(lang === "en" ? "Pay as you go" : "按量付费", 2, "pay_as_you_go"),
         button(lang === "en" ? "Not sure" : "不确定", 2, "unknown"),
+        ...allRemainingButtons,
         button(lang === "en" ? "Skip" : "跳过", 2, "skip"),
       ]),
     };
@@ -78,10 +94,22 @@ export function renderWizardMessage(state: RouterWizardState, options: { lang?: 
   }
   if (state.step === "step-5-restricted-models") {
     const models = state.configuredModels.map((model) => ` • \`${model}\``).join("\n") || " • (none)";
+    const restricted = new Set(state.answers.restrictedModels);
+    const selected = state.answers.restrictedModels.map((model) => ` • \`${model}\``).join("\n") || " • 无";
+    const modelButtons = state.configuredModels.slice(0, 20).map((model) => {
+      const label = restricted.has(model)
+        ? lang === "en" ? `Allow ${model}` : `取消 ${model}`
+        : lang === "en" ? `Disable ${model}` : `禁用 ${model}`;
+      return button(truncateButtonText(label), 5, `toggle:${model}`);
+    });
     return {
-      text: lang === "en" ? `Which models must be disabled?\n${models}` : `哪些模型必须禁用？（合规 / 测试隔离）\n${models}`,
+      text: lang === "en"
+        ? `Which models must be disabled?\nCurrent selection:\n${selected}\nModels:\n${models}`
+        : `哪些模型必须禁用？（合规 / 测试隔离）\n当前选择：\n${selected}\n当前模型：\n${models}`,
       blocks: actions([
-        button(lang === "en" ? "Confirm none" : "确认无禁用", 5, "confirm"),
+        ...modelButtons,
+        button(lang === "en" ? "Done" : "完成", 5, "done"),
+        button(lang === "en" ? "Clear all" : "确认无禁用", 5, "clear"),
         button(lang === "en" ? "Skip" : "跳过", 5, "skip"),
       ]),
     };

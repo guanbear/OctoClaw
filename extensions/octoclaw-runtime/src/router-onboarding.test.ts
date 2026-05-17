@@ -419,6 +419,8 @@ describe("router wizard Slack onboarding", () => {
     expect(planBlocks).toContain("按量付费");
     expect(planBlocks).toContain("订阅/Plan");
     expect(planBlocks).toContain("我不确定");
+    expect(planBlocks).toContain("剩余全部订阅");
+    expect(planBlocks).toContain("剩余全部按量");
   });
 
   it("ignores stale budget button repeats after the wizard has advanced", async () => {
@@ -612,6 +614,38 @@ describe("router wizard Slack onboarding", () => {
     expect(sameProviderMessage).not.toContain("openai/gpt-5-mini");
     expect(sameProviderMessage).not.toContain("openai/gpt-5.4-mini");
     expect(sameProviderMessage).not.toContain("zhipu/glm-4.7");
+  });
+
+  it("preserves gateway route prefixes when mirroring packaged GPT candidates", async () => {
+    fs.writeFileSync(path.join(tempHome, "openclaw.json"), JSON.stringify({
+      models: {
+        providers: {
+          omniroute: { models: [{ id: "cx/gpt-5.4" }] },
+        },
+      },
+    }), "utf8");
+    const sends: Parameters<RouterWizardOnboardingSendMessage>[0][] = [];
+    const common = {
+      sessionKey: "agent:main:slack:default:direct:u123abc",
+      openclawHome: tempHome,
+      now: new Date("2026-05-14T00:00:00.000Z"),
+      sendMessage: async (params: Parameters<RouterWizardOnboardingSendMessage>[0]) => {
+        sends.push(params);
+        return { sent: true };
+      },
+    };
+
+    await handleRouterWizardAction({ ...common, event: { actions: [{ action_id: "octoclaw_router_wizard_start_questions" }] } });
+    await handleRouterWizardAction({ ...common, event: { actions: [{ action_id: "octoclaw_router_wizard_model_scan_continue" }] } });
+    await handleRouterWizardAction({ ...common, event: { actions: [{ action_id: "octoclaw_router_wizard_plan_confirm" }] } });
+    await handleRouterWizardAction({ ...common, event: { actions: [{ action_id: "octoclaw_router_wizard_budget_none" }] } });
+    await handleRouterWizardAction({ ...common, event: { actions: [{ action_id: "octoclaw_router_wizard_privacy_standard" }] } });
+    await handleRouterWizardAction({ ...common, event: { actions: [{ action_id: "octoclaw_router_wizard_language_auto" }] } });
+    await handleRouterWizardAction({ ...common, event: { actions: [{ action_id: "octoclaw_router_wizard_restricted_none" }] } });
+
+    const sameProviderMessage = sends.at(-1)?.message ?? "";
+    expect(sameProviderMessage).toContain("omniroute/cx/gpt-5.4-mini");
+    expect(sameProviderMessage).not.toContain("omniroute/gpt-5.4-mini");
   });
 
   it("supports all-button question wizard path without free-form text", async () => {

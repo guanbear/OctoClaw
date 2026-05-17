@@ -463,18 +463,27 @@ function modelNameFor(modelKey: string): string {
   return slash > 0 ? modelKey.slice(slash + 1) : modelKey;
 }
 
+function gptRoutePrefixFor(modelKey: string): string {
+  const modelName = modelNameFor(modelKey);
+  const match = /(?:^|[\/_-])gpt[-_.]?\d/iu.exec(modelName);
+  if (!match || match.index <= 0) return "";
+  return modelName.slice(0, match.index + 1);
+}
+
 function isGptMiniCandidate(modelKey: string): boolean {
   return modelFamilyFor(modelKey) === "openai:gpt" && normalizedModelKey(modelKey).includes("mini");
 }
 
-function configuredGptProxyProviders(configuredModels: string[]): Map<string, Set<string>> {
-  const providers = new Map<string, Set<string>>();
+function configuredGptProxyProviders(configuredModels: string[]): Map<string, Map<string, Set<string>>> {
+  const providers = new Map<string, Map<string, Set<string>>>();
   for (const model of configuredModels) {
     const provider = providerForModel(model);
     const major = gptMajorFor(model);
     if (!provider || provider === "openai" || !major) continue;
-    const majors = providers.get(provider) ?? new Set<string>();
-    majors.add(major);
+    const majors = providers.get(provider) ?? new Map<string, Set<string>>();
+    const prefixes = majors.get(major) ?? new Set<string>();
+    prefixes.add(gptRoutePrefixFor(model));
+    majors.set(major, prefixes);
     providers.set(provider, majors);
   }
   return providers;
@@ -493,13 +502,17 @@ function discoverSameProviderRouterModels(openclawHome = "", configuredModels = 
     const sameProvider = configuredProviders.has(providerForModel(modelKey));
     const sameFamily = configuredFamilies.has(modelFamilyFor(modelKey));
     if ((!sameProvider && !sameFamily) || configured.has(normalized)) continue;
-    if (!sameProvider && isGptMiniCandidate(modelKey)) {
+    if (!sameProvider && modelFamilyFor(modelKey) === "openai:gpt" && gptProxyProviders.size > 0) {
       const major = gptMajorFor(modelKey);
+      if (!isGptMiniCandidate(modelKey)) continue;
       for (const [provider, majors] of gptProxyProviders) {
-        if (!major || !majors.has(major)) continue;
-        const mirrored = `${provider}/${modelNameFor(modelKey)}`;
-        const mirroredNormalized = normalizedModelKey(mirrored);
-        if (!configured.has(mirroredNormalized) && !discovered.has(mirroredNormalized)) discovered.set(mirroredNormalized, mirrored);
+        const prefixes = major ? majors.get(major) : undefined;
+        if (!prefixes) continue;
+        for (const prefix of prefixes) {
+          const mirrored = `${provider}/${prefix}${modelNameFor(modelKey)}`;
+          const mirroredNormalized = normalizedModelKey(mirrored);
+          if (!configured.has(mirroredNormalized) && !discovered.has(mirroredNormalized)) discovered.set(mirroredNormalized, mirrored);
+        }
       }
       continue;
     }
@@ -623,6 +636,8 @@ function planQuestion(models: string[], answers: RouterWizardAnswers = {}): { me
       actionButton("订阅/Plan", "octoclaw_router_wizard_plan_subscription", `plan_subscription:${current}`, detectPlanType(current) === "subscription" ? "primary" : undefined),
       actionButton("按量付费", "octoclaw_router_wizard_plan_pay_as_you_go", `plan_pay_as_you_go:${current}`, detectPlanType(current) === "pay_as_you_go" ? "primary" : undefined),
       actionButton("我不确定", "octoclaw_router_wizard_plan_unknown", `plan_unknown:${current}`),
+      actionButton("剩余全部订阅", "octoclaw_router_wizard_plan_all_subscription", "plan_all_subscription"),
+      actionButton("剩余全部按量", "octoclaw_router_wizard_plan_all_pay_as_you_go", "plan_all_pay_as_you_go"),
       actionButton("跳过剩余", "octoclaw_router_wizard_plan_confirm", "plan_confirm"),
     ]
     : [actionButton("继续", "octoclaw_router_wizard_plan_confirm", "plan_confirm", "primary")];

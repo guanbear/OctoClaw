@@ -104,6 +104,10 @@ function defaultModelPlan(model: string): "subscription" | "pay_as_you_go" | "un
   return "pay_as_you_go";
 }
 
+function isPlanType(value: string): value is "subscription" | "pay_as_you_go" | "unknown" {
+  return value === "subscription" || value === "pay_as_you_go" || value === "unknown";
+}
+
 function budgetFromValue(value: string): RouterWizardState["answers"]["budget"] {
   if (value === "skip" || value === "unlimited") return null;
   const lowerBounds: Record<string, number> = {
@@ -209,8 +213,17 @@ export function applyWizardAction(
     const model = state.remainingModels[0];
     if (!model) {
       state.step = "step-3-budget";
+    } else if (action.value.startsWith("all_remaining:")) {
+      const planType = action.value.slice("all_remaining:".length);
+      if (!isPlanType(planType)) return { kind: "invalid", state: inputState, messages: [] };
+      for (const remainingModel of state.remainingModels) {
+        state.answers.models[remainingModel] = { planType };
+      }
+      state.remainingModels = [];
+      markAnswered(state, "step-2-models");
+      state.step = "step-3-budget";
     } else {
-      const planType = action.value === "subscription" || action.value === "pay_as_you_go" || action.value === "unknown"
+      const planType = isPlanType(action.value)
         ? action.value
         : action.value === "skip" ? defaultModelPlan(model) : "unknown";
       state.answers.models[model] = { planType };
@@ -244,6 +257,22 @@ export function applyWizardAction(
   }
 
   if (state.step === "step-5-restricted-models") {
+    if (action.value.startsWith("toggle:")) {
+      const model = action.value.slice("toggle:".length);
+      if (!state.configuredModels.includes(model)) return { kind: "invalid", state: inputState, messages: [] };
+      const restricted = new Set(state.answers.restrictedModels);
+      if (restricted.has(model)) restricted.delete(model);
+      else restricted.add(model);
+      state.answers.restrictedModels = state.configuredModels.filter((configuredModel) => restricted.has(configuredModel));
+      setUpdated(state, now, action);
+      return { kind: "advanced", state, messages: [] };
+    }
+    if (action.value === "done") {
+      markAnswered(state, state.step);
+      state.step = "step-6-same-provider";
+      setUpdated(state, now, action);
+      return { kind: "advanced", state, messages: [] };
+    }
     state.answers.restrictedModels = action.value.startsWith("ban:")
       ? action.value.slice(4).split(",").map((model) => model.trim()).filter(Boolean)
       : [];
