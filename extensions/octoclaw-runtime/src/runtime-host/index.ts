@@ -1,5 +1,5 @@
-export type { RuntimeHostId, RuntimeStatusSnapshot, RuntimeDeliverySnapshot, RuntimeFallbackSnapshot, HostRuntimeAdapter } from "./types.js";
-export { createOpenClawRuntimeAdapter, normalizeNativeDeliveryToSnapshot, adapterFallbackToNativeSnapshot } from "./openclaw-adapter.js";
+export type { RuntimeHostId, RuntimeStatusSnapshot, RuntimeStatusRef, RuntimeDeliverySnapshot, RuntimeFallbackSnapshot, HostRuntimeAdapter } from "./types.js";
+export { createOpenClawRuntimeAdapter, normalizeNativeDeliveryToSnapshot, adapterFallbackToNativeSnapshot, statusSnapshotToNativeProjection } from "./openclaw-adapter.js";
 export type { OpenClawAdapterDeps } from "./openclaw-adapter.js";
 export {
   HERMES_CAPABILITY_MATRIX,

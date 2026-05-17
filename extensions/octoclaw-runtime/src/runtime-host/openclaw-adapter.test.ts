@@ -1,6 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { NativeStatusProjection, NativeStatusProjectorInput } from "../state/native-status-projector.js";
-import { createOpenClawRuntimeAdapter, normalizeNativeDeliveryToSnapshot, adapterFallbackToNativeSnapshot } from "./openclaw-adapter.js";
+import { createOpenClawRuntimeAdapter, normalizeNativeDeliveryToSnapshot, adapterFallbackToNativeSnapshot, statusSnapshotToNativeProjection } from "./openclaw-adapter.js";
 import { deliveryRelayVerdict, shouldSendRelayCompensation } from "../im/delivery-relay-verdict.js";
 import { loadNativeAcpFallbackSnapshot } from "../delegate/native-acp-fallback.js";
 
@@ -17,10 +17,10 @@ function stubProjection(overrides: Partial<NativeStatusProjection> = {}): Native
   };
 }
 
-function stubDeps(overrides: { projection?: NativeStatusProjection } = {}) {
+function stubDeps(overrides: { projection?: NativeStatusProjection; projectStatus?: (input: NativeStatusProjectorInput) => Promise<NativeStatusProjection> } = {}) {
   return {
-    projectStatus: async (_input: NativeStatusProjectorInput) =>
-      overrides.projection ?? stubProjection(),
+    projectStatus: overrides.projectStatus ?? (async (_input: NativeStatusProjectorInput) =>
+      overrides.projection ?? stubProjection()),
     readFallbacks: async () =>
       loadNativeAcpFallbackSnapshot({ acp: { fallbacks: ["acpx", "codex-native"] } }),
   };
@@ -60,6 +60,7 @@ describe("NTR-P4-003: OpenClaw adapter preserves native status projection", () =
     const snapshot = await adapter.readStatus({ runId: "run-1" });
 
     expect(snapshot.status).toBe("succeeded");
+    expect(statusSnapshotToNativeProjection(snapshot).status).toBe("completed");
   });
 
   it("maps canceled to cancelled", async () => {
@@ -69,6 +70,7 @@ describe("NTR-P4-003: OpenClaw adapter preserves native status projection", () =
     const snapshot = await adapter.readStatus({ runId: "run-1" });
 
     expect(snapshot.status).toBe("cancelled");
+    expect(statusSnapshotToNativeProjection(snapshot).status).toBe("canceled");
   });
 
   it("maps degraded to unknown", async () => {
@@ -79,6 +81,36 @@ describe("NTR-P4-003: OpenClaw adapter preserves native status projection", () =
 
     expect(snapshot.status).toBe("unknown");
     expect(snapshot.degraded).toBe(true);
+    expect(statusSnapshotToNativeProjection(snapshot).status).toBe("degraded");
+  });
+
+  it("forwards full status refs to the native projector", async () => {
+    const projectStatus = vi.fn(async () => stubProjection());
+    const adapter = createOpenClawRuntimeAdapter(stubDeps({ projectStatus }));
+
+    await adapter.readStatus({
+      ctx: { marker: "ctx" },
+      sessionKey: "session-1",
+      workContractId: "wc-1",
+      taskId: "task-1",
+      runId: "run-1",
+      flowId: "flow-1",
+      childSessionKey: "child-1",
+      cache: { status: "running", summary: "cached" },
+      allowFindLatest: false,
+    });
+
+    expect(projectStatus).toHaveBeenCalledWith({
+      ctx: { marker: "ctx" },
+      sessionKey: "session-1",
+      workContractId: "wc-1",
+      openclawTaskId: "task-1",
+      openclawRunId: "run-1",
+      openclawFlowId: "flow-1",
+      childSessionKey: "child-1",
+      cache: { status: "running", summary: "cached" },
+      allowFindLatest: false,
+    });
   });
 
   it("maps not-found projection correctly", async () => {

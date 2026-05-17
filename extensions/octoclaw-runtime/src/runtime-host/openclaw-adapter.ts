@@ -1,5 +1,5 @@
 import type { RuntimeStatusSnapshot, RuntimeDeliverySnapshot, RuntimeFallbackSnapshot, HostRuntimeAdapter } from "./types.js";
-import type { NativeStatusProjection, NativeStatusProjectorInput } from "../state/native-status-projector.js";
+import type { NativeProjectedStatus, NativeStatusProjection, NativeStatusProjectorInput, NativeStatusSource } from "../state/native-status-projector.js";
 import { projectNativeStatus } from "../state/native-status-projector.js";
 import { readNativeAcpFallbackSnapshot, type NativeAcpFallbackSnapshot } from "../delegate/native-acp-fallback.js";
 
@@ -20,12 +20,56 @@ function nativeProjectionToStatusSnapshot(projection: NativeStatusProjection): R
     found: projection.found,
     degraded: projection.degraded,
     status: mapNativeStatus(projection.status),
+    rawStatus: projection.rawStatus,
+    source: projection.source,
+    nativeStatus: projection.status,
     runId: projection.runId,
     flowId: projection.flowId,
+    taskId: projection.taskId,
     childSessionKey: projection.childSessionKey,
     nativeKind: projection.nativeKind,
     agentRuntimeId: projection.agentRuntimeId,
+    summary: projection.summary,
+    revision: projection.revision,
+    error: projection.error,
     reason: projection.reason,
+  };
+}
+
+function nativeProjectedStatus(value: unknown): NativeProjectedStatus {
+  const status = String(value);
+  if (["queued", "running", "completed", "failed", "timed_out", "canceled", "unknown", "lost", "degraded"].includes(status)) {
+    return status as NativeProjectedStatus;
+  }
+  if (status === "succeeded") return "completed";
+  if (status === "cancelled") return "canceled";
+  return "unknown";
+}
+
+function nativeStatusSource(value: unknown): NativeStatusSource {
+  const source = String(value);
+  if (["run", "flow", "latest", "cache", "none"].includes(source)) return source as NativeStatusSource;
+  return "none";
+}
+
+export function statusSnapshotToNativeProjection(snapshot: RuntimeStatusSnapshot): NativeStatusProjection {
+  const status = nativeProjectedStatus(snapshot.nativeStatus ?? snapshot.status);
+  return {
+    status,
+    rawStatus: snapshot.rawStatus || snapshot.nativeStatus || snapshot.status,
+    source: nativeStatusSource(snapshot.source),
+    reason: snapshot.reason,
+    found: snapshot.found,
+    degraded: snapshot.degraded,
+    runId: snapshot.runId,
+    flowId: snapshot.flowId,
+    taskId: snapshot.taskId,
+    childSessionKey: snapshot.childSessionKey,
+    nativeKind: snapshot.nativeKind,
+    agentRuntimeId: snapshot.agentRuntimeId,
+    summary: snapshot.summary,
+    revision: snapshot.revision,
+    error: snapshot.error,
   };
 }
 
@@ -89,9 +133,15 @@ export function createOpenClawRuntimeAdapter(deps?: Partial<OpenClawAdapterDeps>
     host: "openclaw",
     async readStatus(ref) {
       const projection = await projectStatus({
+        ctx: ref.ctx,
+        sessionKey: ref.sessionKey,
+        workContractId: ref.workContractId,
+        openclawTaskId: ref.taskId,
         openclawRunId: ref.runId,
         openclawFlowId: ref.flowId,
         childSessionKey: ref.childSessionKey,
+        cache: ref.cache,
+        allowFindLatest: ref.allowFindLatest,
       });
       return nativeProjectionToStatusSnapshot(projection);
     },

@@ -316,9 +316,15 @@ Tests:
       registration-planner.test.ts NTR-P2-007 and NTR-P2-008 pass
       unchanged (32 pass + 1 skip). Adapter round-trip test added
       (openclaw-adapter.test.ts NTR-P4-B, 3 tests).
-      Status and relay call sites remain pending:
-      dispatch status reads, native-announce.ts delivery reads,
-      runtime-task-projection.ts projection reads still use direct imports.
+      Status panel call site migrated:
+      runtime-status.ts reads status through
+      createOpenClawRuntimeAdapter().readStatus() and converts the snapshot
+      back with statusSnapshotToNativeProjection() to preserve existing
+      NativeStatusProjection semantics. runtime-status.test.ts covers
+      NTR-P4-003 through the status panel path. Relay/delivery call sites
+      remain pending:
+      native-announce.ts delivery reads and runtime-task-projection.ts
+      projection reads still use direct imports.
 - [x] Prove outputs are identical to pre-extraction tests in OpenClaw mode.
       (adapter tests prove mapping is correct; existing native-status-projector,
       delivery-relay-verdict, native-acp-fallback tests still pass unchanged)
@@ -326,9 +332,11 @@ Tests:
 Tests:
 
 - [x] `NTR-P4-003`
-      (openclaw-adapter.test.ts: 6 tests covering spawn-child/agentRuntime.id,
+      (openclaw-adapter.test.ts: 7 tests covering spawn-child/agentRuntime.id,
       completed→succeeded, canceled→cancelled, degraded→unknown, not-found,
-      no-legacy-heuristic)
+      no-legacy-heuristic, status ref forwarding;
+      runtime-status.test.ts: status panel consumes adapter snapshot and
+      preserves native kind/runtime id without legacy fallback)
 - [x] `NTR-P4-004`
       (openclaw-adapter.test.ts: 6 tests — readDelivery returns unavailable
       without live source; readDelivery does not treat ref as payload;

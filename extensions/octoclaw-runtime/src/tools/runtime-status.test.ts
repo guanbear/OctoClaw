@@ -1,14 +1,49 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const captureTmuxEvidenceMock = vi.hoisted(() => vi.fn());
+const readTaskStateRecordsMock = vi.hoisted(() => vi.fn((): unknown[] => []));
+const pruneTaskStateCacheMock = vi.hoisted(() => vi.fn(() => ({ archived: 0, deletedArchiveEntries: 0, skipped: false, reason: "" })));
+const readStatusMock = vi.hoisted(() => vi.fn());
+const recordPolicyReplayMock = vi.hoisted(() => vi.fn(async () => undefined));
 
 vi.mock("../runtime-ledger/tmux-evidence.js", () => ({
   captureTmuxEvidence: captureTmuxEvidenceMock,
   isTmuxEvidenceEnabled: () => true,
 }));
 
+vi.mock("../state/task-state-store.js", () => ({
+  readTaskStateDocumentDetailed: () => ({ status: "ok", document: { tasks: [] } }),
+  readTaskStateRecords: readTaskStateRecordsMock,
+}));
+
+vi.mock("../state/task-state-retention.js", () => ({
+  pruneTaskStateCache: pruneTaskStateCacheMock,
+  readArchivedTaskState: () => [],
+}));
+
+vi.mock("../runtime-ledger/shadow.js", () => ({
+  resolveRuntimeLedgerMode: () => "off",
+}));
+
+vi.mock("../replay/replay.js", () => ({
+  recordPolicyReplay: recordPolicyReplayMock,
+}));
+
+vi.mock("../runtime-host/openclaw-adapter.js", async () => {
+  const actual = await vi.importActual<typeof import("../runtime-host/openclaw-adapter.js")>("../runtime-host/openclaw-adapter.js");
+  return {
+    ...actual,
+    createOpenClawRuntimeAdapter: () => ({
+      host: "openclaw",
+      readStatus: readStatusMock,
+      readDelivery: async () => ({ found: false, delivered: false, degraded: false, reason: "test" }),
+      readFallbacks: async () => ({ status: "unavailable", fallbackRuntimeIds: [], source: "none", observedAt: "2026-05-12T00:00:00.000Z" }),
+    }),
+  };
+});
+
 import type { NativeStatusProjection } from "../state/native-status-projector.js";
-import { buildRuntimeStatusTaskView, type RuntimeTaskStateRecord } from "./runtime-status.js";
+import { buildNativeStatusPanelOutput, buildRuntimeStatusTaskView, type RuntimeTaskStateRecord } from "./runtime-status.js";
 
 const nowMs = Date.parse("2026-05-12T12:10:00.000Z");
 
@@ -47,6 +82,12 @@ function task(overrides: Partial<RuntimeTaskStateRecord> = {}): RuntimeTaskState
 describe("runtime status lifecycle projection", () => {
   beforeEach(() => {
     captureTmuxEvidenceMock.mockReset();
+    readTaskStateRecordsMock.mockReset();
+    readTaskStateRecordsMock.mockReturnValue([]);
+    pruneTaskStateCacheMock.mockReset();
+    pruneTaskStateCacheMock.mockReturnValue({ archived: 0, deletedArchiveEntries: 0, skipped: false, reason: "" });
+    readStatusMock.mockReset();
+    recordPolicyReplayMock.mockClear();
   });
 
   it("marks native completed without result evidence as degraded", () => {
@@ -181,5 +222,48 @@ describe("runtime status lifecycle projection", () => {
 
     expect(view.status).not.toBe("delivered");
     expect(view.statusReason).not.toBe("delivered_with_ack");
+  });
+
+  it("NTR-P4-003: status panel reads native truth through the runtime adapter", async () => {
+    readTaskStateRecordsMock.mockReturnValue([
+      task({
+        runId: "run-1",
+        flowId: "flow-1",
+        childSessionKey: "child-1",
+        nativeTaskId: "task-1",
+        status: "running",
+      }),
+    ]);
+    readStatusMock.mockResolvedValue({
+      found: true,
+      degraded: false,
+      status: "running",
+      nativeStatus: "running",
+      rawStatus: "running",
+      source: "run",
+      reason: "resolved_by_openclaw_run_id",
+      runId: "run-1",
+      flowId: "flow-1",
+      taskId: "task-1",
+      childSessionKey: "child-1",
+      nativeKind: "spawn-child",
+      agentRuntimeId: "acp-primary",
+    });
+
+    const output = await buildNativeStatusPanelOutput("raw", "plain", { runtimeCtx: true });
+
+    expect(readStatusMock).toHaveBeenCalledWith(expect.objectContaining({
+      ctx: { runtimeCtx: true },
+      runId: "run-1",
+      flowId: "flow-1",
+      taskId: "task-1",
+      childSessionKey: "child-1",
+    }));
+    expect(output.text).toContain("native=spawn-child/acp-primary");
+    expect(output.text).toContain("child=child-1/run-1");
+    expect(recordPolicyReplayMock).not.toHaveBeenCalledWith(
+      "legacy_heuristic_fallback_used",
+      expect.anything(),
+    );
   });
 });

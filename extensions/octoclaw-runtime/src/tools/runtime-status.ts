@@ -5,7 +5,8 @@ import { recordPolicyReplay } from "../replay/replay.js";
 import { resolveRuntimeLedgerMode } from "../runtime-ledger/shadow.js";
 import { rebuildTaskStateProjection } from "../runtime-ledger/projection-rebuild.js";
 import { createOctoClawRuntimePlugin } from "../plugin.js";
-import { projectNativeStatus, type NativeStatusProjection } from "../state/native-status-projector.js";
+import type { NativeStatusProjection } from "../state/native-status-projector.js";
+import { createOpenClawRuntimeAdapter, statusSnapshotToNativeProjection } from "../runtime-host/openclaw-adapter.js";
 import { buildLegacyHeuristicFallbackEvent, legacyHeuristicVerdict } from "../state/legacy-heuristics.js";
 import { buildSlackStatusOutput, buildStatusInteractiveBlocks, type IMType, type StatusTaskSummary } from "../im-status-renderer.js";
 import { normalizeLiveRoute } from "../resolve/route-helpers.js";
@@ -636,7 +637,18 @@ export async function buildNativeStatusPanelOutput(format: string, imType: strin
   const retention = pruneRuntimeTaskStateCache();
   const tasks = sortTaskStateRecords(await readRuntimeTaskState({ includeArchive: includeExpired }));
   const nativeInputs = tasks.map((task) => nativeStatusInputForTask(task, ctx));
-  const nativeProjections = await Promise.all(nativeInputs.map((input) => projectNativeStatus(input)));
+  const runtimeHost = createOpenClawRuntimeAdapter();
+  const nativeProjections = await Promise.all(nativeInputs.map(async (input) => statusSnapshotToNativeProjection(await runtimeHost.readStatus({
+    ctx: input.ctx,
+    sessionKey: input.sessionKey,
+    workContractId: input.workContractId,
+    taskId: input.openclawTaskId,
+    runId: input.openclawRunId,
+    flowId: input.openclawFlowId,
+    childSessionKey: input.childSessionKey,
+    cache: input.cache,
+    allowFindLatest: input.allowFindLatest,
+  }))));
   tasks.forEach((task, index) => {
     const input = nativeInputs[index];
     const projection = nativeProjections[index];
