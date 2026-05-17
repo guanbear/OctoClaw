@@ -268,26 +268,29 @@ Smoke evidence:
 
 ### P4-A: Minimal host runtime adapter types
 
-- [ ] Add the smallest runtime host type boundary needed by existing behavior.
-  - Candidate files:
-    - `extensions/octoclaw-runtime/src/runtime-host/types.ts`
-    - `extensions/octoclaw-runtime/src/runtime-host/index.ts`
-  - Required concepts:
-    - `RuntimeHostId`
-    - `RuntimeStatusSnapshot`
-    - `RuntimeDeliverySnapshot`
-    - `RuntimeFallbackSnapshot`
-    - `HostRuntimeAdapter`
-- [ ] Do not add `spawn()` unless a BDD scenario and call site require it.
-- [ ] Do not add `cancel()` unless `octoclaw_task_action` routes cancellation
+- [x] Add the smallest runtime host type boundary needed by existing behavior.
+  - `extensions/octoclaw-runtime/src/runtime-host/types.ts`
+  - `extensions/octoclaw-runtime/src/runtime-host/index.ts`
+  - Concepts: RuntimeHostId, RuntimeStatusSnapshot, RuntimeDeliverySnapshot,
+    RuntimeFallbackSnapshot, HostRuntimeAdapter
+- [x] Do not add `spawn()` unless a BDD scenario and call site require it.
+      (HostRuntimeAdapter has only readStatus, readDelivery, readFallbacks;
+      NTR-P4-001 proves spawn/cancel/schedule absent at runtime)
+- [x] Do not add `cancel()` unless `octoclaw_task_action` routes cancellation
       through the host in this slice.
-- [ ] Keep all types free of OpenClaw-only names except in the OpenClaw
+- [x] Keep all types free of OpenClaw-only names except in the OpenClaw
       adapter file.
+      (nativeKind/agentRuntimeId are optional fields; required fields
+      found/degraded/status/reason are host-neutral; NTR-P4-002 proves it)
 
 Tests:
 
-- [ ] `NTR-P4-001`
-- [ ] `NTR-P4-002`
+- [x] `NTR-P4-001`
+      (runtime-host/types.test.ts: method key inspection + 13 forbidden
+      method absence checks)
+- [x] `NTR-P4-002`
+      (runtime-host/types.test.ts: host-neutral required fields, optional
+      native fields, dual-source fallback)
 
 ### P4-B: OpenClaw adapter extraction
 
