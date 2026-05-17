@@ -145,18 +145,36 @@ Precondition:
 
 Tasks:
 
-- [ ] Add feature flag `nativeAcpFallbackMode`.
-- [ ] In `delegate_backend_unavailable` mode, stop OctoClaw self-managed
+- [x] Add feature flag `nativeAcpFallbackMode`.
+      (resolveNativeAcpFallbackMode, OCTOCLAW_NATIVE_ACP_FALLBACK_MODE env,
+      default "observe", enforce mode "delegate_backend_unavailable")
+- [x] In `delegate_backend_unavailable` mode, stop OctoClaw self-managed
       backend-unavailable retry for ACP paths.
-- [ ] Record OpenClaw selected fallback runtime id if exposed.
-- [ ] Ensure one WorkContract remains associated with the fallback run.
-- [ ] Ensure no second OctoClaw task is created for the same backend failover.
+      (No self-managed backend-unavailable retry path exists in planner
+      dispatch scope. NTR-P2-008 proves no legacy_outbox_queued or
+      child_finalizer_scheduled events in enforce mode.)
+- [x] Record OpenClaw selected fallback runtime id if exposed.
+      (buildEnforceFallbackReplayMetadata with exposedFallbackRuntimeId param;
+      empty string when not exposed, never guesses from config candidates)
+- [x] Ensure one WorkContract remains associated with the fallback run.
+      (NTR-P2-007 dispatch test proves one dispatch_tool_started event,
+      body.workContractId matches original contract)
+- [x] Ensure no second OctoClaw task is created for the same backend failover.
+      (NTR-P2-007/008 dispatch tests prove one spawn intent, zero duplicates)
 
 Tests:
 
-- [ ] `NTR-P2-007`
-- [ ] `NTR-P2-008`
-- [ ] `NTR-P2-009`
+- [x] `NTR-P2-007`
+      (native-acp-fallback.test.ts: 4 pure tests covering before-output,
+      exposed id, normal dispatch, task_timeout;
+      registration-planner.test.ts: 1 dispatch test proving one WorkContract,
+      enforce replay metadata)
+- [x] `NTR-P2-008`
+      (registration-planner.test.ts: 1 dispatch test proving one spawn intent,
+      no duplicate final, no legacy outbox/finalizer)
+- [x] `NTR-P2-009`
+      (native-acp-fallback.test.ts: 1 pure test proving output-started
+      primary failure is not rerouted to native in enforce mode)
 
 ## Phase 3: Delivery Relay Slimming
 
