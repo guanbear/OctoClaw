@@ -12,6 +12,7 @@ import { type NativeAnnounceBlocker, type NativeAnnounceCompletion, type NativeA
 import { extractNativeAnnounceBlocker, extractNativeAnnounceCompletion, readNativeChildSessionCompletion } from "./native-announce-parse.js";
 import { contractNativeIds, deliverNativeAnnounceCompletion, markNativeAnnounceCompletionOnContract, nativeAnnounceDeliveryAlreadySent, nativeAnnounceDirectDeliveryEnabled } from "./native-announce-delivery.js";
 import { applyNativeAnnounceCompletionState } from "./native-announce-state.js";
+import { buildLegacyHeuristicFallbackEvent, legacyHeuristicVerdict } from "../state/legacy-heuristics.js";
 
 export { NATIVE_ANNOUNCE_BLOCKED_TOOLS } from "./native-announce-types.js";
 export type { NativeAnnounceBlocker, NativeAnnounceCompletion, NativeAnnounceSendMessage } from "./native-announce-types.js";
@@ -24,6 +25,19 @@ function getPolicyStateForContext(ctx: UnknownRecord): { key: string; state: Pol
     key: stringValue(resolved.key),
     state: resolved.state ?? null,
   };
+}
+
+function hasNativeAnnounceStructuredProvenance(event: UnknownRecord): boolean {
+  const direct = asRecord(event.provenance);
+  if (stringValue(direct.sourceTool || direct.source_tool || direct.kind)) return true;
+  const message = asRecord(event.message);
+  const messageProvenance = asRecord(message.provenance);
+  if (stringValue(messageProvenance.sourceTool || messageProvenance.source_tool || messageProvenance.kind)) return true;
+  const messages = Array.isArray(event.messages) ? event.messages : [];
+  return messages.some((item) => {
+    const provenance = asRecord(asRecord(item).provenance);
+    return Boolean(stringValue(provenance.sourceTool || provenance.source_tool || provenance.kind));
+  });
 }
 
 function nativeAnnouncePromptProjection(input: {
@@ -110,6 +124,25 @@ export async function handleNativeAnnounceCompletion(input: {
 } | null> {
   const nativeAnnounceCompletion = extractNativeAnnounceCompletion(input.event, input.prompt);
   if (!nativeAnnounceCompletion) return null;
+
+  const hasStructuredProvenance = hasNativeAnnounceStructuredProvenance(input.event);
+  const textParsedAnnounce = !hasStructuredProvenance;
+  const messageGuardVerdict = legacyHeuristicVerdict({
+    surface: "message_guard",
+    hasNativeTruth: hasStructuredProvenance,
+    hasKnownNativeId: false,
+    hasLegacySignal: textParsedAnnounce,
+    newTask: false,
+    reason: hasStructuredProvenance ? "native_kind_present" : "text_native_announce_parse",
+  });
+  if (messageGuardVerdict.source === "legacy_heuristic_read_only") {
+    void recordPolicyReplay("legacy_heuristic_fallback_used", buildLegacyHeuristicFallbackEvent({
+      surface: "message_guard",
+      reason: messageGuardVerdict.reason,
+      newTask: false,
+      allowed: messageGuardVerdict.allowed,
+    }), input.logger, null).catch(() => undefined);
+  }
 
   const preStateKey = resolvePolicyStateKey(input.ctx);
   const matchedContract = findWorkContractByNativeChildSessionKey(nativeAnnounceCompletion.sourceSessionKey);

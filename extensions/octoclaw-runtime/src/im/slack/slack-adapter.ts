@@ -545,9 +545,12 @@ export class SlackAdapter implements IMAdapter {
     }
 
     const timeoutMs = Math.max(500, Number(params.timeoutMs || 5000));
-    const message = params.suppressProjectionFooter || !params.projectionFooter
+    let message = params.suppressProjectionFooter || !params.projectionFooter
       ? params.message
       : this.renderProjectionFooter(params.message, params.projectionFooter);
+    if (message.length > SLACK_CAPABILITIES.maxMessageLength) {
+      message = message.slice(0, SLACK_CAPABILITIES.maxMessageLength);
+    }
     const replyToMessageId = normalizeSlackMessageTs(params.replyToMessageId);
     const source = params.deliveryTargetSource ?? slackTargetSource({ replyToMessageId, threadTs: target.threadTs });
     const footerMode = params.footerMode ?? (params.projectionFooter && !params.suppressProjectionFooter ? "debug" : "off");

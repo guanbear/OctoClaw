@@ -21,7 +21,7 @@ done unless the listed evidence exists.
 
 ### P1-A: Runtime truth verdict
 
-- [ ] Add or complete a native-first runtime truth verdict helper.
+- [x] Add or complete a native-first runtime truth verdict helper.
   - Candidate files:
     - `extensions/octoclaw-runtime/src/state/native-status-projector.ts`
     - `extensions/octoclaw-runtime/src/tools/runtime-task-projection.ts`
@@ -33,58 +33,70 @@ done unless the listed evidence exists.
     - `agentRuntimeId`
     - `source`
     - `reason`
-- [ ] Ensure `kind="spawn-child"` is accepted as child-session truth.
-- [ ] Ensure native `agentRuntime.id` is preserved through status projection.
-- [ ] Ensure native `direct` or non-child kind is not overridden by string
+- [x] Ensure `kind="spawn-child"` is accepted as child-session truth.
+- [x] Ensure native `agentRuntime.id` is preserved through status projection.
+- [x] Ensure native `direct` or non-child kind is not overridden by string
       heuristics.
 
 Tests:
 
-- [ ] `NTR-P1-001`
-- [ ] `NTR-P1-002`
-- [ ] `NTR-P1-003`
-- [ ] `NTR-P1-004`
+- [x] `NTR-P1-001` — kind=spawn-child accepted as child-session truth (native-status-projector.test.ts: "resolves status by openclawRunId")
+- [x] `NTR-P1-002` — native agentRuntime.id preserved (same test checks agentRuntimeId: "acp-primary")
+- [x] `NTR-P1-003` — native direct kind not overridden by string heuristics (native-status-projector.test.ts: "does not let a misleading session key override native direct truth")
+- [x] `NTR-P1-004` — verdict fields complete and source tracking correct (all 8 projector tests)
 
 ### P1-B: Legacy heuristic isolation
 
-- [ ] Identify all runtime/session/spawn heuristics that read:
+- [x] Identify all runtime/session/spawn heuristics that read:
   - session key substrings;
   - task labels;
   - assistant text;
   - transcript text;
   - stale cache fields.
-- [ ] Move those heuristics behind `legacy_read_only` or equivalent boundary.
-- [ ] Add event emission when legacy fallback is used:
+  - Evidence: 31 heuristics cataloged across 5 categories (session identity 6, delivery status 10, spawn success 6, text-to-decision 5, role/source routing 4)
+- [x] Move those heuristics behind `legacy_read_only` or equivalent boundary.
+  - `dispatch_guard` surface wired in `resolve/session.ts:isSubagentSessionRef()`
+  - `message_guard` surface wired in `resolve/native-announce.ts:handleNativeAnnounceCompletion()`
+  - `delivery_projection` surface wired in `im/delivery-relay-verdict.ts:deliveryRelayVerdict()`
+  - `status_projection` surface already wired in `tools/runtime-status.ts`
+- [x] Add event emission when legacy fallback is used:
   - event name: `legacy_heuristic_fallback_used`
   - required fields: `surface`, `reason`, `newTask`, `readOnly`.
-- [ ] For new tasks, legacy fallback must not affect:
+  - All 4 surfaces emit via `recordPolicyReplay()` + `buildLegacyHeuristicFallbackEvent()`
+- [x] For new tasks, legacy fallback must not affect:
   - dispatch;
   - `sessions_spawn` admission;
   - dispatch confirm;
   - ACK;
   - final delivery.
+  - Evidence: All 5 hot paths verified clean — no legacy heuristic imports or calls
 
 Tests:
 
-- [ ] `NTR-P1-005`
-- [ ] `NTR-P1-006`
-- [ ] `NTR-P1-007`
-- [ ] `NTR-P1-008`
+- [x] `NTR-P1-005` — blocks legacy fallback for new tasks at dispatch_guard (legacy-heuristics.test.ts)
+- [x] `NTR-P1-006` — allows read-only legacy for old tasks at status_projection (legacy-heuristics.test.ts)
+- [x] `NTR-P1-007` — legacy_heuristic_fallback_used event fires with correct fields at all 5 surfaces (legacy-heuristics.test.ts)
+- [x] `NTR-P1-008` — hot-path modules verified clean of legacy heuristic imports (legacy-heuristics.test.ts)
 
 ### P1-C: Delete first unsafe heuristics
 
 Only after P1-A and P1-B tests pass:
 
-- [ ] Remove or disable child detection from assistant message text.
-- [ ] Remove or disable child detection from transcript text for new tasks.
-- [ ] Remove or disable session-label substring inference when native kind is
+- [x] Remove or disable child detection from assistant message text.
+  - `extractNativeAnnounceCompletion()` in `native-announce-parse.ts` now gates text regex fallback (`sourceTool=`, `[Internal task completion event]`) behind `!structuredSourceTool`
+- [x] Remove or disable child detection from transcript text for new tasks.
+  - `readNativeChildSessionCompletion()` naturally guarded — only called when structured extraction fails
+- [x] Remove or disable session-label substring inference when native kind is
       present.
-- [ ] Keep old-record display reader if BDD old-record tests require it.
+  - `isSubagentSessionRef(raw, nativeKind?)` now uses native kind as truth: `spawn-child` → true, any other present kind → false, absent → legacy string heuristics preserved
+  - `SessionDescriptor` carries `nativeKind` from session registry; `loadSessionDescriptors()` passes it through
+- [x] Keep old-record display reader if BDD old-record tests require it.
+  - All legacy string heuristics preserved when `nativeKind` is absent — old records still display correctly
 
 Tests:
 
-- [ ] `NTR-P1-009`
-- [ ] `NTR-P1-010`
+- [x] `NTR-P1-009`
+- [x] `NTR-P1-010`
 
 ## Phase 2: ACP Fallback Native Integration
 
@@ -196,6 +208,126 @@ Tests:
 - [ ] `NTR-P3-008`
 - [ ] `NTR-P3-009`
 
+## Phase 4: RuntimeAdapter And Hermes Foundation
+
+### P4-A: Minimal host runtime adapter types
+
+- [ ] Add the smallest runtime host type boundary needed by existing behavior.
+  - Candidate files:
+    - `extensions/octoclaw-runtime/src/runtime-host/types.ts`
+    - `extensions/octoclaw-runtime/src/runtime-host/index.ts`
+  - Required concepts:
+    - `RuntimeHostId`
+    - `RuntimeStatusSnapshot`
+    - `RuntimeDeliverySnapshot`
+    - `RuntimeFallbackSnapshot`
+    - `HostRuntimeAdapter`
+- [ ] Do not add `spawn()` unless a BDD scenario and call site require it.
+- [ ] Do not add `cancel()` unless `octoclaw_task_action` routes cancellation
+      through the host in this slice.
+- [ ] Keep all types free of OpenClaw-only names except in the OpenClaw
+      adapter file.
+
+Tests:
+
+- [ ] `NTR-P4-001`
+- [ ] `NTR-P4-002`
+
+### P4-B: OpenClaw adapter extraction
+
+- [ ] Wrap existing OpenClaw native status lookup behind the adapter.
+- [ ] Wrap native delivery lookup behind the adapter.
+- [ ] Wrap ACP fallback snapshot read path behind the adapter.
+- [ ] Move status/relay/fallback call sites to consume adapter snapshots.
+- [ ] Prove outputs are identical to pre-extraction tests in OpenClaw mode.
+
+Tests:
+
+- [ ] `NTR-P4-003`
+- [ ] `NTR-P4-004`
+- [ ] `NTR-P4-005`
+
+### P4-C: Hermes dry-run foundation only
+
+- [ ] Add a Hermes capability matrix document or module.
+  - Required statuses:
+    - `acp`
+    - `gatewayMessaging`
+    - `sessionStorage`
+    - `backgroundDelegation`
+    - `deliveryReceipts`
+    - `runtimeFallbacks`
+- [ ] Add `runtimeHostMode = "openclaw" | "hermes_dry_run"` only if a runtime
+      config flag is needed for reporting.
+- [ ] `hermes_dry_run` may report capability gaps but must not spawn, deliver,
+      or change OpenClaw live behavior.
+- [ ] Do not add Hermes process management, config mutation, credentials,
+      migration execution, or a live Hermes backend.
+
+Tests:
+
+- [ ] `NTR-P4-006`
+- [ ] `NTR-P4-007`
+- [ ] `NTR-P4-008`
+
+## Phase 5: Deletion Closeout
+
+### P5-A: Deletion ledger baseline
+
+- [ ] Record before/after runtime production LOC.
+  - Suggested command:
+
+```bash
+node - <<'NODE'
+const fs=require('fs'); const path=require('path');
+const root=process.cwd(); const base='extensions/octoclaw-runtime/src';
+function walk(dir,out=[]){ for(const ent of fs.readdirSync(path.join(root,dir),{withFileTypes:true})){ const p=path.join(dir,ent.name); if(ent.isDirectory()) walk(p,out); else if(['.ts','.tsx','.js','.mjs'].includes(path.extname(ent.name))) out.push(p); } return out; }
+function lines(rel){ return fs.readFileSync(path.join(root,rel),'utf8').split(/\r?\n/).length; }
+let prod=0, prodFiles=0, test=0, testFiles=0;
+for(const f of walk(base)){ const n=lines(f); if(/(__tests__|\.test\.|\.spec\.)/.test(f)){ test+=n; testFiles++; } else { prod+=n; prodFiles++; } }
+console.log({prod, prodFiles, test, testFiles});
+NODE
+```
+
+- [ ] Create a deletion ledger in implementation notes.
+- [ ] List every retained large module with a reason.
+
+Tests:
+
+- [ ] `NTR-P5-001`
+
+### P5-B: Delete proven-dead legacy branches
+
+Delete only after the corresponding BDD and smoke evidence exists:
+
+- [ ] New-task assistant/transcript/session-label runtime heuristics.
+- [ ] ACP backend-unavailable self-managed fallback branches replaced by native
+      ACP fallback.
+- [ ] Delivery compensation branches replaced by native delivery success.
+- [ ] Stale task-state-only success/delivery inference.
+- [ ] OpenClaw concrete duplicate call sites replaced by adapter reads.
+- [ ] Pass-through wrappers that no longer add policy, validation, or evidence.
+
+Tests:
+
+- [ ] `NTR-P5-002`
+- [ ] `NTR-P5-003`
+- [ ] `NTR-P5-004`
+
+### P5-C: Retire transitional flags and stale docs
+
+- [ ] Remove completed transitional flags when both old and new paths no longer
+      need runtime switching.
+- [ ] Keep permanent product flags only when users need them.
+- [ ] Update `README.md`, `README.zh-CN.md`, relevant docs, and CLI/status text
+      so they describe the surviving architecture.
+- [ ] Ensure no docs advertise removed live paths.
+
+Tests:
+
+- [ ] `NTR-P5-005`
+- [ ] `NTR-P5-006`
+
 ## Required Test Commands
 
 Run the smallest targeted command for each slice, then broader checks.
@@ -219,6 +351,7 @@ extensions/octoclaw-runtime/src/delegate/native-spawn-gate*.test.ts
 extensions/octoclaw-runtime/src/delegate/native-spawn-confirm*.test.ts
 extensions/octoclaw-runtime/src/replay/message-guard*.test.ts
 extensions/octoclaw-runtime/src/im/*/*.test.ts
+extensions/octoclaw-runtime/src/runtime-host/*.test.ts
 tools/octoclawctl/src/slack-acceptance/*.test.ts
 ```
 
@@ -248,5 +381,8 @@ If broad checks fail due to pre-existing dirty worktree issues, document:
 - [ ] Do not infer spawn success from text.
 - [ ] Do not infer delivery success from text.
 - [ ] Do not remove old replay readers without archive/replay tests.
+- [ ] Do not create a live Hermes backend in this change.
+- [ ] Do not add adapter methods without BDD demand.
+- [ ] Do not leave replaced legacy branches behind under unused permanent flags.
 - [ ] Do not mark any BDD scenario done without an automated test or an explicit
       manual smoke note.

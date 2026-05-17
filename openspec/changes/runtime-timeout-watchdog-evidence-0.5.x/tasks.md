@@ -87,7 +87,7 @@ Tasks:
 - [x] Add optional tmux evidence provider behind `OCTOCLAW_TMUX_EVIDENCE=1`.
 - [x] Capture bounded tmux data only: alive, command/cwd if available, output hash/change, short redacted excerpt.
 - [x] Do not let tmux evidence prove success.
-- [ ] Persist reducer transition events for running_slow/stalled/timed_out/completed_without_result in the ledger.
+- [ ] Persist reducer transition events for running_slow/stalled/timed_out/completed_without_result in the ledger. — NOT YET IMPLEMENTED: reducer computes status but does not write transition events to runtime_events table.
 - [x] Keep notification best-effort and deduped through the existing transition notifier path.
 
 Acceptance:
@@ -109,14 +109,14 @@ Write scope:
 Tasks:
 
 - [x] Run lightweight reducer projection before `octoclaw_status`/task detail renders active or recent tasks.
-- [ ] Add startup reconcile for unfinished attempts.
-- [ ] Do not retry or restart tasks during startup reconcile.
-- [ ] Deduplicate startup notifications.
+- [x] Add startup reconcile for unfinished attempts. — Implemented: `watchdogStartupReconcile()` in `ack-watchdog.ts:321`, hooked in `ack-guard.ts:64`, tests in `watchdog-startup-reconcile.test.ts`.
+- [x] Do not retry or restart tasks during startup reconcile. — Implemented: startup reconcile only updates projection, never triggers spawn/retry.
+- [x] Deduplicate startup notifications. — Implemented: dedupe in watchdogStartupReconcile path.
 
 Acceptance:
 
 - [x] Status query discovers stale/timed-out/degraded tasks even if prior notification was missed.
-- [ ] Runtime startup repairs unfinished task projection without auto-retry.
+- [x] Runtime startup repairs unfinished task projection without auto-retry. — Implemented: watchdogStartupReconcile repairs projection without spawn.
 
 ## WP-F Context Hygiene And Verification
 

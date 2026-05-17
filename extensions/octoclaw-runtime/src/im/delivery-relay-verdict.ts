@@ -1,4 +1,6 @@
 import { asString, isRecord } from "../util/type-coercion.js";
+import { recordPolicyReplay } from "../replay/replay.js";
+import { buildLegacyHeuristicFallbackEvent, legacyHeuristicVerdict } from "../state/legacy-heuristics.js";
 
 export type DeliveryRelayMode = "compensate" | "native_success_audit_only";
 export type DeliveryTruthSource = "native_delivery" | "octoclaw_relay" | "audit_only" | "none";
@@ -30,6 +32,25 @@ function nativeDeliveryResultHash(nativeDelivery: unknown): string {
   return isRecord(nativeDelivery) ? asString(nativeDelivery.resultHash || nativeDelivery.result_hash) : "";
 }
 
+function recordDeliveryProjectionLegacyBoundary(reason: string): void {
+  const verdict = legacyHeuristicVerdict({
+    surface: "delivery_projection",
+    hasNativeTruth: false,
+    hasKnownNativeId: false,
+    hasLegacySignal: true,
+    newTask: false,
+    reason,
+  });
+  if (verdict.source === "legacy_heuristic_read_only") {
+    void recordPolicyReplay("legacy_heuristic_fallback_used", buildLegacyHeuristicFallbackEvent({
+      surface: "delivery_projection",
+      reason: verdict.reason,
+      newTask: false,
+      allowed: verdict.allowed,
+    })).catch(() => undefined);
+  }
+}
+
 export function deliveryRelayVerdict(input: {
   nativeDelivery?: unknown;
   nativeResultExists?: boolean;
@@ -39,8 +60,12 @@ export function deliveryRelayVerdict(input: {
   const status = nativeDeliveryStatus(input.nativeDelivery);
   const error = nativeDeliveryError(input.nativeDelivery);
   const resultHash = nativeDeliveryResultHash(input.nativeDelivery);
+  const nativeDeliveryStructured = isRecord(input.nativeDelivery) && Boolean(input.nativeDelivery.status || input.nativeDelivery.deliveryStatus);
 
   if (["delivered", "sent", "acknowledged", "acked"].includes(status)) {
+    if (!nativeDeliveryStructured) {
+      recordDeliveryProjectionLegacyBoundary("delivery_status_string_match");
+    }
     const duplicateRisk = Boolean(resultHash && input.relayResultHash && resultHash === input.relayResultHash);
     return {
       finalVisible: true,
@@ -53,6 +78,9 @@ export function deliveryRelayVerdict(input: {
   }
 
   if (["failed", "error"].includes(status)) {
+    if (!nativeDeliveryStructured) {
+      recordDeliveryProjectionLegacyBoundary("delivery_status_string_match");
+    }
     return {
       finalVisible: false,
       nativeDelivered: false,
@@ -64,6 +92,9 @@ export function deliveryRelayVerdict(input: {
   }
 
   if (["degraded", "unknown"].includes(status)) {
+    if (!nativeDeliveryStructured) {
+      recordDeliveryProjectionLegacyBoundary("delivery_status_string_match");
+    }
     return {
       finalVisible: false,
       nativeDelivered: false,

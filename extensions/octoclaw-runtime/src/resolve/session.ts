@@ -11,6 +11,7 @@ import {
 } from "../conversation-grounding.js";
 import { normalizeSemanticPrompt } from "../semantic-prompt.js";
 import { stripProjectionFooterFromText } from "../projection-footer-sanitizer.js";
+import { buildLegacyHeuristicFallbackEvent, legacyHeuristicVerdict } from "../state/legacy-heuristics.js";
 import { isRecord, type UnknownRecord } from "../util/type-coercion.js";
 import fsSync from "node:fs";
 
@@ -53,6 +54,7 @@ export interface SessionDescriptor extends SessionRouteInfo {
   channelSessionKey: string;
   sessionId: string;
   sessionFile: string;
+  nativeKind: string;
   nativeChannelId: string;
   chatType: string;
   updatedSort: number;
@@ -308,18 +310,37 @@ export function ackDeliveryState(result: { delivered?: boolean; sent?: unknown; 
   };
 }
 
-export function isSubagentSessionRef(raw: string): boolean {
+export function isSubagentSessionRef(raw: string, nativeKind?: string): boolean {
   const value = lowerStringValue(raw);
   if (!value) {
     return false;
   }
-  if (value.includes("octoclaw-subagent-")) {
-    return true;
+  if (nativeKind === "spawn-child") return true;
+  if (nativeKind === "direct" || nativeKind) return false;
+  const hasKnownNativeId = value.includes("octoclaw-subagent-") || value.includes(":subagent:");
+  const textMatchedSubagent = /^agent:[^:]+:(?!main$)/iu.test(stringValue(raw)) && value.includes("subagent");
+
+  // Legacy boundary: text-only subagent inference is read-only observability and must not admit new dispatch work.
+  const verdict = legacyHeuristicVerdict({
+    surface: "dispatch_guard",
+    hasNativeTruth: hasKnownNativeId,
+    hasKnownNativeId,
+    hasLegacySignal: textMatchedSubagent,
+    newTask: true,
+    reason: hasKnownNativeId ? "native_kind_present" : "no_native_spawn_evidence",
+  });
+  if (verdict.source === "legacy_heuristic_read_only") {
+    void import("../replay/replay.js")
+      .then(({ recordPolicyReplay }) => recordPolicyReplay("legacy_heuristic_fallback_used", buildLegacyHeuristicFallbackEvent({
+        surface: "dispatch_guard",
+        reason: verdict.reason,
+        newTask: true,
+        allowed: verdict.allowed,
+      })))
+      .catch(() => undefined);
   }
-  if (value.includes(":subagent:")) {
-    return true;
-  }
-  return /^agent:[^:]+:(?!main$)/iu.test(stringValue(raw)) && value.includes("subagent");
+
+  return hasKnownNativeId || textMatchedSubagent;
 }
 
 export function deriveSessionDescriptor(controlKey: string, record: UnknownRecord = {}): SessionDescriptor {
@@ -373,6 +394,7 @@ export function deriveSessionDescriptor(controlKey: string, record: UnknownRecor
     channelSessionKey: stringValue(record.channelSessionKey),
     sessionId: stringValue(record.sessionId),
     sessionFile: stringValue(record.sessionFile),
+    nativeKind: stringValue(record.nativeKind || record.kind || record.type || record.sessionKind || record.session_kind),
     nativeChannelId: stringValue(originRecord.nativeChannelId || deliveryRecord.nativeChannelId || ""),
     chatType: stringValue(record.chatType || originRecord.chatType || ""),
     updatedSort: parseUpdatedSortValue(record.updatedAt),
@@ -403,6 +425,7 @@ export function loadSessionDescriptors(): Map<string, SessionDescriptor> {
       channelSessionKey,
       sessionId: stringValue(record.sessionId),
       sessionFile: stringValue(record.sessionFile),
+      nativeKind: stringValue(record.nativeKind || record.kind || record.type || record.sessionKind || record.session_kind),
       origin: stringValue(parsed.origin),
       target: stringValue(parsed.target),
       bindingKey: stringValue(parsed.bindingKey),
@@ -411,7 +434,8 @@ export function loadSessionDescriptors(): Map<string, SessionDescriptor> {
       nativeChannelId: stringValue(parsed.nativeChannelId),
       chatType: stringValue(parsed.chatType),
       updatedSort: parseUpdatedSortValue(record.updatedAt),
-      isSubagent: isSubagentSessionRef(key) || isSubagentSessionRef(stringValue(record.agentId)),
+      isSubagent: isSubagentSessionRef(key, stringValue(record.nativeKind || record.kind || record.type || record.sessionKind || record.session_kind))
+        || isSubagentSessionRef(stringValue(record.agentId), stringValue(record.nativeKind || record.kind || record.type || record.sessionKind || record.session_kind)),
       isUserFacing: Boolean(parsed.looksLikeImSession),
       isContaminatedUserSession: false,
     };

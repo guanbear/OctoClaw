@@ -748,3 +748,116 @@ describe("Slack adapter acceptance", () => {
     });
   });
 });
+
+describe("Slack smoke S1-S5", () => {
+  it("S1: normal reply sends and delivers successfully", async () => {
+    delete process.env.OCTOCLAW_LEGACY_CLI_DELIVERY;
+    process.env.SLACK_BOT_TOKEN = "xoxb-test";
+    const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      expect(String(url)).toBe("https://slack.com/api/chat.postMessage");
+      const body = JSON.parse(String(init?.body));
+      expect(body.channel).toBe("C123ABCDEF");
+      expect(body.text).toContain("hello world");
+      return { json: async () => ({ ok: true, ts: "1700000000.001001" }) } as Response;
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const adapter = new SlackAdapter();
+    const result = await adapter.send({
+      sessionKey: "agent:main:slack:channel:C123abcdef",
+      message: "hello world",
+    });
+
+    expect(result).toMatchObject({ sent: true, delivered: true });
+  });
+
+  it("S2: delegate message with footer includes model name", async () => {
+    delete process.env.OCTOCLAW_LEGACY_CLI_DELIVERY;
+    process.env.SLACK_BOT_TOKEN = "xoxb-test";
+    const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      expect(String(url)).toBe("https://slack.com/api/chat.postMessage");
+      const body = JSON.parse(String(init?.body));
+      expect(body.text).toContain("task completed");
+      expect(body.text).toContain("zhipu/GLM-5.1");
+      return { json: async () => ({ ok: true, ts: "1700000000.001002" }) } as Response;
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const adapter = new SlackAdapter();
+    const result = await adapter.send({
+      sessionKey: "agent:main:slack:channel:C123abcdef",
+      message: "task completed",
+      projectionFooter: { route: "delegate", model: "zhipu/GLM-5.1", via: "native_announce" },
+    });
+
+    expect(result).toMatchObject({ sent: true, delivered: true });
+  });
+
+  it("S3: streaming transport returns native_streaming", async () => {
+    delete process.env.OCTOCLAW_LEGACY_CLI_DELIVERY;
+    process.env.SLACK_BOT_TOKEN = "xoxb-test";
+    const calls: string[] = [];
+    const fetchMock = vi.fn(async (url: string | URL | Request, _init?: RequestInit) => {
+      const method = String(url).split("/").pop() || "";
+      calls.push(method);
+      if (method === "chat.startStream") {
+        return { json: async () => ({ ok: true, channel: "C123ABCDEF", ts: "1700000000.001003" }) } as Response;
+      }
+      return { json: async () => ({ ok: true, ts: "1700000000.001003" }) } as Response;
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const adapter = new SlackAdapter({ streamingMode: "partial", nativeTransport: true });
+    const result = await adapter.sendText({
+      kind: "native_child_final",
+      channel: "slack",
+      target: { to: "C123ABCDEF", replyToMessageId: "1700000000.000100", source: "inbound_anchor" },
+      content: "streamed result",
+      footerMode: "off",
+    });
+
+    expect(result).toMatchObject({ ok: true, transport: "slack_api_stream" });
+  });
+
+  it("S4: channel_not_found returns sent:false with IM_SEND_FAILED error", async () => {
+    delete process.env.OCTOCLAW_LEGACY_CLI_DELIVERY;
+    process.env.SLACK_BOT_TOKEN = "xoxb-test";
+    const fetchMock = vi.fn(async (url: string | URL | Request, _init?: RequestInit) => {
+      expect(String(url)).toBe("https://slack.com/api/chat.postMessage");
+      return { json: async () => ({ ok: false, error: "channel_not_found" }) } as Response;
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const adapter = new SlackAdapter();
+    const result = await adapter.send({
+      sessionKey: "agent:main:slack:channel:C_NOTFOUND",
+      message: "test message",
+    });
+
+    expect(result).toMatchObject({ sent: false, delivered: false });
+    expect(result.error).toBeTruthy();
+  });
+
+  it("S5: long message auto-truncates and sends successfully", async () => {
+    delete process.env.OCTOCLAW_LEGACY_CLI_DELIVERY;
+    process.env.SLACK_BOT_TOKEN = "xoxb-test";
+    const longMessage = "x".repeat(50000);
+    let capturedText = "";
+    const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      expect(String(url)).toBe("https://slack.com/api/chat.postMessage");
+      const body = JSON.parse(String(init?.body));
+      capturedText = body.text;
+      return { json: async () => ({ ok: true, ts: "1700000000.001005" }) } as Response;
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const adapter = new SlackAdapter();
+    const result = await adapter.send({
+      sessionKey: "agent:main:slack:channel:C123abcdef",
+      message: longMessage,
+    });
+
+    expect(result).toMatchObject({ sent: true, delivered: true });
+    expect(capturedText.length).toBeLessThanOrEqual(40000);
+  });
+});

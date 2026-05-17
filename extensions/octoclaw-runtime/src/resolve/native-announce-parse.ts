@@ -69,10 +69,11 @@ export function extractNativeAnnounceCompletion(event: UnknownRecord, prompt: st
   const text = stringValue(prompt);
   if (!text) return null;
   const provenance = nativeAnnounceProvenance(event);
-  const sourceTool = stringValue(provenance.sourceTool || provenance.source_tool)
-    || regexGroup(text, /\bsourceTool=([^\s]+)/u);
-  const internalSubagentCompletion = /\[Internal task completion event\][\s\S]*\bsource:\s*subagent\b/iu.test(text);
-  if (sourceTool !== "subagent_announce" && !text.includes("sourceTool=subagent_announce") && !internalSubagentCompletion) {
+  const structuredSourceTool = stringValue(provenance.sourceTool || provenance.source_tool);
+  const sourceTool = structuredSourceTool || regexGroup(text, /\bsourceTool=([^\s]+)/u);
+  const internalSubagentCompletion = !structuredSourceTool
+    && /\[Internal task completion event\][\s\S]*\bsource:\s*subagent\b/iu.test(text);
+  if (sourceTool !== "subagent_announce" && (!structuredSourceTool && !text.includes("sourceTool=subagent_announce")) && !internalSubagentCompletion) {
     return null;
   }
   const sourceSessionFromPrompt = regexGroup(text, /\bsourceSession=([^\s]+)/u)

@@ -7,6 +7,8 @@ Date: 2026-05-17
 - `NTR-P1-*`: native truth and legacy heuristic isolation
 - `NTR-P2-*`: ACP fallback observe/enforce
 - `NTR-P3-*`: delivery relay slimming
+- `NTR-P4-*`: RuntimeAdapter and Hermes foundation
+- `NTR-P5-*`: deletion closeout and debt removal
 
 All scenarios are written so another AI can implement tests directly. Prefer
 automated Vitest tests. Mark live Slack/Feishu tests as smoke only when real
@@ -496,6 +498,204 @@ RESULT: done
 
 ---
 
+## NTR-P4: RuntimeAdapter And Hermes Foundation
+
+### NTR-P4-001: Runtime adapter has only required methods
+
+**Given** the runtime host adapter type is loaded
+
+**When** its public methods are inspected
+
+**Then** it exposes status, delivery, and fallback snapshot reads
+
+**And** it does not expose a generic scheduler API
+
+**And** it does not expose `spawn` or `cancel` unless the implementing patch
+includes a BDD-backed call site that requires them
+
+### NTR-P4-002: Adapter types are host-neutral
+
+**Given** `RuntimeStatusSnapshot`, `RuntimeDeliverySnapshot`, and
+`RuntimeFallbackSnapshot`
+
+**When** their type names and required fields are inspected
+
+**Then** shared types do not require OpenClaw-only field names
+
+**And** OpenClaw-specific names appear only as optional native reference fields
+or inside the OpenClaw adapter implementation
+
+### NTR-P4-003: OpenClaw adapter preserves native status projection
+
+**Given** an OpenClaw native record with:
+
+```json
+{
+  "kind": "spawn-child",
+  "agentRuntime": { "id": "acp-primary" },
+  "runId": "run-1",
+  "flowId": "flow-1",
+  "childSessionKey": "child-1",
+  "status": "running"
+}
+```
+
+**When** the OpenClaw adapter reads status
+
+**Then** adapter status is `running`
+
+**And** `nativeKind` is `spawn-child`
+
+**And** `agentRuntimeId` is `acp-primary`
+
+**And** no legacy heuristic is consulted
+
+### NTR-P4-004: OpenClaw adapter preserves delivery verdict
+
+**Given** native delivery reports a delivered message with id `msg-1`
+
+**When** delivery relay consumes the adapter delivery snapshot
+
+**Then** `nativeDelivered` is true
+
+**And** relay compensation is not needed in `native_success_audit_only` mode
+
+**And** the audit event includes `source="native_delivery"`
+
+### NTR-P4-005: OpenClaw adapter preserves ACP fallback snapshot
+
+**Given** native fallback read path returns:
+
+```json
+{
+  "primaryRuntimeId": "acp-primary",
+  "fallbackRuntimeIds": ["acp-secondary"]
+}
+```
+
+**When** the adapter reads fallbacks
+
+**Then** fallback status is `ok`
+
+**And** primary/fallback ids match the native data
+
+**And** OctoClaw does not mutate `acp.fallbacks`
+
+### NTR-P4-006: Hermes capability matrix is explicit
+
+**Given** Hermes foundation is present
+
+**When** capability matrix is read
+
+**Then** it reports statuses for:
+
+- `acp`
+- `gatewayMessaging`
+- `sessionStorage`
+- `backgroundDelegation`
+- `deliveryReceipts`
+- `runtimeFallbacks`
+
+**And** unknown capabilities are marked `unknown`, not assumed supported
+
+### NTR-P4-007: Hermes dry-run cannot spawn or deliver
+
+**Given** `runtimeHostMode = "hermes_dry_run"`
+
+**When** a delegated task attempts to spawn or deliver through Hermes
+
+**Then** the operation fails closed with a reason like
+`hermes_live_runtime_not_enabled`
+
+**And** no child run is created
+
+**And** no user-facing final is sent by Hermes
+
+### NTR-P4-008: OpenClaw live mode does not import Hermes runtime
+
+**Given** `runtimeHostMode = "openclaw"`
+
+**When** runtime extension starts and handles a normal delegated run
+
+**Then** no Hermes process launcher, credentials, migration script, or live
+runtime dependency is imported or invoked
+
+**And** existing OpenClaw BDD scenarios still pass
+
+---
+
+## NTR-P5: Deletion Closeout
+
+### NTR-P5-001: Deletion ledger records before and after LOC
+
+**Given** a deletion closeout patch
+
+**When** implementation notes are reviewed
+
+**Then** they include before/after production LOC for
+`extensions/octoclaw-runtime/src`
+
+**And** they list removed files or branches
+
+**And** every retained large module has a reason
+
+### NTR-P5-002: Deleted legacy heuristic has test coverage
+
+**Given** a legacy heuristic branch is deleted
+
+**When** the corresponding new-task BDD test runs
+
+**Then** native facts still decide dispatch/status/delivery
+
+**And** old-record display tests still pass or document explicit migration
+
+### NTR-P5-003: Deleted ACP retry branch has native fallback coverage
+
+**Given** OctoClaw self-managed backend-unavailable retry code is deleted
+
+**When** `backend_unavailable_before_output` occurs in enforce mode
+
+**Then** OpenClaw native ACP fallback owns failover
+
+**And** only one WorkContract and one user-facing final exist
+
+### NTR-P5-004: Deleted relay branch has native delivery coverage
+
+**Given** a message-tool-only or rich/card/button-only relay branch is deleted
+
+**When** native delivery success is proven for that reply kind
+
+**Then** OctoClaw does not compensate
+
+**And** audit still records native delivery
+
+**And** native failure/missing/degraded tests still compensate
+
+### NTR-P5-005: Retired flags are absent from live config
+
+**Given** a transitional flag is retired
+
+**When** config schema, docs, and runtime code are searched
+
+**Then** the flag no longer appears as a user-configurable live option
+
+**And** permanent product flags remain documented only when users still need
+to choose behavior
+
+### NTR-P5-006: Docs no longer advertise removed live paths
+
+**Given** final docs are updated
+
+**When** docs and CLI/status help are searched for removed paths
+
+**Then** they do not advertise legacy scheduler, legacy completion file,
+self-managed backend fallback, or delivery relay as primary live paths
+
+**And** they describe OctoClaw as policy/contract/projection on top of the host
+runtime
+
+---
+
 ## Minimum Test File Map
 
 ```text
@@ -507,6 +707,7 @@ extensions/octoclaw-runtime/src/delegate/native-spawn-confirm*.test.ts
 extensions/octoclaw-runtime/src/replay/message-guard*.test.ts
 extensions/octoclaw-runtime/src/im/slack/*.test.ts
 extensions/octoclaw-runtime/src/im/feishu/*.test.ts
+extensions/octoclaw-runtime/src/runtime-host/*.test.ts
 tools/octoclawctl/src/slack-acceptance/*.test.ts
 tools/octoclawctl/src/nightly/*.test.ts
 ```
@@ -524,3 +725,9 @@ tools/octoclawctl/src/nightly/*.test.ts
 | NTR-P3-001..003 | P3-A |
 | NTR-P3-004..007 | P3-B |
 | NTR-P3-008..009 | P3-C |
+| NTR-P4-001..002 | P4-A |
+| NTR-P4-003..005 | P4-B |
+| NTR-P4-006..008 | P4-C |
+| NTR-P5-001 | P5-A |
+| NTR-P5-002..004 | P5-B |
+| NTR-P5-005..006 | P5-C |

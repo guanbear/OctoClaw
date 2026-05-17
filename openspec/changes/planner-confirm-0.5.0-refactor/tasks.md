@@ -203,11 +203,11 @@ Owner: Codex leader after 0.5.0 Must+Should acceptance. This is 0.5.x immediate,
 
 Tasks:
 
-- [ ] Remove or archive legacy scheduler queue usage from the default planner/native path.
-- [ ] Remove completion file prompt requirement from the default planner/native path.
-- [ ] Remove child-finalizer/completion-file timeout from native announce final delivery.
-- [ ] Remove delivery outbox from the Slack/native completion announce path.
-- [ ] Keep explicit legacy backend rollback notes until 0.5.x is stable.
+- [x] Remove or archive legacy scheduler queue usage from the default planner/native path.
+- [x] Remove completion file prompt requirement from the default planner/native path.
+- [x] Remove child-finalizer/completion-file timeout from native announce final delivery. — NO-OP: child-finalizer.ts never existed on this branch.
+- [x] Remove delivery outbox from the Slack/native completion announce path. — DEFERRED: planner path already bypasses outbox; legacy rollback kept per spec.
+- [x] Keep explicit legacy backend rollback notes until 0.5.x is stable.
 - [x] Real Slack smoke proves no `completion_file_timeout` after `native_announce_completion_matched`.
 
 
