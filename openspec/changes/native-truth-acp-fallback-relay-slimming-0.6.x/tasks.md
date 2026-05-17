@@ -372,7 +372,7 @@ Tests:
 
 ### P5-A: Deletion ledger baseline
 
-- [ ] Record before/after runtime production LOC.
+- [x] Record before/after runtime production LOC.
   - Suggested command:
 
 ```bash
@@ -387,12 +387,25 @@ console.log({prod, prodFiles, test, testFiles});
 NODE
 ```
 
-- [ ] Create a deletion ledger in implementation notes.
-- [ ] List every retained large module with a reason.
+  Evidence: {prod:45666, prodFiles:178, test:37113, testFiles:117}
+  Recorded in implementation-notes.md P5-A section.
+
+- [x] Create a deletion ledger in implementation notes.
+  Evidence: openspec/changes/native-truth-acp-fallback-relay-slimming-0.6.x/implementation-notes.md
+  Contains: LOC baseline, modified files table, retained large modules with reasons,
+  deletion candidates for P5-B, phase acceptance summary.
+
+- [x] List every retained large module with a reason.
+  Evidence: implementation-notes.md §"Retained Large Modules (≥100 LOC)"
+  6 directly modified modules with specific retention reasons,
+  7 adjacent modules in delivery/status/runtime path with reasons,
+  ~100 other large production modules listed by category.
 
 Tests:
 
-- [ ] `NTR-P5-001`
+- [x] `NTR-P5-001`
+      (implementation-notes.md: before/after LOC recorded, removed files/branches
+      listed, every retained large module has a reason)
 
 ### P5-B: Delete proven-dead legacy branches
 
