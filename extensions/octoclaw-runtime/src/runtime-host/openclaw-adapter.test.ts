@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { NativeStatusProjection, NativeStatusProjectorInput } from "../state/native-status-projector.js";
-import { createOpenClawRuntimeAdapter, normalizeNativeDeliveryToSnapshot } from "./openclaw-adapter.js";
+import { createOpenClawRuntimeAdapter, normalizeNativeDeliveryToSnapshot, adapterFallbackToNativeSnapshot } from "./openclaw-adapter.js";
 import { deliveryRelayVerdict, shouldSendRelayCompensation } from "../im/delivery-relay-verdict.js";
 import { loadNativeAcpFallbackSnapshot } from "../delegate/native-acp-fallback.js";
 
@@ -242,5 +242,53 @@ describe("NTR-P4-005: OpenClaw adapter fallback snapshot preserves ids", () => {
 
     expect(snap1.fallbackRuntimeIds).toEqual(snap2.fallbackRuntimeIds);
     expect(snap1.fallbackRuntimeIds).not.toBe(snap2.fallbackRuntimeIds);
+  });
+});
+
+describe("NTR-P4-B: adapter fallback round-trip preserves NativeAcpFallbackSnapshot shape", () => {
+  it("round-trips ok config with fallbacks to native snapshot", async () => {
+    const config = { acp: { fallbacks: ["acpx", "codex-native"] } };
+    const adapter = createOpenClawRuntimeAdapter({
+      readFallbacks: async () => loadNativeAcpFallbackSnapshot(config, new Date("2026-05-17T00:00:00Z")),
+    });
+
+    const adapterSnapshot = await adapter.readFallbacks();
+    const nativeSnapshot = adapterFallbackToNativeSnapshot(adapterSnapshot);
+
+    expect(nativeSnapshot).toMatchObject({
+      status: "ok",
+      primaryRuntimeId: "acpx",
+      fallbackRuntimeIds: ["acpx", "codex-native"],
+      source: "openclaw_config",
+    });
+  });
+
+  it("round-trips unavailable config restoring empty primaryRuntimeId", async () => {
+    const config = {};
+    const adapter = createOpenClawRuntimeAdapter({
+      readFallbacks: async () => loadNativeAcpFallbackSnapshot(config),
+    });
+
+    const adapterSnapshot = await adapter.readFallbacks();
+    const nativeSnapshot = adapterFallbackToNativeSnapshot(adapterSnapshot);
+
+    expect(nativeSnapshot.primaryRuntimeId).toBe("");
+    expect(nativeSnapshot.fallbackRuntimeIds).toEqual([]);
+    expect(nativeSnapshot.source).toBe("none");
+  });
+
+  it("round-trip produces metadata identical to direct readNativeAcpFallbackSnapshot", async () => {
+    const config = { acp: { fallbacks: ["acp-primary", "acp-secondary"] } };
+    const adapter = createOpenClawRuntimeAdapter({
+      readFallbacks: async () => loadNativeAcpFallbackSnapshot(config, new Date("2026-05-17T00:00:00Z")),
+    });
+    const directSnapshot = loadNativeAcpFallbackSnapshot(config, new Date("2026-05-17T00:00:00Z"));
+
+    const nativeSnapshot = adapterFallbackToNativeSnapshot(await adapter.readFallbacks());
+
+    expect(nativeSnapshot.status).toBe(directSnapshot.status);
+    expect(nativeSnapshot.primaryRuntimeId).toBe(directSnapshot.primaryRuntimeId);
+    expect(nativeSnapshot.fallbackRuntimeIds).toEqual(directSnapshot.fallbackRuntimeIds);
+    expect(nativeSnapshot.source).toBe(directSnapshot.source);
   });
 });

@@ -308,11 +308,17 @@ Tests:
       (readFallbacks wraps readNativeAcpFallbackSnapshot, preserves
       primary/fallback ids, returns copy of fallbackRuntimeIds)
 - [ ] Move status/relay/fallback call sites to consume adapter snapshots.
-      DEFERRED: Live call sites (dispatch.ts, native-announce.ts,
-      runtime-task-projection.ts) not moved in this packet — too risky
-      for a single change. Adapter is pure wrapper + tests only. Call
-      site migration requires separate packet with per-file regression
-      testing against existing expectations.
+      Fallback call site migrated:
+      dispatch.ts reads fallback snapshot via
+      createOpenClawRuntimeAdapter().readFallbacks() +
+      adapterFallbackToNativeSnapshot() instead of direct
+      readNativeAcpFallbackSnapshot(). Metadata shape preserved:
+      registration-planner.test.ts NTR-P2-007 and NTR-P2-008 pass
+      unchanged (32 pass + 1 skip). Adapter round-trip test added
+      (openclaw-adapter.test.ts NTR-P4-B, 3 tests).
+      Status and relay call sites remain pending:
+      dispatch status reads, native-announce.ts delivery reads,
+      runtime-task-projection.ts projection reads still use direct imports.
 - [x] Prove outputs are identical to pre-extraction tests in OpenClaw mode.
       (adapter tests prove mapping is correct; existing native-status-projector,
       delivery-relay-verdict, native-acp-fallback tests still pass unchanged)

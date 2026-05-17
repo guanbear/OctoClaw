@@ -35,9 +35,9 @@ import {
   buildEnforceFallbackReplayMetadata,
   classifyNativeAcpFallback,
   nativeAcpFallbackMetadata,
-  readNativeAcpFallbackSnapshot,
   resolveNativeAcpFallbackMode,
 } from "../../delegate/native-acp-fallback.js";
+import { createOpenClawRuntimeAdapter, adapterFallbackToNativeSnapshot } from "../../runtime-host/openclaw-adapter.js";
 import {
   buildSpeculativeSessionsSendArgs,
   serializeSpeculativePreloadState,
@@ -562,7 +562,9 @@ export async function executeOctoclawDispatch(params: Record<string, unknown>, _
         if (isDelegatedRoute) {
           const spawnBackend = resolveSpawnBackend();
           const fallbackMode = resolveNativeAcpFallbackMode();
-          const fallbackSnapshot = readNativeAcpFallbackSnapshot();
+          const fallbackSnapshot = adapterFallbackToNativeSnapshot(
+            await createOpenClawRuntimeAdapter().readFallbacks(),
+          );
           const nativeAcpFallback = fallbackMode === "delegate_backend_unavailable"
             ? buildEnforceFallbackReplayMetadata(
               fallbackSnapshot,

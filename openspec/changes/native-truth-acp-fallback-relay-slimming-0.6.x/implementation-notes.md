@@ -28,6 +28,9 @@ Recorded 2026-05-17. This is the "before" snapshot for P5-B deletion closeout.
 | P4-A | `runtime-host/types.ts` | 39 | New: `RuntimeHostId`, `RuntimeStatusSnapshot`, `RuntimeDeliverySnapshot`, `RuntimeFallbackSnapshot`, `HostRuntimeAdapter` |
 | P4-A | `runtime-host/index.ts` | 11 | New: re-exports from types |
 | P4-B | `runtime-host/openclaw-adapter.ts` | 112 | New: `createOpenClawRuntimeAdapter`, `normalizeNativeDeliveryToSnapshot` |
+| P4-B | `runtime-host/openclaw-adapter.ts` | +12 | Added `adapterFallbackToNativeSnapshot` — reverse conversion for metadata builders |
+| P4-B | `tools/handlers/dispatch.ts` | ~1511 | Replaced direct `readNativeAcpFallbackSnapshot()` with `createOpenClawRuntimeAdapter().readFallbacks()` + `adapterFallbackToNativeSnapshot()`. Removed `readNativeAcpFallbackSnapshot` import. |
+| P4-B | `runtime-host/index.ts` | 10 | Added `adapterFallbackToNativeSnapshot` to exports |
 | P4-C | `runtime-host/hermes-capabilities.ts` | 57 | New: `HermesCapabilityMatrix`, `RuntimeHostMode`, `resolveRuntimeHostMode`, `hermesDryRunSpawn`, `hermesDryRunDeliver` |
 
 ### Retained Large Modules (≥100 LOC)
@@ -192,7 +195,7 @@ The following are identified for potential deletion in P5-B, pending BDD evidenc
 | P3-B | ✓ Complete | 50 pass | `deliveryRelayMode` wired; `DeliveryPresentation` added |
 | P3-C | ✓ Complete | 70 pass | Redundant branches removed; `hasDeliveryAck` tightened |
 | P4-A | ✓ Complete | 18 pass | Minimal type boundary; no live behavior changes |
-| P4-B | Partial | 73 pass | Adapter wrapper created; live call-site migration remains pending |
+| P4-B | Partial (fallback migrated) | adapter 19 pass, planner 32 pass +1 skip, fallback 17 pass | Adapter wrapper created; fallback call site in dispatch.ts migrated via `adapterFallbackToNativeSnapshot`. Status/relay call sites remain pending. |
 | P4-C | ✓ Complete | 44 pass | Hermes dry-run foundation; fail-closed spawn/deliver |
 | P5-A | ✓ This ledger | LOC baseline recorded | See tables above |
 | P5-B | Pending | — | — |

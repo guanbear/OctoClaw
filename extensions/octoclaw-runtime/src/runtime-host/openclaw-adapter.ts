@@ -109,3 +109,17 @@ export function createOpenClawRuntimeAdapter(deps?: Partial<OpenClawAdapterDeps>
 export function normalizeNativeDeliveryToSnapshot(nativeDelivery: unknown): RuntimeDeliverySnapshot {
   return normalizeDeliverySnapshot({ nativeDelivery });
 }
+
+/** Reverse of nativeFallbackToAdapterSnapshot: restores required string primaryRuntimeId and narrows source. */
+export function adapterFallbackToNativeSnapshot(
+  snapshot: RuntimeFallbackSnapshot,
+): NativeAcpFallbackSnapshot {
+  return {
+    status: snapshot.status,
+    primaryRuntimeId: snapshot.primaryRuntimeId ?? "",
+    fallbackRuntimeIds: [...snapshot.fallbackRuntimeIds],
+    source: snapshot.source === "hermes_config" ? "none" : snapshot.source,
+    observedAt: snapshot.observedAt,
+    reason: snapshot.reason,
+  };
+}
