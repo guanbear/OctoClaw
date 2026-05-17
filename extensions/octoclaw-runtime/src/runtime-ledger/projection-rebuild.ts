@@ -46,16 +46,6 @@ interface TaskAttemptRow extends UnknownRecord {
   error_message: string | null;
 }
 
-interface CompletionBindingRow extends UnknownRecord {
-  completion_id: string;
-  work_contract_id: string;
-  attempt_id: string;
-  expected_path: string;
-  verdict: string;
-  observed_at: string | null;
-  completed_at: string | null;
-}
-
 export interface RebuildTaskStateProjectionInput {
   dbPath?: string;
   sqlite?: SqliteProvider;
@@ -167,20 +157,6 @@ function normalizeAttemptRow(row: UnknownRecord | undefined): TaskAttemptRow | n
   };
 }
 
-function normalizeCompletionBindingRow(row: UnknownRecord | undefined): CompletionBindingRow | null {
-  if (!row) return null;
-  return {
-    ...row,
-    completion_id: asString(row.completion_id),
-    work_contract_id: asString(row.work_contract_id),
-    attempt_id: asString(row.attempt_id),
-    expected_path: asString(row.expected_path),
-    verdict: asString(row.verdict),
-    observed_at: row.observed_at == null ? null : asString(row.observed_at),
-    completed_at: row.completed_at == null ? null : asString(row.completed_at),
-  };
-}
-
 function recordIdentity(record: TaskStateRecord): string {
   return asString(record.workContractId || record.work_contract_id || record.id || record.taskId || record.task_id);
 }
@@ -220,7 +196,7 @@ function ledgerWorkContractIds(db: DatabaseSync): string[] {
     .filter(Boolean);
 }
 
-function buildRecord(contract: WorkContractRow, attempt: TaskAttemptRow | null, binding: CompletionBindingRow | null): TaskStateRecord {
+function buildRecord(contract: WorkContractRow, attempt: TaskAttemptRow | null): TaskStateRecord {
   const workContract = parseJsonRecord(contract.work_contract_json) as unknown as WorkContract;
   const workContractRecord = workContract as unknown as UnknownRecord;
   const telemetry = isRecord(workContractRecord.telemetry) ? workContractRecord.telemetry : {};
@@ -321,22 +297,6 @@ function buildRecord(contract: WorkContractRow, attempt: TaskAttemptRow | null, 
     completedAt: contract.completed_at || attempt?.ended_at || undefined,
     completed_at: contract.completed_at || attempt?.ended_at || undefined,
   };
-  if (binding) {
-    record.completionVerdict = binding.verdict;
-    record.completion_verdict = binding.verdict;
-    record.completionBinding = {
-      completionId: binding.completion_id,
-      completion_id: binding.completion_id,
-      verdict: binding.verdict,
-      expectedPath: binding.expected_path,
-      expected_path: binding.expected_path,
-      observedAt: binding.observed_at,
-      observed_at: binding.observed_at,
-      completedAt: binding.completed_at,
-      completed_at: binding.completed_at,
-    };
-    record.completion_binding = record.completionBinding;
-  }
   return record;
 }
 
@@ -363,15 +323,7 @@ export function rebuildTaskStateProjection(input: RebuildTaskStateProjectionInpu
          ORDER BY attempt_no DESC, updated_at DESC
          LIMIT 1`,
       ).get(contract.work_contract_id));
-      const binding = attempt
-        ? normalizeCompletionBindingRow(db.prepare(
-          `SELECT * FROM completion_bindings
-           WHERE attempt_id = ?
-           ORDER BY updated_at DESC, completion_id
-           LIMIT 1`,
-        ).get(attempt.attempt_id))
-        : null;
-      return buildRecord(contract, attempt, binding);
+      return buildRecord(contract, attempt);
     });
     return { tasks, ledgerWorkContractIds: allWorkContractIds, rebuiltAt, source: "ledger" };
   } finally {

@@ -89,7 +89,7 @@ function countRows(dbPath: string, table: string): number {
 }
 
 describe("admitDelegationTicketForDispatch", () => {
-  it("valid ticket is consumed once and creates one attempt plus queue row", () => {
+  it("valid ticket is consumed once and creates one attempt", () => {
     const dbPath = tmpDbPath();
     const workContract = contract();
     mirror(workContract, dbPath);
@@ -109,7 +109,6 @@ describe("admitDelegationTicketForDispatch", () => {
     expect(result.reason).toBe("ticket_admitted");
     expect(result.attempt_id).toBe("attempt-n1-1");
     expect(countRows(dbPath, "task_attempts")).toBe(1);
-    expect(countRows(dbPath, "scheduler_queue")).toBe(1);
 
     const replay = admitDelegationTicketForDispatch({
       contract: workContract,
@@ -236,7 +235,6 @@ describe("admitDelegationTicketForDispatch", () => {
     expect(result.enforced).toBe(true);
     expect(result.reason).toBe("not_new_work");
     expect(countRows(dbPath, "task_attempts")).toBe(0);
-    expect(countRows(dbPath, "scheduler_queue")).toBe(0);
   });
 
   it("rejects missing_expected_deliverable in enforce mode without creating attempts", () => {
@@ -255,7 +253,6 @@ describe("admitDelegationTicketForDispatch", () => {
     expect(result.enforced).toBe(true);
     expect(result.reason).toBe("missing_expected_deliverable");
     expect(countRows(dbPath, "task_attempts")).toBe(0);
-    expect(countRows(dbPath, "scheduler_queue")).toBe(0);
   });
 
   it("allows ticket_not_issued in off mode (no enforcement)", () => {

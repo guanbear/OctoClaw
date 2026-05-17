@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { openRuntimeLedger } from "../index.js";
-import { inspectLedgerHealth, listOrphanCompletions, releaseStaleLeases, operatorRebuildProjection } from "../operator-diagnostics.js";
+import { inspectLedgerHealth, operatorRebuildProjection } from "../operator-diagnostics.js";
 import type { DatabaseSync } from "../types.js";
 
 const fsSync = fs as unknown as {
@@ -14,7 +14,6 @@ const fsSync = fs as unknown as {
 const osModule = os as unknown as { tmpdir(): string };
 
 const nowIso = "2026-05-01T00:00:00.000Z";
-const pastIso = "2026-04-30T00:00:00.000Z";
 const futureIso = "2026-05-02T00:00:00.000Z";
 
 function tempPath(name: string): string {
@@ -115,46 +114,6 @@ function seedTicket(db: DatabaseSync, ticketId: string, workContractId: string):
   );
 }
 
-function seedQueue(db: DatabaseSync, queueId: string, workContractId: string, attemptId: string, queueStatus = "queued", leaseExpiresAt?: string): void {
-  db.prepare(
-    `INSERT INTO scheduler_queue (
-      queue_id, work_contract_id, attempt_id, queue_status, priority,
-      dependency_ids_json, resource_keys_json, lease_owner, lease_expires_at,
-      created_at, updated_at
-    ) VALUES (?, ?, ?, ?, 10, '[]', '[]', ?, ?, ?, ?)`,
-  ).run(
-    queueId,
-    workContractId,
-    attemptId,
-    queueStatus,
-    leaseExpiresAt ? `owner-${queueId}` : null,
-    leaseExpiresAt ?? null,
-    nowIso,
-    nowIso,
-  );
-}
-
-function seedCompletion(db: DatabaseSync, completionId: string, workContractId: string, attemptId: string, verdict = "pending", createdAt = nowIso): void {
-  db.prepare(
-    `INSERT INTO completion_bindings (
-      completion_id, work_contract_id, attempt_id, expected_path,
-      expected_work_contract_id, expected_delegate_task_id, verdict,
-      completion_json, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).run(
-    completionId,
-    workContractId,
-    attemptId,
-    `/path/to/${completionId}.json`,
-    workContractId,
-    `task-${workContractId}`,
-    verdict,
-    JSON.stringify({ completionId }),
-    createdAt,
-    createdAt,
-  );
-}
-
 describe("operator-diagnostics", () => {
   const originalEnv = { ...process.env };
   let dbPath = "";
@@ -204,11 +163,6 @@ describe("operator-diagnostics", () => {
       for (let index = 1; index <= 3; index += 1) {
         seedTicket(db, `ticket-${index}`, `wc-${index}`);
       }
-      seedQueue(db, "queue-1", "wc-1", "att-1");
-      seedQueue(db, "queue-2", "wc-2", "att-2");
-      for (let index = 1; index <= 7; index += 1) {
-        seedCompletion(db, `comp-${index}`, `wc-${((index - 1) % 5) + 1}`, `att-${index}`);
-      }
       db.prepare(
         "INSERT INTO runtime_events (event_type, work_contract_id, attempt_id, payload_json, created_at) VALUES (?, ?, ?, ?, ?)",
       ).run("operator_test_event", "wc-1", "att-1", JSON.stringify({ ok: true }), nowIso);
@@ -221,75 +175,8 @@ describe("operator-diagnostics", () => {
       expect(result.workContractCount).toBe(5);
       expect(result.attemptCount).toBe(10);
       expect(result.ticketCount).toBe(3);
-      expect(result.queueCount).toBe(2);
-      expect(result.completionBindingCount).toBe(7);
       expect(result.runtimeEventCount).toBe(1);
-      expect(result.orphanedCompletions).toBe(0);
-      expect(result.staleLeases).toBe(0);
       expect(result.errors).toEqual([]);
-    });
-
-    it("counts orphaned completions", () => {
-      db = openTempLedger(dbPath);
-      seedWorkContract(db, "wc-1");
-      seedAttempt(db, "att-1", "wc-1", 1);
-      seedCompletion(db, "comp-1", "wc-1", "att-1", "completion_orphaned");
-      seedCompletion(db, "comp-2", "wc-1", "att-1", "binding_mismatch");
-      seedCompletion(db, "comp-3", "wc-1", "att-1", "matched");
-
-      const result = inspectLedgerHealth({ dbPath });
-
-      expect(result.completionBindingCount).toBe(3);
-      expect(result.orphanedCompletions).toBe(2);
-      expect(result.errors).toEqual([]);
-    });
-  });
-
-  describe("listOrphanCompletions", () => {
-    it("returns empty array when ledger unavailable", () => {
-      const result = listOrphanCompletions({ dbPath, sqlite: null });
-      expect(result).toEqual([]);
-    });
-
-    it("returns orphan summaries from ledger", () => {
-      db = openTempLedger(dbPath);
-      seedWorkContract(db, "wc-1");
-      seedAttempt(db, "att-1", "wc-1", 1);
-      seedCompletion(db, "comp-1", "wc-1", "att-1", "completion_orphaned", "2026-05-01T00:00:00.000Z");
-      seedCompletion(db, "comp-2", "wc-1", "att-1", "binding_mismatch", "2026-05-01T00:01:00.000Z");
-      seedCompletion(db, "comp-3", "wc-1", "att-1", "matched", "2026-05-01T00:02:00.000Z");
-
-      const result = listOrphanCompletions({ dbPath });
-
-      expect(result).toHaveLength(2);
-      expect(result[0]).toEqual({
-        completionId: "comp-2",
-        workContractId: "wc-1",
-        attemptId: "att-1",
-        expectedPath: "/path/to/comp-2.json",
-        verdict: "binding_mismatch",
-        createdAt: "2026-05-01T00:01:00.000Z",
-      });
-      expect(result[1].completionId).toBe("comp-1");
-      expect(result[1].verdict).toBe("completion_orphaned");
-      expect(result[1].expectedPath).toBe("/path/to/comp-1.json");
-    });
-  });
-
-  describe("releaseStaleLeases", () => {
-    it("delegates to requeueExpiredLeases", () => {
-      db = openTempLedger(dbPath);
-      seedWorkContract(db, "wc-1", "delegate", "running");
-      seedAttempt(db, "att-1", "wc-1", 1, "spawning");
-      seedQueue(db, "queue-1", "wc-1", "att-1", "spawning", pastIso);
-
-      const result = releaseStaleLeases({ dbPath });
-      const queue = db.prepare("SELECT queue_status, lease_owner, lease_expires_at FROM scheduler_queue WHERE queue_id = ?").get("queue-1");
-      const attempt = db.prepare("SELECT status FROM task_attempts WHERE attempt_id = ?").get("att-1");
-
-      expect(result).toEqual({ released: 1, errors: [] });
-      expect(queue).toEqual({ queue_status: "queued", lease_owner: null, lease_expires_at: null });
-      expect(attempt).toEqual({ status: "queued" });
     });
   });
 

@@ -6,6 +6,7 @@ import { resolveRuntimeLedgerMode } from "../runtime-ledger/shadow.js";
 import { rebuildTaskStateProjection } from "../runtime-ledger/projection-rebuild.js";
 import { createOctoClawRuntimePlugin } from "../plugin.js";
 import { projectNativeStatus, type NativeStatusProjection } from "../state/native-status-projector.js";
+import { buildLegacyHeuristicFallbackEvent, legacyHeuristicVerdict } from "../state/legacy-heuristics.js";
 import { buildSlackStatusOutput, buildStatusInteractiveBlocks, type IMType, type StatusTaskSummary } from "../im-status-renderer.js";
 import { normalizeLiveRoute } from "../resolve/route-helpers.js";
 import type { NativeBindingRef } from "@octoclaw/contracts/work-contract";
@@ -200,7 +201,6 @@ export function plannerDispatchResponse(params: {
   delegateTaskId: string;
   attemptId: string;
   ticketId?: string;
-  queueId?: string;
   ticketAdmissionReason?: string;
   ticketEnforced?: boolean;
   sessionsSpawnArgs: Record<string, unknown>;
@@ -234,7 +234,6 @@ export function plannerDispatchResponse(params: {
     attempt_id: params.attemptId,
     attemptId: params.attemptId,
     ...(params.ticketId ? { ticket_id: params.ticketId, ticketId: params.ticketId } : {}),
-    ...(params.queueId ? { queue_id: params.queueId, queueId: params.queueId } : {}),
     ...(params.ticketAdmissionReason ? { ticket_admission_reason: params.ticketAdmissionReason } : {}),
     ticket_enforced: params.ticketEnforced === true,
     sessions_spawn_args: params.sessionsSpawnArgs,
@@ -381,7 +380,7 @@ function statusPanelRelevantMs(task: RuntimeStatusTaskView): number | null {
 }
 
 function statusPanelRetentionMs(task: RuntimeStatusTaskView): number | null {
-  if (["failed", "completed", "canceled"].includes(task.status)) return STATUS_PANEL_TERMINAL_VISIBLE_MS;
+  if (["failed", "completed", "delivered", "canceled"].includes(task.status)) return STATUS_PANEL_TERMINAL_VISIBLE_MS;
   if (task.status === "queued" && task.statusReason === "dispatch_materialized_but_no_spawn_evidence") return STATUS_PANEL_STALE_VISIBLE_MS;
   if (["timed_out", "blocked", "registered", "main_fallback", "deliverable_ready", "degraded", "lost"].includes(task.status)) return STATUS_PANEL_STALE_VISIBLE_MS;
   return null;
@@ -636,7 +635,36 @@ export async function buildNativeStatusPanelOutput(format: string, imType: strin
   const includeExpired = shouldIncludeExpiredStatus(normalizedFormat);
   const retention = pruneRuntimeTaskStateCache();
   const tasks = sortTaskStateRecords(await readRuntimeTaskState({ includeArchive: includeExpired }));
-  const nativeProjections = await Promise.all(tasks.map((task) => projectNativeStatus(nativeStatusInputForTask(task, ctx))));
+  const nativeInputs = tasks.map((task) => nativeStatusInputForTask(task, ctx));
+  const nativeProjections = await Promise.all(nativeInputs.map((input) => projectNativeStatus(input)));
+  tasks.forEach((task, index) => {
+    const input = nativeInputs[index];
+    const projection = nativeProjections[index];
+    const evidence = runtimeStatusEvidence(task);
+    const hasKnownNativeId = Boolean(input.openclawRunId || input.openclawTaskId || input.openclawFlowId);
+    const hasNativeTruth = ["run", "flow", "latest"].includes(projection.source)
+      || Boolean(projection.nativeKind || projection.agentRuntimeId);
+    const hasLegacySignal = Boolean(evidence.childSessionKey || asString(task.childSessionKey || task.child_session_key));
+    const newTask = Boolean(hasKnownNativeId || projection.nativeKind || projection.agentRuntimeId);
+    const verdict = legacyHeuristicVerdict({
+      surface: "status_projection",
+      hasNativeTruth,
+      hasKnownNativeId,
+      hasLegacySignal,
+      newTask,
+      reason: hasNativeTruth || hasKnownNativeId ? "native_kind_present" : "native_fields_absent",
+    });
+    if (verdict.source === "legacy_heuristic_read_only") {
+      void recordPolicyReplay("legacy_heuristic_fallback_used", buildLegacyHeuristicFallbackEvent({
+        taskId: asString(task.id),
+        workContractId: asString(task.workContractId || task.work_contract_id),
+        surface: "status_projection",
+        reason: verdict.reason,
+        newTask,
+        allowed: verdict.allowed,
+      })).catch(() => undefined);
+    }
+  });
   const allTasks = tasks
     .map((task, index) => buildRuntimeStatusTaskView(task, nowMs, nativeProjections[index]))
     .filter((task, index) => shouldDisplayRuntimeStatusRecord(tasks[index]) && task.route === "delegate");
@@ -647,7 +675,7 @@ export async function buildNativeStatusPanelOutput(format: string, imType: strin
   const STATUS_PRIORITY: Record<string, number> = {
     running: 0, running_slow: 0, stalled: 1, materializing: 2, queued: 3, blocked: 4,
     timed_out: 5, lost: 6, degraded: 7, failed: 8, deliverable_ready: 9,
-    completed: 10, canceled: 11, registered: 12,
+    completed: 10, delivered: 10, canceled: 11, registered: 12,
   };
   const sortedVisibleTasks = [...visibleTasks].sort((a, b) => {
     const pa = STATUS_PRIORITY[a.status] ?? 5;
@@ -678,7 +706,7 @@ export async function buildNativeStatusPanelOutput(format: string, imType: strin
   // ── Beautified anchors format (default) ─────────────────────────────────
   if (normalizedFormat === "anchors") {
     const limit = 50;
-    const completedStates = new Set(["completed"]);
+    const completedStates = new Set(["completed", "delivered"]);
     const failedStates = new Set([
       "failed",
       "timed_out",
@@ -785,11 +813,12 @@ export async function buildNativeStatusPanelOutput(format: string, imType: strin
       : `Expired hidden: ${hiddenExpiredCount}`,
     countSummary ? `Projected counts: ${countSummary}` : "Projected counts: none",
     hiddenExpiredCount > 0 && !includeExpired && allCountSummary ? `All projected counts: ${allCountSummary}` : "",
-    "Fields: task_id | projected_status(raw_status) | route | title | complexity | elapsed | delegated_at | model | backend | child_session/run | result_location/artifact_refs | reason | summary",
+    "Fields: task_id | projected_status(raw_status) | route | title | complexity | elapsed | delegated_at | model | backend | native_kind/runtime | child_session/run | result_location/artifact_refs | reason | summary",
   ].filter(Boolean);
   const limit = normalizedFormat === "raw" ? 50 : 25;
   for (const task of sortedVisibleTasks.slice(0, limit)) {
     const childRef = [task.childSessionKey, task.runId].filter(Boolean).join("/") || "none";
+    const nativeRef = [task.nativeKind, task.agentRuntimeId].filter(Boolean).join("/") || "unknown";
     lines.push([
       `- ${task.taskId}`,
       `${task.status}(${task.rawStatus})`,
@@ -800,6 +829,7 @@ export async function buildNativeStatusPanelOutput(format: string, imType: strin
       `delegated_at=${task.delegatedAt || "unknown"}`,
       `model=${task.model}`,
       `backend=${task.backend}`,
+      `native=${nativeRef}`,
       `child=${childRef}`,
       `result=${task.resultLocation}`,
       `reason=${task.statusReason}`,

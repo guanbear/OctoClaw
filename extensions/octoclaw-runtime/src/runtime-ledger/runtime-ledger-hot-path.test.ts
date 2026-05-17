@@ -195,8 +195,6 @@ function expectNoDispatchSideEffects(workContractId: string): void {
     expect(Number(usedTickets?.count ?? 0)).toBe(0);
     const attempts = db.prepare("SELECT COUNT(*) AS count FROM task_attempts WHERE work_contract_id = ?").get(workContractId);
     expect(Number(attempts?.count ?? 0)).toBe(0);
-    const queue = db.prepare("SELECT COUNT(*) AS count FROM scheduler_queue WHERE work_contract_id = ?").get(workContractId);
-    expect(Number(queue?.count ?? 0)).toBe(0);
     const ticketUsedEvents = db.prepare("SELECT COUNT(*) AS count FROM runtime_events WHERE work_contract_id = ? AND event_type = 'delegation_ticket_used'").get(workContractId);
     expect(Number(ticketUsedEvents?.count ?? 0)).toBe(0);
   } finally {
@@ -211,8 +209,6 @@ function expectDispatchSideEffects(workContractId: string): void {
     expect(Number(usedTickets?.count ?? 0)).toBe(1);
     const attempts = db.prepare("SELECT COUNT(*) AS count FROM task_attempts WHERE work_contract_id = ?").get(workContractId);
     expect(Number(attempts?.count ?? 0)).toBe(1);
-    const queue = db.prepare("SELECT COUNT(*) AS count FROM scheduler_queue WHERE work_contract_id = ?").get(workContractId);
-    expect(Number(queue?.count ?? 0)).toBe(1);
     const ticketUsedEvents = db.prepare("SELECT COUNT(*) AS count FROM runtime_events WHERE work_contract_id = ? AND event_type = 'delegation_ticket_used'").get(workContractId);
     expect(Number(ticketUsedEvents?.count ?? 0)).toBe(1);
   } finally {
@@ -296,7 +292,6 @@ describe("runtime ledger hot-path tool integration", () => {
     delete process.env.OCTOCLAW_SPAWN_BACKEND;
     delete process.env.OCTOCLAW_PLANNER_ALLOWLIST;
     delete process.env.OCTOCLAW_RUNTIME_LEDGER;
-    delete process.env.OCTOCLAW_SCHEDULER_ENABLED;
     delete process.env.OCTOCLAW_TASK_STATE_REBUILD;
     delete process.env.OCTOCLAW_WORK_CONTRACT_LEDGER_PATH;
     envOverrides.workspaceRoot = "";
@@ -306,103 +301,9 @@ describe("runtime ledger hot-path tool integration", () => {
     vi.restoreAllMocks();
   });
 
-  it("dispatch tool creates scheduler queue entry in enforce mode", async () => {
-    useTempWorkspace();
-    process.env.OCTOCLAW_RUNTIME_LEDGER = "enforce";
-    process.env.OCTOCLAW_SCHEDULER_ENABLED = "true";
-    const contract = seedWorkContract({ sessionKey: "session-hot-path-dispatch" });
-    seedDelegationTicket(contract);
-
-    const result = await executeDispatch({
-      task: contract.userAsk,
-      delegateTaskId: `delegate-task:${contract.workContractId}`,
-      workContractId: contract.workContractId,
-      policyJson: JSON.stringify(delegateDecision(contract.sessionKey)),
-    }, {
-      helperInvoker: successfulHelper(),
-      sessionId: "session-hot-path-dispatch-test",
-    });
-
-    expect(result.error).toBe("spawn_not_confirmed");
-    expect(result.dispatch_executed).toBe(true);
-    const db = openDb();
-    try {
-      const row = db.prepare("SELECT * FROM scheduler_queue WHERE work_contract_id = ?").get(contract.workContractId);
-      expect(row).toMatchObject({ work_contract_id: contract.workContractId });
-      expect(String(row?.queue_id)).toContain(`delegate-task:${contract.workContractId}`);
-      const events = db.prepare(
-        "SELECT event_type, payload_json FROM runtime_events WHERE work_contract_id = ? ORDER BY created_at",
-      ).all(contract.workContractId);
-      const eventTypes = events.map((event) => String(event.event_type));
-      expect(eventTypes).toContain("delegation_ticket_used");
-      expect(eventTypes).toContain("scheduler_queue_promoted");
-      expect(eventTypes).toContain("scheduler_lease_acquired");
-      expect(eventTypes).toContain("scheduler_released");
-      expect(row?.queue_status).toBe("terminal");
-      const attempt = db.prepare("SELECT status FROM task_attempts WHERE work_contract_id = ?").get(contract.workContractId);
-      expect(attempt?.status).not.toBe("admitted");
-      expect(attempt?.status).toBe("failed");
-    } finally {
-      db.close();
-    }
-  });
-
-  it("scheduler lease lifecycle produces correct events and terminal state on spawn failure", async () => {
-    useTempWorkspace();
-    process.env.OCTOCLAW_RUNTIME_LEDGER = "enforce";
-    process.env.OCTOCLAW_SCHEDULER_ENABLED = "true";
-    const contract = seedWorkContract({ sessionKey: "session-hot-path-lease-lifecycle" });
-    seedDelegationTicket(contract);
-
-    const result = await executeDispatch({
-      task: contract.userAsk,
-      delegateTaskId: `delegate-task:${contract.workContractId}`,
-      workContractId: contract.workContractId,
-      policyJson: JSON.stringify(delegateDecision(contract.sessionKey)),
-    }, {
-      helperInvoker: successfulHelper(),
-      sessionId: "session-hot-path-lease-lifecycle-test",
-    });
-
-    expect(result.error).toBe("spawn_not_confirmed");
-    expect(result.dispatch_executed).toBe(true);
-    const db = openDb();
-    try {
-      const row = db.prepare("SELECT * FROM scheduler_queue WHERE work_contract_id = ?").get(contract.workContractId);
-      expect(row).toMatchObject({ work_contract_id: contract.workContractId, queue_status: "terminal" });
-      expect(row?.lease_owner).toBeNull();
-      expect(row?.lease_expires_at).toBeNull();
-
-      const events = db.prepare(
-        "SELECT event_type, payload_json FROM runtime_events WHERE work_contract_id = ? ORDER BY created_at",
-      ).all(contract.workContractId);
-      const eventTypes = events.map((event) => String(event.event_type));
-      expect(eventTypes).toEqual(expect.arrayContaining([
-        "delegation_ticket_used",
-        "scheduler_queue_promoted",
-        "scheduler_lease_acquired",
-        "scheduler_released",
-      ]));
-      expect(eventTypes.indexOf("delegation_ticket_used")).toBeLessThan(eventTypes.indexOf("scheduler_queue_promoted"));
-      expect(eventTypes.indexOf("scheduler_queue_promoted")).toBeLessThan(eventTypes.indexOf("scheduler_lease_acquired"));
-      expect(eventTypes.indexOf("scheduler_lease_acquired")).toBeLessThan(eventTypes.indexOf("scheduler_released"));
-
-      const leaseAcquiredEvent = events.find((event) => event.event_type === "scheduler_lease_acquired");
-      expect(leaseAcquiredEvent).toBeTruthy();
-      expect(String(leaseAcquiredEvent?.payload_json ?? "")).toContain("leaseOwner");
-
-      const attempt = db.prepare("SELECT status FROM task_attempts WHERE work_contract_id = ?").get(contract.workContractId);
-      expect(attempt?.status).not.toBe("admitted");
-      expect(attempt?.status).toBe("failed");
-    } finally {
-      db.close();
-    }
-  });
-
   it("policy seal issues a ledger ticket in enforce mode without manual seeding", async () => {
     useTempWorkspace();
     process.env.OCTOCLAW_RUNTIME_LEDGER = "enforce";
-    process.env.OCTOCLAW_SCHEDULER_ENABLED = "true";
     const task = "Delegate a subagent to research runtime ledger ticket issuance and return a concise implementation summary.";
     const decision = await resolveDelegatePolicy(task, "session-hot-path-auto-ticket", {
       relation_to_recent_execution: "new_work",
@@ -485,8 +386,6 @@ describe("runtime ledger hot-path tool integration", () => {
         delegate_task_id: `delegate-task:${contract.workContractId}`,
         status: "admitted",
       });
-      const queue = db.prepare("SELECT * FROM scheduler_queue WHERE attempt_id = ?").get(attemptId);
-      expect(queue).toMatchObject({ work_contract_id: contract.workContractId, queue_status: "admitted" });
     } finally {
       db.close();
     }
@@ -519,8 +418,6 @@ describe("runtime ledger hot-path tool integration", () => {
         child_session_key: "agent:main:subagent:planner-ledger",
         child_run_id: "child-run-planner-ledger",
       });
-      const queue = db.prepare("SELECT * FROM scheduler_queue WHERE attempt_id = ?").get(attemptId);
-      expect(queue?.queue_status).toBe("running");
       const events = db.prepare(
         "SELECT event_type FROM runtime_events WHERE work_contract_id = ? ORDER BY event_id",
       ).all(contract.workContractId).map((event) => String(event.event_type));
@@ -534,7 +431,6 @@ describe("runtime ledger hot-path tool integration", () => {
   it("dispatch tool is blocked without valid ticket in enforce mode", async () => {
     useTempWorkspace();
     process.env.OCTOCLAW_RUNTIME_LEDGER = "enforce";
-    process.env.OCTOCLAW_SCHEDULER_ENABLED = "true";
     const contract = seedWorkContract({ sessionKey: "session-hot-path-no-ticket" });
     const db = openDb();
     try {
@@ -556,37 +452,6 @@ describe("runtime ledger hot-path tool integration", () => {
     expect(result.ok).toBe(false);
     expect(result.error).toBe("delegation_ticket_rejected:no_ticket");
     expect(result.dispatch_executed).toBe(false);
-    const dbAfter = openDb();
-    try {
-      const count = dbAfter.prepare("SELECT COUNT(*) AS count FROM scheduler_queue WHERE work_contract_id = ?").get(contract.workContractId);
-      expect(Number(count?.count ?? 0)).toBe(0);
-    } finally {
-      dbAfter.close();
-    }
-  });
-
-  it("enforce mode with scheduler disabled blocks dispatch", async () => {
-    useTempWorkspace();
-    process.env.OCTOCLAW_RUNTIME_LEDGER = "enforce";
-    delete process.env.OCTOCLAW_SCHEDULER_ENABLED;
-    const contract = seedWorkContract({ sessionKey: "session-hot-path-scheduler-disabled" });
-    seedDelegationTicket(contract);
-
-    const result = await executeDispatch({
-      task: contract.userAsk,
-      delegateTaskId: `delegate-task:${contract.workContractId}`,
-      workContractId: contract.workContractId,
-      policyJson: JSON.stringify(delegateDecision(contract.sessionKey)),
-    }, {
-      helperInvoker: successfulHelper(),
-      sessionId: "session-hot-path-scheduler-disabled-test",
-    });
-
-    expect(result.ok).toBe(false);
-    expect(result.error).toBe("blocked_by_scheduler_mandatory:scheduler_not_enabled");
-    expect(result.dispatch_executed).toBe(false);
-    expect(result.spawn_executed).toBe(false);
-    expect(result.scheduler_status).toBe("blocked_by_scheduler_mandatory");
   });
 
   it("task_action retry creates real attempt row in ledger", async () => {
@@ -602,8 +467,6 @@ describe("runtime ledger hot-path tool integration", () => {
     try {
       const row = db.prepare("SELECT * FROM task_attempts WHERE attempt_id = ?").get(String(payload.attempt_id));
       expect(row).toMatchObject({ work_contract_id: contract.workContractId, attempt_kind: "retry" });
-      const queue = db.prepare("SELECT * FROM scheduler_queue WHERE attempt_id = ?").get(String(payload.attempt_id));
-      expect(queue).toMatchObject({ work_contract_id: contract.workContractId });
     } finally {
       db.close();
     }
@@ -630,7 +493,6 @@ describe("runtime ledger hot-path tool integration", () => {
     expect(response.text).toContain("crash_recovery_completed");
     expect(response.json).toMatchObject({ projectionRebuilt: true });
     const payload = response.json as Record<string, unknown>;
-    expect(typeof payload.staleLeasesReleased).toBe("number");
     expect(typeof payload.attemptsReconciled).toBe("number");
     expect(Array.isArray(payload.errors)).toBe(true);
   });
@@ -670,7 +532,6 @@ describe("runtime ledger hot-path tool integration", () => {
   it("follow-up query with existing_execution_followup creates no dispatch side effects", async () => {
     useTempWorkspace();
     process.env.OCTOCLAW_RUNTIME_LEDGER = "enforce";
-    process.env.OCTOCLAW_SCHEDULER_ENABLED = "1";
     const task = "Why did the previous dispatch not succeed?";
     const decision = await resolveDelegatePolicy(task, "session-hot-path-followup", {
       relation_to_recent_execution: "existing_execution_followup",
@@ -702,7 +563,6 @@ describe("runtime ledger hot-path tool integration", () => {
   it("follow-up query with existing_execution_provenance_query creates no dispatch side effects", async () => {
     useTempWorkspace();
     process.env.OCTOCLAW_RUNTIME_LEDGER = "enforce";
-    process.env.OCTOCLAW_SCHEDULER_ENABLED = "1";
     const task = "Who handled the previous delegated task?";
     const decision = await resolveDelegatePolicy(task, "session-hot-path-provenance", {
       relation_to_recent_execution: "existing_execution_provenance_query",
@@ -734,7 +594,6 @@ describe("runtime ledger hot-path tool integration", () => {
   it("follow-up status query (为啥没派发成功呢) creates no dispatch side effects", async () => {
     useTempWorkspace();
     process.env.OCTOCLAW_RUNTIME_LEDGER = "enforce";
-    process.env.OCTOCLAW_SCHEDULER_ENABLED = "1";
     const dispatchedContract = seedWorkContract({ sessionKey: "session-hot-path-status-question-initial" });
     seedDelegationTicket(dispatchedContract);
 
@@ -780,12 +639,11 @@ describe("runtime ledger hot-path tool integration", () => {
   it("new work with explicit new task request dispatches normally", async () => {
     useTempWorkspace();
     process.env.OCTOCLAW_RUNTIME_LEDGER = "enforce";
-    process.env.OCTOCLAW_SCHEDULER_ENABLED = "1";
-    const task = "Delegate a subagent to research the runtime ledger scheduler queue hot path and summarize the dispatch flow.";
+    const task = "Delegate a subagent to research the runtime ledger hot path and summarize the dispatch flow.";
     const decision = await resolveDelegatePolicy(task, "session-hot-path-new-work", {
       relation_to_recent_execution: "new_work",
       is_new_work: true,
-      expected_deliverable: "summary of runtime ledger scheduler queue dispatch flow",
+      expected_deliverable: "summary of runtime ledger dispatch flow",
       conversation_control: {
         intent_class: "delegated_work",
         route_hint: "delegate",
@@ -803,7 +661,7 @@ describe("runtime ledger hot-path tool integration", () => {
       metadataJson: JSON.stringify({
         relation_to_recent_execution: "new_work",
         is_new_work: true,
-        expected_deliverable: "summary of runtime ledger scheduler queue dispatch flow",
+        expected_deliverable: "summary of runtime ledger dispatch flow",
         conversation_control: {
           intent_class: "delegated_work",
           route_hint: "delegate",

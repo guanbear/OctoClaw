@@ -680,7 +680,7 @@ describe("neutral Slack ACK hook dedupe", () => {
 
     expect(result).toMatchObject({ handled: true });
     expect(result.text).toContain("Task: wc-cd096bf3039cf9f0");
-    expect(result.text).toContain("Status: completed");
+    expect(result.text).toContain("Status: delivered");
     expect(result.text).toContain("Delivery: delivered");
     const neutralAckEvents = readReplayEvents().filter((entry) => entry.event === "neutral_inbound_ack");
     expect(neutralAckEvents).toHaveLength(0);

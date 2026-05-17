@@ -5,6 +5,7 @@ import { findWorkContractByNativeChildSessionKey } from "../work-contract/store.
 import { type UnknownRecord, asRecord } from "../util/type-coercion.js";
 import { stringValue } from "../extension-entry-shared.js";
 import { buildPromptContextProjection } from "../extension-entry-helpers.js";
+import { deliveryRelayVerdict } from "../im/delivery-relay-verdict.js";
 import { type SendIMResult } from "../im/send.js";
 import { type WorkContract } from "@octoclaw/contracts/work-contract";
 import { type NativeAnnounceBlocker, type NativeAnnounceCompletion, type NativeAnnounceSendMessage } from "./native-announce-types.js";
@@ -136,6 +137,7 @@ export async function handleNativeAnnounceCompletion(input: {
   const alreadyDelivered = nativeAnnounceDeliveryAlreadySent(matchedContract);
   const blocker = extractNativeAnnounceBlocker(nativeAnnounceCompletion);
   const currentState = asRecord(getPolicyStateForContext(input.ctx).state);
+  const directDeliveryAttempted = !blocker && !alreadyDelivered && directDeliveryEnabled;
   const directDelivery: SendIMResult & { sessionKey: string; replyToMessageId: string } = !blocker && !alreadyDelivered && directDeliveryEnabled
     ? await deliverNativeAnnounceCompletion({
         contract: matchedContract,
@@ -153,6 +155,19 @@ export async function handleNativeAnnounceCompletion(input: {
         replyToMessageId: "",
       };
   const delivered = alreadyDelivered || directDelivery.sent;
+  const nativeDeliveryVerdict = deliveryRelayVerdict({
+    nativeDelivery: delivered
+      ? {
+          status: "delivered",
+          messageId: directDelivery.messageId || "",
+          resultHash: nativeAnnounceCompletion.resultHash,
+        }
+      : directDeliveryAttempted
+        ? { status: "failed", error: directDelivery.error || "native_delivery_send_failed" }
+        : {},
+    nativeResultExists: true,
+    relayResultHash: alreadyDelivered ? nativeAnnounceCompletion.resultHash : "",
+  });
   const now = Date.now();
   const nowIso = new Date(now).toISOString();
   const updatedContract = markNativeAnnounceCompletionOnContract(
@@ -183,7 +198,8 @@ export async function handleNativeAnnounceCompletion(input: {
       blocked: Boolean(blocker),
       blocker: blocker?.reason || "",
       delivered,
-      directDeliveryAttempted: !blocker && !alreadyDelivered && directDeliveryEnabled,
+      native_delivery_verdict: nativeDeliveryVerdict,
+      directDeliveryAttempted,
       directDeliverySent: directDelivery.sent,
       directDeliveryError: directDelivery.error || "",
       delivery_transport: directDelivery.transport || "",
@@ -294,9 +310,21 @@ export async function handleNativeSubagentEndedCompletion(input: {
         ctx: stateCtx,
         cwd: input.cwd || stringValue(stateCtx.cwd) || process.cwd(),
         sendMessage: input.sendMessage,
-      })
+    })
     : { sent: false, error: "direct_delivery_disabled", sessionKey: "", replyToMessageId: "" };
   const delivered = directDelivery.sent;
+  const nativeDeliveryVerdict = deliveryRelayVerdict({
+    nativeDelivery: delivered
+      ? {
+          status: "delivered",
+          messageId: directDelivery.messageId || "",
+          resultHash: completion.resultHash,
+        }
+      : directDeliveryEnabled
+        ? { status: "failed", error: directDelivery.error || "native_delivery_send_failed" }
+        : {},
+    nativeResultExists: true,
+  });
   const now = Date.now();
   const nowIso = new Date(now).toISOString();
   const updatedContract = markNativeAnnounceCompletionOnContract(
@@ -325,6 +353,7 @@ export async function handleNativeSubagentEndedCompletion(input: {
       sourceTool: completion.sourceTool,
       resultHash: completion.resultHash,
       delivered,
+      native_delivery_verdict: nativeDeliveryVerdict,
       directDeliveryAttempted: directDeliveryEnabled,
       directDeliverySent: directDelivery.sent,
       directDeliveryError: directDelivery.error || "",

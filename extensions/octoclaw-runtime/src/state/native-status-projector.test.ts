@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { projectNativeStatus } from "./native-status-projector.js";
+import { projectNativeStatus, runtimeTruthVerdict } from "./native-status-projector.js";
 
 function ctxWithNative(options: {
   run?: unknown;
@@ -37,7 +37,16 @@ function ctxWithNative(options: {
 
 describe("native status projector", () => {
   it("resolves status by openclawRunId", async () => {
-    const runtime = ctxWithNative({ run: { runId: "run-1", status: "running", taskId: "task-1" } });
+    const runtime = ctxWithNative({
+      run: {
+        runId: "run-1",
+        status: "running",
+        taskId: "task-1",
+        kind: "spawn-child",
+        agentRuntime: { id: "acp-primary" },
+        childSessionKey: "child-session-1",
+      },
+    });
 
     const projected = await projectNativeStatus({ ctx: runtime.ctx, openclawRunId: "run-1" });
 
@@ -48,10 +57,54 @@ describe("native status projector", () => {
       reason: "resolved_by_openclaw_run_id",
       runId: "run-1",
       taskId: "task-1",
+      childSessionKey: "child-session-1",
+      nativeKind: "spawn-child",
+      agentRuntimeId: "acp-primary",
       found: true,
       degraded: false,
     });
+    expect(runtimeTruthVerdict(projected)).toEqual({
+      isSpawnChild: true,
+      spawnEvidence: "accepted_native",
+      nativeKind: "spawn-child",
+      agentRuntimeId: "acp-primary",
+      source: "native_run",
+      reason: "native_spawn_child_kind",
+    });
     expect(runtime.runResolve).toHaveBeenCalledWith("run-1");
+  });
+
+  it("does not let a misleading session key override native direct truth", async () => {
+    const runtime = ctxWithNative({
+      run: {
+        runId: "run-direct-1",
+        status: "completed",
+        kind: "direct",
+        agentRuntime: { id: "acpx" },
+        summary: "done",
+      },
+    });
+
+    const projected = await projectNativeStatus({
+      ctx: runtime.ctx,
+      openclawRunId: "run-direct-1",
+      sessionKey: "agent:main:slack:channel:C123:subagent-old-label",
+    });
+
+    expect(projected).toMatchObject({
+      status: "completed",
+      nativeKind: "direct",
+      agentRuntimeId: "acpx",
+      summary: "done",
+    });
+    expect(runtimeTruthVerdict(projected)).toEqual({
+      isSpawnChild: false,
+      spawnEvidence: "none",
+      nativeKind: "direct",
+      agentRuntimeId: "acpx",
+      source: "native_run",
+      reason: "native_kind_present",
+    });
   });
 
   it("falls back to flow status when run is missing", async () => {
@@ -108,6 +161,12 @@ describe("native status projector", () => {
       runId: "run-lost",
       childSessionKey: "child-1",
     });
+    expect(runtimeTruthVerdict(projected)).toMatchObject({
+      isSpawnChild: false,
+      spawnEvidence: "none",
+      source: "none",
+      reason: "native_id_known_but_registry_missing",
+    });
   });
 
   it("treats corrupt task-state cache as degraded display", async () => {
@@ -145,6 +204,12 @@ describe("native status projector", () => {
       degraded: true,
       runId: "run-unavailable",
       summary: "cached running",
+    });
+    expect(runtimeTruthVerdict(projected)).toMatchObject({
+      isSpawnChild: false,
+      spawnEvidence: "none",
+      source: "none",
+      reason: "native_registry_unavailable",
     });
   });
 

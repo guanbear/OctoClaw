@@ -120,31 +120,6 @@ function seedAttempt(dbPath: string, opts: {
   });
 }
 
-function seedCompletionBinding(dbPath: string, opts: {
-  workContractId: string;
-  attemptId: string;
-  verdict: string;
-}): void {
-  withDb(dbPath, (db) => {
-    db.prepare(
-      `INSERT INTO completion_bindings (
-         completion_id, work_contract_id, attempt_id, expected_path,
-         expected_work_contract_id, expected_delegate_task_id, verdict,
-         observed_at, completed_at, created_at, updated_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, '2026-01-01T00:05:00.000Z', '2026-01-01T00:05:01.000Z',
-         '2026-01-01T00:04:00.000Z', '2026-01-01T00:05:01.000Z')`,
-    ).run(
-      `cb:${opts.workContractId}:${opts.attemptId}`,
-      opts.workContractId,
-      opts.attemptId,
-      `/tmp/${opts.workContractId}.completion.json`,
-      opts.workContractId,
-      `delegate-${opts.workContractId}`,
-      opts.verdict,
-    );
-  });
-}
-
 describe("projection-rebuild", () => {
   describe("rebuildTaskStateProjection", () => {
     it("returns empty array when ledger has no work contracts", () => {
@@ -240,19 +215,6 @@ describe("projection-rebuild", () => {
       expect(record.workContractStatus).toBe("completed");
       expect(record.attempt_id).toBe("attempt-terminal-stale");
       expect(record.native_flow_id).toBe("flow-terminal-stale");
-    });
-
-    it("includes completion verdict when available", () => {
-      const dbPath = tmpDbPath();
-      seedWorkContract(dbPath, { workContractId: "wc-verdict" });
-      seedAttempt(dbPath, { workContractId: "wc-verdict", attemptId: "attempt-verdict" });
-      seedCompletionBinding(dbPath, { workContractId: "wc-verdict", attemptId: "attempt-verdict", verdict: "matched" });
-
-      const [record] = rebuildTaskStateProjection({ dbPath }).tasks;
-
-      expect(record.completionVerdict).toBe("matched");
-      expect(record.completion_verdict).toBe("matched");
-      expect(record.completion_binding).toMatchObject({ verdict: "matched" });
     });
 
     it("skips terminal work contracts (completed, canceled, failed)", () => {

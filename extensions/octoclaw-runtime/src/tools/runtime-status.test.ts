@@ -73,7 +73,7 @@ describe("runtime status lifecycle projection", () => {
     expect(view.resultLocation).toBe("/tmp/wc-runtime-status-report.md");
   });
 
-  it("uses native announce delivery evidence as completed result evidence", () => {
+  it("uses native announce delivery evidence as delivered result evidence", () => {
     const view = buildRuntimeStatusTaskView(
       task({
         status: "completed",
@@ -89,8 +89,8 @@ describe("runtime status lifecycle projection", () => {
       native("completed"),
     );
 
-    expect(view.status).toBe("completed");
-    expect(view.statusReason).toBe("completed_with_result");
+    expect(view.status).toBe("delivered");
+    expect(view.statusReason).toBe("delivered_with_ack");
     expect(view.resultLocation).toBe("delivered:1778573724.032469");
   });
 

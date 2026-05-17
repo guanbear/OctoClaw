@@ -105,7 +105,7 @@ const ROUTER_COST_PERIODS: Array<NonNullable<ParsedCliArgs["period"]>> = ["1d", 
 const INIT_LANGUAGES = ["zh", "en"] as const;
 const RUNNING_STATES = new Set(["running", "in_progress", "active", "working"]);
 const QUEUED_STATES = new Set(["queued", "pending", "planned", "waiting"]);
-const DONE_STATES = new Set(["completed", "done", "succeeded", "success"]);
+const DONE_STATES = new Set(["completed", "delivered", "done", "succeeded", "success"]);
 const FAILED_STATES = new Set(["failed", "error", "cancelled", "canceled", "blocked"]);
 const NON_DELEGATED_ROUTES = new Set(["reply", "direct"]);
 const FALLBACK_MESSAGE = "No active OctoClaw runtime detected. Ensure the extension is installed and a task has been created.";
@@ -753,13 +753,14 @@ function formatCompact(snapshot: StatusSnapshot): string {
   const running = snapshot.tasks.filter((task) => RUNNING_STATES.has(normalizeState(task.state))).length;
   const queued = snapshot.tasks.filter((task) => QUEUED_STATES.has(normalizeState(task.state))).length;
   const done = snapshot.tasks.filter((task) => DONE_STATES.has(normalizeState(task.state))).length;
+  const delivered = snapshot.tasks.filter((task) => normalizeState(task.state) === "delivered").length;
   const failed = snapshot.tasks.filter((task) => FAILED_STATES.has(normalizeState(task.state))).length;
   const routeSummary = [...snapshot.replay.routeCounts.entries()]
     .sort((a, b) => b[1] - a[1])
     .map(([route, count]) => `${route}=${count}`)
     .join(", ") || "none";
   return [
-    `Tasks total=${snapshot.tasks.length} running=${running} queued=${queued} done=${done} failed=${failed}`,
+    `Tasks total=${snapshot.tasks.length} running=${running} queued=${queued} done=${done} delivered=${delivered} failed=${failed}`,
     `Runner state=${snapshot.runner.state} mode=${snapshot.runner.mode}${snapshot.runner.pid ? ` pid=${snapshot.runner.pid}` : ""}`,
     `Replay phase=${snapshot.replay.phase} events=${snapshot.replay.totalEvents} delegated=${snapshot.replay.delegatedEvents} runner=${snapshot.replay.runnerEvents} route_hints=${snapshot.replay.routeHintEvents} blocked=${snapshot.replay.blockedEvents}`,
     `Replay routes=${routeSummary}`,
@@ -777,13 +778,20 @@ function formatTable(snapshot: StatusSnapshot): string {
   ].join(" ");
   const rows = snapshot.tasks.map((task) => [
     pad(task.id, 20),
-    pad(task.state, 12),
+    pad(formatTaskState(task.state), 12),
     pad(task.route, 14),
     pad(task.model, 28),
     pad(task.workerPool, 20),
     pad(task.phase, 14),
   ].join(" "));
   return [header, ...rows].join("\n");
+}
+
+function formatTaskState(state: string): string {
+  const normalized = normalizeState(state);
+  if (normalized === "delivered") return "✅ delivered";
+  if (normalized === "degraded") return "⚠️ degraded";
+  return state;
 }
 
 function formatLanes(snapshot: StatusSnapshot): string {

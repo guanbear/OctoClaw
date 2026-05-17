@@ -41,7 +41,6 @@ export interface DelegationTicketAdmissionResult {
   work_contract_id?: string;
   delegate_task_id?: string;
   attempt_id?: string;
-  queue_id?: string;
   attempts_created?: number;
 }
 
@@ -305,7 +304,6 @@ export function admitDelegationTicketForDispatch(
 
     const maxRow = db.prepare("SELECT MAX(attempt_no) AS max_no FROM task_attempts WHERE work_contract_id = ?").get(workContractId);
     const attemptNo = maxRow && maxRow.max_no != null ? Number(maxRow.max_no) + 1 : 1;
-    const queueId = `queue:${attemptId}`;
     const attemptJson = {
       ticket_id: ticketId,
       work_contract_id: workContractId,
@@ -333,13 +331,6 @@ export function admitDelegationTicketForDispatch(
     );
 
     db.prepare(
-      `INSERT INTO scheduler_queue (
-         queue_id, work_contract_id, attempt_id, queue_status, priority,
-         dependency_ids_json, resource_keys_json, created_at, updated_at, revision
-       ) VALUES (?, ?, ?, ?, 0, '[]', '[]', ?, ?, 0)`,
-    ).run(queueId, workContractId, attemptId, "admitted", nowIso, nowIso);
-
-    db.prepare(
       `UPDATE delegation_tickets
        SET status = 'used', used_at = ?, revision = revision + 1
        WHERE ticket_id = ? AND status = 'issued'`,
@@ -348,7 +339,6 @@ export function admitDelegationTicketForDispatch(
     appendRuntimeEvent(db, "delegation_ticket_used", workContractId, attemptId, {
       ticketId,
       delegateTaskId,
-      queueId,
     }, nowIso);
 
     db.exec("COMMIT");
@@ -361,7 +351,6 @@ export function admitDelegationTicketForDispatch(
       work_contract_id: workContractId,
       delegate_task_id: delegateTaskId,
       attempt_id: attemptId,
-      queue_id: queueId,
       attempts_created: 1,
     };
   } catch (err) {

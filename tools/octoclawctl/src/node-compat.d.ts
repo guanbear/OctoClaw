@@ -70,6 +70,7 @@ declare module "node:child_process" {
     cwd?: string;
     detached?: boolean;
     env?: Record<string, string | undefined>;
+    timeout?: number;
     stdio?: ["ignore", "pipe", "pipe"] | ["ignore", number, number] | "pipe";
   }
 

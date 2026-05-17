@@ -71,10 +71,20 @@ describe("reduceCanonicalStatus", () => {
     );
   });
 
-  it('native completed + delivery ack → status "completed"', () => {
-    expect(reduceCanonicalStatus(defaultInput({ nativeStatus: "completed", hasDeliveryAck: true })).status).toBe(
-      "completed",
-    );
+  it('native completed + result evidence + delivery ack → status "delivered", reason "delivered_with_ack"', () => {
+    expect(reduceCanonicalStatus(defaultInput({ nativeStatus: "completed", hasResultSummary: true, hasDeliveryAck: true }))).toEqual({
+      status: "delivered",
+      reason: "delivered_with_ack",
+      suggestedAction: "deliver",
+    });
+  });
+
+  it('native completed + result evidence + no delivery ack → status "completed"', () => {
+    expect(reduceCanonicalStatus(defaultInput({ nativeStatus: "completed", hasResultSummary: true, hasDeliveryAck: false }))).toEqual({
+      status: "completed",
+      reason: "completed_with_result",
+      suggestedAction: "deliver",
+    });
   });
 
   it('native completed + no result evidence → status "degraded", reason "completed_without_result"', () => {

@@ -1198,6 +1198,12 @@ describe("guardOutboundMessageForPolicyState", () => {
         delivered: true,
         directDeliveryAttempted: true,
         directDeliverySent: true,
+        native_delivery_verdict: expect.objectContaining({
+          finalVisible: true,
+          nativeDelivered: true,
+          relayCompensationNeeded: false,
+          reason: "native_delivery_success",
+        }),
         delivery_transport: "slack_api",
         target_source: "inbound_anchor",
         footer_source: "envelope",
@@ -1313,6 +1319,11 @@ describe("guardOutboundMessageForPolicyState", () => {
         delivered: true,
         directDeliverySent: false,
         directDeliveryError: "already_delivered",
+        native_delivery_verdict: expect.objectContaining({
+          finalVisible: true,
+          nativeDelivered: true,
+          relayCompensationNeeded: false,
+        }),
       }));
     } finally {
       if (previousProjectionFooterMode === undefined) delete process.env.OCTOCLAW_PROJECTION_FOOTER_MODE;
@@ -1659,6 +1670,11 @@ describe("guardOutboundMessageForPolicyState", () => {
         workContractId: contract.workContractId,
         delivered: true,
         directDeliverySent: true,
+        native_delivery_verdict: expect.objectContaining({
+          finalVisible: true,
+          nativeDelivered: true,
+          relayCompensationNeeded: false,
+        }),
       }));
       expect(readReplayEvents()).toContainEqual(expect.objectContaining({
         event: "native_announce_final_delivered",

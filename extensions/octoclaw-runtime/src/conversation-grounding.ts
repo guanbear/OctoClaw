@@ -12,8 +12,6 @@ import { sanitizeMainContextInjection } from "./context/context-budget.js";
 import type { DelegateStatusPacket } from "@octoclaw/contracts/delegate-context";
 import { normalizeSemanticPrompt } from "./semantic-prompt.js";
 import { stripProjectionFooterFromText } from "./projection-footer-sanitizer.js";
-import { openRuntimeLedger } from "./runtime-ledger/index.js";
-import type { DatabaseSync } from "./runtime-ledger/types.js";
 import { isRecord } from "./util/type-coercion.js";
 
 interface FsSyncLike {
@@ -766,22 +764,7 @@ function buildRecentExecutionContext(options: {
   const taskStateStatus = stringValue(taskRecord.status || taskRecord.task_status);
   const lastEventType = stringValue(taskRecord.last_event_type || taskRecord.latest_event_kind);
 
-  let completionVerdict = "missing";
-  if (workContractId) {
-    try {
-      const opened = openRuntimeLedgerBestEffort();
-      if (opened) {
-        try {
-          const row = opened.prepare("SELECT verdict FROM completion_bindings WHERE work_contract_id = ? ORDER BY created_at DESC LIMIT 1").get(workContractId);
-          completionVerdict = stringValue((row as JsonRecord | null)?.verdict) || "missing";
-        } finally {
-          opened.close();
-        }
-      }
-    } catch {
-      completionVerdict = "missing";
-    }
-  }
+  const completionVerdict = "missing";
 
   return {
     workContractId,
@@ -789,15 +772,6 @@ function buildRecentExecutionContext(options: {
     lastEventType,
     completionVerdict,
   };
-}
-
-function openRuntimeLedgerBestEffort(): DatabaseSync | null {
-  try {
-    const result = openRuntimeLedger({ mode: "best_effort" });
-    return result.status === "ok" && result.db ? result.db : null;
-  } catch {
-    return null;
-  }
 }
 
 function classifyRelationToRecentExecution(

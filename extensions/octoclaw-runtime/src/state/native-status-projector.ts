@@ -18,6 +18,22 @@ export type NativeProjectedStatus =
   | "degraded";
 
 export type NativeStatusSource = "run" | "flow" | "latest" | "cache" | "none";
+export type RuntimeTruthSource =
+  | "native_run"
+  | "native_flow"
+  | "native_latest"
+  | "legacy_cache_read_only"
+  | "legacy_heuristic_read_only"
+  | "none";
+
+export interface RuntimeTruthVerdict {
+  isSpawnChild: boolean;
+  spawnEvidence: "accepted_native" | "legacy_read_only" | "none";
+  nativeKind: string;
+  agentRuntimeId: string;
+  source: RuntimeTruthSource;
+  reason: string;
+}
 
 export interface NativeStatusCacheInput {
   status?: string;
@@ -50,9 +66,78 @@ export interface NativeStatusProjection {
   flowId?: string;
   taskId?: string;
   childSessionKey?: string;
+  nativeKind?: string;
+  agentRuntimeId?: string;
   summary?: string;
   revision?: number;
   error?: string;
+}
+
+function runtimeTruthSourceFromProjection(projection: NativeStatusProjection): RuntimeTruthSource {
+  if (projection.source === "run") return "native_run";
+  if (projection.source === "flow") return "native_flow";
+  if (projection.source === "latest") return "native_latest";
+  if (projection.source === "cache") return "legacy_cache_read_only";
+  return "none";
+}
+
+export function runtimeTruthVerdict(projection: NativeStatusProjection): RuntimeTruthVerdict {
+  const nativeKind = asString(projection.nativeKind);
+  const agentRuntimeId = asString(projection.agentRuntimeId);
+  const source = runtimeTruthSourceFromProjection(projection);
+
+  if (projection.found && nativeKind === "spawn-child") {
+    return {
+      isSpawnChild: true,
+      spawnEvidence: "accepted_native",
+      nativeKind,
+      agentRuntimeId,
+      source,
+      reason: "native_spawn_child_kind",
+    };
+  }
+
+  if (projection.found && !projection.degraded && (asString(projection.runId) || asString(projection.childSessionKey)) && !nativeKind) {
+    return {
+      isSpawnChild: true,
+      spawnEvidence: "accepted_native",
+      nativeKind,
+      agentRuntimeId,
+      source,
+      reason: "native_accepted_refs",
+    };
+  }
+
+  if (nativeKind) {
+    return {
+      isSpawnChild: false,
+      spawnEvidence: "none",
+      nativeKind,
+      agentRuntimeId,
+      source,
+      reason: "native_kind_present",
+    };
+  }
+
+  if (projection.source === "cache" && projection.found) {
+    return {
+      isSpawnChild: false,
+      spawnEvidence: "legacy_read_only",
+      nativeKind,
+      agentRuntimeId,
+      source,
+      reason: projection.reason || "legacy_cache_read_only",
+    };
+  }
+
+  return {
+    isSpawnChild: false,
+    spawnEvidence: "none",
+    nativeKind,
+    agentRuntimeId,
+    source,
+    reason: projection.reason || "no_native_truth",
+  };
 }
 
 function firstString(...values: unknown[]): string {
@@ -88,6 +173,7 @@ function unwrapNativeRecord(value: unknown, kind: "run" | "flow" | "latest"): Un
 function statusFromNativeRecord(record: UnknownRecord, source: NativeStatusSource, reason: string): NativeStatusProjection {
   const lifecycle = asRecord(record.lifecycle);
   const result = asRecord(record.result);
+  const agentRuntime = asRecord(record.agentRuntime ?? record.agent_runtime);
   const rawStatus = firstString(
     record.status,
     record.state,
@@ -107,6 +193,8 @@ function statusFromNativeRecord(record: UnknownRecord, source: NativeStatusSourc
     flowId: firstString(record.flowId, record.flow_id),
     taskId: firstString(record.taskId, record.task_id, record.nativeTaskId, record.native_task_id),
     childSessionKey: firstString(record.childSessionKey, record.child_session_key, record.sessionKey, record.session_key),
+    nativeKind: firstString(record.kind, record.type, record.sessionKind, record.session_kind),
+    agentRuntimeId: firstString(record.agentRuntimeId, record.agent_runtime_id, agentRuntime.id, agentRuntime.runtimeId, agentRuntime.runtime_id),
     summary: firstString(record.summary, record.progressSummary, record.progress_summary, result.summary),
     revision: asNumber(record.revision),
   };

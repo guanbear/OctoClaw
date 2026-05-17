@@ -2,6 +2,7 @@ import {
   getAckTrackingState,
   sendNeutralInboundAck,
   type NeutralInboundAckResult,
+  watchdogStartupReconcile,
   watchdogTick,
   WATCHDOG_INTERVAL_MS,
 } from "./ack/ack-guard.js";
@@ -883,6 +884,7 @@ export const plugin = {
     watchdogInterval = setInterval(() => {
       void watchdogTick(pi.logger).catch(() => undefined);
     }, WATCHDOG_INTERVAL_MS);
+    void watchdogStartupReconcile(pi.logger);
 
     if (taskStateRetentionInterval) {
       clearInterval(taskStateRetentionInterval);

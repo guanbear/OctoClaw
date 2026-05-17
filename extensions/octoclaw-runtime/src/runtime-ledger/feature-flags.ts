@@ -15,13 +15,6 @@ export function isLedgerActive(flag?: RuntimeLedgerFlag): boolean {
   return resolved === "shadow" || resolved === "enforce";
 }
 
-// ── OCTOCLAW_SCHEDULER_ENABLED ───────────────────────────────────────
-
-export function isSchedulerEnabled(): boolean {
-  const value = String(process.env.OCTOCLAW_SCHEDULER_ENABLED ?? "").trim().toLowerCase();
-  return value === "1" || value === "true";
-}
-
 // ── OCTOCLAW_TASK_STATE_REBUILD ──────────────────────────────────────
 
 export function isTaskStateRebuildEnabled(): boolean {
@@ -35,7 +28,6 @@ export function isTaskStateRebuildEnabled(): boolean {
 export interface RuntimeLedgerFeatureFlags {
   ledgerMode: RuntimeLedgerFlag;
   ledgerActive: boolean;
-  schedulerEnabled: boolean;
   taskStateRebuildEnabled: boolean;
 }
 
@@ -44,7 +36,6 @@ export function resolveAllFeatureFlags(): RuntimeLedgerFeatureFlags {
   return {
     ledgerMode,
     ledgerActive: isLedgerActive(ledgerMode),
-    schedulerEnabled: isSchedulerEnabled(),
     taskStateRebuildEnabled: isTaskStateRebuildEnabled(),
   };
 }

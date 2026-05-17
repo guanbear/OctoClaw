@@ -47,9 +47,6 @@ import { openRuntimeLedger } from "../runtime-ledger/index.js";
 import { resolveRuntimeLedgerMode } from "../runtime-ledger/shadow.js";
 import { performCrashRecovery } from "../runtime-ledger/crash-recovery.js";
 import {
-  promoteToQueued,
-} from "../runtime-ledger/scheduler.js";
-import {
   type UnknownRecord,
   isRecord,
   asRecord,
@@ -713,7 +710,6 @@ async function executeRetryTaskAction(taskId: string, format: "text" | "json"): 
   const nowIso = now.toISOString();
   let attemptNo = 1;
   let attemptId = "";
-  let queueId = "";
   let ticketId = "";
   let sessionMode = "new_session";
   let childSessionKey = "";
@@ -724,7 +720,6 @@ async function executeRetryTaskAction(taskId: string, format: "text" | "json"): 
     const maxRow = db.prepare("SELECT MAX(attempt_no) AS max_no FROM task_attempts WHERE work_contract_id = ?").get(contract.workContractId);
     attemptNo = maxRow && maxRow.max_no != null ? Number(maxRow.max_no) + 1 : 1;
     attemptId = `${delegateTaskId}:attempt:${attemptNo}`;
-    queueId = `queue:${attemptId}`;
     ticketId = issueRetryDelegationTicket(db, contract, attemptId, nowIso);
     const preferred = selectPreferredChildSession(contract, "resume_preferred");
     preferredReason = preferred.reason;
@@ -755,17 +750,11 @@ async function executeRetryTaskAction(taskId: string, format: "text" | "json"): 
       nowIso,
       JSON.stringify(attemptJson),
     );
-    db.prepare(
-      `INSERT INTO scheduler_queue (
-         queue_id, work_contract_id, attempt_id, queue_status, priority,
-         dependency_ids_json, resource_keys_json, created_at, updated_at, revision
-       ) VALUES (?, ?, ?, 'admitted', 0, '[]', '[]', ?, ?, 0)`,
-    ).run(queueId, contract.workContractId, attemptId, nowIso, nowIso);
     db.prepare("UPDATE delegation_tickets SET status = 'used', used_at = ?, revision = revision + 1 WHERE ticket_id = ?").run(nowIso, ticketId);
     db.prepare(
       `INSERT INTO runtime_events (event_type, work_contract_id, attempt_id, payload_json, created_at)
        VALUES ('task_retry_requested', ?, ?, ?, ?)`,
-    ).run(contract.workContractId, attemptId, JSON.stringify({ taskId, delegateTaskId, attemptNo, queueId, ticketId, sessionMode, childSessionKey }), nowIso);
+    ).run(contract.workContractId, attemptId, JSON.stringify({ taskId, delegateTaskId, attemptNo, ticketId, sessionMode, childSessionKey }), nowIso);
     db.exec("COMMIT");
   } catch (error) {
     try { db.exec("ROLLBACK"); } catch {}
@@ -774,7 +763,6 @@ async function executeRetryTaskAction(taskId: string, format: "text" | "json"): 
     try { db.close(); } catch {}
   }
 
-  const queued = promoteToQueued({ queueId, contract });
   const updatedContract = markChildSessionPreferred({
     workContractId: contract.workContractId,
     childSessionKey,
@@ -792,7 +780,7 @@ async function executeRetryTaskAction(taskId: string, format: "text" | "json"): 
     task_id: asString(updatedContract.telemetry.nativeTaskId || taskId),
     workContractId: updatedContract.workContractId,
     work_contract_id: updatedContract.workContractId,
-    status: queued.queueStatus,
+    status: "admitted",
     workContractStatus: updatedContract.status,
     work_contract_status: updatedContract.status,
     route: updatedContract.route,
@@ -804,7 +792,7 @@ async function executeRetryTaskAction(taskId: string, format: "text" | "json"): 
     updated_at: nowIso,
     workContract: updatedContract,
     work_contract: updatedContract,
-    retry: { attempt_no: attemptNo, attempt_id: attemptId, delegateTaskId, queue_id: queueId, ticket_id: ticketId, status: queued.queueStatus },
+    retry: { attempt_no: attemptNo, attempt_id: attemptId, delegateTaskId, ticket_id: ticketId, status: "admitted" },
   });
 
   const payload = {
@@ -816,15 +804,13 @@ async function executeRetryTaskAction(taskId: string, format: "text" | "json"): 
     delegateTaskId,
     attempt_no: attemptNo,
     attempt_id: attemptId,
-    status: queued.queueStatus,
-    queue_id: queueId,
+    status: "admitted",
     ticket_id: ticketId,
     child_session_key: childSessionKey,
     session_mode: sessionMode,
     preferred_child_session_reason: preferredReason,
-    scheduler: queued,
   };
-  const summary = format === "json" ? JSON.stringify(payload, null, 2) : `Retry admitted for ${delegateTaskId}: attempt ${attemptNo} (${attemptId}) is ${queued.queueStatus}.`;
+  const summary = format === "json" ? JSON.stringify(payload, null, 2) : `Retry admitted for ${delegateTaskId}: attempt ${attemptNo} (${attemptId}) is admitted.`;
   return { summary, payload };
 }
 
@@ -1342,7 +1328,7 @@ export function getToolRegistrations(options: ToolRegistrationOptions = {}): Too
     {
       name: "octoclaw_crash_recovery",
       label: "OctoClaw Crash Recovery",
-      description: "Operator tool to manually run runtime ledger crash recovery for stale leases, attempt reconciliation, orphan scans, and projection rebuild.",
+      description: "Operator tool to manually run runtime ledger crash recovery for stale leases, attempt reconciliation, and projection rebuild.",
       params: {
         type: "object",
         additionalProperties: false,
@@ -1355,10 +1341,8 @@ export function getToolRegistrations(options: ToolRegistrationOptions = {}): Too
         const result = performCrashRecovery({});
         const summary = [
           "crash_recovery_completed",
-          `staleLeasesReleased=${result.staleLeasesReleased}`,
           `attemptsReconciled=${result.attemptsReconciled}`,
           `spawnConfirmed=${result.spawnConfirmed}`,
-          `orphansFound=${result.orphansFound}`,
           `projectionRebuilt=${result.projectionRebuilt}`,
           `errors=${result.errors.length}`,
         ].join("; ");

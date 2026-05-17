@@ -19,7 +19,7 @@ const fs = fsSync as unknown as {
 };
 const osModule = os as unknown as { tmpdir(): string };
 
-const ENV_KEYS = ["OCTOCLAW_SPAWN_BACKEND", "OCTOCLAW_PLANNER_ALLOWLIST", "OCTOCLAW_SPAWN_INTENT_TTL_MS", "OCTOCLAW_RUNTIME_LEDGER", "OCTOCLAW_SCHEDULER_ENABLED", "OCTOCLAW_SPECULATIVE_PRELOAD"];
+const ENV_KEYS = ["OCTOCLAW_SPAWN_BACKEND", "OCTOCLAW_PLANNER_ALLOWLIST", "OCTOCLAW_SPAWN_INTENT_TTL_MS", "OCTOCLAW_RUNTIME_LEDGER", "OCTOCLAW_SPECULATIVE_PRELOAD", "OPENCLAW_HOME"];
 let originalEnv: Record<string, string | undefined>;
 let tempWorkspace = "";
 
@@ -183,7 +183,10 @@ describe("octoclaw_dispatch planner backend", () => {
   it("returns a native sessions_spawn plan with ledger admission and without legacy materialization side effects", async () => {
     process.env.OCTOCLAW_SPAWN_BACKEND = "planner";
     process.env.OCTOCLAW_RUNTIME_LEDGER = "enforce";
-    process.env.OCTOCLAW_SCHEDULER_ENABLED = "1";
+    process.env.OPENCLAW_HOME = tempWorkspace;
+    fsSync.writeFileSync(path.join(tempWorkspace, "openclaw.json"), JSON.stringify({
+      acp: { fallbacks: ["acpx", "codex-native"] },
+    }));
     const contract = seedWorkContract();
 
     const response = await dispatchTool().execute({
@@ -229,9 +232,7 @@ describe("octoclaw_dispatch planner backend", () => {
     expect(nativeSpawnIntentStore.get(body.spawnIntentId)?.status).toBe("planned");
     expect(body.ticket_enforced).toBe(true);
     expect(body.ticket_admission_reason).toBe("ticket_admitted");
-    expect(countRows("scheduler_queue", "work_contract_id = ?", [contract.workContractId])).toBe(1);
     expect(countRows("task_attempts", "work_contract_id = ?", [contract.workContractId])).toBe(1);
-    expect(countRows("completion_bindings", "work_contract_id = ?", [contract.workContractId])).toBe(0);
     const events = readReplayEvents();
     expect(events).toContainEqual(expect.objectContaining({
       event: "dispatch_tool_started",
@@ -243,11 +244,23 @@ describe("octoclaw_dispatch planner backend", () => {
       spawn_backend: "planner",
       planner_enabled: true,
       planner_allowed_candidates: expect.arrayContaining([contract.sessionKey]),
+      native_acp_fallback: expect.objectContaining({
+        mode: "delegate_backend_unavailable",
+        primaryRuntimeId: "acpx",
+        fallbackRuntimeIds: ["acpx", "codex-native"],
+        fallbackAttempted: false,
+      }),
     }));
     expect(events).toContainEqual(expect.objectContaining({
       event: "dispatch_planner_intent_created",
       work_contract_id: contract.workContractId,
       spawn_intent_id: body.spawnIntentId,
+      native_acp_fallback: expect.objectContaining({
+        mode: "delegate_backend_unavailable",
+        primaryRuntimeId: "acpx",
+        fallbackRuntimeIds: ["acpx", "codex-native"],
+        fallbackAttempted: false,
+      }),
       elapsedMs: expect.any(Number),
     }));
   });
@@ -1099,7 +1112,6 @@ describe("octoclaw_dispatch planner backend", () => {
     expect(body.dispatch_executed).toBe(false);
     expect(body.spawn_executed).toBe(false);
     expect(countRows("native_spawn_intents", "work_contract_id = ?", [contract.workContractId])).toBe(0);
-    expect(countRows("scheduler_queue", "work_contract_id = ?", [contract.workContractId])).toBe(0);
   });
 
 });

@@ -183,6 +183,7 @@ declare module "node:child_process" {
 
   export function spawn(command: string, args: string[], options?: SpawnOptions): ChildProcessLike;
   export function spawnSync(command: string, args: string[], options?: SpawnSyncOptions): SpawnSyncResult;
+  export function execFileSync(command: string, args?: string[], options?: SpawnSyncOptions & { stdio?: ["ignore", "pipe", "pipe"] }): string;
 }
 
 declare module "node:sqlite" {

@@ -83,55 +83,6 @@ const MIGRATIONS: readonly Migration[] = [
       `CREATE INDEX IF NOT EXISTS idx_task_attempts_child_session ON task_attempts(child_session_key)`,
       `CREATE INDEX IF NOT EXISTS idx_task_attempts_status_updated ON task_attempts(status, updated_at)`,
 
-      `CREATE TABLE IF NOT EXISTS scheduler_queue (
-  queue_id TEXT PRIMARY KEY,
-  work_contract_id TEXT NOT NULL REFERENCES work_contracts(work_contract_id) ON DELETE CASCADE,
-  attempt_id TEXT NOT NULL REFERENCES task_attempts(attempt_id) ON DELETE CASCADE,
-  queue_status TEXT NOT NULL CHECK (queue_status IN ('admitted', 'queued', 'blocked', 'spawning', 'running', 'terminal')),
-  priority INTEGER NOT NULL DEFAULT 0,
-  dependency_ids_json TEXT NOT NULL DEFAULT '[]',
-  queued_after TEXT,
-  blocked_by TEXT,
-  blocked_reason TEXT,
-  resource_keys_json TEXT NOT NULL DEFAULT '[]',
-  lease_owner TEXT,
-  lease_expires_at TEXT,
-  wakeup_at TEXT,
-  wakeup_reason TEXT,
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL,
-  revision INTEGER NOT NULL DEFAULT 0
-)`,
-      `CREATE INDEX IF NOT EXISTS idx_scheduler_queue_status_priority ON scheduler_queue(queue_status, priority, created_at)`,
-      `CREATE INDEX IF NOT EXISTS idx_scheduler_queue_wakeup ON scheduler_queue(wakeup_at)`,
-      `CREATE INDEX IF NOT EXISTS idx_scheduler_queue_attempt ON scheduler_queue(attempt_id)`,
-
-      `CREATE TABLE IF NOT EXISTS completion_bindings (
-  completion_id TEXT PRIMARY KEY,
-  work_contract_id TEXT NOT NULL REFERENCES work_contracts(work_contract_id) ON DELETE CASCADE,
-  attempt_id TEXT NOT NULL REFERENCES task_attempts(attempt_id) ON DELETE CASCADE,
-  expected_path TEXT NOT NULL,
-  expected_work_contract_id TEXT NOT NULL,
-  expected_delegate_task_id TEXT NOT NULL,
-  expected_native_task_id TEXT,
-  expected_child_session_key TEXT,
-  observed_path TEXT,
-  observed_work_contract_id TEXT,
-  observed_delegate_task_id TEXT,
-  observed_native_task_id TEXT,
-  observed_child_session_key TEXT,
-  verdict TEXT NOT NULL CHECK (verdict IN ('pending', 'matched', 'completion_orphaned', 'binding_mismatch', 'missing', 'invalid_json')),
-  observed_at TEXT,
-  completed_at TEXT,
-  completion_json TEXT,
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL,
-  revision INTEGER NOT NULL DEFAULT 0
-)`,
-      `CREATE UNIQUE INDEX IF NOT EXISTS idx_completion_bindings_expected_path ON completion_bindings(expected_path)`,
-      `CREATE INDEX IF NOT EXISTS idx_completion_bindings_verdict ON completion_bindings(verdict)`,
-      `CREATE INDEX IF NOT EXISTS idx_completion_bindings_attempt ON completion_bindings(attempt_id)`,
-
       `CREATE TABLE IF NOT EXISTS runtime_events (
   event_id INTEGER PRIMARY KEY AUTOINCREMENT,
   event_type TEXT NOT NULL,
@@ -290,43 +241,6 @@ export type { DelegationTicketDryRunInput, DelegationTicketDryRunResult } from "
 export { admitDelegationTicketForDispatch } from "./ticket-enforcement.js";
 export type { DelegationTicketAdmissionInput, DelegationTicketAdmissionResult } from "./ticket-enforcement.js";
 export {
-  resolveSchedulerConfig,
-  deriveSchedulerResourceKeys,
-  promoteToQueued,
-  tryAcquireLease,
-  materializeNativeIds,
-  releaseOrComplete,
-  requeueExpiredLeases,
-} from "./scheduler.js";
-export type {
-  SchedulerConfig,
-  QueueStatus,
-  PromoteToQueuedInput,
-  PromoteToQueuedResult,
-  AcquireLeaseInput,
-  AcquireLeaseResult,
-  MaterializeInput,
-  MaterializeResult,
-  ReleaseInput,
-  ReleaseResult,
-  RequeueExpiredInput,
-  RequeueExpiredResult,
-} from "./scheduler.js";
-export {
-  createCompletionBinding,
-  observeCompletionBinding,
-  getCompletionBinding,
-  listCompletionBindingsByVerdict,
-  scanOrphanCompletions,
-  listOrphanedCompletionBindings,
-} from "./completion-binding.js";
-export type {
-  CreateCompletionBindingInput,
-  CreateCompletionBindingResult,
-  ObserveCompletionBindingInput,
-  ObserveCompletionBindingResult,
-} from "./completion-binding.js";
-export {
   rebuildTaskStateProjection,
   writeRebuiltTaskState,
   isTaskStateRebuildable,
@@ -345,7 +259,6 @@ export type {
 export {
   resolveRuntimeLedgerFlag,
   isLedgerActive,
-  isSchedulerEnabled,
   isTaskStateRebuildEnabled,
   resolveAllFeatureFlags,
 } from "./feature-flags.js";
@@ -355,15 +268,11 @@ export type {
 } from "./feature-flags.js";
 export {
   inspectLedgerHealth,
-  listOrphanCompletions,
-  releaseStaleLeases,
   operatorRebuildProjection,
 } from "./operator-diagnostics.js";
 export type {
   LedgerHealthReport,
   LedgerDiagnosticsInput,
-  OrphanSummary,
-  ReleaseStaleLeasesResult,
   RebuildProjectionResult,
 } from "./operator-diagnostics.js";
 export { performCrashRecovery } from "./crash-recovery.js";

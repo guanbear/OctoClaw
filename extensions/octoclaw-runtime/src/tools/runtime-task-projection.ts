@@ -7,7 +7,7 @@ import {
 import { captureTmuxEvidence, isTmuxEvidenceEnabled, type TmuxEvidenceSnapshot, type TmuxPaneMapping } from "../runtime-ledger/tmux-evidence.js";
 import { truncateText } from "../resolve/env.js";
 import { normalizeLiveRoute } from "../resolve/route-helpers.js";
-import type { NativeStatusProjection, NativeStatusProjectorInput } from "../state/native-status-projector.js";
+import { runtimeTruthVerdict, type NativeStatusProjection, type NativeStatusProjectorInput } from "../state/native-status-projector.js";
 import { asBoolean, asRecord, asString, type UnknownRecord } from "../util/type-coercion.js";
 import {
   formatAbsoluteShort,
@@ -44,6 +44,8 @@ export interface RuntimeStatusTaskView {
   workerPool: string;
   childSessionKey: string;
   runId: string;
+  nativeKind: string;
+  agentRuntimeId: string;
   statusReason: string;
   resultLocation: string;
 }
@@ -580,7 +582,7 @@ export function projectRuntimeStatus(
   const reconcileResult = asRecord(record.lifecycle_reconcile_result);
   const rawStatusIsTerminal = Boolean(terminalStatus || normalizedRawStatus === "deliverable_ready");
   if (!rawStatusIsTerminal && typeof reconcileResult.status === "string") {
-    const canonicalStatuses = new Set(["queued", "running", "running_slow", "stalled", "timed_out", "failed", "degraded", "completed"]);
+    const canonicalStatuses = new Set(["queued", "running", "running_slow", "stalled", "timed_out", "failed", "degraded", "delivered", "completed"]);
     if (canonicalStatuses.has(reconcileResult.status)) {
       return { status: reconcileResult.status, reason: asString(reconcileResult.reason, "lifecycle_reducer") };
     }
@@ -654,6 +656,7 @@ export function buildRuntimeTaskProjection(
   const endMs = timestampMs(completedAt) ?? nowMs;
   const elapsedMs = startMs === null ? null : Math.max(0, endMs - startMs);
   const fallbackProjection = projectRuntimeStatus(record, nowMs, nativeProjection);
+  const nativeTruthVerdict = nativeProjection ? runtimeTruthVerdict(nativeProjection) : null;
   const fallbackTerminal = ["completed", "failed", "canceled"].includes(fallbackProjection.status);
   const nativeProjectionAuthoritative = Boolean(nativeProjection && (
     ["run", "flow", "latest"].includes(nativeProjection.source)
@@ -729,8 +732,12 @@ export function buildRuntimeTaskProjection(
     model: runtimeTaskModel(record, runtimeTruth, delegateAttempt),
     backend: optionalString(record.backend, workerPool, binding.controllerId, runtimeTruth.backend) ?? "unknown",
     workerPool,
-    childSessionKey: optionalString(nativeProjectionAuthoritative ? nativeProjection?.childSessionKey : "", evidence.childSessionKey) ?? "",
+    childSessionKey: nativeProjectionAuthoritative
+      ? (nativeTruthVerdict?.isSpawnChild ? optionalString(nativeProjection?.childSessionKey, evidence.childSessionKey) ?? "" : "")
+      : optionalString(evidence.childSessionKey) ?? "",
     runId: optionalString(nativeProjectionAuthoritative ? nativeProjection?.runId : "", evidence.runId) ?? "",
+    nativeKind: optionalString(nativeProjectionAuthoritative ? nativeProjection?.nativeKind : "") ?? "",
+    agentRuntimeId: optionalString(nativeProjectionAuthoritative ? nativeProjection?.agentRuntimeId : "") ?? "",
     statusReason: actionableReason,
     resultLocation,
   };

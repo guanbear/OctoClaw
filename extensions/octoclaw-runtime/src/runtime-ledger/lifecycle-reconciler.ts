@@ -6,6 +6,7 @@ export type CanonicalLifecycleStatus =
   | "timed_out"
   | "failed"
   | "degraded"
+  | "delivered"
   | "completed";
 
 export type NativeLifecycleStatus = "running" | "completed" | "failed" | "timed_out" | "missing" | "unavailable";
@@ -40,6 +41,7 @@ export interface LifecycleReconcileInput {
 }
 
 export type LifecycleReconcileReason =
+  | "delivered_with_ack"
   | "completed_with_result"
   | "completed_without_result"
   | "expected_deadline_passed_live_output"
@@ -152,6 +154,8 @@ function mapTerminalStatus(status: string): CanonicalLifecycleStatus | null {
     case "completed":
     case "deliverable_ready":
       return "completed";
+    case "delivered":
+      return "delivered";
     case "failed":
     case "canceled":
     case "cancelled":
@@ -187,6 +191,10 @@ export function reduceCanonicalStatus(input: LifecycleReconcileInput): Lifecycle
     return { status: "timed_out", reason: "native_timed_out", suggestedAction: "inspect" };
   }
 
+  if (input.nativeStatus === "completed" && hasResultEvidence(input) && input.hasDeliveryAck) {
+    return { status: "delivered", reason: "delivered_with_ack", suggestedAction: "deliver" };
+  }
+
   if (input.nativeStatus === "completed" && hasResultEvidence(input)) {
     return { status: "completed", reason: "completed_with_result", suggestedAction: "deliver" };
   }
@@ -197,6 +205,10 @@ export function reduceCanonicalStatus(input: LifecycleReconcileInput): Lifecycle
 
   if (["completed", "done", "succeeded", "deliverable_ready"].includes(currentStatus) && !hasResultEvidence(input)) {
     return { status: "degraded", reason: "completed_without_result", suggestedAction: "inspect" };
+  }
+
+  if (["completed", "done", "succeeded", "deliverable_ready"].includes(currentStatus) && hasResultEvidence(input) && input.hasDeliveryAck) {
+    return { status: "delivered", reason: "delivered_with_ack", suggestedAction: "deliver" };
   }
 
   if (["completed", "done", "succeeded", "deliverable_ready"].includes(currentStatus) && hasResultEvidence(input)) {

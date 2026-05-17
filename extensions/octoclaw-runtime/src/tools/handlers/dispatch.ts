@@ -32,6 +32,11 @@ import { emitExecutionTransitionNotification } from "../../ack/execution-transit
 import { isPlannerAllowedForSession, resolvePlannerAllowlist, resolveSpawnBackend, resolveSpawnIntentTtlMs, resolveSpeculativePreloadEnabled } from "../../config/index.js";
 import { nativeSpawnIntentStore } from "../../delegate/native-spawn-intent-store.js";
 import {
+  nativeAcpFallbackMetadata,
+  readNativeAcpFallbackSnapshot,
+  resolveNativeAcpFallbackMode,
+} from "../../delegate/native-acp-fallback.js";
+import {
   buildSpeculativeSessionsSendArgs,
   serializeSpeculativePreloadState,
 } from "../../delegate/speculative-preload.js";
@@ -44,14 +49,6 @@ import {
 import { getModelMap } from "../../model-map.js";
 import { buildDelegationTicketDryRun } from "../../runtime-ledger/ticket-dry-run.js";
 import { admitDelegationTicketForDispatch, issueDelegationTicketCandidate } from "../../runtime-ledger/ticket-enforcement.js";
-import { isSchedulerEnabled } from "../../runtime-ledger/feature-flags.js";
-import { resolveRuntimeLedgerMode } from "../../runtime-ledger/shadow.js";
-import {
-  promoteToQueued,
-  releaseOrComplete,
-  resolveSchedulerConfig,
-  tryAcquireLease,
-} from "../../runtime-ledger/scheduler.js";
 import {
   type UnknownRecord,
   isRecord,
@@ -109,7 +106,6 @@ import {
   toolLogger,
   userFacingHandoff,
   validateDispatchWorkContract,
-  warnToolLogger,
   type ToolRegistrationOptions,
 } from "../registration.js";
 
@@ -210,7 +206,6 @@ export async function executeOctoclawDispatch(params: Record<string, unknown>, _
             }, toolLogger(ctx), cachedDecision);
           }
         }
-        const runtimeLedgerMode = resolveRuntimeLedgerMode();
         const recordDispatchTerminalFailure = async (errorMessage: string, options: { sealMismatch?: boolean; route?: string | null } = {}) => {
           await recordPolicyReplay("dispatch_terminal_failure", {
             sessionKey: managedSessionKey,
@@ -522,24 +517,13 @@ export async function executeOctoclawDispatch(params: Record<string, unknown>, _
         }
 
         const helperInvoker = readHelperInvoker(asRecord(metadata).helperInvoker, ctx.helperInvoker);
-        let schedulerQueueId = "";
-        let schedulerDispatchState: "inactive" | "bypassed" | "leased" = "inactive";
-        const releaseSchedulerQueue = (outcome: "completed" | "failed" | "cancelled", errorMessage?: string) => {
-          if (!schedulerQueueId || schedulerDispatchState !== "leased") return;
-          const result = releaseOrComplete({
-            queueId: schedulerQueueId,
-            outcome,
-            errorCode: errorMessage ? outcome : undefined,
-            errorMessage,
-            terminalSummary: errorMessage,
-          });
-          if (!result.ok) {
-            warnToolLogger(ctx, `scheduler release failed: ${result.error || "unknown_error"}`);
-          }
-        };
 
         if (isDelegatedRoute) {
           const spawnBackend = resolveSpawnBackend();
+          const nativeAcpFallback = nativeAcpFallbackMetadata(
+            readNativeAcpFallbackSnapshot(),
+            resolveNativeAcpFallbackMode(),
+          );
           const plannerSessionCandidates = dispatchPlannerSessionCandidates(
             managedSessionKey,
             stateKey,
@@ -573,6 +557,7 @@ export async function executeOctoclawDispatch(params: Record<string, unknown>, _
             planner_allowed_candidates: plannerAllowedCandidates.slice(0, 12),
             planner_allowlist_size: resolvePlannerAllowlist().length,
             helper_invoker_present: Boolean(helperInvoker),
+            native_acp_fallback: nativeAcpFallback,
           }, toolLogger(ctx), null).catch(() => undefined);
           if (spawnBackend === "off") {
             const errorMessage = "spawn_backend_off";
@@ -877,7 +862,6 @@ export async function executeOctoclawDispatch(params: Record<string, unknown>, _
                 work_contract_id: ticketAdmission.work_contract_id ?? ticketCandidate.work_contract_id ?? null,
                 ticket_id: ticketAdmission.ticket_id ?? ticketCandidate.ticket_id ?? null,
                 attempt_id: ticketAdmission.attempt_id ?? attemptId,
-                queue_id: ticketAdmission.queue_id ?? null,
                 spawn_intent_id: intent.spawnIntentId,
                 dispatch_executed: false,
                 spawn_executed: false,
@@ -901,7 +885,6 @@ export async function executeOctoclawDispatch(params: Record<string, unknown>, _
                   work_contract_id: ticketAdmission.work_contract_id ?? ticketCandidate.work_contract_id ?? null,
                   ticket_id: ticketAdmission.ticket_id ?? ticketCandidate.ticket_id ?? null,
                   attempt_id: ticketAdmission.attempt_id ?? attemptId,
-                  queue_id: ticketAdmission.queue_id ?? null,
                   spawn_intent_id: intent.spawnIntentId,
                   dispatch_executed: false,
                   spawn_executed: false,
@@ -949,7 +932,6 @@ export async function executeOctoclawDispatch(params: Record<string, unknown>, _
               delegate_task_id: delegateTaskId,
               attempt_id: attemptId,
               ticket_id: ticketAdmission.ticket_id ?? null,
-              queue_id: ticketAdmission.queue_id ?? null,
               ticket_issue_ok: ticketIssue.ok === true,
               ticket_issue_reason: ticketIssue.reason ?? "",
               ticket_admission_reason: ticketAdmission.reason,
@@ -966,6 +948,7 @@ export async function executeOctoclawDispatch(params: Record<string, unknown>, _
               speculative_selection_reason: speculativeSelection.reason,
               speculative_selection_status: speculativeSelection.status,
               speculative_selection_candidate_key: speculativeSelection.candidateKey,
+              native_acp_fallback: nativeAcpFallback,
               elapsedMs: Date.now() - dispatchToolStartedAt,
             }, toolLogger(ctx), null);
             return plannerDispatchResponse({
@@ -974,7 +957,6 @@ export async function executeOctoclawDispatch(params: Record<string, unknown>, _
               delegateTaskId,
               attemptId,
               ticketId: ticketAdmission.ticket_id,
-              queueId: ticketAdmission.queue_id,
               ticketAdmissionReason: ticketAdmission.reason,
               ticketEnforced: ticketAdmission.enforced,
               sessionsSpawnArgs,
@@ -1077,151 +1059,6 @@ export async function executeOctoclawDispatch(params: Record<string, unknown>, _
             metadata.delegate_task_id = ticketAdmission.delegate_task_id;
             metadata.attemptId = ticketAdmission.attempt_id;
             metadata.attempt_id = ticketAdmission.attempt_id;
-            schedulerQueueId = asString(ticketAdmission.queue_id);
-            if (runtimeLedgerMode === "enforce") {
-              if (!isSchedulerEnabled()) {
-                const errorMessage = "blocked_by_scheduler_mandatory:scheduler_not_enabled";
-                warnToolLogger(ctx, "OCTOCLAW_SCHEDULER_ENABLED is false; blocking dispatch because scheduler gating is mandatory in enforce mode");
-                await recordPolicyReplay("dispatch_scheduler_mandatory_blocked", {
-                  sessionKey: managedSessionKey,
-                  sessionId: asString(ctx.sessionId),
-                  route: resolvedRoute,
-                  queue_id: schedulerQueueId || null,
-                  work_contract_id: ticketAdmission.work_contract_id ?? null,
-                  attempt_id: ticketAdmission.attempt_id ?? null,
-                  reason: "scheduler_not_enabled",
-                  dispatch_executed: false,
-                  spawn_executed: false,
-                  materialized: false,
-                  retryable: false,
-                  terminal: true,
-                }, toolLogger(ctx), cachedDecision);
-                await recordDispatchTerminalFailure(errorMessage, { route: resolvedRoute });
-                return dispatchHonestyFailure({
-                  route: resolvedRoute,
-                  error: errorMessage,
-                  retryable: false,
-                  terminal: true,
-                  details: {
-                    status: "blocked_by_scheduler_mandatory",
-                    scheduler_status: "blocked_by_scheduler_mandatory",
-                    queue_id: schedulerQueueId || null,
-                    work_contract_id: ticketAdmission.work_contract_id ?? null,
-                    attempt_id: ticketAdmission.attempt_id ?? null,
-                    reason: "scheduler_not_enabled",
-                    dispatch_executed: false,
-                    spawn_executed: false,
-                    materialized: false,
-                  },
-                });
-              } else if (!schedulerQueueId) {
-                const errorMessage = "blocked_by_scheduler:missing_queue_id";
-                await recordDispatchTerminalFailure(errorMessage, { route: resolvedRoute });
-                return dispatchHonestyFailure({
-                  route: resolvedRoute,
-                  error: errorMessage,
-                  retryable: false,
-                  terminal: true,
-                  details: {
-                    status: "blocked_by_scheduler",
-                    scheduler_status: "blocked_by_scheduler",
-                    queue_id: null,
-                    dispatch_executed: false,
-                    spawn_executed: false,
-                    materialized: false,
-                  },
-                });
-              } else {
-                const promoted = promoteToQueued({ queueId: schedulerQueueId, contract: dispatchWorkContract });
-                if (!promoted.ok) {
-                  const schedulerStatus = promoted.queueStatus === "blocked" ? "blocked_by_scheduler" : "blocked_by_scheduler";
-                  const errorMessage = `${schedulerStatus}:${promoted.blockedReason || promoted.error || promoted.queueStatus}`;
-                  await recordPolicyReplay("dispatch_scheduler_blocked", {
-                    sessionKey: managedSessionKey,
-                    sessionId: asString(ctx.sessionId),
-                    route: resolvedRoute,
-                    queue_id: schedulerQueueId,
-                    queue_status: promoted.queueStatus,
-                    blocked_by: promoted.blockedBy ?? null,
-                    blocked_reason: promoted.blockedReason ?? promoted.error ?? null,
-                    dispatch_executed: false,
-                    spawn_executed: false,
-                    materialized: false,
-                  }, toolLogger(ctx), cachedDecision);
-                  await recordDispatchTerminalFailure(errorMessage, { route: resolvedRoute });
-                  return dispatchHonestyFailure({
-                    route: resolvedRoute,
-                    error: errorMessage,
-                    retryable: promoted.error === "ledger_unavailable",
-                    terminal: promoted.error !== "ledger_unavailable",
-                    details: {
-                      status: "blocked_by_scheduler",
-                      scheduler_status: "blocked_by_scheduler",
-                      queue_id: schedulerQueueId,
-                      queue_status: promoted.queueStatus,
-                      blocked_by: promoted.blockedBy ?? null,
-                      blocked_reason: promoted.blockedReason ?? promoted.error ?? null,
-                      dispatch_executed: false,
-                      spawn_executed: false,
-                      materialized: false,
-                    },
-                  });
-                }
-                const schedulerConfig = resolveSchedulerConfig();
-                const lease = tryAcquireLease({
-                  queueId: schedulerQueueId,
-                  leaseOwner: `octoclaw_dispatch:${asString(ctx.sessionId, managedSessionKey) || process.pid}`,
-                  maxConcurrentSpawns: schedulerConfig.maxConcurrentSpawns,
-                  leaseDurationMs: schedulerConfig.leaseDurationMs,
-                });
-                if (!lease.acquired || lease.queueId !== schedulerQueueId) {
-                  const errorMessage = `queued_not_leased:${lease.reason || (lease.queueId && lease.queueId !== schedulerQueueId ? "different_queue_leased" : "unknown")}`;
-                  await recordPolicyReplay("dispatch_scheduler_not_leased", {
-                    sessionKey: managedSessionKey,
-                    sessionId: asString(ctx.sessionId),
-                    route: resolvedRoute,
-                    queue_id: schedulerQueueId,
-                    leased_queue_id: lease.queueId ?? null,
-                    reason: lease.reason ?? null,
-                    blocked_by: lease.blockedBy ?? null,
-                    blocked_reason: lease.blockedReason ?? null,
-                    dispatch_executed: false,
-                    spawn_executed: false,
-                    materialized: false,
-                  }, toolLogger(ctx), cachedDecision);
-                  if (lease.acquired && lease.queueId && lease.queueId !== schedulerQueueId) {
-                    const releaseResult = releaseOrComplete({
-                      queueId: lease.queueId,
-                      outcome: "cancelled",
-                      errorCode: "unexpected_lease_owner",
-                      errorMessage: `dispatch acquired ${lease.queueId} while waiting for ${schedulerQueueId}`,
-                    });
-                    if (!releaseResult.ok) warnToolLogger(ctx, `scheduler unexpected lease release failed: ${releaseResult.error || "unknown_error"}`);
-                  }
-                  await recordDispatchTerminalFailure(errorMessage, { route: resolvedRoute });
-                  return dispatchHonestyFailure({
-                    route: resolvedRoute,
-                    error: errorMessage,
-                    retryable: true,
-                    terminal: false,
-                    details: {
-                      status: "queued_not_leased",
-                      scheduler_status: "queued_not_leased",
-                      queue_id: schedulerQueueId,
-                      leased_queue_id: lease.queueId ?? null,
-                      blocked_by: lease.blockedBy ?? null,
-                      blocked_reason: lease.blockedReason ?? lease.reason ?? null,
-                      dispatch_executed: false,
-                      spawn_executed: false,
-                      materialized: false,
-                    },
-                  });
-                }
-                schedulerDispatchState = "leased";
-                metadata.scheduler_queue_id = schedulerQueueId;
-                metadata.scheduler_status = "leased";
-              }
-            }
           }
         }
 
@@ -1242,7 +1079,6 @@ export async function executeOctoclawDispatch(params: Record<string, unknown>, _
           payload = isRecord(candidate.payload) ? asRecord(candidate.payload) : {};
           if (Object.keys(payload).length === 0) {
             await recordDispatchTerminalFailure(errorMessage);
-            releaseSchedulerQueue("failed", errorMessage);
             return dispatchHonestyFailure({
               route: resolvedRoute,
               error: errorMessage,
@@ -1274,7 +1110,6 @@ export async function executeOctoclawDispatch(params: Record<string, unknown>, _
               stateKey,
             });
           } catch (_) { }
-          releaseSchedulerQueue("failed", errorMessage);
           return dispatchHonestyFailure({
             route: asString(payload.route, resolvedRoute),
             error: errorMessage,
@@ -1568,7 +1403,6 @@ export async function executeOctoclawDispatch(params: Record<string, unknown>, _
                 transitionKind: "spawn_started",
               });
             } else {
-              releaseSchedulerQueue("failed", "spawn_not_confirmed");
               void emitExecutionTransitionNotification({
                 ...notifyParams,
                 transitionKind: "materialized_no_spawn",

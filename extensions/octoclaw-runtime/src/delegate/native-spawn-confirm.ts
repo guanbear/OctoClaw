@@ -249,7 +249,6 @@ function markPlannerAttemptInLedger(input: {
 
   const db = opened.db;
   const flowId = input.runId ? `sessions_spawn:${input.runId}` : "";
-  const queueId = `queue:${attemptId}`;
   const attemptJson = {
     work_contract_id: workContractId,
     delegate_task_id: delegateTaskId,
@@ -313,17 +312,6 @@ function markPlannerAttemptInLedger(input: {
         attemptId,
       );
       db.prepare(
-        `INSERT OR IGNORE INTO scheduler_queue (
-           queue_id, work_contract_id, attempt_id, queue_status, priority,
-           dependency_ids_json, resource_keys_json, created_at, updated_at, revision
-         ) VALUES (?, ?, ?, 'running', 0, '[]', '[]', ?, ?, 0)`,
-      ).run(queueId, workContractId, attemptId, input.nowIso, input.nowIso);
-      db.prepare(
-        `UPDATE scheduler_queue
-         SET queue_status = 'running', updated_at = ?, revision = revision + 1
-         WHERE attempt_id = ? AND queue_status <> 'terminal'`,
-      ).run(input.nowIso, attemptId);
-      db.prepare(
         `INSERT INTO runtime_events (event_type, work_contract_id, attempt_id, payload_json, created_at)
          VALUES ('task_attempt_spawn_confirmed', ?, ?, ?, ?)`,
       ).run(workContractId, attemptId, JSON.stringify({
@@ -343,17 +331,6 @@ function markPlannerAttemptInLedger(input: {
              revision = revision + 1
          WHERE attempt_id = ?`,
       ).run(input.nowIso, asString(input.errorMessage), input.nowIso, attemptId);
-      db.prepare(
-        `INSERT OR IGNORE INTO scheduler_queue (
-           queue_id, work_contract_id, attempt_id, queue_status, priority,
-           dependency_ids_json, resource_keys_json, created_at, updated_at, revision
-         ) VALUES (?, ?, ?, 'terminal', 0, '[]', '[]', ?, ?, 0)`,
-      ).run(queueId, workContractId, attemptId, input.nowIso, input.nowIso);
-      db.prepare(
-        `UPDATE scheduler_queue
-         SET queue_status = 'terminal', updated_at = ?, revision = revision + 1
-         WHERE attempt_id = ?`,
-      ).run(input.nowIso, attemptId);
       db.prepare(
         `INSERT INTO runtime_events (event_type, work_contract_id, attempt_id, payload_json, created_at)
          VALUES ('task_attempt_spawn_failed', ?, ?, ?, ?)`,

@@ -61,6 +61,7 @@ export {
   STUCK_THRESHOLD_MIN,
   WATCHDOG_DEBOUNCE_MS,
   WATCHDOG_INTERVAL_MS,
+  watchdogStartupReconcile,
   watchdogTick,
 } from "./ack-watchdog.js";
 

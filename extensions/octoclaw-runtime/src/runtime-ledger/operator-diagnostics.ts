@@ -2,7 +2,6 @@ import { openRuntimeLedger } from "./index.js";
 import type { DatabaseSync, SqliteProvider } from "./types.js";
 import { isTaskStateRebuildEnabled } from "./feature-flags.js";
 import { rebuildTaskStateProjection, writeRebuiltTaskState } from "./projection-rebuild.js";
-import { requeueExpiredLeases } from "./scheduler.js";
 
 // ── DB health ────────────────────────────────────────────────────────
 
@@ -13,11 +12,7 @@ export interface LedgerHealthReport {
   workContractCount: number;
   attemptCount: number;
   ticketCount: number;
-  queueCount: number;
-  completionBindingCount: number;
   runtimeEventCount: number;
-  orphanedCompletions: number;
-  staleLeases: number;
   errors: string[];
 }
 
@@ -34,11 +29,7 @@ export function inspectLedgerHealth(input: LedgerDiagnosticsInput = {}): LedgerH
     workContractCount: 0,
     attemptCount: 0,
     ticketCount: 0,
-    queueCount: 0,
-    completionBindingCount: 0,
     runtimeEventCount: 0,
-    orphanedCompletions: 0,
-    staleLeases: 0,
     errors: [],
   };
 
@@ -58,13 +49,7 @@ export function inspectLedgerHealth(input: LedgerDiagnosticsInput = {}): LedgerH
     report.workContractCount = countRows(db, "work_contracts");
     report.attemptCount = countRows(db, "task_attempts");
     report.ticketCount = countRows(db, "delegation_tickets");
-    report.queueCount = countRows(db, "scheduler_queue");
-    report.completionBindingCount = countRows(db, "completion_bindings");
     report.runtimeEventCount = countRows(db, "runtime_events");
-    report.orphanedCompletions = countRows(db, "completion_bindings", "verdict IN ('completion_orphaned','binding_mismatch')");
-
-    const now = new Date().toISOString();
-    report.staleLeases = countRows(db, "scheduler_queue", "lease_expires_at IS NOT NULL AND lease_expires_at < ?", [now]);
   } catch (err) {
     report.errors.push(err instanceof Error ? err.message : String(err));
   } finally {
@@ -72,69 +57,6 @@ export function inspectLedgerHealth(input: LedgerDiagnosticsInput = {}): LedgerH
   }
 
   return report;
-}
-
-// ── Orphan list ──────────────────────────────────────────────────────
-
-export interface OrphanSummary {
-  completionId: string;
-  workContractId: string;
-  attemptId: string;
-  expectedPath: string;
-  verdict: string;
-  createdAt: string;
-}
-
-export function listOrphanCompletions(input: LedgerDiagnosticsInput = {}): OrphanSummary[] {
-  const orphans: OrphanSummary[] = [];
-
-  const openResult = openRuntimeLedger({ dbPath: input.dbPath, mode: "best_effort", sqlite: input.sqlite });
-  if (openResult.status !== "ok" || !openResult.db) return orphans;
-
-  const db = openResult.db;
-  try {
-    const rows = db.prepare(
-      `SELECT completion_id, work_contract_id, attempt_id, expected_path, verdict, created_at
-       FROM completion_bindings
-       WHERE verdict IN ('completion_orphaned','binding_mismatch','missing')
-       ORDER BY created_at DESC`,
-    ).all();
-
-    for (const row of rows) {
-      orphans.push({
-        completionId: String(row.completion_id),
-        workContractId: String(row.work_contract_id),
-        attemptId: String(row.attempt_id),
-        expectedPath: String(row.expected_path),
-        verdict: String(row.verdict),
-        createdAt: String(row.created_at),
-      });
-    }
-  } finally {
-    db.close();
-  }
-
-  return orphans;
-}
-
-// ── Stale lease release ──────────────────────────────────────────────
-
-export interface ReleaseStaleLeasesResult {
-  released: number;
-  errors: string[];
-}
-
-export function releaseStaleLeases(input: LedgerDiagnosticsInput = {}): ReleaseStaleLeasesResult {
-  const result: ReleaseStaleLeasesResult = { released: 0, errors: [] };
-
-  try {
-    const requeued = requeueExpiredLeases({ dbPath: input.dbPath, sqlite: input.sqlite });
-    result.released = requeued.requeued;
-  } catch (err) {
-    result.errors.push(err instanceof Error ? err.message : String(err));
-  }
-
-  return result;
 }
 
 // ── Projection rebuild operator command ──────────────────────────────
