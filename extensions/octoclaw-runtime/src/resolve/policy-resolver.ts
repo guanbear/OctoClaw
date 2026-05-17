@@ -239,23 +239,34 @@ function attachWorkContractToPolicyDecision(input: {
     || asBoolean(executionLayer.requires_control_plane_refresh);
   const executionCoverageReplyOverride = asBoolean(input.metadata.execution_coverage_reply_override);
   const executionCoverageReplyApplied = (isExecutionFollowup && executionSupportsReply) || executionCoverageReplyOverride;
+  const workRoute = executionCoverageReplyApplied ? "reply" : authoritativeDecisionRoute(input.decision) === "delegate" ? "delegate" : "reply";
+  const replyHasControlPlaneToolPath = asBoolean(executionLayer.requires_control_plane_refresh) || statusSurfaceControlAllowed;
+  const replyRequiresNewEvidence = workRoute === "reply"
+    && intentClass === "undetermined"
+    && !executionCoverageReplyApplied
+    && coverageSnapshot.authority === "none"
+    && !executionSupportsReply
+    && !replyHasControlPlaneToolPath;
+  const replyMode = executionCoverageReplyApplied ? "answer" : replyRequiresNewEvidence ? "clarify" : undefined;
+  const executionEvidenceSummary = replyRequiresNewEvidence
+    ? "reply requires new evidence before answer"
+    : asString(executionLayer.evidence_summary) || undefined;
   const executionCoveragePacket: ExecutionCoveragePacket = {
     packetId: stableId("execution-coverage", [input.stateKey, input.prompt, String(Date.now())]),
     turnId: stableId("turn", [input.stateKey, input.prompt]),
     sessionKey: input.stateKey,
     coverage: coverageSnapshot,
-    route: executionCoverageReplyApplied ? "reply" : authoritativeDecisionRoute(input.decision) === "delegate" ? "delegate" : "reply",
-    replyMode: executionCoverageReplyApplied ? "answer" : undefined,
+    route: workRoute,
+    replyMode,
     dispatchExecuted: asBoolean(executionLayer.dispatch_executed),
     spawnExecuted: asBoolean(executionLayer.spawn_executed),
     resultMaterialized: asBoolean(executionLayer.result_materialized),
-    evidenceRefs: asString(executionLayer.evidence_summary) ? [asString(executionLayer.evidence_summary)] : [],
-    evidenceSummary: asString(executionLayer.evidence_summary) || undefined,
+    evidenceRefs: replyRequiresNewEvidence ? [] : asString(executionLayer.evidence_summary) ? [asString(executionLayer.evidence_summary)] : [],
+    evidenceSummary: executionEvidenceSummary,
     createdAt: new Date().toISOString(),
   };
   input.metadata._execution_coverage_packet = executionCoveragePacket;
   input.decision._execution_coverage_packet = executionCoveragePacket;
-  const workRoute = executionCoveragePacket.route;
   const decisionSource = executionCoverageReplyApplied
     ? "execution_coverage"
     : workDecisionSourceFromPolicy(input.decision._judge_source || asRecord(input.decision.route_decision).final_judge_source || "local_judge");
@@ -264,16 +275,16 @@ function attachWorkContractToPolicyDecision(input: {
     workRoute,
     asStringArray(asRecord(input.decision.route_decision).reason_codes),
     {
-      replyMode: decisionSource === "execution_coverage" ? "answer" : undefined,
+      replyMode,
       confidence: typeof input.decision.judge_confidence === "number" ? input.decision.judge_confidence : undefined,
       routeSealId: asString(asRecord(input.routeSeal).routeSealId) || undefined,
     },
   );
   const replyContract: ReplyContract | undefined = workRoute === "reply"
     ? {
-        replyMode: decisionSource === "execution_coverage" ? "answer" : "answer",
-        grounding: (asBoolean(executionLayer.requires_control_plane_refresh) || statusSurfaceControlAllowed) ? "control_plane_status" : executionSupportsReply ? "execution_receipt" : "none",
-        allowedTools: (asBoolean(executionLayer.requires_control_plane_refresh) || statusSurfaceControlAllowed) ? ["octoclaw_status", "octoclaw_task_action"] : [],
+        replyMode: replyMode ?? "answer",
+        grounding: replyHasControlPlaneToolPath ? "control_plane_status" : executionSupportsReply ? "execution_receipt" : "none",
+        allowedTools: replyHasControlPlaneToolPath ? ["octoclaw_status", "octoclaw_task_action"] : [],
         forbiddenTools: ["octoclaw_dispatch", "spawn"],
         evidenceRefs: executionCoveragePacket.evidenceRefs,
       }

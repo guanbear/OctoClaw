@@ -600,6 +600,37 @@ describe("WP3 acceptance", () => {
     expect((decision.work_contract as Record<string, unknown>).route).toBe("reply");
   });
 
+  it("undetermined reply with no evidence or tools asks for clarification instead of sealing answer", async () => {
+    const decision = await resolveStatelessPolicyDecision("北京下周的天气预报怎样 下周还下雨吗", {
+      metadata: {
+        _judgeFastConfig: {
+          enabled: false,
+          shadowMode: true,
+          modelId: "test-local-judge",
+          baseUrl: "",
+          apiKey: "",
+          timeoutMs: 1,
+        },
+        session_key: "agent:main:wp3-no-evidence-reply",
+      },
+    });
+
+    expect((decision.route_decision as Record<string, unknown>).route).toBe("reply");
+    expect(decision.work_contract).toMatchObject({
+      route: "reply",
+      intentClass: "undetermined",
+      replyMode: "clarify",
+      nextAction: "clarify",
+      allowedTools: [],
+      forbiddenTools: ["octoclaw_dispatch", "spawn"],
+    });
+    expect(decision._execution_coverage_packet).toMatchObject({
+      route: "reply",
+      replyMode: "clarify",
+      evidenceSummary: "reply requires new evidence before answer",
+    });
+  });
+
   it("status/provenance follow-up with execution coverage seals WorkContract from execution_coverage as reply.answer", async () => {
     const stateKey = "agent:main:wp3-followup-covered";
     seedAt(stateKey, Date.now() - 5_000, {

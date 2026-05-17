@@ -67,6 +67,7 @@ export function buildWorkContractFromPolicy(
     decision.routeSealId || "",
     decision.sealedAt || now,
   ]);
+  const replyMode = options.reply?.replyMode ?? decision.replyMode;
 
   const mainContext: MainContextPacket = {
     summary: userAsk.slice(0, 200),
@@ -75,7 +76,7 @@ export function buildWorkContractFromPolicy(
       workContractId,
     },
     artifactRefs: [],
-    nextAction: decision.route === "delegate" ? "dispatch" : "answer",
+    nextAction: decision.route === "delegate" ? "dispatch" : replyMode === "clarify" ? "clarify" : "answer",
     tokenBudget: {
       maxResumeTokens: 700,
       maxArtifactSummaryTokens: 250,

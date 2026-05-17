@@ -89,6 +89,9 @@ export function extractNativeAnnounceCompletion(event: UnknownRecord, prompt: st
   const resultText = regexGroup(
     text,
     /<<<BEGIN_UNTRUSTED_CHILD_RESULT>>>\s*([\s\S]*?)\s*<<<END_UNTRUSTED_CHILD_RESULT>>>/u,
+  ) || regexGroup(
+    text,
+    /<prompt-data>\s*([\s\S]*?)\s*<\/prompt-data>/u,
   );
   if (!resultText) return null;
   return {
