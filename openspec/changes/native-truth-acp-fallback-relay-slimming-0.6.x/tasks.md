@@ -335,26 +335,38 @@ Tests:
 
 ### P4-C: Hermes dry-run foundation only
 
-- [ ] Add a Hermes capability matrix document or module.
-  - Required statuses:
-    - `acp`
-    - `gatewayMessaging`
-    - `sessionStorage`
-    - `backgroundDelegation`
-    - `deliveryReceipts`
-    - `runtimeFallbacks`
-- [ ] Add `runtimeHostMode = "openclaw" | "hermes_dry_run"` only if a runtime
+- [x] Add a Hermes capability matrix document or module.
+      (hermes-capabilities.ts: HermesCapabilityMatrix with 6 capabilities,
+      3 supported + 3 unknown, with explanatory notes)
+      - `acp`: supported
+      - `gatewayMessaging`: supported
+      - `sessionStorage`: supported
+      - `backgroundDelegation`: unknown
+      - `deliveryReceipts`: unknown
+      - `runtimeFallbacks`: unknown
+- [x] Add `runtimeHostMode = "openclaw" | "hermes_dry_run"` only if a runtime
       config flag is needed for reporting.
-- [ ] `hermes_dry_run` may report capability gaps but must not spawn, deliver,
+      (resolveRuntimeHostMode reads OCTOCLAW_RUNTIME_HOST_MODE, defaults openclaw)
+- [x] `hermes_dry_run` may report capability gaps but must not spawn, deliver,
       or change OpenClaw live behavior.
-- [ ] Do not add Hermes process management, config mutation, credentials,
+      (hermesDryRunSpawn/hermesDryRunDeliver always return ok:false with
+      hermes_live_runtime_not_enabled; no child run or final send possible)
+- [x] Do not add Hermes process management, config mutation, credentials,
       migration execution, or a live Hermes backend.
+      (NTR-P4-008 test proves module source contains no launcher/credential/
+      migration/dependency strings)
 
 Tests:
 
-- [ ] `NTR-P4-006`
-- [ ] `NTR-P4-007`
-- [ ] `NTR-P4-008`
+- [x] `NTR-P4-006`
+      (hermes-capabilities.test.ts: 3 tests — all 6 capabilities present,
+      unknowns explicit, notes explain each status)
+- [x] `NTR-P4-007`
+      (hermes-capabilities.test.ts: 4 tests — spawn fails closed, deliver
+      fails closed, repeated calls never return ok:true)
+- [x] `NTR-P4-008`
+      (hermes-capabilities.test.ts: 3 tests — no forbidden strings in module,
+      defaults to openclaw, hermes_dry_run only when explicitly set)
 
 ## Phase 5: Deletion Closeout
 
