@@ -543,6 +543,7 @@ export async function executeOctoclawDispatch(params: Record<string, unknown>, _
             asRecord(state?.deliveryTarget).session_key,
             asRecord(state?.delivery_target).sessionKey,
             asRecord(state?.delivery_target).session_key,
+            resolveDispatchSessionKey(ctx, metadata, { stateKey, state, cachedDecision }),
           );
           const plannerAllowedCandidates = plannerSessionCandidates.filter((candidate) => isPlannerAllowedForSession(candidate));
           const plannerEnabled = spawnBackend === "planner"

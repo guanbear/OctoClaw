@@ -382,6 +382,58 @@ describe("octoclaw_dispatch planner backend", () => {
     }));
   });
 
+  it("derives planner session candidates from ctx session boundary when params.sessionKey is absent", async () => {
+    process.env.OCTOCLAW_SPAWN_BACKEND = "planner";
+    const sessionKey = "agent:main:slack:channel:c0as4dappu3:thread:1779017257.196709";
+    const contract = seedWorkContract(sessionKey);
+
+    const response = await dispatchTool().execute({
+      task: contract.userAsk,
+      workContractId: contract.workContractId,
+      policyJson: JSON.stringify(delegateDecision(contract)),
+    }, {
+      sessionId: sessionKey,
+      agentId: "main",
+      cwd: tempWorkspace,
+    });
+
+    const body = JSON.parse(String(response.text));
+    expect(body.ok).toBe(true);
+    expect(body.status).toBe("requires_native_spawn");
+    const events = readReplayEvents();
+    const backendSelected = events.find((e) => e.event === "dispatch_backend_selected");
+    expect(backendSelected).toBeTruthy();
+    expect(backendSelected!.planner_session_candidates).toBeDefined();
+    expect((backendSelected!.planner_session_candidates as string[]).length).toBeGreaterThan(0);
+    expect(backendSelected!.planner_session_candidates).toEqual(expect.arrayContaining([
+      sessionKey,
+      "agent:main:slack:channel:c0as4dappu3",
+    ]));
+    expect(backendSelected!.planner_enabled).toBe(true);
+  });
+
+  it("derives planner session candidates from resolveDispatchSessionKey when ctx.sessionKey is absent but sessionId is present", async () => {
+    process.env.OCTOCLAW_SPAWN_BACKEND = "planner";
+    const sessionKey = "agent:main:slack:default:direct:u0al9t5u89z";
+    const contract = seedWorkContract(sessionKey);
+
+    const response = await dispatchTool().execute({
+      task: contract.userAsk,
+      workContractId: contract.workContractId,
+      policyJson: JSON.stringify(delegateDecision(contract)),
+    }, {
+      sessionId: sessionKey,
+      cwd: tempWorkspace,
+    });
+
+    const body = JSON.parse(String(response.text));
+    expect(body.ok).toBe(true);
+    const events = readReplayEvents();
+    const backendSelected = events.find((e) => e.event === "dispatch_backend_selected");
+    expect(backendSelected).toBeTruthy();
+    expect((backendSelected!.planner_session_candidates as string[]).length).toBeGreaterThan(0);
+  });
+
   it("uses configured live OctoClaw root instead of OpenClaw managed mirror cwd", async () => {
     process.env.OCTOCLAW_SPAWN_BACKEND = "planner";
     const liveRoot = path.join(tempWorkspace, "live", "OctoClaw");
