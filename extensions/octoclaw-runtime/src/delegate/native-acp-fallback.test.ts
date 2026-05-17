@@ -87,4 +87,64 @@ describe("native ACP fallback integration", () => {
       classification: classifyNativeAcpFallback({ backendUnavailable: true, outputStarted: true }),
     })).toBe(false);
   });
+
+  it("classifies bad_result as recovery owned and not native fallback eligible", () => {
+    const classified = classifyNativeAcpFallback({ badResult: true });
+
+    expect(classified).toEqual({
+      reason: "bad_result",
+      nativeFallbackEligible: false,
+      octoclawRecoveryOwner: true,
+    });
+  });
+
+  it("classifies policy_violation as recovery owned and not native fallback eligible", () => {
+    const classified = classifyNativeAcpFallback({ policyViolation: true });
+
+    expect(classified).toEqual({
+      reason: "policy_violation",
+      nativeFallbackEligible: false,
+      octoclawRecoveryOwner: true,
+    });
+  });
+
+  it("classifies no failure as reason none with octoclaw recovery ownership", () => {
+    const classified = classifyNativeAcpFallback({});
+
+    expect(classified).toEqual({
+      reason: "none",
+      nativeFallbackEligible: false,
+      octoclawRecoveryOwner: true,
+    });
+  });
+
+  it("NTR-P2-006: task_timeout is not native fallback eligible and remains OctoClaw recovery owned", () => {
+    const classified = classifyNativeAcpFallback({ timedOut: true });
+
+    expect(classified).toEqual({
+      reason: "task_timeout",
+      nativeFallbackEligible: false,
+      octoclawRecoveryOwner: true,
+    });
+    expect(shouldDelegateBackendUnavailableToNative({
+      mode: "delegate_backend_unavailable",
+      classification: classified,
+    })).toBe(false);
+  });
+
+  it("shouldDelegateBackendUnavailableToNative rejects all non-before-output reasons in enforce mode", () => {
+    const mode = "delegate_backend_unavailable";
+
+    const afterOutput = classifyNativeAcpFallback({ backendUnavailable: true, outputStarted: true });
+    const timeout = classifyNativeAcpFallback({ timedOut: true });
+    const badResult = classifyNativeAcpFallback({ badResult: true });
+    const policyViolation = classifyNativeAcpFallback({ policyViolation: true });
+    const none = classifyNativeAcpFallback({});
+
+    expect(shouldDelegateBackendUnavailableToNative({ mode, classification: afterOutput })).toBe(false);
+    expect(shouldDelegateBackendUnavailableToNative({ mode, classification: timeout })).toBe(false);
+    expect(shouldDelegateBackendUnavailableToNative({ mode, classification: badResult })).toBe(false);
+    expect(shouldDelegateBackendUnavailableToNative({ mode, classification: policyViolation })).toBe(false);
+    expect(shouldDelegateBackendUnavailableToNative({ mode, classification: none })).toBe(false);
+  });
 });

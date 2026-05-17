@@ -122,20 +122,20 @@ Tests:
 
 ### P2-B: Separate backend failover from task recovery
 
-- [ ] Classify fallback reason as one of:
+- [x] Classify fallback reason as one of:
   - `backend_unavailable_before_output`
   - `backend_unavailable_after_output`
   - `task_timeout`
   - `bad_result`
   - `policy_violation`
-- [ ] Only `backend_unavailable_before_output` may move to OpenClaw ACP fallback.
-- [ ] Keep OctoClaw recovery for all other reasons.
+- [x] Only `backend_unavailable_before_output` may move to OpenClaw ACP fallback.
+- [x] Keep OctoClaw recovery for all other reasons.
 
 Tests:
 
-- [ ] `NTR-P2-004`
-- [ ] `NTR-P2-005`
-- [ ] `NTR-P2-006`
+- [x] `NTR-P2-004` — backend unavailable before output: nativeFallbackEligible=true, octoclawRecoveryOwner=false (native-acp-fallback.test.ts)
+- [x] `NTR-P2-005` — backend unavailable after output, bad_result, policy_violation: all nativeFallbackEligible=false, octoclawRecoveryOwner=true (native-acp-fallback.test.ts)
+- [x] `NTR-P2-006` — task_timeout: nativeFallbackEligible=false, octoclawRecoveryOwner=true, shouldDelegateBackendUnavailableToNative=false (native-acp-fallback.test.ts)
 
 ### P2-C: Enforce native ACP fallback behind flag
 
