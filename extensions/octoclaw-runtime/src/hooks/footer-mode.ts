@@ -74,7 +74,8 @@ export function resolveDisplayModel(state: UnknownRecord, event: UnknownRecord, 
   );
 
   const routeSource = stringValue(routeDecision.route_source || routeDecision.final_judge_source || snapshot.via || snapshot.source);
-  if (routeSource === "budgeted_main_escalation" && mainRuntimeModel) {
+  const route = stringValue(workContract.route || routeDecision.route || state.route || snapshot.route || "reply");
+  if ((route === "reply" || routeSource === "budgeted_main_escalation") && mainRuntimeModel) {
     return mainRuntimeModel;
   }
 

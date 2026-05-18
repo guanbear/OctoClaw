@@ -11,6 +11,7 @@ import { policyState } from "../state/policy-state.js";
 import { envOverrides } from "../resolve/env.js";
 import { buildExecutionCoverageLayer } from "../resolve/execution-coverage-precheck.js";
 import { buildMemoryCoverageLayer } from "../resolve/memory-coverage-precheck.js";
+import { readNativeChildSessionCompletion } from "../resolve/native-announce-parse.js";
 import { buildWorkContractFromPolicy, buildWorkDecisionSeal } from "../work-contract/builders.js";
 import { loadWorkContract, saveWorkContract } from "../work-contract/store.js";
 import { resetNeutralInboundAckDedupeForTests } from "../ack/ack-guard.js";
@@ -546,7 +547,7 @@ describe("guardOutboundMessageForPolicyState", () => {
     expect(String(guarded?.message?.content)).toContain("route=reply | model=GLM-5.1 · thread");
   });
 
-  it("appends a footer when Slack message_sending only exposes a display target", () => {
+  it("uses the actual reply runtime model when Slack message_sending only exposes a display target", () => {
     const now = Date.now();
     const key = "agent:main:slack:default:direct:u0al9t5u89z";
     policyState.setState(key, {
@@ -566,7 +567,7 @@ describe("guardOutboundMessageForPolicyState", () => {
     );
 
     expect(guarded?.content).toContain("你好，guan。我在。");
-    expect(guarded?.content).toContain("route=reply | model=zhipu/GLM-5.1 · thread");
+    expect(guarded?.content).toContain("route=reply | model=cliproxyapi/gpt-5.5 · thread");
     policyState.clearState(key);
   });
 
@@ -710,7 +711,7 @@ describe("guardOutboundMessageForPolicyState", () => {
     }
   });
 
-  it("prefers policy model over host shim in footer projection", () => {
+  it("prefers actual reply runtime model over policy-selected delegate candidate in footer projection", () => {
     const now = Date.now();
     const key = "agent:main:slack:channel:c0shimmodel";
     policyState.setState(key, {
@@ -726,12 +727,12 @@ describe("guardOutboundMessageForPolicyState", () => {
 
     const guarded = guardOutboundMessageForPolicyState(
       { to: "C0SHIMMODEL", content: "测试。", metadata: { channelId: "C0SHIMMODEL", threadTs: "1777380001.000001" } },
-      { channelId: "slack", model: "Anno" },
+      { channelId: "slack", model: "cliproxyapi/gpt-5.5" },
       now,
     );
 
-    expect(guarded?.content).toContain("model=zhipu/GLM-5.1");
-    expect(guarded?.content).not.toContain("model=Anno");
+    expect(guarded?.content).toContain("model=cliproxyapi/gpt-5.5");
+    expect(guarded?.content).not.toContain("model=zhipu/GLM-5.1");
     policyState.clearState(key);
   });
 
@@ -1788,6 +1789,14 @@ describe("guardOutboundMessageForPolicyState", () => {
         type: "message",
         message: {
           role: "assistant",
+          content: [{ type: "text", text: "I'll investigate the configuration and logs." }],
+          stopReason: "toolUse",
+        },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "assistant",
           content: [{ type: "text", text: "收到并确认本条委派任务。\n\nOCTOCLAW_5_4_DELEGATE_SMOKE_OK" }],
           stopReason: "stop",
         },
@@ -1861,6 +1870,143 @@ describe("guardOutboundMessageForPolicyState", () => {
       else process.env.OPENCLAW_HOME = previousOpenClawHome;
       policyState.clearState(parentKey);
       policyState.clearState(childKey);
+    }
+  });
+
+  it("does not deliver tool-use child preambles as native subagent_ended results after an interrupted run", async () => {
+    const previousOpenClawHome = process.env.OPENCLAW_HOME;
+    process.env.OPENCLAW_HOME = tempWorkspace;
+    const handlers = new Map<string, Function>();
+    const sentMessages: Array<{ sessionKey: string; message: string; replyToMessageId?: string }> = [];
+    plugin.register({
+      pluginConfig: {
+        nativeAnnounceSendMessageForTests: async (params: { sessionKey: string; message: string; replyToMessageId?: string }) => {
+          sentMessages.push(params);
+          return { sent: true, messageId: "1778052399.654321", threadTs: params.replyToMessageId, transport: "slack_api", targetSource: "inbound_anchor", footerSource: "envelope" };
+        },
+      },
+      on: (event, handler) => handlers.set(event, handler),
+      registerTool: () => {},
+      registerCommand: () => {},
+      logger: {},
+    });
+    const subagentEnded = handlers.get("subagent_ended");
+    expect(subagentEnded).toBeTruthy();
+
+    const parentKey = "agent:main:slack:default:direct:u0al9t5u89z:thread:1779084209.727019";
+    const childKey = "agent:main:subagent:interrupted-child";
+    const childSessionId = "interrupted-child-session";
+    const runId = "interrupted-run";
+    const sessionsDir = path.join(tempWorkspace, "agents", "main", "sessions");
+    fsSync.mkdirSync(sessionsDir, { recursive: true });
+    fsSync.writeFileSync(path.join(sessionsDir, "sessions.json"), JSON.stringify({
+      [childKey]: {
+        sessionId: childSessionId,
+        sessionFile: path.join(sessionsDir, `${childSessionId}.jsonl`),
+        runId,
+        status: "done",
+      },
+    }));
+    fsSync.writeFileSync(path.join(sessionsDir, `${childSessionId}.jsonl`), [
+      JSON.stringify({ type: "session", id: childSessionId }),
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "assistant",
+          content: [
+            { type: "text", text: "I'll investigate the OpenClaw configuration and logs." },
+            { type: "toolCall", id: "tool-read-openclaw-json", name: "read", arguments: { path: "/Users/guanbear/.openclaw/openclaw.json" } },
+          ],
+          stopReason: "toolUse",
+        },
+      }),
+      "",
+    ].join("\n"));
+
+    const contract = buildWorkContractFromPolicy(
+      parentKey,
+      "查证当前模型配置",
+      "delegated_work",
+      coverageSnapshot(),
+      buildWorkDecisionSeal("local_judge", "delegate", ["native_spawn_confirmed"]),
+      { status: "sealed" },
+    );
+    contract.nativeSpawnRefs = {
+      openclawRunId: runId,
+      childSessionKey: childKey,
+      requesterSessionKey: parentKey,
+      spawnIntentId: "nsp-interrupted-ended",
+      spawnBackend: "sessions_spawn_planner",
+      spawnMode: "run",
+    };
+    contract.telemetry = {
+      ...contract.telemetry,
+      dispatchExecuted: true,
+      spawnExecuted: true,
+      childRunId: runId,
+      childSessionKey: childKey,
+    };
+    saveWorkContract(contract);
+
+    try {
+      await subagentEnded!(
+        { targetSessionKey: childKey, targetKind: "subagent", reason: "completed", outcome: "ok", runId, endedAt: Date.now() },
+        { runId, childSessionKey: childKey, requesterSessionKey: parentKey },
+      );
+
+      expect(sentMessages).toHaveLength(0);
+      expect(loadWorkContract(contract.workContractId)?.telemetry.resultMaterialized).not.toBe(true);
+      await waitForFireAndForget();
+      expect(readReplayEvents()).toContainEqual(expect.objectContaining({
+        event: "native_announce_subagent_ended_no_result",
+        workContractId: contract.workContractId,
+        reason: "child_session_result_unavailable",
+      }));
+    } finally {
+      if (previousOpenClawHome === undefined) delete process.env.OPENCLAW_HOME;
+      else process.env.OPENCLAW_HOME = previousOpenClawHome;
+      policyState.clearState(parentKey);
+      policyState.clearState(childKey);
+    }
+  });
+
+  it("ignores tool-use assistant preambles when reading child session completion", () => {
+    const previousOpenClawHome = process.env.OPENCLAW_HOME;
+    process.env.OPENCLAW_HOME = tempWorkspace;
+    const childKey = "agent:main:subagent:tool-use-preamble";
+    const childSessionId = "tool-use-preamble-session";
+    const runId = "tool-use-preamble-run";
+    const sessionsDir = path.join(tempWorkspace, "agents", "main", "sessions");
+    fsSync.mkdirSync(sessionsDir, { recursive: true });
+    fsSync.writeFileSync(path.join(sessionsDir, "sessions.json"), JSON.stringify({
+      [childKey]: {
+        sessionId: childSessionId,
+        sessionFile: path.join(sessionsDir, `${childSessionId}.jsonl`),
+        runId,
+        status: "done",
+      },
+    }));
+    fsSync.writeFileSync(path.join(sessionsDir, `${childSessionId}.jsonl`), [
+      JSON.stringify({ type: "session", id: childSessionId }),
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "assistant",
+          content: [
+            { type: "text", text: "I'll investigate the configuration and logs." },
+            { type: "toolCall", id: "tool-read", name: "read", arguments: { path: "/Users/guanbear/.openclaw/openclaw.json" } },
+          ],
+          stopReason: "toolUse",
+        },
+      }),
+      "",
+    ].join("\n"));
+
+    try {
+      expect(readNativeChildSessionCompletion(childKey, runId)).toBeNull();
+    } finally {
+      if (previousOpenClawHome === undefined) delete process.env.OPENCLAW_HOME;
+      else process.env.OPENCLAW_HOME = previousOpenClawHome;
     }
   });
 });

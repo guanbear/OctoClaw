@@ -170,6 +170,8 @@ export function readNativeChildSessionCompletion(childSessionKey: string, runId?
       if (record.type !== "message") continue;
       const message = asRecord(record.message);
       if (stringValue(message.role).toLowerCase() !== "assistant") continue;
+      const stopReason = stringValue(message.stopReason || message.stop_reason).toLowerCase();
+      if (["tooluse", "tool_use", "toolcalls", "tool_calls"].includes(stopReason)) continue;
       const text = extractMessageText(message.content);
       if (!text || text.trim().toUpperCase() === "NO_REPLY") continue;
       resultText = text;
