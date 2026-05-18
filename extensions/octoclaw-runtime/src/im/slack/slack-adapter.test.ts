@@ -203,7 +203,7 @@ describe("SlackAdapter", () => {
       const body = JSON.parse(String(init?.body));
       expect(body.channel).toBe("C123ABCDEF");
       expect(body.markdown_text).toContain("done");
-      expect(body.markdown_text).toContain("route=delegate | model=zhipu/GLM-5.1 · thread | via=native_announce | wc=wc-12345");
+      expect(body.markdown_text).toContain("route=delegate | model=zhipu/GLM-5.1 | difficulty=deep · thread | via=native_announce | wc=wc-12345");
       expect(body.thread_ts).toBe("1700000000.000100");
       return { json: async () => ({ ok: true, ts: "1700000000.000220" }) } as Response;
     });
@@ -223,6 +223,7 @@ describe("SlackAdapter", () => {
         route: "delegate",
         model: "worker_research",
         via: "native_announce",
+        complexityBand: "deep",
         workContractId: "wc-1234567890",
       },
       footerMode: "debug",

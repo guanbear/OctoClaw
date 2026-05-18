@@ -1129,7 +1129,7 @@ describe("guardOutboundMessageForPolicyState", () => {
         },
         state: {
           decision: {
-            route_decision: { route: "delegate", route_source: "native_announce", worker_pool: "octoclaw-research" },
+            route_decision: { route: "delegate", route_source: "native_announce", worker_pool: "octoclaw-research", complexity_band: "deep" },
             model_policy: { selected_model: "zhipu/GLM-5.1" },
           },
         },
@@ -1145,6 +1145,7 @@ describe("guardOutboundMessageForPolicyState", () => {
       expect(sent?.replyToMessageId).toBe("1777709667.918049");
       expect(sent?.message).toContain("已查证并完成");
       expect(sent?.message).toContain("route=delegate");
+      expect(sent?.message).toContain("difficulty=deep");
       expect(sent?.message).toContain("via=native_announce");
       expect(sent?.message).not.toContain("route=reply");
     } finally {
@@ -1670,6 +1671,58 @@ describe("guardOutboundMessageForPolicyState", () => {
       policyState.clearState(childKey);
       policyState.clearState("parent-session-prompt-data");
     }
+  });
+
+  it("anchors native child final delivery for Slack DMs when policy state lost the inbound ts", async () => {
+    const sentMessages: Array<{ sessionKey: string; message: string; replyToMessageId?: string }> = [];
+    const parentKey = "agent:main:slack:default:direct:u0al9t5u89z";
+    const childKey = "agent:main:subagent:a0a59368-037a-4e8d-8aff-28a191e0312e";
+    const contract = buildWorkContractFromPolicy(
+      parentKey,
+      "普京什么时候来北京",
+      "delegated_work",
+      coverageSnapshot(),
+      buildWorkDecisionSeal("local_judge", "delegate", ["budgeted_main_escalated"]),
+      { status: "sealed" },
+    );
+    contract.nativeSpawnRefs = {
+      openclawRunId: "run-native-dm-anchor",
+      childSessionKey: childKey,
+      requesterSessionKey: parentKey,
+      spawnIntentId: "nsp-native-dm-anchor",
+      spawnBackend: "sessions_spawn_planner",
+      spawnMode: "run",
+    };
+
+    const result = await deliverNativeAnnounceCompletion({
+      contract,
+      completion: {
+        sourceSessionKey: childKey,
+        sourceSessionId: "child-session-native-dm-anchor",
+        sourceTool: "subagent_announce",
+        status: "completed successfully",
+        resultText: "普京将于 2026 年 5 月 19 日至 20 日访华。",
+        resultHash: "hash-native-dm-anchor",
+      },
+      state: {},
+      ctx: { sessionKey: parentKey, channelId: "slack" },
+      sendMessage: async (params) => {
+        sentMessages.push(params);
+        return {
+          sent: true,
+          messageId: "1779092231.095149",
+          threadTs: params.replyToMessageId,
+          transport: "slack_api",
+          targetSource: params.replyToMessageId ? "inbound_anchor" : "session_fallback",
+          footerSource: "envelope",
+        };
+      },
+      resolveReplyToMessageId: async () => "1779092084.993849",
+    });
+
+    expect(result.replyToMessageId).toBe("1779092084.993849");
+    expect(sentMessages).toHaveLength(1);
+    expect(sentMessages[0]?.replyToMessageId).toBe("1779092084.993849");
   });
 
   it("keeps child missing-context blockers recoverable by the parent agent", async () => {

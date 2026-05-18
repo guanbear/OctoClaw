@@ -1,5 +1,6 @@
 import { type SendIMResult, sendIMMessage } from "../im/send.js";
 import { renderIMProjectionFooter } from "../im/projection-footer.js";
+import { fetchLatestUserMessageTsForSessionKey } from "../im/slack-thread-anchor.js";
 import { resolveWorkspaceRoot } from "./env.js";
 import { updateWorkContract } from "../work-contract/store.js";
 import { type WorkContract } from "@octoclaw/contracts/work-contract";
@@ -8,6 +9,7 @@ import { stringValue } from "../extension-entry-shared.js";
 import {
   footerDebugEnabled,
   resolveNativeAnnounceDisplayModel,
+  resolveFooterComplexityBand,
   resolveProjectionChannel,
 } from "../hooks/footer-mode.js";
 import { type NativeAnnounceBlocker, type NativeAnnounceCompletion, type NativeAnnounceSendMessage } from "./native-announce-types.js";
@@ -81,6 +83,10 @@ function resolveNativeAnnounceReplyToMessageId(contract: WorkContract, ctx: Unkn
     || stringValue(ctx.replyToMessageId || ctx.reply_to_id || ctx.inboundMessageTs || ctx.message_id || ctx.threadTs || ctx.thread_ts);
 }
 
+function shouldResolveSlackDmAnchor(sessionKey: string, replyToMessageId: string): boolean {
+  return !replyToMessageId && /(?:^|:)slack:/u.test(sessionKey.toLowerCase()) && sessionKey.includes(":direct:");
+}
+
 function buildNativeAnnounceFinalMessage(input: {
   contract: WorkContract;
   completion: NativeAnnounceCompletion;
@@ -93,12 +99,14 @@ function buildNativeAnnounceFinalMessage(input: {
   const decision = asRecord(input.state.decision);
   const routeDecision = asRecord(decision.route_decision);
   const content = input.completion.resultText.trim();
+  const complexityBand = resolveFooterComplexityBand(nativeAnnounceFooterState(input.contract, input.state));
   if (!content) return "";
   return renderIMProjectionFooter({
     content,
     projection: {
       route: "delegate",
       model: resolveNativeAnnounceDisplayModel(input.contract, input.state, input.event, input.ctx),
+      complexityBand,
       via: "native_announce",
       thread: Boolean(input.replyToMessageId || slackThreadFromSessionKey(input.sessionKey)),
       ...(footerDebugEnabled() ? {
@@ -111,9 +119,15 @@ function buildNativeAnnounceFinalMessage(input: {
   });
 }
 
-function nativeAnnounceDeliveryProvenance(contract: WorkContract, completion: NativeAnnounceCompletion, model?: string): {
+function nativeAnnounceDeliveryProvenance(
+  contract: WorkContract,
+  completion: NativeAnnounceCompletion,
+  model?: string,
+  complexityBand = "",
+): {
   route: "delegate";
   model?: string;
+  complexityBand?: string;
   via: "native_announce";
   workContractId: string;
   runId?: string;
@@ -124,10 +138,22 @@ function nativeAnnounceDeliveryProvenance(contract: WorkContract, completion: Na
   return {
     route: "delegate",
     ...(model ? { model } : {}),
+    ...(complexityBand ? { complexityBand } : {}),
     via: "native_announce",
     workContractId: contract.workContractId,
     ...(ids.runId ? { runId: ids.runId } : {}),
     ...(childSessionKey ? { childSessionKey } : {}),
+  };
+}
+
+function nativeAnnounceFooterState(contract: WorkContract, state: UnknownRecord): UnknownRecord {
+  const decision = asRecord(state.decision);
+  return {
+    ...state,
+    decision: {
+      ...decision,
+      work_contract: asRecord(decision.work_contract || contract),
+    },
   };
 }
 
@@ -139,12 +165,17 @@ export async function deliverNativeAnnounceCompletion(input: {
   ctx?: UnknownRecord;
   cwd?: string;
   sendMessage?: NativeAnnounceSendMessage;
+  resolveReplyToMessageId?: (sessionKey: string) => Promise<string>;
 }): Promise<SendIMResult & { sessionKey: string; replyToMessageId: string }> {
   const ctx = asRecord(input.ctx);
   const event = asRecord(input.event);
   const state = asRecord(input.state);
   const sessionKey = resolveNativeAnnounceDeliverySessionKey(input.contract, ctx);
-  const replyToMessageId = resolveNativeAnnounceReplyToMessageId(input.contract, ctx, state);
+  let replyToMessageId = resolveNativeAnnounceReplyToMessageId(input.contract, ctx, state);
+  if (shouldResolveSlackDmAnchor(sessionKey, replyToMessageId)) {
+    const resolveReplyToMessageId = input.resolveReplyToMessageId ?? ((key: string) => fetchLatestUserMessageTsForSessionKey(key, 1200));
+    replyToMessageId = stringValue(await resolveReplyToMessageId(sessionKey));
+  }
   if (!sessionKey) {
     return { sent: false, error: "native_announce_missing_delivery_session", sessionKey, replyToMessageId };
   }
@@ -161,6 +192,7 @@ export async function deliverNativeAnnounceCompletion(input: {
     return { sent: false, error: "native_announce_empty_result", sessionKey, replyToMessageId };
   }
   const content = input.completion.resultText.trim();
+  const complexityBand = resolveFooterComplexityBand(nativeAnnounceFooterState(input.contract, state));
   const sendMessage = input.sendMessage ?? ((params) => sendIMMessage({
     ...params,
     timeoutMs: 8000,
@@ -171,6 +203,7 @@ export async function deliverNativeAnnounceCompletion(input: {
       input.contract,
       input.completion,
       resolveNativeAnnounceDisplayModel(input.contract, state, event, ctx),
+      complexityBand,
     ),
     footerMode: footerDebugEnabled() ? "debug" : "off",
   }));
