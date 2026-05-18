@@ -283,10 +283,11 @@ export function hasThreadProjection(event: UnknownRecord, ctx: UnknownRecord): b
 }
 
 export function appendReplyProjectionFooter(content: string, state: UnknownRecord, event: UnknownRecord, ctx: UnknownRecord): string {
-  if (!replyProjectionFooterEnabled() || internalAckProjectionSuppressed()) return content;
+  const safeContent = replaceRawProviderStatusError(content);
+  if (!replyProjectionFooterEnabled() || internalAckProjectionSuppressed()) return safeContent;
   // Don't double-stamp
-  if (hasProjectionFooter(content)) return content;
-  if (/\[ack\s*·/iu.test(content)) return content;
+  if (hasProjectionFooter(safeContent)) return safeContent;
+  if (/\[ack\s*·/iu.test(safeContent)) return safeContent;
 
   const decision = asRecord(state.decision);
   const snapshot = outboundProjectionSnapshot(state);
@@ -312,11 +313,18 @@ export function appendReplyProjectionFooter(content: string, state: UnknownRecor
     } : {}),
   };
   return renderIMProjectionFooter({
-    content: content.trim(),
+    content: safeContent.trim(),
     projection,
     sessionKey: stringValue(ctx.sessionKey || event.sessionKey || event.session_key),
     channel: resolveProjectionChannel(event, ctx),
   });
+}
+
+function replaceRawProviderStatusError(content: string): string {
+  const trimmed = content.trim();
+  const match = /^([1-5]\d\d)\s+status\s+code(?:\s+\(no body\))?$/i.exec(trimmed);
+  if (!match) return content;
+  return `模型调用失败：上游返回 HTTP ${match[1]}。已避免把底层错误当作正常回答发送，请重试或切到备用模型。`;
 }
 
 function resolveHealthFooterNote(state: UnknownRecord): string | undefined {

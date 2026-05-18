@@ -63,9 +63,12 @@ export function buildRuntimeHealthEvent(input: RuntimeHealthBuildInput): HealthE
   );
   if (!modelKey) return null;
 
-  const hasError = Boolean(firstString(event.error, result.error, state.error));
-  const success = input.success ?? !hasError;
-  const errorCode = success ? undefined : firstString(event.errorCode, event.error_code, result.errorCode, result.error_code) || "RUNTIME_ERROR";
+  const runtimeErrorText = firstString(event.error, event.errorMessage, event.error_message, result.error, result.errorMessage, result.error_message, state.error);
+  const stopReason = firstString(event.stopReason, event.stop_reason, result.stopReason, result.stop_reason);
+  const httpStatus = extractHttpStatus(runtimeErrorText);
+  const hasError = Boolean(runtimeErrorText) || stopReason?.toLowerCase() === "error";
+  const success = hasError ? false : (input.success ?? true);
+  const errorCode = success ? undefined : firstString(event.errorCode, event.error_code, result.errorCode, result.error_code) || (httpStatus ? String(httpStatus) : "RUNTIME_ERROR");
   const latencyMs = input.latencyMs ?? firstNumber(event.latencyMs, event.latency_ms, event.durationMs, event.duration_ms, result.latencyMs, result.durationMs);
   const sessionKey = firstString(input.stateKey, ctx.sessionKey, ctx.canonicalSessionKey, event.sessionKey, state.sessionKey);
   const turnId = firstString(ctx.turnId, ctx.turn_id, event.turnId, event.turn_id, state.turnId, state.turn_id);
@@ -83,6 +86,7 @@ export function buildRuntimeHealthEvent(input: RuntimeHealthBuildInput): HealthE
       ...(sessionKey ? { sessionKey } : {}),
       ...(turnId ? { turnId } : {}),
       ...(agentId ? { agentId } : {}),
+      ...(httpStatus ? { httpStatus } : {}),
     },
   };
 }
@@ -134,4 +138,12 @@ function firstNumber(...values: unknown[]): number | undefined {
     if (Number.isFinite(number)) return number;
   }
   return undefined;
+}
+
+function extractHttpStatus(value: string | undefined): number | undefined {
+  if (!value) return undefined;
+  const match = /\b([1-5]\d\d)\s+status\s+code\b/i.exec(value) || /\bhttp\s*([1-5]\d\d)\b/i.exec(value);
+  if (!match) return undefined;
+  const status = Number(match[1]);
+  return Number.isFinite(status) ? status : undefined;
 }

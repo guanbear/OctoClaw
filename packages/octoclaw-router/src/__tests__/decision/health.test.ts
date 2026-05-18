@@ -86,6 +86,17 @@ describe("health and stability RT-H-001..005", () => {
     expect(snapshot.cooldownUntil).toBe(now + 10 * 60 * 1000);
   });
 
+  it("RT-H-002B triggers immediate 10 minute cooldown on provider quota 402", () => {
+    const now = new Date("2026-05-13T00:00:00.000Z").getTime();
+    const tracker = new ModelHealthTracker(() => now);
+
+    tracker.recordCall("openai/gpt-5.5", { success: false, errorCode: "402", latencyMs: 300 });
+
+    const snapshot = tracker.snapshot("openai/gpt-5.5");
+    expect(snapshot.cooldown).toBe(true);
+    expect(snapshot.cooldownUntil).toBe(now + 10 * 60 * 1000);
+  });
+
   it("RT-H-003 expires cooldown and allows a model to be tried again", () => {
     let now = new Date("2026-05-13T00:00:00.000Z").getTime();
     const tracker = new ModelHealthTracker(() => now);

@@ -36,7 +36,7 @@ export class ModelHealthTracker {
       .slice(-this.windowSize);
     this.callLog.set(model, trimmed);
 
-    if (result.errorCode === "429") {
+    if (isImmediateCooldownError(result.errorCode)) {
       this.cooldownUntil.set(model, this.now() + 10 * 60 * 1000);
       return;
     }
@@ -71,6 +71,17 @@ export class ModelHealthTracker {
     if (log.length === 0) return 0;
     return log.filter((entry) => !entry.success).length / log.length;
   }
+}
+
+function isImmediateCooldownError(errorCode: string | undefined): boolean {
+  if (!errorCode) return false;
+  const normalized = errorCode.toLowerCase();
+  return normalized === "429"
+    || normalized === "402"
+    || normalized === "rate_limit"
+    || normalized.includes("rate_limit_429")
+    || normalized.includes("payment_required")
+    || normalized.includes("provider_quota_402");
 }
 
 function percentile(values: number[], p: number): number | undefined {

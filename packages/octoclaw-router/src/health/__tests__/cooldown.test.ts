@@ -32,6 +32,19 @@ describe("evaluateCooldown", () => {
     });
   });
 
+  it("cools down for provider quota 402 before waiting for failure-rate samples", () => {
+    const result = evaluateCooldown({
+      now: base,
+      events: [event({ success: false, errorCode: "402" })],
+    });
+
+    expect(result).toEqual({
+      cooldown: true,
+      cooldownUntil: base + 10 * 60_000,
+      reason: "provider_quota_402",
+    });
+  });
+
   it("cools down for failed probe without requiring ten samples", () => {
     expect(evaluateCooldown({
       now: base,

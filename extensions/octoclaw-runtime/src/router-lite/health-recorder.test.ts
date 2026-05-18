@@ -43,6 +43,29 @@ describe("buildRuntimeHealthEvent", () => {
     });
     expect(JSON.stringify(event)).not.toContain("do not persist");
   });
+
+  it("treats assistant error stop reasons as model failures even when the caller had an optimistic receipt", () => {
+    const event = buildRuntimeHealthEvent({
+      event: {
+        model: "cliproxyapi/gpt-5.5",
+        stopReason: "error",
+        errorMessage: "402 status code (no body)",
+        durationMs: 3456,
+      },
+      ctx: { sessionKey: "session-1" },
+      state: {},
+      success: true,
+    });
+
+    expect(event).toMatchObject({
+      modelKey: "cliproxyapi/gpt-5.5",
+      source: "runtime",
+      success: false,
+      latencyMs: 3456,
+      errorCode: "402",
+      evidence: { sessionKey: "session-1", httpStatus: 402 },
+    });
+  });
 });
 
 describe("recordRuntimeHealthCall", () => {

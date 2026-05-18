@@ -1,6 +1,6 @@
 import type { HealthEvent } from "./event.js";
 
-export type CooldownReason = "rate_limit_429" | "probe_failure" | "high_failure_rate" | "high_p95_drift";
+export type CooldownReason = "rate_limit_429" | "provider_quota_402" | "probe_failure" | "high_failure_rate" | "high_p95_drift";
 
 export interface CooldownEvaluationInput {
   events: HealthEvent[];
@@ -21,6 +21,14 @@ export function evaluateCooldown(input: CooldownEvaluationInput): CooldownEvalua
       cooldown: true,
       cooldownUntil: input.now + 10 * 60_000,
       reason: "rate_limit_429",
+    };
+  }
+
+  if (latest && !latest.success && isProviderQuota(latest.errorCode)) {
+    return {
+      cooldown: true,
+      cooldownUntil: input.now + 10 * 60_000,
+      reason: "provider_quota_402",
     };
   }
 
@@ -62,6 +70,12 @@ function isRateLimit(errorCode: string | undefined): boolean {
   if (!errorCode) return false;
   const normalized = errorCode.toLowerCase();
   return normalized === "429" || normalized === "rate_limit" || normalized.includes("rate_limit_429");
+}
+
+function isProviderQuota(errorCode: string | undefined): boolean {
+  if (!errorCode) return false;
+  const normalized = errorCode.toLowerCase();
+  return normalized === "402" || normalized.includes("payment_required") || normalized.includes("provider_quota_402");
 }
 
 function percentile(values: number[], p: number): number | undefined {

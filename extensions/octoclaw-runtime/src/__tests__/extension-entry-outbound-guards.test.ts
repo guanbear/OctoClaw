@@ -502,6 +502,19 @@ describe("guardOutboundMessageForPolicyState", () => {
     expect(guarded?.content).toContain("route=reply | model=");
   });
 
+  it("replaces raw provider status errors before Slack footer projection", () => {
+    const guarded = guardOutboundMessageForPolicyState(
+      { to: "D0AR3GTPYQL", content: "402 status code (no body)", metadata: { channelId: "D0AR3GTPYQL", threadTs: "1779088519.556849" } },
+      { channelId: "slack", model: "cliproxyapi/gpt-5.5" },
+      Date.now(),
+    );
+
+    expect(guarded?.content).toContain("模型调用失败");
+    expect(guarded?.content).toContain("HTTP 402");
+    expect(guarded?.content).not.toContain("402 status code (no body)");
+    expect(guarded?.content).toContain("route=reply | model=cliproxyapi/gpt-5.5 · thread");
+  });
+
   it("uses bullet compact footer so OpenClaw Slack normalizer does not rewrite it", () => {
     const guarded = guardOutboundMessageForPolicyState(
       { to: "D0AR3GTPYQL", content: "北京今天整体天气不错。", metadata: { channelId: "D0AR3GTPYQL" } },
