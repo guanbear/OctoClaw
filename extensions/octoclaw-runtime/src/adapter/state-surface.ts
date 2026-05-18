@@ -1,11 +1,45 @@
 import { buildContractEnvelope } from "@octoclaw/contracts/schemas";
 import type { StatusSurfaceViewModel } from "@octoclaw/contracts/results";
-import type {
-  RuntimeTaskflowManagedRecord,
-  RuntimeTaskflowTaskRecord,
-} from "./runtime-taskflow.js";
 
-export type RuntimeStateSurfaceRecord = RuntimeTaskflowManagedRecord | RuntimeTaskflowTaskRecord;
+interface RuntimeStateSurfaceEnvelope {
+  taskId: string;
+  flowId: string;
+  requestId?: string;
+  [key: string]: unknown;
+}
+
+export interface RuntimeStateSurfaceRecord {
+  [key: string]: unknown;
+  taskId?: string;
+  flowId?: string;
+  runtime: "openclaw-native";
+  syncMode: "managed";
+  substrateState: string;
+  substrateRevision: number;
+  ownership: {
+    claimOwner: string;
+    claimToken?: string;
+    controllerId?: string;
+  };
+  scope: {
+    workspaceMode: string;
+    readScope?: unknown[];
+    writeScope?: unknown[];
+    writeScopeSummary?: string;
+  };
+  truth: RuntimeStateSurfaceEnvelope;
+  projection: RuntimeStateSurfaceEnvelope & {
+    role?: string;
+    task_class?: string;
+  };
+  identity?: {
+    route?: string;
+    role?: string;
+  };
+  execution?: {
+    role?: string;
+  };
+}
 
 export interface RuntimeStateDetailsSurface {
   taskId: string;
@@ -27,15 +61,11 @@ function substrateSummary(record: RuntimeStateSurfaceRecord): string {
 }
 
 export function buildStatusSurfaceView(record: RuntimeStateSurfaceRecord): StatusSurfaceViewModel {
-  const route = (record as RuntimeStateSurfaceRecord & { identity?: { route?: string } }).identity?.route
-    || (record.truth.requestId ? "delegate" : "reply");
-  const taskClass = String((record.projection as { task_class?: string } | undefined)?.task_class ?? "").trim();
-  const role = (record as RuntimeStateSurfaceRecord & {
-    identity?: { role?: string };
-    execution?: { role?: string };
-  }).identity?.role
-    || (record as RuntimeStateSurfaceRecord & { execution?: { role?: string } }).execution?.role
-    || String((record.projection as { role?: string } | undefined)?.role ?? "").trim()
+  const route = record.identity?.route || (record.truth.requestId ? "delegate" : "reply");
+  const taskClass = String(record.projection.task_class ?? "").trim();
+  const role = record.identity?.role
+    || record.execution?.role
+    || String(record.projection.role ?? "").trim()
     || (taskClass === "control_observer" ? "observer_probe" : route === "reply" ? "main_reply" : "worker_research");
   return {
     ...buildContractEnvelope("projection"),

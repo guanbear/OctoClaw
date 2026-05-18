@@ -268,7 +268,6 @@ export async function recordDispatchLifecycleReplayEvents(options: Record<string
   const logger = options.logger;
   const sessionKey = String(options.sessionKey ?? "").trim();
   const sessionId = String(options.sessionId ?? "").trim();
-  const deliveries = asRecord(payload.deliveries);
   const materialization = asRecord(payload.materialization);
   const routeDecision = asRecord(decision.route_decision);
   const route = String(routeDecision.route ?? payload.route ?? "").trim();
@@ -279,49 +278,20 @@ export async function recordDispatchLifecycleReplayEvents(options: Record<string
   const flowId = String(payload.flow_id ?? materialization.flow_id ?? "").trim();
   const executed = Boolean(payload.executed);
 
-  const progress = asRecord(deliveries.progress);
-  if (Object.keys(progress).length > 0) {
-    await recordPolicyReplay(
-      "checkpoint_emitted",
-      {
-        sessionKey,
-        sessionId,
-        route,
-        workerPool,
-        taskClass,
-        protectedLane,
-        taskId,
-        flowId,
-        executed,
-        summary: truncateText(progress.summary ?? payload.summary ?? "", 1000),
-        channel: String(progress.channel ?? "").trim(),
-        artifactRefs: asStringArray(progress.artifactRefs),
-      },
-      logger,
-      decision,
-    );
-  }
-
-  const finalDelivery = asRecord(deliveries.final);
-  if (Object.keys(finalDelivery).length > 0) {
-    await recordPolicyReplay(
-      "deliverable_ready",
-      {
-        sessionKey,
-        sessionId,
-        route,
-        workerPool,
-        taskClass,
-        protectedLane,
-        taskId,
-        flowId,
-        executed,
-        summary: truncateText(finalDelivery.summary ?? payload.summary ?? "", 1000),
-        channel: String(finalDelivery.channel ?? "").trim(),
-        artifactRefs: asStringArray(finalDelivery.artifactRefs),
-      },
-      logger,
-      decision,
-    );
-  }
+  await recordPolicyReplay(
+    "dispatch_lifecycle",
+    {
+      sessionKey,
+      sessionId,
+      route,
+      workerPool,
+      taskClass,
+      protectedLane,
+      taskId,
+      flowId,
+      executed,
+    },
+    logger,
+    decision,
+  );
 }

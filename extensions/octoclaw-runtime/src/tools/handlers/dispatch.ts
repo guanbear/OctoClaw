@@ -32,10 +32,7 @@ import { emitExecutionTransitionNotification } from "../../ack/execution-transit
 import { isPlannerAllowedForSession, resolvePlannerAllowlist, resolveSpawnBackend, resolveSpawnIntentTtlMs, resolveSpeculativePreloadEnabled } from "../../config/index.js";
 import { nativeSpawnIntentStore } from "../../delegate/native-spawn-intent-store.js";
 import {
-  buildEnforceFallbackReplayMetadata,
-  classifyNativeAcpFallback,
   nativeAcpFallbackMetadata,
-  resolveNativeAcpFallbackMode,
 } from "../../delegate/native-acp-fallback.js";
 import { createOpenClawRuntimeAdapter, adapterFallbackToNativeSnapshot } from "../../runtime-host/openclaw-adapter.js";
 import {
@@ -561,17 +558,10 @@ export async function executeOctoclawDispatch(params: Record<string, unknown>, _
 
         if (isDelegatedRoute) {
           const spawnBackend = resolveSpawnBackend();
-          const fallbackMode = resolveNativeAcpFallbackMode();
           const fallbackSnapshot = adapterFallbackToNativeSnapshot(
             await createOpenClawRuntimeAdapter().readFallbacks(),
           );
-          const nativeAcpFallback = fallbackMode === "delegate_backend_unavailable"
-            ? buildEnforceFallbackReplayMetadata(
-              fallbackSnapshot,
-              fallbackMode,
-              classifyNativeAcpFallback({}),
-            )
-            : nativeAcpFallbackMetadata(fallbackSnapshot, fallbackMode);
+          const nativeAcpFallback = nativeAcpFallbackMetadata(fallbackSnapshot);
           const plannerSessionCandidates = dispatchPlannerSessionCandidates(
             managedSessionKey,
             stateKey,

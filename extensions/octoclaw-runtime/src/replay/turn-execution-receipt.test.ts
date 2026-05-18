@@ -48,15 +48,32 @@ describe("TurnExecutionReceipt", () => {
     expect(receipt.outcome).toBe("unknown");
   });
 
-  it("derives delegated from delegate identity when state flag is false", () => {
+  it("derives delegated from delegate identity after dispatch executes", () => {
     const state = {
       canonicalSessionKey: "test-session",
       delegated: false,
+      dispatchExecuted: true,
       delegateTaskContext: { delegateTaskId: "dt-789", taskStatus: "completed" },
       decision: { route_decision: { route: "delegate" } },
     };
     const receipt = buildTurnExecutionReceipt(state as any, 1000);
     expect(receipt.delegated).toBe(true);
+  });
+
+  it("does not treat planned native binding as delegated before dispatch executes", () => {
+    const state = {
+      canonicalSessionKey: "test-session",
+      delegated: false,
+      dispatchExecuted: false,
+      delegateTaskContext: { delegateTaskId: "dt-planned", taskStatus: "planned" },
+      decision: {
+        route_decision: { route: "delegate" },
+        runtime_truth: { binding: { taskId: "native-planned" } },
+      },
+    };
+    const receipt = buildTurnExecutionReceipt(state as any, 1000);
+    expect(receipt.dispatchExecuted).toBe(false);
+    expect(receipt.delegated).toBe(false);
   });
 
   it("includes dispatch_executed from state", () => {

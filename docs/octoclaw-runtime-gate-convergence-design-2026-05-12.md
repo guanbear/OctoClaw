@@ -696,8 +696,9 @@ pnpm --filter @octoclaw/runtime run check
 
 ```bash
 pnpm vitest run \
-  extensions/octoclaw-runtime/src/runtime-ledger/__tests__/projection-rebuild.test.ts \
   extensions/octoclaw-runtime/src/state/native-status-projector.test.ts \
+  extensions/octoclaw-runtime/src/tools/runtime-task-projection.test.ts \
+  extensions/octoclaw-runtime/src/tools/runtime-status.test.ts \
   extensions/octoclaw-runtime/src/conversation-grounding.test.ts
 ```
 

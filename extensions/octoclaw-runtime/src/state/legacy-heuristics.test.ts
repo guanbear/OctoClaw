@@ -4,7 +4,6 @@ import {
   buildLegacyHeuristicFallbackEvent,
   legacyHeuristicVerdict,
   type LegacyHeuristicSurface,
-  resolveLegacyHeuristicMode,
 } from "./legacy-heuristics.js";
 import { isSubagentSessionRef } from "../resolve/session.js";
 
@@ -65,10 +64,21 @@ describe("legacy heuristic isolation", () => {
     });
   });
 
-  it("defaults legacy heuristic mode to read_only", () => {
-    expect(resolveLegacyHeuristicMode({})).toBe("read_only");
-    expect(resolveLegacyHeuristicMode({ OCTOCLAW_LEGACY_HEURISTIC_MODE: "off" })).toBe("off");
-    expect(resolveLegacyHeuristicMode({ OCTOCLAW_LEGACY_HEURISTIC_MODE: "enforce" })).toBe("read_only");
+  it("keeps old-record compatibility read-only without an env switch", () => {
+    const verdict = legacyHeuristicVerdict({
+      surface: "status_projection",
+      hasNativeTruth: false,
+      hasKnownNativeId: false,
+      hasLegacySignal: true,
+      newTask: false,
+      reason: "native_fields_absent",
+    });
+
+    expect(verdict).toMatchObject({
+      allowed: true,
+      readOnly: true,
+      source: "legacy_heuristic_read_only",
+    });
   });
 });
 
@@ -153,5 +163,15 @@ describe("NTR-P1-009: native spawn-child kind wins over session key content", ()
 describe("NTR-P1-010: native direct kind wins over legacy subagent markers", () => {
   it("returns false for direct even when the key contains subagent", () => {
     expect(isSubagentSessionRef("octoclaw-subagent-legacy", "direct")).toBe(false);
+  });
+});
+
+describe("NTR-P5-002: session-label substrings are deleted from new-task runtime truth", () => {
+  it("does not classify a subagent-labeled session key as child truth without native kind", () => {
+    expect(isSubagentSessionRef("agent:main:slack:channel:C123:subagent-old-label")).toBe(false);
+  });
+
+  it("still accepts OpenClaw native child ids as runtime identity evidence", () => {
+    expect(isSubagentSessionRef("octoclaw-subagent-run-123")).toBe(true);
   });
 });

@@ -318,14 +318,14 @@ export function isSubagentSessionRef(raw: string, nativeKind?: string): boolean 
   if (nativeKind === "spawn-child") return true;
   if (nativeKind === "direct" || nativeKind) return false;
   const hasKnownNativeId = value.includes("octoclaw-subagent-") || value.includes(":subagent:");
-  const textMatchedSubagent = /^agent:[^:]+:(?!main$)/iu.test(stringValue(raw)) && value.includes("subagent");
+  const legacySessionLabelSignal = /^agent:[^:]+:(?!main$)/iu.test(stringValue(raw)) && value.includes("subagent");
 
   // Legacy boundary: text-only subagent inference is read-only observability and must not admit new dispatch work.
   const verdict = legacyHeuristicVerdict({
     surface: "dispatch_guard",
     hasNativeTruth: hasKnownNativeId,
     hasKnownNativeId,
-    hasLegacySignal: textMatchedSubagent,
+    hasLegacySignal: legacySessionLabelSignal,
     newTask: true,
     reason: hasKnownNativeId ? "native_kind_present" : "no_native_spawn_evidence",
   });
@@ -340,7 +340,7 @@ export function isSubagentSessionRef(raw: string, nativeKind?: string): boolean 
       .catch(() => undefined);
   }
 
-  return hasKnownNativeId || textMatchedSubagent;
+  return hasKnownNativeId;
 }
 
 export function deriveSessionDescriptor(controlKey: string, record: UnknownRecord = {}): SessionDescriptor {

@@ -138,7 +138,6 @@ export function buildTurnExecutionReceipt(
     asStringOptional(delegateCtx.delegateTaskId ?? delegateCtx.taskId ?? delegateTask.delegateTaskId ?? binding.taskId),
   );
   const routeWasDelegate = asStringOptional(routeDecision.route) === "delegate";
-  const delegated = state.delegated === true || (routeWasDelegate && hasDelegateIdentity);
   const nativeTaskId = asStringOptional(
     nativeTaskBinding.nativeTaskId ?? nativeAttemptBinding.nativeTaskId ?? binding.taskId,
   );
@@ -146,6 +145,7 @@ export function buildTurnExecutionReceipt(
     nativeTaskBinding.nativeFlowId ?? nativeAttemptBinding.nativeFlowId ?? binding.flowId,
   );
   const dispatchExecuted = state.dispatchExecuted === true || decision.dispatchExecuted === true;
+  const delegated = state.delegated === true || (dispatchExecuted && routeWasDelegate && hasDelegateIdentity);
   const spawnSignals = [
     state.spawnExecuted,
     state.spawn_executed,

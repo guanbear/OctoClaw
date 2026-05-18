@@ -15,20 +15,11 @@ export function isLedgerActive(flag?: RuntimeLedgerFlag): boolean {
   return resolved === "shadow" || resolved === "enforce";
 }
 
-// ── OCTOCLAW_TASK_STATE_REBUILD ──────────────────────────────────────
-
-export function isTaskStateRebuildEnabled(): boolean {
-  const v = String(process.env.OCTOCLAW_TASK_STATE_REBUILD ?? "").trim().toLowerCase();
-  if (v === "0" || v === "false") return false;
-  return true;
-}
-
 // ── aggregator ───────────────────────────────────────────────────────
 
 export interface RuntimeLedgerFeatureFlags {
   ledgerMode: RuntimeLedgerFlag;
   ledgerActive: boolean;
-  taskStateRebuildEnabled: boolean;
 }
 
 export function resolveAllFeatureFlags(): RuntimeLedgerFeatureFlags {
@@ -36,6 +27,5 @@ export function resolveAllFeatureFlags(): RuntimeLedgerFeatureFlags {
   return {
     ledgerMode,
     ledgerActive: isLedgerActive(ledgerMode),
-    taskStateRebuildEnabled: isTaskStateRebuildEnabled(),
   };
 }

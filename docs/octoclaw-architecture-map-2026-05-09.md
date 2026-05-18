@@ -193,7 +193,7 @@ flowchart TD
   Ledger["OctoClaw SQLite metadata ledger<br/>WorkContract、route seal、spawn intent、native refs、events"]
   Replay["replay log<br/>观测与 eval 证据"]
   TaskState["task-state.json<br/>生成型缓存"]
-  Projection["StatusProjectionBuilder<br/>runtime-ledger/projection-rebuild + state/native-status-projector"]
+  Projection["StatusProjectionBuilder<br/>runtime-host adapter + state/native-status-projector"]
   Surface["status/details/queue/timeline<br/>IM footer、octoclaw_status、octoclawctl"]
   Degraded["degraded diagnostics<br/>native state 缺失、cache 损坏、SQLite 不可用"]
 

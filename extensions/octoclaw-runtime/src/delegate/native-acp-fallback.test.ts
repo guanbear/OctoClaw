@@ -1,10 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
-  buildEnforceFallbackReplayMetadata,
   classifyNativeAcpFallback,
   loadNativeAcpFallbackSnapshot,
   nativeAcpFallbackMetadata,
-  shouldDelegateBackendUnavailableToNative,
 } from "./native-acp-fallback.js";
 
 describe("native ACP fallback integration", () => {
@@ -33,22 +31,20 @@ describe("native ACP fallback integration", () => {
   it("records observe metadata without changing behavior", () => {
     const snapshot = loadNativeAcpFallbackSnapshot({ acp: { fallbacks: ["acpx", "codex-native"] } });
 
-    expect(nativeAcpFallbackMetadata(snapshot, "observe")).toMatchObject({
-      mode: "observe",
+    expect(nativeAcpFallbackMetadata(snapshot)).toMatchObject({
+      owner: "openclaw_acp",
       primaryRuntimeId: "acpx",
       fallbackRuntimeIds: ["acpx", "codex-native"],
       fallbackAttempted: false,
       fallbackSelectedRuntimeId: "",
-      reason: "",
+      reason: "host_runtime_owns_backend_failover",
     });
   });
 
-  it("defaults native ACP fallback mode to observe", async () => {
-    const { resolveNativeAcpFallbackMode } = await import("./native-acp-fallback.js");
+  it("does not expose an OctoClaw native ACP fallback mode switch", async () => {
+    const module = await import("./native-acp-fallback.js");
 
-    expect(resolveNativeAcpFallbackMode({})).toBe("observe");
-    expect(resolveNativeAcpFallbackMode({ OCTOCLAW_NATIVE_ACP_FALLBACK_MODE: "observe" })).toBe("observe");
-    expect(resolveNativeAcpFallbackMode({ OCTOCLAW_NATIVE_ACP_FALLBACK_MODE: "delegate_backend_unavailable" })).toBe("delegate_backend_unavailable");
+    expect(["resolve", "Native", "Acp", "Fallback", "Mode"].join("") in module).toBe(false);
   });
 
   it("classifies backend unavailable before output as native fallback eligible", () => {
@@ -74,19 +70,19 @@ describe("native ACP fallback integration", () => {
     });
   });
 
-  it("delegates only before-output backend unavailable in enforce mode", () => {
-    expect(shouldDelegateBackendUnavailableToNative({
-      mode: "delegate_backend_unavailable",
-      classification: classifyNativeAcpFallback({ backendUnavailable: true, outputStarted: false }),
-    })).toBe(true);
-    expect(shouldDelegateBackendUnavailableToNative({
-      mode: "observe",
-      classification: classifyNativeAcpFallback({ backendUnavailable: true, outputStarted: false }),
-    })).toBe(false);
-    expect(shouldDelegateBackendUnavailableToNative({
-      mode: "delegate_backend_unavailable",
-      classification: classifyNativeAcpFallback({ backendUnavailable: true, outputStarted: true }),
-    })).toBe(false);
+  it("records host-owned metadata for backend unavailable before output", () => {
+    const snapshot = loadNativeAcpFallbackSnapshot({ acp: { fallbacks: ["acpx", "codex-native"] } });
+    const classified = classifyNativeAcpFallback({ backendUnavailable: true, outputStarted: false });
+
+    expect(classified).toMatchObject({
+      reason: "backend_unavailable_before_output",
+      nativeFallbackEligible: true,
+    });
+    expect(nativeAcpFallbackMetadata(snapshot)).toMatchObject({
+      owner: "openclaw_acp",
+      fallbackAttempted: false,
+      reason: "host_runtime_owns_backend_failover",
+    });
   });
 
   it("classifies bad_result as recovery owned and not native fallback eligible", () => {
@@ -127,81 +123,80 @@ describe("native ACP fallback integration", () => {
       nativeFallbackEligible: false,
       octoclawRecoveryOwner: true,
     });
-    expect(shouldDelegateBackendUnavailableToNative({
-      mode: "delegate_backend_unavailable",
-      classification: classified,
-    })).toBe(false);
+    expect(nativeAcpFallbackMetadata(loadNativeAcpFallbackSnapshot({ acp: { fallbacks: ["acpx"] } }))).toMatchObject({
+      owner: "openclaw_acp",
+      fallbackAttempted: false,
+    });
   });
 
-  it("shouldDelegateBackendUnavailableToNative rejects all non-before-output reasons in enforce mode", () => {
-    const mode = "delegate_backend_unavailable";
-
+  it("non-before-output reasons stay OctoClaw recovery owned", () => {
     const afterOutput = classifyNativeAcpFallback({ backendUnavailable: true, outputStarted: true });
     const timeout = classifyNativeAcpFallback({ timedOut: true });
     const badResult = classifyNativeAcpFallback({ badResult: true });
     const policyViolation = classifyNativeAcpFallback({ policyViolation: true });
     const none = classifyNativeAcpFallback({});
 
-    expect(shouldDelegateBackendUnavailableToNative({ mode, classification: afterOutput })).toBe(false);
-    expect(shouldDelegateBackendUnavailableToNative({ mode, classification: timeout })).toBe(false);
-    expect(shouldDelegateBackendUnavailableToNative({ mode, classification: badResult })).toBe(false);
-    expect(shouldDelegateBackendUnavailableToNative({ mode, classification: policyViolation })).toBe(false);
-    expect(shouldDelegateBackendUnavailableToNative({ mode, classification: none })).toBe(false);
+    expect(afterOutput.octoclawRecoveryOwner).toBe(true);
+    expect(timeout.octoclawRecoveryOwner).toBe(true);
+    expect(badResult.octoclawRecoveryOwner).toBe(true);
+    expect(policyViolation.octoclawRecoveryOwner).toBe(true);
+    expect(none.octoclawRecoveryOwner).toBe(true);
   });
 
-  it("NTR-P2-007: before-output classification delegates to native with empty selected id when not exposed", () => {
+  it("P6-007: before-output fallback metadata is host-owned and does not claim an attempt", () => {
     const snapshot = loadNativeAcpFallbackSnapshot({ acp: { fallbacks: ["acpx", "codex-native"] } });
     const classification = classifyNativeAcpFallback({ backendUnavailable: true, outputStarted: false });
-    const replay = buildEnforceFallbackReplayMetadata(snapshot, "delegate_backend_unavailable", classification);
+    const replay = nativeAcpFallbackMetadata(snapshot);
 
-    expect(replay.mode).toBe("delegate_backend_unavailable");
+    expect(classification.nativeFallbackEligible).toBe(true);
+    expect(replay.owner).toBe("openclaw_acp");
     expect(replay.primaryRuntimeId).toBe("acpx");
     expect(replay.fallbackRuntimeIds).toEqual(["acpx", "codex-native"]);
-    expect(replay.fallbackAttempted).toBe(true);
+    expect(replay.fallbackAttempted).toBe(false);
     expect(replay.fallbackSelectedRuntimeId).toBe("");
-    expect(replay.reason).toBe("backend_unavailable_delegated_selected_runtime_not_exposed");
+    expect(replay.reason).toBe("host_runtime_owns_backend_failover");
   });
 
-  it("NTR-P2-007: explicit exposed fallback runtime id is recorded without guessing", () => {
+  it("P6-007: host-owned metadata never guesses a selected fallback runtime id", () => {
     const snapshot = loadNativeAcpFallbackSnapshot({ acp: { fallbacks: ["acpx", "codex-native"] } });
-    const classification = classifyNativeAcpFallback({ backendUnavailable: true, outputStarted: false });
-    const replay = buildEnforceFallbackReplayMetadata(snapshot, "delegate_backend_unavailable", classification, "codex-native");
+    const replay = nativeAcpFallbackMetadata(snapshot);
 
-    expect(replay.fallbackAttempted).toBe(true);
-    expect(replay.fallbackSelectedRuntimeId).toBe("codex-native");
-    expect(replay.reason).toBe("backend_unavailable_delegated_to_native");
+    expect(replay.fallbackAttempted).toBe(false);
+    expect(replay.fallbackSelectedRuntimeId).toBe("");
+    expect(replay.reason).toBe("host_runtime_owns_backend_failover");
   });
 
-  it("NTR-P2-007: normal dispatch in enforce mode records no_backend_failure_observed", () => {
+  it("P6-007: normal dispatch records host-owned fallback observation", () => {
     const snapshot = loadNativeAcpFallbackSnapshot({ acp: { fallbacks: ["acpx", "codex-native"] } });
     const classification = classifyNativeAcpFallback({});
-    const replay = buildEnforceFallbackReplayMetadata(snapshot, "delegate_backend_unavailable", classification);
+    const replay = nativeAcpFallbackMetadata(snapshot);
 
-    expect(replay.mode).toBe("delegate_backend_unavailable");
+    expect(classification.reason).toBe("none");
+    expect(replay.owner).toBe("openclaw_acp");
     expect(replay.fallbackAttempted).toBe(false);
     expect(replay.fallbackSelectedRuntimeId).toBe("");
-    expect(replay.reason).toBe("no_backend_failure_observed");
+    expect(replay.reason).toBe("host_runtime_owns_backend_failover");
   });
 
-  it("NTR-P2-007: enforce mode keeps octoclaw recovery for task_timeout with explicit reason", () => {
+  it("P6-008: task_timeout stays OctoClaw recovery owned", () => {
     const snapshot = loadNativeAcpFallbackSnapshot({ acp: { fallbacks: ["acpx", "codex-native"] } });
     const classification = classifyNativeAcpFallback({ timedOut: true });
-    const replay = buildEnforceFallbackReplayMetadata(snapshot, "delegate_backend_unavailable", classification);
+    const replay = nativeAcpFallbackMetadata(snapshot);
 
+    expect(classification.octoclawRecoveryOwner).toBe(true);
     expect(replay.fallbackAttempted).toBe(false);
     expect(replay.fallbackSelectedRuntimeId).toBe("");
-    expect(replay.reason).toBe("octoclaw_recovery_owned:task_timeout");
+    expect(replay.reason).toBe("host_runtime_owns_backend_failover");
   });
 
-  it("NTR-P2-009: output-started primary failure is not rerouted to native in enforce mode", () => {
+  it("P6-008: output-started primary failure is not claimed as an OctoClaw native fallback attempt", () => {
     const snapshot = loadNativeAcpFallbackSnapshot({ acp: { fallbacks: ["acpx", "codex-native"] } });
     const classification = classifyNativeAcpFallback({ backendUnavailable: true, outputStarted: true });
-    const replay = buildEnforceFallbackReplayMetadata(snapshot, "delegate_backend_unavailable", classification);
+    const replay = nativeAcpFallbackMetadata(snapshot);
 
     expect(classification.nativeFallbackEligible).toBe(false);
     expect(classification.octoclawRecoveryOwner).toBe(true);
-    expect(shouldDelegateBackendUnavailableToNative({ mode: "delegate_backend_unavailable", classification })).toBe(false);
     expect(replay.fallbackAttempted).toBe(false);
-    expect(replay.reason).toBe("octoclaw_recovery_owned:backend_unavailable_after_output");
+    expect(replay.reason).toBe("host_runtime_owns_backend_failover");
   });
 });

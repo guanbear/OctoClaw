@@ -1,6 +1,4 @@
-export * from "./plugin.js";
 export * from "./config/index.js";
-export * from "./adapter/webhook-surface.js";
 export * from "./adapter/state-surface.js";
 export * from "./runtime-payloads.js";
 export * from "./bridge.js";
@@ -44,9 +42,6 @@ export type {
   RuntimeLedgerOpenResult,
   ShadowMirrorResult,
   ShadowMirrorStatus,
-  ShadowDiffReport,
-  ShadowDiffMissingWorkContract,
-  ShadowDiffMissingAttempt,
   SqliteModule,
   SqliteProvider,
 } from "./runtime-ledger/types.js";
@@ -54,5 +49,4 @@ export {
   resolveRuntimeLedgerMode,
   isShadowActive,
   mirrorWorkContractToRuntimeLedger,
-  buildRuntimeLedgerShadowDiff,
 } from "./runtime-ledger/index.js";

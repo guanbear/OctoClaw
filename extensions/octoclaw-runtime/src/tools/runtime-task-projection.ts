@@ -192,6 +192,14 @@ export function runtimeStatusEvidence(record: RuntimeTaskProjectionRecord): {
     || asBoolean(delegateAttempt.dispatch_executed)
     || Boolean(asString(nativeBinding.nativeFlowId || nativeTaskBinding.nativeFlowId))
     || Boolean(asString(record.flow_id));
+  const nativeFlowId = optionalString(
+    nativeBinding.nativeFlowId,
+    nativeBinding.native_flow_id,
+    nativeTaskBinding.nativeFlowId,
+    nativeTaskBinding.native_flow_id,
+    record.flowId,
+    record.flow_id,
+  ) ?? "";
   const spawnSignals = [
     record.spawnExecuted,
     record.spawn_executed,
@@ -202,7 +210,7 @@ export function runtimeStatusEvidence(record: RuntimeTaskProjectionRecord): {
   ];
   const hasSpawnEvidence = hasExplicitTrue(spawnSignals)
     || Boolean(runId || childSessionId)
-    || (!hasExplicitFalse(spawnSignals) && Boolean(childSessionKey));
+    || (!hasExplicitFalse(spawnSignals) && Boolean(nativeFlowId && childSessionKey));
   const resultMaterialized = asBoolean(record.resultMaterialized)
     || asBoolean(record.result_materialized)
     || asBoolean(evidence.resultMaterialized)

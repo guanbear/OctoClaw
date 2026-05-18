@@ -60,20 +60,10 @@ export function resolveSpeculativePreloadEnabled(pluginConfig: Record<string, un
   return raw === "1" || raw === "true" || raw === "enabled";
 }
 
-export type RuntimeLedgerLegacyMode = "on" | "read_only" | "off";
-
-export function resolveLegacyRuntimeLedgerMode(): RuntimeLedgerLegacyMode {
-  const v = String(process.env.OCTOCLAW_LEGACY_RUNTIME_LEDGER ?? "").trim().toLowerCase();
-  if (v === "read_only") return "read_only";
-  if (v === "off") return "off";
-  return "on";
-}
-
 export interface PlannerSpawnConfig {
   spawnBackend: SpawnBackend;
   plannerAllowlist: string[];
   intentTtlMs: number;
-  legacyRuntimeLedgerMode: RuntimeLedgerLegacyMode;
 }
 
 export function resolvePlannerSpawnConfig(): PlannerSpawnConfig {
@@ -81,6 +71,5 @@ export function resolvePlannerSpawnConfig(): PlannerSpawnConfig {
     spawnBackend: resolveSpawnBackend(),
     plannerAllowlist: resolvePlannerAllowlist(),
     intentTtlMs: resolveSpawnIntentTtlMs(),
-    legacyRuntimeLedgerMode: resolveLegacyRuntimeLedgerMode(),
   };
 }

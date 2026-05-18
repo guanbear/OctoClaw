@@ -12,7 +12,7 @@ import {
 let useMockAdapter = false;
 let previousSpawnBackend: string | undefined;
 let previousPlannerAllowlist: string | undefined;
-let previousLegacyCliDelivery: string | undefined;
+const mockSendIMMessage = vi.hoisted(() => vi.fn());
 
 const imAdapter = {
   canHandle: vi.fn(() => true),
@@ -28,6 +28,10 @@ vi.mock("../../im/index.js", async (importOriginal) => {
     getAdapterForSession: (sessionKey: string) => useMockAdapter ? imAdapter : actual.getAdapterForSession(sessionKey),
   };
 });
+
+vi.mock("../../im/send.js", () => ({
+  sendIMMessage: mockSendIMMessage,
+}));
 
 function packet(overrides: Partial<RouteCommitAckPacket> = {}): RouteCommitAckPacket {
   return {
@@ -59,12 +63,12 @@ describe("route commit ACK", () => {
   beforeEach(() => {
     previousSpawnBackend = process.env.OCTOCLAW_SPAWN_BACKEND;
     previousPlannerAllowlist = process.env.OCTOCLAW_PLANNER_ALLOWLIST;
-    previousLegacyCliDelivery = process.env.OCTOCLAW_LEGACY_CLI_DELIVERY;
     process.env.OCTOCLAW_SPAWN_BACKEND = "legacy";
     delete process.env.OCTOCLAW_PLANNER_ALLOWLIST;
-    process.env.OCTOCLAW_LEGACY_CLI_DELIVERY = "1";
     resetRouteCommitAckState();
     vi.clearAllMocks();
+    mockSendIMMessage.mockReset();
+    mockSendIMMessage.mockResolvedValue({ sent: true, threadTs: "1700000000.000100" });
     useMockAdapter = false;
     imAdapter.canHandle.mockReturnValue(true);
     imAdapter.resolveTarget.mockReturnValue({ target: "C1" });
@@ -76,11 +80,8 @@ describe("route commit ACK", () => {
     else process.env.OCTOCLAW_SPAWN_BACKEND = previousSpawnBackend;
     if (previousPlannerAllowlist === undefined) delete process.env.OCTOCLAW_PLANNER_ALLOWLIST;
     else process.env.OCTOCLAW_PLANNER_ALLOWLIST = previousPlannerAllowlist;
-    if (previousLegacyCliDelivery === undefined) delete process.env.OCTOCLAW_LEGACY_CLI_DELIVERY;
-    else process.env.OCTOCLAW_LEGACY_CLI_DELIVERY = previousLegacyCliDelivery;
     previousSpawnBackend = undefined;
     previousPlannerAllowlist = undefined;
-    previousLegacyCliDelivery = undefined;
   });
 
   it("projects truthful zh delegate text without execution claims", () => {
@@ -261,11 +262,8 @@ describe("route commit ACK", () => {
     expect(result.reason).toBe("channel_message_sent");
     expect(result.ack_target_resolution_state).toBe("resolved");
     expect(result.ackKey).toContain("wc-123");
-    expect(runCommandSpy).toHaveBeenCalledWith(
-      "openclaw",
-      expect.not.arrayContaining(["--reply-to"]),
-      expect.any(Object),
-    );
+    expect(mockSendIMMessage).toHaveBeenCalledOnce();
+    expect(mockSendIMMessage.mock.calls[0][0].replyToMessageId).toBeUndefined();
 
     expect(replaySpy).toHaveBeenCalledWith(
       "route_commit_ack",
@@ -491,7 +489,7 @@ describe("route commit ACK", () => {
       expect(result.sent).toBe(true);
       expect(result.skipped).toBe(false);
       expect(result.reason).not.toBe("delegate_route_ack_waits_for_native_confirm");
-      expect(runCommandSpy).toHaveBeenCalled();
+      expect(mockSendIMMessage).toHaveBeenCalled();
     } finally {
       runCommandSpy.mockRestore();
       if (previousBackend === undefined) delete process.env.OCTOCLAW_SPAWN_BACKEND;
@@ -554,7 +552,7 @@ describe("route commit ACK", () => {
     expect(result.sent).toBe(true);
     expect(result.reason).toBe("reaction_ack_failed_text_fallback");
     expect(imAdapter.react).toHaveBeenCalledOnce();
-    expect(imAdapter.send).toHaveBeenCalledWith(expect.objectContaining({
+    expect(mockSendIMMessage).toHaveBeenCalledWith(expect.objectContaining({
       message: "收到，正在处理。稍后可查看状态。",
       replyToMessageId: "1700000000.000100",
     }));
@@ -606,7 +604,7 @@ describe("route commit ACK", () => {
     expect(result.ack_target_resolution_state).toBe("resolved");
     expect(result.ack_delivery_state).toBe("sent");
 
-    expect(runCommandSpy).toHaveBeenCalledOnce();
+    expect(mockSendIMMessage).toHaveBeenCalledOnce();
 
     expect(replaySpy).toHaveBeenCalledWith(
       "route_commit_ack",
@@ -703,11 +701,10 @@ describe("route commit ACK", () => {
     expect(result.sent).toBe(true);
     expect(result.skipped).toBe(false);
     expect(result.ack_target_resolution_state).toBe("resolved");
-    expect(runCommandSpy).toHaveBeenCalledWith(
-      "openclaw",
-      expect.arrayContaining(["--reply-to", "1700000000.000100"]),
-      expect.any(Object),
-    );
+    expect(mockSendIMMessage).toHaveBeenCalledWith(expect.objectContaining({
+      replyToMessageId: "1700000000.000100",
+      deliveryTargetSource: "inbound_anchor",
+    }));
 
     runCommandSpy.mockRestore();
   });
@@ -731,11 +728,10 @@ describe("route commit ACK", () => {
     expect(result.sent).toBe(true);
     expect(result.skipped).toBe(false);
     expect(result.ack_target_resolution_state).toBe("resolved");
-    expect(runCommandSpy).toHaveBeenCalledWith(
-      "openclaw",
-      expect.arrayContaining(["--reply-to", "1700000000.000100"]),
-      expect.any(Object),
-    );
+    expect(mockSendIMMessage).toHaveBeenCalledWith(expect.objectContaining({
+      replyToMessageId: "1700000000.000100",
+      deliveryTargetSource: "inbound_anchor",
+    }));
 
     runCommandSpy.mockRestore();
   });

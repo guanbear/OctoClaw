@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { NativeStatusProjection, NativeStatusProjectorInput } from "../state/native-status-projector.js";
 import { createOpenClawRuntimeAdapter, normalizeNativeDeliveryToSnapshot, adapterFallbackToNativeSnapshot, statusSnapshotToNativeProjection } from "./openclaw-adapter.js";
-import { deliveryRelayVerdict, shouldSendRelayCompensation } from "../im/delivery-relay-verdict.js";
+import { deliveryRelayVerdict } from "../im/delivery-relay-verdict.js";
 import { loadNativeAcpFallbackSnapshot } from "../delegate/native-acp-fallback.js";
 
 function stubProjection(overrides: Partial<NativeStatusProjection> = {}): NativeStatusProjection {
@@ -184,7 +184,7 @@ describe("NTR-P4-004: OpenClaw adapter delivery snapshot preserves delivery verd
     });
 
     expect(verdict.nativeDelivered).toBe(true);
-    expect(shouldSendRelayCompensation({ mode: "native_success_audit_only", verdict })).toBe(false);
+    expect(verdict.relayCompensationNeeded).toBe(false);
     expect(verdict.source).toBe("native_delivery");
   });
 

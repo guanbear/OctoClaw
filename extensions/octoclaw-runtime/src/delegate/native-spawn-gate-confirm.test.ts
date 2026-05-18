@@ -15,6 +15,12 @@ import { evaluateNativeSessionsSendGate, evaluateNativeSpawnGate } from "./nativ
 import { nativeSpawnIntentStore } from "./native-spawn-intent-store.js";
 import type { SessionsSpawnArgs } from "./native-spawn-intent.js";
 
+const mockSendIMMessage = vi.hoisted(() => vi.fn());
+
+vi.mock("../im/send.js", () => ({
+  sendIMMessage: mockSendIMMessage,
+}));
+
 const fs = fsSync as unknown as {
   mkdtempSync(pathname: string): string;
   rmSync(pathname: string, options?: { recursive?: boolean; force?: boolean }): void;
@@ -22,7 +28,6 @@ const fs = fsSync as unknown as {
 const osModule = os as unknown as { tmpdir(): string };
 
 let tempWorkspace = "";
-let previousLegacyCliDelivery: string | undefined;
 
 const args: SessionsSpawnArgs = {
   task: "Research the native planner confirm handshake.",
@@ -71,14 +76,14 @@ function seedContract(sessionKey = "session-native-spawn-confirm") {
 }
 
 beforeEach(() => {
-  previousLegacyCliDelivery = process.env.OCTOCLAW_LEGACY_CLI_DELIVERY;
-  process.env.OCTOCLAW_LEGACY_CLI_DELIVERY = "1";
   tempWorkspace = fs.mkdtempSync(path.join(osModule.tmpdir(), "octoclaw-native-spawn-gate-confirm-"));
   envOverrides.workspaceRoot = tempWorkspace;
   nativeSpawnIntentStore.clearForTests();
   resetAckDedupeState();
   resetExecTransitionState();
   vi.restoreAllMocks();
+  mockSendIMMessage.mockReset();
+  mockSendIMMessage.mockResolvedValue({ sent: true, threadTs: "1700000000.000100" });
 });
 
 afterEach(() => {
@@ -87,9 +92,6 @@ afterEach(() => {
   resetExecTransitionState();
   nativeSpawnIntentStore.clearForTests();
   envOverrides.workspaceRoot = "";
-  if (previousLegacyCliDelivery === undefined) delete process.env.OCTOCLAW_LEGACY_CLI_DELIVERY;
-  else process.env.OCTOCLAW_LEGACY_CLI_DELIVERY = previousLegacyCliDelivery;
-  previousLegacyCliDelivery = undefined;
   if (tempWorkspace) fs.rmSync(tempWorkspace, { recursive: true, force: true });
   tempWorkspace = "";
 });
@@ -620,13 +622,6 @@ describe("confirmNativeSpawn", () => {
   });
 
   it("retries ACK on idempotent same-run confirm when the first accepted confirm skipped notification", async () => {
-    const envModule = await import("../resolve/env.js");
-    const runCommandSpy = vi.spyOn(envModule, "runCommand").mockResolvedValue({
-      code: 0,
-      stdout: JSON.stringify({ ok: true, ts: "1777712000.000100" }),
-      stderr: "",
-      timedOut: false,
-    });
     vi.spyOn(await import("../replay/replay.js"), "recordPolicyReplay").mockResolvedValue(undefined);
 
     const contract = seedContract("slack:channel:C1");
@@ -653,7 +648,7 @@ describe("confirmNativeSpawn", () => {
     expect(first.status).toBe("accepted");
     expect(first.ackSent).toBe(false);
     expect(nativeSpawnIntentStore.get(intent.spawnIntentId)?.ackSentAt ?? null).toBeNull();
-    expect(runCommandSpy).not.toHaveBeenCalled();
+    expect(mockSendIMMessage).not.toHaveBeenCalled();
 
     const retry = await confirmNativeSpawn({
       spawnIntentId: intent.spawnIntentId,
@@ -669,25 +664,14 @@ describe("confirmNativeSpawn", () => {
     expect(retry.ok).toBe(true);
     expect(retry.status).toBe("idempotent");
     expect(retry.ackSent).toBe(true);
-    expect(runCommandSpy).toHaveBeenCalledOnce();
+    expect(mockSendIMMessage).toHaveBeenCalledOnce();
     expect(nativeSpawnIntentStore.get(intent.spawnIntentId)?.ackSentAt ?? null).not.toBeNull();
   });
 
   it("does not mark ACK on failed notification and allows an idempotent retry to send it", async () => {
-    const envModule = await import("../resolve/env.js");
-    const runCommandSpy = vi.spyOn(envModule, "runCommand")
-      .mockResolvedValueOnce({
-        code: 1,
-        stdout: JSON.stringify({ ok: false, error: "timeout" }),
-        stderr: "timeout",
-        timedOut: true,
-      })
-      .mockResolvedValueOnce({
-        code: 0,
-        stdout: JSON.stringify({ ok: true, ts: "1777712001.000100" }),
-        stderr: "",
-        timedOut: false,
-      });
+    mockSendIMMessage
+      .mockResolvedValueOnce({ sent: false, error: "timeout" })
+      .mockResolvedValueOnce({ sent: true, threadTs: "1700000000.000100" });
     vi.spyOn(await import("../replay/replay.js"), "recordPolicyReplay").mockResolvedValue(undefined);
 
     const contract = seedContract("slack:channel:C2");
@@ -732,7 +716,7 @@ describe("confirmNativeSpawn", () => {
     expect(retry.ok).toBe(true);
     expect(retry.status).toBe("idempotent");
     expect(retry.ackSent).toBe(true);
-    expect(runCommandSpy).toHaveBeenCalledTimes(2);
+    expect(mockSendIMMessage).toHaveBeenCalledTimes(2);
     expect(nativeSpawnIntentStore.get(intent.spawnIntentId)?.ackSentAt ?? null).not.toBeNull();
   });
 

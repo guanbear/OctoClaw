@@ -44,8 +44,6 @@ import {
 import { hasBudgetedMainEscalationEvidence } from "../budgeted-main.js";
 import { detectIMType } from "../im-status-renderer.js";
 import { openRuntimeLedger } from "../runtime-ledger/index.js";
-import { resolveRuntimeLedgerMode } from "../runtime-ledger/shadow.js";
-import { performCrashRecovery } from "../runtime-ledger/crash-recovery.js";
 import {
   type UnknownRecord,
   isRecord,
@@ -1323,30 +1321,6 @@ export function getToolRegistrations(options: ToolRegistrationOptions = {}): Too
         checkActiveTaskRecovery();
         const output = await buildNativeStatusPanelOutput(format, imType, ctx);
         return statusToolResponse(output.text, format, imType, output.interactiveBlocks);
-      },
-    },
-    {
-      name: "octoclaw_crash_recovery",
-      label: "OctoClaw Crash Recovery",
-      description: "Operator tool to manually run runtime ledger crash recovery for stale leases, attempt reconciliation, and projection rebuild.",
-      params: {
-        type: "object",
-        additionalProperties: false,
-        properties: {},
-      },
-      execute: async () => {
-        if (resolveRuntimeLedgerMode() === "off") {
-          return toolResponse("crash_recovery_unavailable", { reason: "runtime_ledger_off" });
-        }
-        const result = performCrashRecovery({});
-        const summary = [
-          "crash_recovery_completed",
-          `attemptsReconciled=${result.attemptsReconciled}`,
-          `spawnConfirmed=${result.spawnConfirmed}`,
-          `projectionRebuilt=${result.projectionRebuilt}`,
-          `errors=${result.errors.length}`,
-        ].join("; ");
-        return toolResponse(summary, { ...result });
       },
     },
   ];

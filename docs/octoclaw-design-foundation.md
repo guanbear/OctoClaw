@@ -317,16 +317,19 @@ N0 更新：本节保留为长期设计背景，但实现路径已按 TS monorep
 - `e9bf47b` — patrol observation pass 与 on-demand runner mode 收口
 - `17abf08` — unified `octoclawctl` control entrypoint
 
-当前 TS 配套代码/测试入口包括：
+当前 TS 配套代码/测试入口已经在
+`native-truth-acp-fallback-relay-slimming-0.6.x` 后收口为：
 
-- `extensions/octoclaw-runtime/src/ports/openclaw-runtime-taskflow-port.ts`
+- `extensions/octoclaw-runtime/src/runtime-host/openclaw-adapter.ts`
+- `extensions/octoclaw-runtime/src/ports/openclaw-dist-taskflow-port.ts`
 - `extensions/octoclaw-runtime/src/ports/taskflow-port.ts`
-- `extensions/octoclaw-runtime/src/work-contract/native-taskflow-adapter.ts`
+- `extensions/octoclaw-runtime/src/runtime-payloads.ts`
 - `extensions/octoclaw-runtime/src/work-contract/materializer.ts`
 - `extensions/octoclaw-runtime/src/work-contract/continuity.ts`
-- `extensions/octoclaw-runtime/src/core/workflow/*`
-- `extensions/octoclaw-runtime/src/core/recovery/*`
 - `extensions/octoclaw-runtime/src/state/task-state-store.ts`
+
+旧的 `openclaw-runtime-taskflow-port.ts`、`native-taskflow-adapter.ts`、
+`core/workflow/*` 和 `core/recovery/*` 已删除，不再是当前实现入口。
 
 所以现在不能再把“taskflow substrate 接入”“observer 基础层”“resume continuity”写成纯未来事项。
 

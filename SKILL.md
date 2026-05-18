@@ -62,7 +62,6 @@ reintroduced as compatibility paths.
 | `octoclaw_dispatch_confirm` | Bind accepted native `runId` / `childSessionKey` evidence back to OctoClaw metadata. |
 | `octoclaw_task_action` | Read task details, queue, artifacts, or supported task operations. |
 | `octoclaw_status` | Render status/details/queue/timeline from projection. |
-| `octoclaw_crash_recovery` | Run explicit recovery diagnostics. |
 
 ## Auto Router Commands
 

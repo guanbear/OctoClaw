@@ -20,7 +20,7 @@ const fs = fsSync as unknown as {
 };
 const osModule = os as unknown as { tmpdir(): string };
 
-const ENV_KEYS = ["OCTOCLAW_SPAWN_BACKEND", "OCTOCLAW_PLANNER_ALLOWLIST", "OCTOCLAW_SPAWN_INTENT_TTL_MS", "OCTOCLAW_RUNTIME_LEDGER", "OCTOCLAW_SPECULATIVE_PRELOAD", "OCTOCLAW_NATIVE_ACP_FALLBACK_MODE", "OPENCLAW_HOME"];
+const ENV_KEYS = ["OCTOCLAW_SPAWN_BACKEND", "OCTOCLAW_PLANNER_ALLOWLIST", "OCTOCLAW_SPAWN_INTENT_TTL_MS", "OCTOCLAW_RUNTIME_LEDGER", "OCTOCLAW_SPECULATIVE_PRELOAD", "OPENCLAW_HOME"];
 let originalEnv: Record<string, string | undefined>;
 let tempWorkspace = "";
 
@@ -246,10 +246,11 @@ describe("octoclaw_dispatch planner backend", () => {
       planner_enabled: true,
       planner_allowed_candidates: expect.arrayContaining([contract.sessionKey]),
       native_acp_fallback: expect.objectContaining({
-        mode: "observe",
+        owner: "openclaw_acp",
         primaryRuntimeId: "acpx",
         fallbackRuntimeIds: ["acpx", "codex-native"],
         fallbackAttempted: false,
+        reason: "host_runtime_owns_backend_failover",
       }),
     }));
     expect(events).toContainEqual(expect.objectContaining({
@@ -257,10 +258,11 @@ describe("octoclaw_dispatch planner backend", () => {
       work_contract_id: contract.workContractId,
       spawn_intent_id: body.spawnIntentId,
       native_acp_fallback: expect.objectContaining({
-        mode: "observe",
+        owner: "openclaw_acp",
         primaryRuntimeId: "acpx",
         fallbackRuntimeIds: ["acpx", "codex-native"],
         fallbackAttempted: false,
+        reason: "host_runtime_owns_backend_failover",
       }),
       elapsedMs: expect.any(Number),
     }));
@@ -1360,9 +1362,8 @@ describe("runtime convergence invariants (WP-A)", () => {
     expect(spawn).toBeUndefined();
   });
 
-  it("NTR-P2-007: enforce mode dispatch keeps one WorkContract, no native failover in normal dispatch", async () => {
+  it("P6-007: dispatch records host-owned ACP fallback observation without OctoClaw failover", async () => {
     process.env.OCTOCLAW_SPAWN_BACKEND = "planner";
-    process.env.OCTOCLAW_NATIVE_ACP_FALLBACK_MODE = "delegate_backend_unavailable";
     process.env.OPENCLAW_HOME = tempWorkspace;
     fsSync.writeFileSync(path.join(tempWorkspace, "openclaw.json"), JSON.stringify({
       acp: { fallbacks: ["acpx", "codex-native"] },
@@ -1388,17 +1389,17 @@ describe("runtime convergence invariants (WP-A)", () => {
     const backendSelected = events.find((e) => e.event === "dispatch_backend_selected");
     expect(backendSelected).toBeTruthy();
     expect(backendSelected!.native_acp_fallback).toMatchObject({
-      mode: "delegate_backend_unavailable",
+      owner: "openclaw_acp",
       primaryRuntimeId: "acpx",
       fallbackRuntimeIds: ["acpx", "codex-native"],
       fallbackAttempted: false,
       fallbackSelectedRuntimeId: "",
-      reason: "no_backend_failure_observed",
+      reason: "host_runtime_owns_backend_failover",
     });
     const intentCreated = events.find((e) => e.event === "dispatch_planner_intent_created");
     expect(intentCreated).toBeTruthy();
     expect(intentCreated!.native_acp_fallback).toMatchObject({
-      mode: "delegate_backend_unavailable",
+      owner: "openclaw_acp",
       fallbackAttempted: false,
       fallbackSelectedRuntimeId: "",
     });
@@ -1409,9 +1410,8 @@ describe("runtime convergence invariants (WP-A)", () => {
     expect(duplicateDispatches.length).toBe(1);
   });
 
-  it("NTR-P2-008: enforce mode dispatch produces one spawn intent, no duplicate final path", async () => {
+  it("P6-008: host-owned ACP fallback observation produces one spawn intent, no duplicate final path", async () => {
     process.env.OCTOCLAW_SPAWN_BACKEND = "planner";
-    process.env.OCTOCLAW_NATIVE_ACP_FALLBACK_MODE = "delegate_backend_unavailable";
     process.env.OPENCLAW_HOME = tempWorkspace;
     fsSync.writeFileSync(path.join(tempWorkspace, "openclaw.json"), JSON.stringify({
       acp: { fallbacks: ["acpx", "codex-native"] },

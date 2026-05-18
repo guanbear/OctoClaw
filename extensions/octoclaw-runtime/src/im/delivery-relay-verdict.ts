@@ -1,6 +1,5 @@
 import { asString, isRecord } from "../util/type-coercion.js";
 
-export type DeliveryRelayMode = "compensate" | "native_success_audit_only";
 export type DeliveryTruthSource = "native_delivery" | "octoclaw_relay" | "audit_only" | "none";
 
 export interface DeliveryRelayVerdict {
@@ -12,12 +11,6 @@ export interface DeliveryRelayVerdict {
   duplicateRisk: boolean;
   source: DeliveryTruthSource;
   reason: string;
-}
-
-export function resolveDeliveryRelayMode(env: Record<string, string | undefined> = process.env): DeliveryRelayMode {
-  const value = String(env.OCTOCLAW_DELIVERY_RELAY_MODE ?? "").trim().toLowerCase();
-  if (value === "compensate") return "compensate";
-  return value === "delete_relay" ? "compensate" : "native_success_audit_only";
 }
 
 function nativeDeliveryStatus(nativeDelivery: unknown): string {
@@ -50,18 +43,15 @@ export function deliveryRelayVerdict(input: {
 
   if (status === "delivered") {
     const duplicateRisk = Boolean(resultHash && input.relayResultHash && resultHash === input.relayResultHash);
-    const isRich = input.presentation === "rich";
-    const successReason = duplicateRisk ? "duplicate_final_suppressed" : isRich ? "rich_native_delivery_success" : "native_delivery_success";
-    const compensationReason = duplicateRisk ? "duplicate_no_compensation_needed" : isRich ? "rich_native_delivered_no_compensation_needed" : "native_delivered_no_compensation_needed";
     return {
       finalVisible: true,
       nativeDelivered: true,
       relayCompensationNeeded: false,
       relayCompensationRan: false,
-      relayCompensationReason: compensationReason,
+      relayCompensationReason: duplicateRisk ? "duplicate_no_compensation_needed" : "native_delivered_no_compensation_needed",
       duplicateRisk,
       source: "native_delivery",
-      reason: successReason,
+      reason: duplicateRisk ? "duplicate_final_suppressed" : "native_delivery_success",
     };
   }
 
@@ -129,17 +119,4 @@ export function deliveryRelayVerdict(input: {
     source: "none",
     reason: "native_delivery_pending",
   };
-}
-
-export function shouldSendRelayCompensation(input: {
-  mode: DeliveryRelayMode;
-  verdict: DeliveryRelayVerdict;
-}): boolean {
-  const { mode, verdict } = input;
-
-  if (verdict.duplicateRisk) return false;
-
-  if (mode === "native_success_audit_only" && verdict.nativeDelivered) return false;
-
-  return verdict.relayCompensationNeeded && !verdict.nativeDelivered;
 }

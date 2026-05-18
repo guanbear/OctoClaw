@@ -4,7 +4,6 @@ import { asBooleanStrict, asString, isRecord, type UnknownRecord } from "../util
 import { emitExecutionTransitionNotification } from "./execution-transition-notifier.js";
 import { reduceCanonicalStatus, type LifecycleReconcileInput } from "../runtime-ledger/lifecycle-reconciler.js";
 import type { NativeLifecycleStatus } from "../runtime-ledger/lifecycle-reconciler.js";
-import { writeRebuiltTaskState } from "../runtime-ledger/projection-rebuild.js";
 
 interface FsSyncLike {
   readFileSync(pathname: string, encoding: string): string;
@@ -321,7 +320,6 @@ export async function watchdogTick(logger: unknown): Promise<void> {
 export async function watchdogStartupReconcile(logger: unknown): Promise<void> {
   const sink = isRecord(logger) ? logger as AckLogger : {};
   try {
-    writeRebuiltTaskState();
     watchdogLastTick = 0;
     await watchdogTick(logger);
   } catch (error) {

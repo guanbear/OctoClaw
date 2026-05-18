@@ -1,11 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const writeRebuiltTaskState = vi.fn();
 const readFileSync = vi.fn();
-
-vi.mock("../../runtime-ledger/projection-rebuild.js", () => ({
-  writeRebuiltTaskState,
-}));
 
 vi.mock("node:fs", () => ({
   default: {
@@ -26,11 +21,10 @@ describe("watchdogStartupReconcile", () => {
   beforeEach(() => {
     vi.resetModules();
     vi.useRealTimers();
-    writeRebuiltTaskState.mockReset();
     readFileSync.mockReset();
   });
 
-  it("rebuilds projection and runs an immediate watchdog tick through debounce", async () => {
+  it("resets debounce and runs an immediate watchdog tick", async () => {
     const now = new Date("2026-05-16T08:00:00.000Z").getTime();
     vi.useFakeTimers();
     vi.setSystemTime(now);
@@ -42,19 +36,17 @@ describe("watchdogStartupReconcile", () => {
     await watchdogTick(logger);
     await watchdogStartupReconcile(logger);
 
-    expect(writeRebuiltTaskState).toHaveBeenCalledOnce();
     expect(readFileSync).toHaveBeenCalledTimes(2);
   });
 
-  it("catches rebuild errors and logs without throwing", async () => {
-    writeRebuiltTaskState.mockImplementation(() => {
-      throw new Error("ledger offline");
+  it("does not throw when task-state read fails", async () => {
+    readFileSync.mockImplementation(() => {
+      throw new Error("fs error");
     });
     const logger = { warn: vi.fn() };
 
     const { watchdogStartupReconcile } = await import("../ack-watchdog.js");
 
     await expect(watchdogStartupReconcile(logger)).resolves.toBeUndefined();
-    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("watchdog startup reconcile failed"));
   });
 });

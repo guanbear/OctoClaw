@@ -1,5 +1,5 @@
-import { buildStatusQueryPacket } from "./core/delegate/index.js";
-import type { DelegateAttempt, DelegateProgressEvent, DelegateTask, NativeTaskBinding, StatusQueryPacket } from "@octoclaw/contracts/delegate";
+import type { DelegateAttempt, DelegateProgressEvent, DelegateTask, NativeTaskBinding, RecoveryInfo, StatusQueryPacket, TimelineEntry } from "@octoclaw/contracts/delegate";
+import { buildContractEnvelope } from "@octoclaw/contracts/schemas";
 import { normalizeInboundPrompt } from "./resolve/session.js";
 import { stripProjectionFooterFromText } from "./projection-footer-sanitizer.js";
 import { policyState, type PolicyStateEntry } from "./state/policy-state.js";
@@ -149,6 +149,49 @@ function isDelegateProgressEvent(value: unknown): value is DelegateProgressEvent
 function collectDelegateProgressEvents(state: PolicyStateEntry): DelegateProgressEvent[] {
   const events = Array.isArray(state.delegateProgressEvents) ? state.delegateProgressEvents : [];
   return events.filter(isDelegateProgressEvent);
+}
+
+function buildTimelineEntries(progressEvents: DelegateProgressEvent[]): TimelineEntry[] {
+  return [...progressEvents]
+    .sort((left, right) => Date.parse(left.eventAt) - Date.parse(right.eventAt))
+    .slice(-50)
+    .map((event) => ({
+      eventAt: event.eventAt,
+      eventType: event.eventType,
+      summary: event.summary,
+    }));
+}
+
+function buildStatusQueryPacket(input: {
+  delegateTask: DelegateTask;
+  currentAttempt: DelegateAttempt | null;
+  nativeBinding: NativeTaskBinding | null;
+  progressEvents: DelegateProgressEvent[];
+  recoveryInfo?: RecoveryInfo | null;
+}): StatusQueryPacket {
+  const queriedAt = new Date().toISOString();
+  const timelineEntries = buildTimelineEntries(input.progressEvents);
+  return {
+    ...buildContractEnvelope("projection", queriedAt),
+    kind: "projection",
+    delegateTaskId: input.delegateTask.delegateTaskId,
+    currentAttemptId: input.delegateTask.currentAttemptId,
+    currentAttemptStatus: input.currentAttempt?.status ?? null,
+    nativeBinding: input.nativeBinding,
+    taskStatus: input.delegateTask.status,
+    role: input.delegateTask.role,
+    coordinationMode: input.delegateTask.coordinationMode,
+    modelProfile: input.currentAttempt?.modelProfile ?? null,
+    backend: input.currentAttempt?.backend ?? null,
+    totalAttempts: input.delegateTask.totalAttempts,
+    timeline: {
+      entries: timelineEntries,
+      lastEventAt: timelineEntries.at(-1)?.eventAt ?? null,
+      totalEvents: input.progressEvents.length,
+    },
+    recoveryInfo: input.recoveryInfo ?? null,
+    queriedAt,
+  };
 }
 
 export function queryDelegateStatus(delegateTaskId: string): StatusQueryPacket | null {

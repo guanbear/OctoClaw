@@ -49,26 +49,3 @@ export interface ShadowMirrorResult {
   rowsAffected?: number;
   eventsAppended?: number;
 }
-
-// ── Shadow diff result ──
-
-export interface ShadowDiffMissingWorkContract {
-  workContractId: string;
-  route: string;
-  sessionKey: string;
-  hasAttemptInfo: boolean;
-}
-
-export interface ShadowDiffMissingAttempt {
-  attemptId: string;
-  workContractId: string;
-  delegateTaskId: string;
-}
-
-export interface ShadowDiffReport {
-  taskStatePath?: string;
-  dbPath?: string;
-  totalDelegateContracts: number;
-  missingWorkContracts: ShadowDiffMissingWorkContract[];
-  missingAttempts: ShadowDiffMissingAttempt[];
-}

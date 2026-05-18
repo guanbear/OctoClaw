@@ -1,9 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  deliveryRelayVerdict,
-  resolveDeliveryRelayMode,
-  shouldSendRelayCompensation,
-} from "./delivery-relay-verdict.js";
+import { deliveryRelayVerdict } from "./delivery-relay-verdict.js";
 import { normalizeNativeDeliveryToSnapshot } from "../runtime-host/openclaw-adapter.js";
 
 describe("delivery relay verdict", () => {
@@ -57,8 +53,7 @@ describe("delivery relay verdict", () => {
       nativeDelivery: { status: "delivered", messageId: "1778573724.032469" },
     });
 
-    expect(shouldSendRelayCompensation({ mode: "native_success_audit_only", verdict })).toBe(false);
-    expect(shouldSendRelayCompensation({ mode: "compensate", verdict })).toBe(false);
+    expect(verdict.relayCompensationNeeded).toBe(false);
   });
 
   it("NTR-P4-004: consumes adapter delivery snapshots without changing verdict semantics", () => {
@@ -92,7 +87,7 @@ describe("delivery relay verdict", () => {
       relayCompensationNeeded: true,
       reason: "native_delivery_degraded:native_status_uncertain",
     });
-    expect(shouldSendRelayCompensation({ mode: "native_success_audit_only", verdict })).toBe(true);
+    expect(verdict.relayCompensationNeeded).toBe(true);
   });
 
   // BDD: NTR-P3-008
@@ -112,15 +107,7 @@ describe("delivery relay verdict", () => {
       reason: "duplicate_final_suppressed",
     });
 
-    expect(shouldSendRelayCompensation({ mode: "native_success_audit_only", verdict })).toBe(false);
-    expect(shouldSendRelayCompensation({ mode: "compensate", verdict })).toBe(false);
-  });
-
-  it("defaults delivery relay mode to native success audit-only", () => {
-    expect(resolveDeliveryRelayMode({})).toBe("native_success_audit_only");
-    expect(resolveDeliveryRelayMode({ OCTOCLAW_DELIVERY_RELAY_MODE: "native_success_audit_only" })).toBe("native_success_audit_only");
-    expect(resolveDeliveryRelayMode({ OCTOCLAW_DELIVERY_RELAY_MODE: "compensate" })).toBe("compensate");
-    expect(resolveDeliveryRelayMode({ OCTOCLAW_DELIVERY_RELAY_MODE: "delete_relay" })).toBe("compensate");
+    expect(verdict.relayCompensationNeeded).toBe(false);
   });
 
   // BDD: NTR-P3-004
@@ -140,8 +127,7 @@ describe("delivery relay verdict", () => {
       reason: "native_delivery_success",
     });
 
-    expect(shouldSendRelayCompensation({ mode: "native_success_audit_only", verdict })).toBe(false);
-    expect(shouldSendRelayCompensation({ mode: "compensate", verdict })).toBe(false);
+    expect(verdict.relayCompensationNeeded).toBe(false);
   });
 
   // BDD: NTR-P3-005
@@ -157,7 +143,7 @@ describe("delivery relay verdict", () => {
       reason: "native_delivery_success",
     });
 
-    expect(shouldSendRelayCompensation({ mode: "native_success_audit_only", verdict })).toBe(false);
+    expect(verdict.relayCompensationNeeded).toBe(false);
   });
 
   // BDD: NTR-P3-006
@@ -171,13 +157,13 @@ describe("delivery relay verdict", () => {
       nativeDelivered: true,
       relayCompensationNeeded: false,
       relayCompensationRan: false,
-      relayCompensationReason: "rich_native_delivered_no_compensation_needed",
+      relayCompensationReason: "native_delivered_no_compensation_needed",
       duplicateRisk: false,
       source: "native_delivery",
-      reason: "rich_native_delivery_success",
+      reason: "native_delivery_success",
     });
 
-    expect(shouldSendRelayCompensation({ mode: "native_success_audit_only", verdict })).toBe(false);
+    expect(verdict.relayCompensationNeeded).toBe(false);
   });
 
   // BDD: NTR-P3-007
@@ -194,8 +180,7 @@ describe("delivery relay verdict", () => {
       reason: "native_delivery_degraded:native_status_uncertain",
     });
 
-    expect(shouldSendRelayCompensation({ mode: "native_success_audit_only", verdict })).toBe(true);
-    expect(shouldSendRelayCompensation({ mode: "compensate", verdict })).toBe(true);
+    expect(verdict.relayCompensationNeeded).toBe(true);
   });
 
   it("unconfirmed native delivery (sent/acknowledged/acked) is not treated as delivered", () => {
@@ -213,8 +198,7 @@ describe("delivery relay verdict", () => {
       });
       expect(verdict.reason).toBe(`native_delivery_unconfirmed:${unconfirmedStatus}`);
 
-      expect(shouldSendRelayCompensation({ mode: "native_success_audit_only", verdict })).toBe(false);
-      expect(shouldSendRelayCompensation({ mode: "compensate", verdict })).toBe(false);
+      expect(verdict.relayCompensationNeeded).toBe(false);
     }
   });
 
@@ -245,7 +229,7 @@ describe("delivery relay verdict", () => {
         expect(verdict.duplicateRisk).toBe(true);
         expect(verdict.reason).toBe("duplicate_final_suppressed");
       }
-      expect(shouldSendRelayCompensation({ mode: "native_success_audit_only", verdict })).toBe(row.expectCompensation);
+      expect(verdict.relayCompensationNeeded).toBe(row.expectCompensation);
     }
   });
 
@@ -257,6 +241,6 @@ describe("delivery relay verdict", () => {
 
     expect(verdict.nativeDelivered).toBe(false);
     expect(verdict.relayCompensationNeeded).toBe(true);
-    expect(shouldSendRelayCompensation({ mode: "native_success_audit_only", verdict })).toBe(true);
+    expect(verdict.relayCompensationNeeded).toBe(true);
   });
 });

@@ -5,15 +5,15 @@ done unless the listed evidence exists.
 
 ## Phase 0: Preparation
 
-- [ ] Confirm local OpenClaw version is `>= 2026.5.12`.
+- [x] Confirm local OpenClaw version is `>= 2026.5.12`.
   - Command: `openclaw --version`
   - Evidence: version line in implementation notes.
-- [ ] Run GitNexus index refresh before code edits.
+- [x] Run GitNexus index refresh before code edits.
   - Command: `npx gitnexus analyze`
-- [ ] Before editing any symbol, run impact analysis.
+- [x] Before editing any symbol, run impact analysis.
   - Example: `npx gitnexus impact projectNativeStatus --repo OctoClaw --direction upstream`
   - Evidence: risk summary copied into implementation notes.
-- [ ] Record current dirty worktree before editing.
+- [x] Record current dirty worktree before editing.
   - Command: `git status --short --branch`
   - Requirement: do not overwrite unrelated user changes.
 
@@ -212,6 +212,7 @@ Precondition:
 Tasks:
 
 - [x] Add feature flag `deliveryRelayMode`.
+      (Retired in P5-C after native delivery trust became the default.)
 - [x] In `native_success_audit_only` mode, do not compensate when native
       delivery success is proven.
 - [x] Still write audit event.
@@ -429,33 +430,96 @@ Tests:
 
 Delete only after the corresponding BDD and smoke evidence exists:
 
-- [ ] New-task assistant/transcript/session-label runtime heuristics.
-- [ ] ACP backend-unavailable self-managed fallback branches replaced by native
+- [x] New-task assistant/transcript/session-label runtime heuristics.
+      (runtime-task-projection.ts no longer treats `childSessionKey` alone as
+      spawn evidence; session.ts no longer lets session-label substring matches
+      classify child truth. Assistant/transcript result/delivery tests remain
+      green.)
+- [x] ACP backend-unavailable self-managed fallback branches replaced by native
       ACP fallback.
-- [ ] Delivery compensation branches replaced by native delivery success.
-- [ ] Stale task-state-only success/delivery inference.
-- [ ] OpenClaw concrete duplicate call sites replaced by adapter reads.
-- [ ] Pass-through wrappers that no longer add policy, validation, or evidence.
+      (registration-planner tests and p5-slimming guard verify no
+      `legacy_outbox_queued`, `child_finalizer_scheduled`, or backend retry
+      branch remains in dispatch live path; enforce metadata delegates
+      `backend_unavailable_before_output` to native ACP fallback.)
+- [x] Delivery compensation branches replaced by native delivery success.
+      (delivery-relay-verdict.ts collapsed rich/message-tool success branches
+      into the single native delivered verdict. Failure/missing/degraded still
+      compensate.)
+- [x] Stale task-state-only success/delivery inference.
+      (runtime-task-projection and delivery verdict tests prove
+      sent/acknowledged/acked/childSessionKey-only states do not prove final
+      delivery or spawn.)
+- [x] OpenClaw concrete duplicate call sites replaced by adapter reads.
+      (runtime-host/p5-slimming-guard.test.ts verifies runtime-status,
+      dispatch, and native-announce no longer call direct native status or ACP
+      fallback readers; adapter tests cover behavior preservation.)
+- [x] Pass-through wrappers that no longer add policy, validation, or evidence.
+      (P5-B audit found no dead pass-through wrapper left in live code:
+      retained adapter conversion helpers still normalize status/source and
+      preserve native metadata compatibility. Guard coverage locks duplicate
+      OpenClaw reads behind the adapter.)
 
 Tests:
 
-- [ ] `NTR-P5-002`
-- [ ] `NTR-P5-003`
-- [ ] `NTR-P5-004`
+- [x] `NTR-P5-002`
+      (runtime-task-projection.test.ts, legacy-heuristics.test.ts,
+      runtime-host/p5-slimming-guard.test.ts)
+- [x] `NTR-P5-003`
+      (registration-planner.test.ts, runtime-host/p5-slimming-guard.test.ts)
+- [x] `NTR-P5-004`
+      (delivery-relay-verdict.test.ts, runtime-host/p5-slimming-guard.test.ts)
 
 ### P5-C: Retire transitional flags and stale docs
 
-- [ ] Remove completed transitional flags when both old and new paths no longer
+- [x] Remove completed transitional flags when both old and new paths no longer
       need runtime switching.
-- [ ] Keep permanent product flags only when users need them.
-- [ ] Update `README.md`, `README.zh-CN.md`, relevant docs, and CLI/status text
+- [x] Keep permanent product flags only when users need them.
+- [x] Update `README.md`, `README.zh-CN.md`, relevant docs, and CLI/status text
       so they describe the surviving architecture.
-- [ ] Ensure no docs advertise removed live paths.
+- [x] Ensure no docs advertise removed live paths.
 
 Tests:
 
-- [ ] `NTR-P5-005`
-- [ ] `NTR-P5-006`
+- [x] `NTR-P5-005`
+      (runtime-host/p5-slimming-guard.test.ts: delivery relay mode env
+      resolver, public mode type, and live runtime switch are absent from
+      `im/delivery-relay-verdict.ts`)
+- [x] `NTR-P5-006`
+      (runtime-host/p5-slimming-guard.test.ts: README/current docs guard
+      prevents re-advertising delivery relay mode or delivery relay as a
+      primary live path)
+
+### Hard Deletion Follow-Up
+
+- [x] HD-1B: Delete the structured runtime delivery outbox/protocol payload
+      chain. Native delivery/announce remains the live delivery path; replay
+      audit remains without delivery sub-events.
+- [x] HD-2: Delete the ledger rebuild and crash-recovery migration tail.
+      Runtime status reads task-state/native adapter data without rebuilding on
+      read; watchdog startup no longer rewrites task-state first; the manual
+      recovery operator is removed.
+- [x] HD-3: Delete unused experimental adapter layers that were no longer
+      connected to the live native TaskFlow dispatch path. Removed
+      fast-delegate draft/probe, the old WorkContract native-taskflow adapter,
+      the unused api.runtime.taskFlow port, and the stale core IM adapter.
+      Live dispatch still uses the OpenClaw dist TaskFlow port and native
+      status adapter.
+- [x] HD-4: Delete retired runtime-ledger shadow/reconcile/diff diagnostic
+      tails. Runtime truth now comes from native/task-state/WorkContract
+      adapters; shadow metadata retained in `runtime-ledger/shadow.ts`.
+- [x] HD-5: Delete retired webhook surface export while retaining the
+      lightweight `state-surface` compatibility API required by
+      `@octoclaw/status-surface`.
+- [x] HD-6: Delete the old TS runtime-core compatibility layer:
+      `plugin.ts`, `adapter/runtime-taskflow.ts`, `core/workflow/*`,
+      `core/tasks/*`, `core/requests/*`, `core/telemetry/*`,
+      `core/recovery/*`, `core/delegate/*`, and `core/ack/*`.
+      Native helper materialization remains in `runtime-payloads.ts`; status
+      reads native/task-state facts via adapter paths.
+- [x] HD-7: Delete the orphaned `core/workflow/index.test.mjs` and refresh
+      current docs that still pointed at deleted runtime-core paths.
+      Final production LOC after hard deletion follow-up: 40,368, net
+      reduction of 5,298 LOC versus the P5-A baseline of 45,666.
 
 ## Required Test Commands
 

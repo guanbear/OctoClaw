@@ -166,10 +166,7 @@ describe("buildTsRuntimeDispatchPayload", () => {
         nativeTaskId: "task-plugin-native",
       },
     });
-    expect(payload.deliveries).toMatchObject({
-      progress: undefined,
-    });
-    expect(payload.deliveries?.final).toBeUndefined();
+    expect(payload).not.toHaveProperty("deliveries");
   });
 
   it("prefers sealed requested_route over stale decision route", () => {
@@ -223,5 +220,6 @@ describe("buildTsRuntimeDispatchPayload", () => {
       type: "delegate",
       task_id: "task-plugin-native",
     });
+    expect(payload).not.toHaveProperty("deliveries");
   });
 });

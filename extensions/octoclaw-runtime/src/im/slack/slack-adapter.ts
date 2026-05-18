@@ -3,22 +3,10 @@ import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { ERROR_CODES } from "@octoclaw/errors";
-import { runCommand, resolveWorkspaceRoot } from "../../resolve/env.js";
 import { firstDisplayModel } from "../../model-display.js";
 import { hasProjectionFooter, OCTOCLAW_PROJECTION_FOOTER_PREFIX } from "../../projection-footer-sanitizer.js";
 import type { IMAdapter, IMMessageTurnAnchorParams, IMProjectionFooter, IMSendParams } from "../adapter.js";
 import type { MessageDeliveryEnvelope, MessageDeliveryResult } from "../delivery-port.js";
-
-type SlackCommandResult = {
-  ok?: unknown;
-  message?: {
-    ts?: unknown;
-    thread_ts?: unknown;
-  };
-  ts?: unknown;
-  thread_ts?: unknown;
-  error?: unknown;
-};
 
 export interface SlackDeliveryTarget {
   channel: "slack";
@@ -33,7 +21,7 @@ export interface SlackSendResult {
   messageId?: string;
   threadTs?: string;
   error?: string;
-  transport?: "slack_api" | "slack_api_stream" | "legacy_cli";
+  transport?: "slack_api" | "slack_api_stream";
   targetSource?: string;
   footerSource?: string;
 }
@@ -200,11 +188,6 @@ function postSlackApiIsolated<T extends Record<string, unknown>>(
   }
 }
 
-function legacyCliDeliveryEnabled(): boolean {
-  const raw = stringValue(process.env.OCTOCLAW_LEGACY_CLI_DELIVERY).toLowerCase();
-  return ["1", "true", "on", "yes"].includes(raw);
-}
-
 const SLACK_API_TEXT_CHUNK_LIMIT = 39000;
 const SLACK_STREAM_TEXT_LIMIT = 12000;
 
@@ -312,74 +295,6 @@ async function postSlackApi<T extends Record<string, unknown>>(
   }
 }
 
-
-function normalizePayload(value: unknown): SlackCommandResult | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  const record = value as Record<string, unknown>;
-  if ("ok" in record) {
-    const message = record.message && typeof record.message === "object" && !Array.isArray(record.message)
-      ? record.message as { ts?: unknown; thread_ts?: unknown }
-      : undefined;
-    return {
-      ok: record.ok,
-      message,
-      ts: record.ts,
-      thread_ts: record.thread_ts,
-      error: record.error,
-    };
-  }
-  const payload = record.payload;
-  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return null;
-  const payloadRecord = payload as Record<string, unknown>;
-  if (!("ok" in payloadRecord)) return null;
-  const result = payloadRecord.result && typeof payloadRecord.result === "object" && !Array.isArray(payloadRecord.result)
-    ? payloadRecord.result as Record<string, unknown>
-    : {};
-  return {
-    ok: payloadRecord.ok,
-    message: {
-      ts: result.ts ?? result.messageId,
-      thread_ts: result.thread_ts ?? result.threadTs,
-    },
-    ts: result.ts ?? result.messageId,
-    thread_ts: result.thread_ts ?? result.threadTs,
-    error: payloadRecord.error ?? result.error,
-  };
-}
-
-function extractPayload(text: string): SlackCommandResult | null {
-  if (!text) return null;
-
-  let searchFrom = 0;
-  while (searchFrom < text.length) {
-    const openBrace = text.indexOf("{", searchFrom);
-    if (openBrace < 0) break;
-
-    let braceDepth = 0;
-    let closeBrace = openBrace;
-    let insideString = false;
-    let escaping = false;
-    for (let position = openBrace; position < text.length; position++) {
-      const character = text[position];
-      if (escaping) { escaping = false; continue; }
-      if (character === "\\") { escaping = true; continue; }
-      if (character === '"') { insideString = !insideString; continue; }
-      if (insideString) continue;
-      if (character === "{") braceDepth++;
-      if (character === "}") braceDepth--;
-      if (braceDepth === 0) { closeBrace = position; break; }
-    }
-    if (braceDepth !== 0) { searchFrom = openBrace + 1; continue; }
-
-    const candidate = text.slice(openBrace, closeBrace + 1);
-    try {
-      const payload = normalizePayload(JSON.parse(candidate));
-      if (payload) return payload;
-    } catch {}
-    searchFrom = closeBrace + 1;
-  }
-  return null;
-}
 
 function parseSlackSessionKey(sessionKey: string): { kind: string; target: string; threadTs: string } {
   const parts = sessionKey.split(":").map((part) => part.trim());
@@ -594,18 +509,15 @@ export class SlackAdapter implements IMAdapter {
       return {
         ok: false,
         error: ERROR_CODES.IM_UNRESOLVABLE_TARGET,
-        transport: legacyCliDeliveryEnabled() ? "legacy_cli" : "slack_api",
+        transport: "slack_api",
         targetSource: envelope.target.source,
         footerSource: envelope.footerMode === "debug" ? "envelope" : "none",
       };
     }
 
     const timeoutMs = Math.max(500, Number(options.timeoutMs || 5000));
-    const replyToMessageId = normalizeSlackMessageTs(envelope.target.replyToMessageId);
     const projected = applyEnvelopeFooter(envelope);
-    const result = legacyCliDeliveryEnabled()
-      ? await this.executeLegacyCliSend(target, projected.content, timeoutMs, options.cwd, replyToMessageId || undefined, options.suppressProjectionFooter)
-      : await this.executeSlackApiSend(target, projected.content, timeoutMs, envelope.kind, envelope.interactiveBlocks);
+    const result = await this.executeSlackApiSend(target, projected.content, timeoutMs, envelope.kind, envelope.interactiveBlocks);
 
     return {
       ok: result.sent || result.delivered,
@@ -626,88 +538,6 @@ export class SlackAdapter implements IMAdapter {
       threadTs: normalizeSlackMessageTs(envelope.target.replyToMessageId || envelope.target.threadTs) || undefined,
       replyToMessageId: normalizeSlackMessageTs(envelope.target.replyToMessageId) || undefined,
     };
-  }
-
-  private async executeLegacyCliSend(
-    target: SlackDeliveryTarget,
-    message: string,
-    timeoutMs: number,
-    cwd?: string,
-    replyToMessageId?: string,
-    suppressProjectionFooter?: boolean,
-  ): Promise<SlackSendResult> {
-    const args = ["message", "send", "--channel", "slack", "--target", target.target, "--json"];
-
-    if (message) {
-      args.push("--message", message);
-    }
-
-    const threadTs = normalizeSlackMessageTs(target.threadTs);
-    if (threadTs) {
-      args.push("--thread-id", threadTs);
-    }
-
-    const replyToTs = normalizeSlackMessageTs(replyToMessageId);
-    if (replyToTs) {
-      args.push("--reply-to", replyToTs);
-    }
-
-    try {
-      const result = await runCommand("openclaw", args, {
-        cwd: stringValue(cwd) || resolveWorkspaceRoot(),
-        timeoutMs,
-        env: suppressProjectionFooter ? { OCTOCLAW_INTERNAL_ACK_SEND: "1" } : undefined,
-      });
-
-      const stdoutPayload = extractPayload(result.stdout || "");
-      const stderrPayload = extractPayload(result.stderr || "");
-      const successPayload = (stdoutPayload?.ok === true) ? stdoutPayload
-        : (stderrPayload?.ok === true) ? stderrPayload
-        : null;
-
-      if (successPayload) {
-        const messageId = stringValue(successPayload.message?.ts || successPayload.ts);
-        const threadTs = stringValue(successPayload.message?.thread_ts || successPayload.thread_ts || target.threadTs);
-        return {
-          sent: true,
-          delivered: true,
-          ...(messageId ? { messageId } : {}),
-          ...(threadTs ? { threadTs } : {}),
-          transport: "legacy_cli",
-        };
-      }
-
-      const explicitFailure = (stdoutPayload?.ok === false) ? stdoutPayload
-        : (stderrPayload?.ok === false) ? stderrPayload
-        : null;
-
-      if (explicitFailure) {
-        return {
-          sent: false,
-          delivered: false,
-          error: stringValue(explicitFailure.error) || ERROR_CODES.IM_SEND_FAILED,
-          transport: "legacy_cli",
-        };
-      }
-
-      if (result.code === 0) {
-        return { sent: true, delivered: true, transport: "legacy_cli" };
-      }
-
-      return {
-        sent: false,
-        delivered: false,
-        error: result.stderr || ERROR_CODES.IM_SEND_FAILED,
-        transport: "legacy_cli",
-      };
-    } catch (error) {
-      return {
-        sent: false,
-        delivered: false,
-        error: String(error),
-        transport: "legacy_cli",
-      };
-    }
   }
 
   private async executeSlackApiSend(

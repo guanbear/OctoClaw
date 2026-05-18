@@ -1,10 +1,8 @@
 import { envOverrides, resolveReplayLogPath, truncateText } from "../resolve/env.js";
 import { pruneTaskStateCache, readArchivedTaskState } from "../state/task-state-retention.js";
-import { readTaskStateDocumentDetailed, readTaskStateRecords } from "../state/task-state-store.js";
+import { readTaskStateRecords } from "../state/task-state-store.js";
 import { recordPolicyReplay } from "../replay/replay.js";
-import { resolveRuntimeLedgerMode } from "../runtime-ledger/shadow.js";
-import { rebuildTaskStateProjection } from "../runtime-ledger/projection-rebuild.js";
-import { createOctoClawRuntimePlugin } from "../plugin.js";
+import { invokeNativeHelper } from "../adapter/native-helper.js";
 import type { NativeStatusProjection } from "../state/native-status-projector.js";
 import { createOpenClawRuntimeAdapter, statusSnapshotToNativeProjection } from "../runtime-host/openclaw-adapter.js";
 import { buildLegacyHeuristicFallbackEvent, legacyHeuristicVerdict } from "../state/legacy-heuristics.js";
@@ -62,32 +60,7 @@ export function dedupeTaskStateRecords(tasks: RuntimeTaskStateRecord[]): Runtime
 }
 
 async function readActiveRuntimeTaskState(options: { includeSynthetic?: boolean } = {}): Promise<RuntimeTaskStateRecord[]> {
-  let tasks: RuntimeTaskStateRecord[] = [];
-  if (resolveRuntimeLedgerMode() !== "off") {
-    const projection = rebuildTaskStateProjection();
-    if (!projection.degraded) {
-      tasks = projection.tasks.filter(isRecord) as RuntimeTaskStateRecord[];
-      void recordPolicyReplay("task_state_projection_rebuilt", {
-        source: "ledger",
-        reason: "status_read_sqlite_projection",
-        task_count: projection.tasks.length,
-        cache_written: false,
-        cache_write_error: "",
-      }).catch(() => undefined);
-    } else {
-      const readResult = readTaskStateDocumentDetailed();
-      tasks = readResult.document.tasks.filter(isRecord) as RuntimeTaskStateRecord[];
-      void recordPolicyReplay("task_state_projection_degraded", {
-        source: "task_state_cache",
-        reason: "ledger_unavailable",
-        ledger_error: projection.error ?? "ledger_unavailable",
-        cache_status: readResult.status,
-        task_count: tasks.length,
-      }).catch(() => undefined);
-    }
-  } else {
-    tasks = readTaskStateRecords().filter(isRecord) as RuntimeTaskStateRecord[];
-  }
+  const tasks = readTaskStateRecords().filter(isRecord) as RuntimeTaskStateRecord[];
   return tasks.filter((task) => options.includeSynthetic === true || !isSyntheticTestTaskState(task));
 }
 
@@ -531,12 +504,33 @@ export async function buildNativeTaskActionPayload(rawText: string, format: "tex
       payload,
     };
   }
-  const plugin = createOctoClawRuntimePlugin();
   if (!liveRead) {
     try {
-      liveRead = asString(record.session_key) && asString(record.flow_id)
-        ? plugin.createAdapter().bindSession(asString(record.session_key)).readTask(asString(record.flow_id), asString(record.id))
-        : null;
+      const sessionKey = asString(record.session_key);
+      const flowId = asString(record.flow_id);
+      const taskId = asString(record.id);
+      if (sessionKey && flowId && taskId) {
+        const native = invokeNativeHelper({
+          action: "read-task",
+          args: {
+            session_key: sessionKey,
+            flow_id: flowId,
+            task_id: taskId,
+          },
+        });
+        liveRead = native.found && native.task
+          ? {
+              taskId: native.task.taskId,
+              flowId: native.flow_id,
+              syncMode: native.task.syncMode,
+              substrateState: native.task.state ?? native.task.status,
+              substrateRevision: native.task.revision,
+              progressSummary: native.task.progressSummary,
+            }
+          : null;
+      } else {
+        liveRead = null;
+      }
     } catch {
       liveRead = null;
     }

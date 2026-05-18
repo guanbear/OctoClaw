@@ -129,6 +129,23 @@ describe("buildRuntimeTaskProjection", () => {
     });
   });
 
+  it("NTR-P5-002: does not treat child session key alone as spawn evidence for new tasks", () => {
+    const evidence = runtimeStatusEvidence({
+      id: "wc-child-session-key-only",
+      route: "delegate",
+      status: "running",
+      dispatchExecuted: true,
+      childSessionKey: "agent:main:slack:channel:C123:subagent-old-label",
+    });
+
+    expect(evidence).toMatchObject({
+      hasDispatchEvidence: true,
+      hasSpawnEvidence: false,
+      runId: "",
+      childSessionKey: "agent:main:slack:channel:C123:subagent-old-label",
+    });
+  });
+
   it("does not treat assistant delivery text as delivered result evidence", () => {
     const view = buildRuntimeTaskProjection({
       id: "wc-no-native-delivery",

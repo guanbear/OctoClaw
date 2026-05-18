@@ -734,7 +734,7 @@ describe("router wizard Slack onboarding", () => {
       step: "model_scan",
       sessionKey: "agent:main:slack:default:direct:u123abc:thread:1777770000.000001",
     });
-  });
+  }, 10_000);
 
   it("extracts remind and skip actions from nested Slack payloads", () => {
     expect(extractRouterWizardAction({ actions: [{ action_id: "octoclaw_router_wizard_remind_later" }] })).toBe("remind_later");

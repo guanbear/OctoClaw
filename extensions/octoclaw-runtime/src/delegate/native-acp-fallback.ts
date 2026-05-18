@@ -3,7 +3,6 @@ import os from "node:os";
 import path from "node:path";
 import { asRecord, asString, type UnknownRecord } from "../util/type-coercion.js";
 
-export type NativeAcpFallbackMode = "observe" | "delegate_backend_unavailable";
 export type NativeAcpFallbackReason =
   | "backend_unavailable_before_output"
   | "backend_unavailable_after_output"
@@ -28,18 +27,12 @@ export interface NativeAcpFallbackClassification {
 }
 
 export interface NativeAcpFallbackReplayMetadata {
-  mode: NativeAcpFallbackMode;
+  owner: "openclaw_acp";
   primaryRuntimeId: string;
   fallbackRuntimeIds: string[];
   fallbackAttempted: boolean;
   fallbackSelectedRuntimeId: string;
   reason: string;
-}
-
-export function resolveNativeAcpFallbackMode(env: Record<string, string | undefined> = process.env): NativeAcpFallbackMode {
-  const value = String(env.OCTOCLAW_NATIVE_ACP_FALLBACK_MODE ?? "").trim().toLowerCase();
-  if (value === "delegate_backend_unavailable") return "delegate_backend_unavailable";
-  return "observe";
 }
 
 export function loadNativeAcpFallbackSnapshot(openclawConfig: unknown, now = new Date()): NativeAcpFallbackSnapshot {
@@ -91,16 +84,14 @@ export function readNativeAcpFallbackSnapshot(input: {
 
 export function nativeAcpFallbackMetadata(
   snapshot: NativeAcpFallbackSnapshot,
-  mode: NativeAcpFallbackMode = resolveNativeAcpFallbackMode(),
-  selectedRuntimeId = "",
-  reason = "",
+  reason = "host_runtime_owns_backend_failover",
 ): NativeAcpFallbackReplayMetadata {
   return {
-    mode,
+    owner: "openclaw_acp",
     primaryRuntimeId: snapshot.primaryRuntimeId,
     fallbackRuntimeIds: [...snapshot.fallbackRuntimeIds],
-    fallbackAttempted: Boolean(selectedRuntimeId),
-    fallbackSelectedRuntimeId: selectedRuntimeId,
+    fallbackAttempted: false,
+    fallbackSelectedRuntimeId: "",
     reason,
   };
 }
@@ -122,41 +113,6 @@ export function classifyNativeAcpFallback(input: {
     return { reason: "backend_unavailable_before_output", nativeFallbackEligible: true, octoclawRecoveryOwner: false };
   }
   return { reason: "none", nativeFallbackEligible: false, octoclawRecoveryOwner: true };
-}
-
-export function shouldDelegateBackendUnavailableToNative(input: {
-  mode: NativeAcpFallbackMode;
-  classification: NativeAcpFallbackClassification;
-}): boolean {
-  return input.mode === "delegate_backend_unavailable"
-    && input.classification.reason === "backend_unavailable_before_output"
-    && input.classification.nativeFallbackEligible;
-}
-
-export function buildEnforceFallbackReplayMetadata(
-  snapshot: NativeAcpFallbackSnapshot,
-  mode: NativeAcpFallbackMode,
-  classification: NativeAcpFallbackClassification,
-  exposedFallbackRuntimeId = "",
-): NativeAcpFallbackReplayMetadata {
-  const delegated = shouldDelegateBackendUnavailableToNative({ mode, classification });
-  const selectedId = delegated && exposedFallbackRuntimeId
-    ? exposedFallbackRuntimeId
-    : "";
-  return {
-    mode,
-    primaryRuntimeId: snapshot.primaryRuntimeId,
-    fallbackRuntimeIds: [...snapshot.fallbackRuntimeIds],
-    fallbackAttempted: delegated,
-    fallbackSelectedRuntimeId: selectedId,
-    reason: delegated
-      ? (selectedId
-        ? "backend_unavailable_delegated_to_native"
-        : "backend_unavailable_delegated_selected_runtime_not_exposed")
-      : classification.reason === "none"
-        ? "no_backend_failure_observed"
-        : `octoclaw_recovery_owned:${classification.reason}`,
-  };
 }
 
 export function nativeAcpFallbackSnapshotFromStatus(status: UnknownRecord, now = new Date()): NativeAcpFallbackSnapshot {

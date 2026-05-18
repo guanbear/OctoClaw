@@ -6,14 +6,19 @@ import {
   sendDelegateWithoutDispatchNotice,
 } from "../ack-delegate-without-dispatch.js";
 
-type RunCommandSpy = MockInstance<typeof import("../../resolve/env.js").runCommand>;
 type ReplaySpy = MockInstance<typeof import("../../replay/replay.js").recordPolicyReplay>;
+const mockSendIMMessage = vi.hoisted(() => vi.fn());
+
+vi.mock("../../im/send.js", () => ({
+  sendIMMessage: mockSendIMMessage,
+}));
 
 describe("delegate without dispatch notice", () => {
   beforeEach(() => {
-    process.env.OCTOCLAW_LEGACY_CLI_DELIVERY = "1";
     resetDelegateWithoutDispatchState();
     vi.restoreAllMocks();
+    mockSendIMMessage.mockReset();
+    mockSendIMMessage.mockResolvedValue({ sent: true, threadTs: "1700000000.000100" });
   });
 
   it("builds packet with real RouteSeal requestId fallback", () => {
@@ -47,7 +52,7 @@ describe("delegate without dispatch notice", () => {
   });
 
   it("sends notice and records replay on happy path", async () => {
-    const { runCommandSpy, replaySpy } = await mockDelivery();
+    const { sendSpy, replaySpy } = await mockDelivery();
 
     const result = await sendDelegateWithoutDispatchNotice(noticeParams());
 
@@ -55,7 +60,7 @@ describe("delegate without dispatch notice", () => {
       sent: true,
       notificationDeliveryState: "sent",
     }));
-    expect(runCommandSpy).toHaveBeenCalledOnce();
+    expect(sendSpy).toHaveBeenCalledOnce();
 
     const replayPayload = findReplayPayload(replaySpy);
     expect(replayPayload).toEqual(expect.objectContaining({
@@ -103,7 +108,7 @@ describe("delegate without dispatch notice", () => {
 
 
   it("sends delivery without a current reply or thread anchor", async () => {
-    const { runCommandSpy } = await mockDelivery();
+    const { sendSpy } = await mockDelivery();
 
     const result = await sendDelegateWithoutDispatchNotice(noticeParams({
       sessionKey: "slack:direct:U1",
@@ -116,11 +121,11 @@ describe("delegate without dispatch notice", () => {
       skipped: false,
       notificationDeliveryState: "sent",
     }));
-    expect(runCommandSpy).toHaveBeenCalledOnce();
+    expect(sendSpy).toHaveBeenCalledOnce();
   });
 
   it("allows delivery when the session key itself carries a thread anchor", async () => {
-    const { runCommandSpy } = await mockDelivery();
+    const { sendSpy } = await mockDelivery();
 
     const result = await sendDelegateWithoutDispatchNotice(noticeParams({
       sessionKey: "slack:channel:C1:thread:1700000000.000100",
@@ -129,7 +134,7 @@ describe("delegate without dispatch notice", () => {
     }));
 
     expect(result.sent).toBe(true);
-    expect(runCommandSpy).toHaveBeenCalledOnce();
+    expect(sendSpy).toHaveBeenCalledOnce();
   });
 
   it("replay ackMessage has no running language", async () => {
@@ -144,7 +149,7 @@ describe("delegate without dispatch notice", () => {
   });
 
   it("uses provided sessionKey as delivery target", async () => {
-    const { runCommandSpy, replaySpy } = await mockDelivery();
+    const { sendSpy, replaySpy } = await mockDelivery();
 
     await sendDelegateWithoutDispatchNotice(noticeParams({
       sessionKey: "slack:channel:C1:thread:1700000000.000100",
@@ -152,7 +157,7 @@ describe("delegate without dispatch notice", () => {
 
     const payload = findReplayPayload(replaySpy);
     expect(payload.deliverySessionKey).toBe("slack:channel:C1:thread:1700000000.000100");
-    expect(runCommandSpy).toHaveBeenCalledOnce();
+    expect(sendSpy).toHaveBeenCalledOnce();
   });
 
   it("records delivery-specific replay event distinct from agent_end event", async () => {
@@ -167,20 +172,13 @@ describe("delegate without dispatch notice", () => {
   });
 });
 
-async function mockDelivery(): Promise<{ runCommandSpy: RunCommandSpy; replaySpy: ReplaySpy }> {
-  const envModule = await import("../../resolve/env.js");
-  const runCommandSpy = vi.spyOn(envModule, "runCommand").mockResolvedValue({
-    code: 0,
-    stdout: JSON.stringify({ ok: true }),
-    stderr: "",
-    timedOut: false,
-  });
+async function mockDelivery(): Promise<{ sendSpy: typeof mockSendIMMessage; replaySpy: ReplaySpy }> {
   const replaySpy = vi.spyOn(
     await import("../../replay/replay.js"),
     "recordPolicyReplay",
   );
 
-  return { runCommandSpy, replaySpy };
+  return { sendSpy: mockSendIMMessage, replaySpy };
 }
 
 function decision(overrides: Record<string, unknown> = {}): Record<string, unknown> {

@@ -1,4 +1,3 @@
-export type LegacyHeuristicMode = "read_only" | "off";
 export type LegacyHeuristicSurface =
   | "status_projection"
   | "dispatch_guard"
@@ -31,13 +30,8 @@ export interface LegacyHeuristicFallbackEventInput {
   allowed: boolean;
 }
 
-export function resolveLegacyHeuristicMode(env: Record<string, string | undefined> = process.env): LegacyHeuristicMode {
-  const value = String(env.OCTOCLAW_LEGACY_HEURISTIC_MODE ?? "").trim().toLowerCase();
-  return value === "off" ? "off" : "read_only";
-}
-
 export function legacyHeuristicVerdict(input: LegacyHeuristicVerdictInput): LegacyHeuristicVerdict {
-  if (!input.hasLegacySignal || input.hasNativeTruth || input.hasKnownNativeId || resolveLegacyHeuristicMode() === "off") {
+  if (!input.hasLegacySignal || input.hasNativeTruth || input.hasKnownNativeId) {
     return {
       allowed: false,
       readOnly: true,

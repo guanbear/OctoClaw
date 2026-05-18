@@ -1,37 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { TaskFlowBridge } from "../adapter/taskflow-bridge.js";
 import { OpenClawDistTaskFlowPort, type BoundDistTaskFlowPort } from "./openclaw-dist-taskflow-port.js";
-import { createOpenClawRuntimeTaskFlowPort, type OpenClawRuntimeTaskFlowApiContainer } from "./openclaw-runtime-taskflow-port.js";
 
 describe("TaskFlowPort adapters", () => {
-  it("fake api.runtime.taskFlow injection does not trigger dist scan", async () => {
-    const calls: string[] = [];
-    const api: OpenClawRuntimeTaskFlowApiContainer = {
-      runtime: {
-        taskFlow: {
-          bindSession: (input) => {
-            calls.push(`bind:${input.sessionKey}`);
-            return {
-              createManaged: () => ({ flowId: "flow-runtime", status: "queued", revision: 1 }),
-              runTask: () => ({ created: true, task: { taskId: "task-runtime" } }),
-              getFlow: ({ flowId }) => ({ flowId, status: "running", revision: 2, tasks: [] }),
-              setWaiting: () => ({ applied: true, flow: { flowId: "flow-runtime", revision: 3 } }),
-              finish: () => ({ applied: true, flow: { flowId: "flow-runtime", revision: 4 } }),
-              fail: () => ({ applied: true, flow: { flowId: "flow-runtime", revision: 5 } }),
-              cancel: () => ({ cancelled: true, flowId: "flow-runtime", found: true }),
-            };
-          },
-        },
-      },
-    };
-
-    const bound = createOpenClawRuntimeTaskFlowPort(api).bindSession({ sessionKey: "session-runtime" });
-    const managed = await bound.createManaged({ controllerId: "controller", goal: "goal" });
-
-    expect(managed.flowId).toBe("flow-runtime");
-    expect(calls).toEqual(["bind:session-runtime"]);
-  });
-
   it("dispatch creates native task id findable by details", async () => {
     const bridge = buildInMemoryBridge();
     const bound: BoundDistTaskFlowPort = new OpenClawDistTaskFlowPort({ bridgeFactory: async () => bridge })
@@ -91,59 +62,6 @@ describe("TaskFlowPort adapters", () => {
     expect(capturedWaitJson).toBe('{"kind":"worker_result"}');
   });
 
-  it("native status maps to OctoClaw projection", async () => {
-    const api: OpenClawRuntimeTaskFlowApiContainer = {
-      runtime: {
-        taskFlow: {
-          bindSession: () => ({
-            createManaged: () => ({ flowId: "flow-wait", status: "waiting", revision: 8 }),
-            runTask: () => ({ created: true, flowId: "flow-wait", task: { taskId: "task-wait", state: "waiting", status: "waiting", revision: 8 } }),
-            getFlow: ({ flowId }) => ({ flowId, status: "waiting", revision: 8 }),
-            setWaiting: (input) => ({ applied: true, flow: { flowId: input.flowId, status: "waiting", revision: 9 } }),
-            finish: (input) => ({ applied: true, flow: { flowId: input.flowId, status: "completed", revision: 10 } }),
-            fail: (input) => ({ applied: true, flow: { flowId: input.flowId, status: "failed", revision: 11 } }),
-            cancel: (input) => ({ cancelled: true, flowId: input.flowId, found: true }),
-          }),
-        },
-      },
-    };
-
-    const bound = createOpenClawRuntimeTaskFlowPort(api).bindSession({ sessionKey: "session-runtime" });
-    const flow = await bound.get("flow-wait");
-    const waiting = await bound.setWaiting({ flowId: "flow-wait", expectedRevision: 8 });
-    const projection = flow?.state ?? flow?.status ?? null;
-
-    expect(projection).toBe("waiting");
-    expect(waiting.status).toBe("ok");
-    expect(waiting.flow?.status).toBe("waiting");
-  });
-
-  it("requesterOrigin passes through to OpenClaw task delivery", () => {
-    const origins: unknown[] = [];
-    const api: OpenClawRuntimeTaskFlowApiContainer = {
-      runtime: {
-        taskFlow: {
-          bindSession: (input) => {
-            origins.push(input.requesterOrigin);
-            return {
-              createManaged: () => ({ flowId: "flow-origin" }),
-              runTask: () => ({ created: true, flowId: "flow-origin", task: { taskId: "task-origin" } }),
-              getFlow: ({ flowId }) => ({ flowId }),
-              setWaiting: () => ({ applied: true }),
-              finish: () => ({ applied: true }),
-              fail: () => ({ applied: true }),
-              cancel: () => ({ cancelled: true }),
-            };
-          },
-        },
-      },
-    };
-    const requesterOrigin = { channel: "slack", threadId: "thread-1" };
-
-    createOpenClawRuntimeTaskFlowPort(api).bindSession({ sessionKey: "session-origin", requesterOrigin });
-
-    expect(origins).toEqual([requesterOrigin]);
-  });
 });
 
 function buildInMemoryBridge(): TaskFlowBridge {

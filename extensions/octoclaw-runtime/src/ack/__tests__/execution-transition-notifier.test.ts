@@ -16,20 +16,25 @@ import {
 } from "../execution-transition-notifier.js";
 
 type EmitExecutionTransitionParams = Parameters<typeof emitExecutionTransitionNotification>[0];
-type RunCommandSpy = MockInstance<typeof import("../../resolve/env.js").runCommand>;
 type ReplaySpy = MockInstance<typeof import("../../replay/replay.js").recordPolicyReplay>;
+const mockSendIMMessage = vi.hoisted(() => vi.fn());
+
+vi.mock("../../im/send.js", () => ({
+  sendIMMessage: mockSendIMMessage,
+}));
 
 describe("execution transition notifier", () => {
   beforeEach(async () => {
-    process.env.OCTOCLAW_LEGACY_CLI_DELIVERY = "1";
     resetExecTransitionState();
     vi.restoreAllMocks();
+    mockSendIMMessage.mockReset();
+    mockSendIMMessage.mockResolvedValue({ sent: true, threadTs: "1700000000.000100" });
     const { envOverrides } = await import("../../resolve/env.js");
     envOverrides.workspaceRoot = "";
   });
 
   it("dispatchExecuted=true/spawnExecuted=false emits queued/materialized text, not running", async () => {
-    const { runCommandSpy, replaySpy } = await mockDelivery();
+    const { sendSpy, replaySpy } = await mockDelivery();
 
     const result = await emitExecutionTransitionNotification(notification({
       transitionKind: "dispatch_materialized",
@@ -44,7 +49,7 @@ describe("execution transition notifier", () => {
     expectNotificationResult(result);
     expect(result.sent).toBe(true);
     expect(result.transitionKind).toBe("dispatch_materialized");
-    expect(runCommandSpy).toHaveBeenCalledOnce();
+    expect(sendSpy).toHaveBeenCalledOnce();
 
     const replayPayload = findReplayPayload(replaySpy);
     expect(replayPayload).toEqual(expect.objectContaining({
@@ -53,13 +58,13 @@ describe("execution transition notifier", () => {
       spawnExecuted: false,
     }));
 
-    const text = deliveredText(runCommandSpy, replayPayload);
+    const text = deliveredText(replayPayload);
     expect(text).not.toMatch(/running|运行|启动/i);
     expect(text).toMatch(/排队|派发/);
   });
 
   it("emits spawn failure notification", async () => {
-    const { runCommandSpy, replaySpy } = await mockDelivery();
+    const { replaySpy } = await mockDelivery();
 
     const result = await emitExecutionTransitionNotification(notification({
       transitionKind: "spawn_failed",
@@ -68,11 +73,11 @@ describe("execution transition notifier", () => {
 
     expect(result.sent).toBe(true);
     expect(result.transitionKind).toBe("spawn_failed");
-    expect(deliveredText(runCommandSpy, findReplayPayload(replaySpy))).toMatch(/失败|恢复/);
+    expect(deliveredText(findReplayPayload(replaySpy))).toMatch(/失败|恢复/);
   });
 
   it("emits stale heartbeat notification before final timeout", async () => {
-    const { runCommandSpy, replaySpy } = await mockDelivery();
+    const { replaySpy } = await mockDelivery();
 
     const result = await emitExecutionTransitionNotification(notification({
       transitionKind: "heartbeat_stale",
@@ -85,11 +90,11 @@ describe("execution transition notifier", () => {
 
     expect(result.sent).toBe(true);
     expect(result.transitionKind).toBe("heartbeat_stale");
-    expect(deliveredText(runCommandSpy, findReplayPayload(replaySpy))).toMatch(/停滞|超时/);
+    expect(deliveredText(findReplayPayload(replaySpy))).toMatch(/停滞|超时/);
   });
 
   it("emits result ready / delivery pending notification", async () => {
-    const { runCommandSpy, replaySpy } = await mockDelivery();
+    const { replaySpy } = await mockDelivery();
 
     const result = await emitExecutionTransitionNotification(notification({
       transitionKind: "result_ready",
@@ -103,7 +108,7 @@ describe("execution transition notifier", () => {
 
     expect(result.sent).toBe(true);
     expect(result.transitionKind).toBe("result_ready");
-    expect(deliveredText(runCommandSpy, findReplayPayload(replaySpy))).toMatch(/完成|投递/);
+    expect(deliveredText(findReplayPayload(replaySpy))).toMatch(/完成|投递/);
   });
 
   it("processes delivery_failed notification", async () => {
@@ -130,14 +135,8 @@ describe("execution transition notifier", () => {
     const { envOverrides } = await import("../../resolve/env.js");
     const tmpDir = fs.mkdtempSync(path.join("/tmp", "octoclaw-exec-transition-"));
     envOverrides.workspaceRoot = tmpDir;
-    const envModule = await import("../../resolve/env.js");
     vi.spyOn(await import("../../replay/replay.js"), "recordPolicyReplay").mockResolvedValue(undefined);
-    vi.spyOn(envModule, "runCommand").mockResolvedValue({
-      code: 1,
-      stdout: JSON.stringify({ ok: false, error: "timeout" }),
-      stderr: "timeout",
-      timedOut: true,
-    });
+    mockSendIMMessage.mockResolvedValueOnce({ sent: false, error: "timeout" });
 
     const result = await emitExecutionTransitionNotification(notification({
       transitionKind: "delivery_failed",
@@ -154,9 +153,8 @@ describe("execution transition notifier", () => {
   });
 
   it("records notification send exceptions without leaking unhandled rejections", async () => {
-    const envModule = await import("../../resolve/env.js");
     const replaySpy = vi.spyOn(await import("../../replay/replay.js"), "recordPolicyReplay").mockResolvedValue(undefined);
-    vi.spyOn(envModule, "runCommand").mockRejectedValue(new DOMException("This operation was aborted", "AbortError"));
+    mockSendIMMessage.mockRejectedValueOnce(new DOMException("This operation was aborted", "AbortError"));
 
     const result = await emitExecutionTransitionNotification(notification({
       transitionKind: "spawn_started",
@@ -338,20 +336,13 @@ describe("execution transition notifier", () => {
   });
 });
 
-async function mockDelivery(): Promise<{ runCommandSpy: RunCommandSpy; replaySpy: ReplaySpy }> {
-  const envModule = await import("../../resolve/env.js");
-  const runCommandSpy = vi.spyOn(envModule, "runCommand").mockResolvedValue({
-    code: 0,
-    stdout: JSON.stringify({ ok: true }),
-    stderr: "",
-    timedOut: false,
-  });
+async function mockDelivery(): Promise<{ sendSpy: typeof mockSendIMMessage; replaySpy: ReplaySpy }> {
   const replaySpy = vi.spyOn(
     await import("../../replay/replay.js"),
     "recordPolicyReplay",
   ).mockResolvedValue(undefined);
 
-  return { runCommandSpy, replaySpy };
+  return { sendSpy: mockSendIMMessage, replaySpy };
 }
 
 function projection(overrides: Partial<TaskStatusProjection> = {}): TaskStatusProjection {
@@ -418,16 +409,8 @@ function findReplayPayload(replaySpy: ReplaySpy): Record<string, unknown> {
   return call![1] as Record<string, unknown>;
 }
 
-function deliveredText(runCommandSpy: RunCommandSpy, replayPayload: Record<string, unknown>): string {
-  const replayText = String(replayPayload.ackMessage ?? replayPayload.message ?? replayPayload.text ?? "");
-  if (replayText.length > 0) {
-    return replayText;
-  }
-
-  return runCommandSpy.mock.calls
-    .flatMap((call) => call)
-    .map((value) => JSON.stringify(value))
-    .join("\n");
+function deliveredText(replayPayload: Record<string, unknown>): string {
+  return String(replayPayload.ackMessage ?? replayPayload.message ?? replayPayload.text ?? "");
 }
 
 function noTranscriptKeys(packet: CompactParentPacket): boolean {

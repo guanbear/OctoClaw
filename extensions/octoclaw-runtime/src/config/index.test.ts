@@ -3,7 +3,6 @@ import {
   DEFAULT_OCTOCLAW_RUNTIME_CONFIG,
   DEFAULT_SPAWN_INTENT_TTL_MS,
   isPlannerAllowedForSession,
-  resolveLegacyRuntimeLedgerMode,
   resolvePlannerAllowlist,
   resolvePlannerSpawnConfig,
   resolveRuntimeConfig,
@@ -15,7 +14,6 @@ const ENV_KEYS = [
   "OCTOCLAW_SPAWN_BACKEND",
   "OCTOCLAW_PLANNER_ALLOWLIST",
   "OCTOCLAW_SPAWN_INTENT_TTL_MS",
-  "OCTOCLAW_LEGACY_RUNTIME_LEDGER",
 ] as const;
 
 let originalEnv: typeof process.env;
@@ -155,36 +153,12 @@ describe("resolveSpawnIntentTtlMs", () => {
   });
 });
 
-describe("legacy disable flags", () => {
-  describe("resolveLegacyRuntimeLedgerMode", () => {
-    it("defaults to on", () => {
-      expect(resolveLegacyRuntimeLedgerMode()).toBe("on");
-    });
-
-    it("returns read_only for read_only", () => {
-      process.env.OCTOCLAW_LEGACY_RUNTIME_LEDGER = "read_only";
-      expect(resolveLegacyRuntimeLedgerMode()).toBe("read_only");
-    });
-
-    it("returns off for off", () => {
-      process.env.OCTOCLAW_LEGACY_RUNTIME_LEDGER = "off";
-      expect(resolveLegacyRuntimeLedgerMode()).toBe("off");
-    });
-
-    it("returns on for invalid values", () => {
-      process.env.OCTOCLAW_LEGACY_RUNTIME_LEDGER = "disabled";
-      expect(resolveLegacyRuntimeLedgerMode()).toBe("on");
-    });
-  });
-});
-
 describe("resolvePlannerSpawnConfig", () => {
   it("returns all defaults when no env is set", () => {
     expect(resolvePlannerSpawnConfig()).toEqual({
       spawnBackend: "planner",
       plannerAllowlist: [],
       intentTtlMs: DEFAULT_SPAWN_INTENT_TTL_MS,
-      legacyRuntimeLedgerMode: "on",
     });
   });
 
@@ -192,13 +166,11 @@ describe("resolvePlannerSpawnConfig", () => {
     process.env.OCTOCLAW_SPAWN_BACKEND = "planner";
     process.env.OCTOCLAW_PLANNER_ALLOWLIST = "ws1, ws_*";
     process.env.OCTOCLAW_SPAWN_INTENT_TTL_MS = "120000";
-    process.env.OCTOCLAW_LEGACY_RUNTIME_LEDGER = "read_only";
 
     expect(resolvePlannerSpawnConfig()).toEqual({
       spawnBackend: "planner",
       plannerAllowlist: ["ws1", "ws_*"],
       intentTtlMs: 120000,
-      legacyRuntimeLedgerMode: "read_only",
     });
   });
 });
@@ -206,8 +178,7 @@ describe("resolvePlannerSpawnConfig", () => {
 describe("runtime convergence target invariants (WP-A)", () => {
   it.todo("WP-A gap: child finalizer recovery should not run in planner backend by default");
 
-  it("documents legacy runtime ledger mode flag as a delete target (WP-B)", () => {
-    expect(resolveLegacyRuntimeLedgerMode()).toBe("on");
-    expect("OCTOCLAW_LEGACY_RUNTIME_LEDGER").toContain("LEGACY_RUNTIME_LEDGER");
+  it("keeps planner spawn config free of legacy runtime ledger mode (P6-001)", () => {
+    expect(resolvePlannerSpawnConfig()).not.toHaveProperty("legacyRuntimeLedgerMode");
   });
 });

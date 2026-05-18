@@ -235,45 +235,16 @@ export function openRuntimeLedger(options?: {
 
 export { MIGRATIONS };
 export { resolveRuntimeLedgerMode, isShadowActive, mirrorWorkContractToRuntimeLedger } from "./shadow.js";
-export { buildRuntimeLedgerShadowDiff } from "./shadow-diff.js";
 export { buildDelegationTicketDryRun } from "./ticket-dry-run.js";
 export type { DelegationTicketDryRunInput, DelegationTicketDryRunResult } from "./ticket-dry-run.js";
 export { admitDelegationTicketForDispatch } from "./ticket-enforcement.js";
 export type { DelegationTicketAdmissionInput, DelegationTicketAdmissionResult } from "./ticket-enforcement.js";
 export {
-  rebuildTaskStateProjection,
-  writeRebuiltTaskState,
-  isTaskStateRebuildable,
-} from "./projection-rebuild.js";
-export {
-  reconcileAttempt,
-  reconcileAllNonTerminal,
-} from "./native-reconcile.js";
-export type {
-  NativeLifecycleState,
-  ReconcileAttemptInput,
-  ReconcileAttemptResult,
-  ReconcileAllInput,
-  ReconcileAllResult,
-} from "./native-reconcile.js";
-export {
   resolveRuntimeLedgerFlag,
   isLedgerActive,
-  isTaskStateRebuildEnabled,
   resolveAllFeatureFlags,
 } from "./feature-flags.js";
 export type {
   RuntimeLedgerFlag,
   RuntimeLedgerFeatureFlags,
 } from "./feature-flags.js";
-export {
-  inspectLedgerHealth,
-  operatorRebuildProjection,
-} from "./operator-diagnostics.js";
-export type {
-  LedgerHealthReport,
-  LedgerDiagnosticsInput,
-  RebuildProjectionResult,
-} from "./operator-diagnostics.js";
-export { performCrashRecovery } from "./crash-recovery.js";
-export type { CrashRecoveryInput, CrashRecoveryResult } from "./crash-recovery.js";

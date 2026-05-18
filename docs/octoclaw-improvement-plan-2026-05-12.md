@@ -455,6 +455,10 @@ export function register(pi: PluginInterface): void {
 
 ### 4.1 清单
 
+状态更新（2026-05-18）：`native-truth-acp-fallback-relay-slimming-0.6.x`
+删除 closeout 后，`core/workflow/*`、`core/requests/*` 以及相关 no-op
+re-export 已不存在；下表是历史清理计划，不代表当前 live path。
+
 | 目标 | 文件 | 状态 |
 |------|------|------|
 | `buildCompoundPolicyPlaceholder` | `packages/octoclaw-policy/src/compound/index.ts` | 返回 `availableInLivePath: false`；被 `judgeFast()` 输出引用 |

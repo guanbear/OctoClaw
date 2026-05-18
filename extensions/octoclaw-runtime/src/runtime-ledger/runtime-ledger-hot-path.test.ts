@@ -43,12 +43,6 @@ function statusTool() {
   return tool;
 }
 
-function crashRecoveryTool() {
-  const tool = getToolRegistrations().find((registration) => registration.name === "octoclaw_crash_recovery");
-  if (!tool) throw new Error("octoclaw_crash_recovery tool not registered");
-  return tool;
-}
-
 function delegateDecision(sessionKey = "session-runtime-ledger-hot-path", expectedDeliverable = "Runtime ledger hot path dispatch") {
   return {
     request: { session_key: sessionKey },
@@ -292,7 +286,6 @@ describe("runtime ledger hot-path tool integration", () => {
     delete process.env.OCTOCLAW_SPAWN_BACKEND;
     delete process.env.OCTOCLAW_PLANNER_ALLOWLIST;
     delete process.env.OCTOCLAW_RUNTIME_LEDGER;
-    delete process.env.OCTOCLAW_TASK_STATE_REBUILD;
     delete process.env.OCTOCLAW_WORK_CONTRACT_LEDGER_PATH;
     envOverrides.workspaceRoot = "";
     for (const dir of tempLedgerPaths.splice(0)) {
@@ -482,19 +475,6 @@ describe("runtime ledger hot-path tool integration", () => {
     const reloaded = loadWorkContract(contract.workContractId);
     expect(reloaded?.workContractId).toBe(contract.workContractId);
     expect(reloaded?.sessionKey).toBe("session-hot-path-ledger-fallback");
-  });
-
-  it("crash recovery operator tool runs and returns structured result", async () => {
-    useTempWorkspace();
-    process.env.OCTOCLAW_RUNTIME_LEDGER = "enforce";
-    process.env.OCTOCLAW_TASK_STATE_REBUILD = "1";
-    const response = await crashRecoveryTool().execute({}, {});
-
-    expect(response.text).toContain("crash_recovery_completed");
-    expect(response.json).toMatchObject({ projectionRebuilt: true });
-    const payload = response.json as Record<string, unknown>;
-    expect(typeof payload.attemptsReconciled).toBe("number");
-    expect(Array.isArray(payload.errors)).toBe(true);
   });
 
   it("corrupt task-state.json is quarantined and ledger provides fallback data", async () => {

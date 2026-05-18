@@ -1,35 +1,17 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-// Hoisted mock for env module
-type MockRunCommand = (command: string, args: string[], options: unknown) => Promise<{ code: number; stdout: string; stderr: string }>;
-let mockRunCommand = vi.hoisted<MockRunCommand>(() => async () => ({ code: 0, stdout: "", stderr: "" }));
-vi.mock("../../resolve/env.js", () => ({
-  runCommand: (...args: unknown[]) => mockRunCommand(...(args as [string, string[], unknown])),
-  resolveWorkspaceRoot: () => "/workspace",
-}));
-
-// Env var save/restore
-const originalLegacyDelivery = process.env.OCTOCLAW_LEGACY_CLI_DELIVERY;
 const originalSlackBotToken = process.env.SLACK_BOT_TOKEN;
-
-beforeEach(() => {
-  mockRunCommand = async () => ({ code: 0, stdout: "", stderr: "" });
-});
 
 afterEach(() => {
   vi.unstubAllGlobals();
-  if (originalLegacyDelivery === undefined) delete process.env.OCTOCLAW_LEGACY_CLI_DELIVERY;
-  else process.env.OCTOCLAW_LEGACY_CLI_DELIVERY = originalLegacyDelivery;
   if (originalSlackBotToken === undefined) delete process.env.SLACK_BOT_TOKEN;
   else process.env.SLACK_BOT_TOKEN = originalSlackBotToken;
 });
 
-// IMPORT AFTER vi.mock
 import { SlackAdapter } from "./slack-adapter.js";
 
 describe("SlackAdapter smoke", () => {
   it("STB-S-001 sends a normal reply without thread through Slack Web API", async () => {
-    delete process.env.OCTOCLAW_LEGACY_CLI_DELIVERY;
     process.env.SLACK_BOT_TOKEN = "xoxb-test";
 
     const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
@@ -54,7 +36,6 @@ describe("SlackAdapter smoke", () => {
   });
 
   it("STB-S-002 includes delegate footer model name in Slack API text", async () => {
-    delete process.env.OCTOCLAW_LEGACY_CLI_DELIVERY;
     process.env.SLACK_BOT_TOKEN = "xoxb-test";
 
     const fetchMock = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => {
@@ -77,7 +58,6 @@ describe("SlackAdapter smoke", () => {
   });
 
   it("STB-S-003 uses streaming transport for native child final with thread", async () => {
-    delete process.env.OCTOCLAW_LEGACY_CLI_DELIVERY;
     process.env.SLACK_BOT_TOKEN = "xoxb-test";
 
     const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
@@ -113,7 +93,6 @@ describe("SlackAdapter smoke", () => {
   });
 
   it("STB-S-004 returns an error when Slack reports channel_not_found", async () => {
-    delete process.env.OCTOCLAW_LEGACY_CLI_DELIVERY;
     process.env.SLACK_BOT_TOKEN = "xoxb-test";
 
     const fetchMock = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => {
@@ -132,7 +111,6 @@ describe("SlackAdapter smoke", () => {
   });
 
   it("STB-S-005 sends long messages in chunks no larger than Slack API limit", async () => {
-    delete process.env.OCTOCLAW_LEGACY_CLI_DELIVERY;
     process.env.SLACK_BOT_TOKEN = "xoxb-test";
     const sentChunks: string[] = [];
 

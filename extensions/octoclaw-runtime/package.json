@@ -14,17 +14,9 @@
       "types": "./src/index.ts",
       "default": "./dist/index.js"
     },
-    "./plugin": {
-      "types": "./src/plugin.ts",
-      "default": "./dist/plugin.js"
-    },
     "./config": {
       "types": "./src/config/index.ts",
       "default": "./dist/config/index.js"
-    },
-    "./webhook-surface": {
-      "types": "./src/adapter/webhook-surface.ts",
-      "default": "./dist/adapter/webhook-surface.js"
     },
     "./state-surface": {
       "types": "./src/adapter/state-surface.ts",

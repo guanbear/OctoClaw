@@ -55,7 +55,6 @@ bash bin/update-openclaw-macmini.sh \
 |------|-----|------|
 | `OCTOCLAW_RUNTIME_LEDGER` | `off` / `shadow` / `enforce` | Runtime ledger 模式 |
 | `OCTOCLAW_SCHEDULER_ENABLED` | `true` / `false` | 调度器开关 |
-| `OCTOCLAW_TASK_STATE_REBUILD` | `1` | 启用投影重建 |
 
 ## 验证
 
@@ -73,7 +72,6 @@ npx vitest run \
   extensions/octoclaw-runtime/src/runtime-ledger/__tests__/ticket-dry-run.test.ts \
   extensions/octoclaw-runtime/src/runtime-ledger/__tests__/ticket-enforcement.test.ts \
   extensions/octoclaw-runtime/src/runtime-ledger/__tests__/scheduler.test.ts \
-  extensions/octoclaw-runtime/src/runtime-ledger/__tests__/operator-diagnostics.test.ts \
   extensions/octoclaw-runtime/src/tools/registration-dispatch-honesty.test.ts
 
 # Ledger 模块测试
@@ -88,7 +86,7 @@ npx vitest run extensions/octoclaw-runtime/src/runtime-ledger/__tests__/
 
 | 文件 | 用途 |
 |------|------|
-| `extensions/octoclaw-runtime/src/tools/registration.ts` | 工具注册入口 (dispatch/status/task_action/crash_recovery) |
+| `extensions/octoclaw-runtime/src/tools/registration.ts` | 工具注册入口 (dispatch/status/task_action) |
 | `extensions/octoclaw-runtime/src/conversation-grounding.ts` | 意图分类 + 执行上下文 |
 | `extensions/octoclaw-runtime/src/state/task-state-store.ts` | task-state.json 读写 + 损坏隔离 |
 | `extensions/octoclaw-runtime/src/work-contract/store.ts` | WorkContract 存储 (SQLite metadata ledger + projection write) |
