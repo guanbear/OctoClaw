@@ -1,6 +1,7 @@
 import type { TaskStatusProjection } from "@octoclaw/contracts/status-projection";
 import type { AnomalyNotice } from "@octoclaw/contracts/work-contract";
 import { sendIMMessage } from "../im/send.js";
+import { fetchLatestUserMessageTsForSessionKey } from "../im/slack-thread-anchor.js";
 import { resolveWorkspaceRoot } from "../resolve/env.js";
 import { getReceipt, recordDelivery } from "./ack-dedupe.js";
 import { resolveAckTargetFromSessionKey } from "./ack-guard.js";
@@ -101,6 +102,18 @@ function compactDefined<T extends CompactParentPacket>(packet: T): T {
   return packet;
 }
 
+function slackThreadReplyAnchor(sessionKey: string, threadId: string): string {
+  if (!/(?:^|:)slack:/iu.test(sessionKey)) return "";
+  return /^\d{10}\.\d{6}$/u.test(threadId) ? threadId : "";
+}
+
+function shouldResolveLatestSlackDmAnchor(transitionKind: ExecutionTransitionKind, sessionKey: string, replyToMessageId: string): boolean {
+  return transitionKind === "spawn_started"
+    && !replyToMessageId
+    && /(?:^|:)slack:/iu.test(sessionKey)
+    && sessionKey.includes(":direct:");
+}
+
 async function sendExecutionTransitionMessage(
   transitionKind: ExecutionTransitionKind,
   sessionKey: string,
@@ -121,18 +134,26 @@ async function sendExecutionTransitionMessage(
     };
   }
 
-  const topLevelFallback = !asString(replyToMessageId) && !resolved.threadId;
+  let effectiveReplyToMessageId = asString(replyToMessageId) || slackThreadReplyAnchor(sessionKey, resolved.threadId);
+  if (shouldResolveLatestSlackDmAnchor(transitionKind, sessionKey, effectiveReplyToMessageId)) {
+    try {
+      effectiveReplyToMessageId = slackThreadReplyAnchor(sessionKey, await fetchLatestUserMessageTsForSessionKey(sessionKey, 1200));
+    } catch {
+      effectiveReplyToMessageId = "";
+    }
+  }
+  const topLevelFallback = !effectiveReplyToMessageId && !resolved.threadId;
   let result: Awaited<ReturnType<typeof sendIMMessage>>;
   try {
     result = await sendIMMessage({
       sessionKey,
       message,
-      replyToMessageId: replyToMessageId || undefined,
+      replyToMessageId: effectiveReplyToMessageId || undefined,
       timeoutMs: 5000,
       cwd: asString(cwd) || resolveWorkspaceRoot(),
       suppressProjectionFooter: true,
       deliveryKind: transitionKind === "spawn_started" ? "accepted_ack" : "status_reply",
-      deliveryTargetSource: asString(replyToMessageId) ? "inbound_anchor" : "session_fallback",
+      deliveryTargetSource: effectiveReplyToMessageId ? "inbound_anchor" : "session_fallback",
       footerMode: "off",
     });
   } catch (error) {

@@ -18,9 +18,14 @@ import {
 type EmitExecutionTransitionParams = Parameters<typeof emitExecutionTransitionNotification>[0];
 type ReplaySpy = MockInstance<typeof import("../../replay/replay.js").recordPolicyReplay>;
 const mockSendIMMessage = vi.hoisted(() => vi.fn());
+const mockFetchLatestUserMessageTsForSessionKey = vi.hoisted(() => vi.fn());
 
 vi.mock("../../im/send.js", () => ({
   sendIMMessage: mockSendIMMessage,
+}));
+
+vi.mock("../../im/slack-thread-anchor.js", () => ({
+  fetchLatestUserMessageTsForSessionKey: mockFetchLatestUserMessageTsForSessionKey,
 }));
 
 describe("execution transition notifier", () => {
@@ -29,6 +34,8 @@ describe("execution transition notifier", () => {
     vi.restoreAllMocks();
     mockSendIMMessage.mockReset();
     mockSendIMMessage.mockResolvedValue({ sent: true, threadTs: "1700000000.000100" });
+    mockFetchLatestUserMessageTsForSessionKey.mockReset();
+    mockFetchLatestUserMessageTsForSessionKey.mockResolvedValue("1779106321.001122");
     const { envOverrides } = await import("../../resolve/env.js");
     envOverrides.workspaceRoot = "";
   });
@@ -175,6 +182,52 @@ describe("execution transition notifier", () => {
     expect(findReplayPayload(replaySpy)).toEqual(expect.objectContaining({
       sent: false,
       reason: "channel_message_failed",
+    }));
+  });
+
+  it("anchors spawn_started ACK to the Slack thread encoded in the session key", async () => {
+    await mockDelivery();
+
+    const result = await emitExecutionTransitionNotification(notification({
+      sessionKey: "agent:main:slack:default:direct:u0al9t5u89z:thread:1779106347.154489",
+      replyToMessageId: "",
+      transitionKind: "spawn_started",
+      projection: projection({
+        status: "running",
+        dispatchExecuted: true,
+        spawnExecuted: true,
+      }),
+    }));
+
+    expect(result.sent).toBe(true);
+    expect(mockSendIMMessage).toHaveBeenCalledWith(expect.objectContaining({
+      replyToMessageId: "1779106347.154489",
+      deliveryTargetSource: "inbound_anchor",
+    }));
+  });
+
+  it("anchors Slack DM spawn_started ACK to the latest user message when OpenClaw omits thread metadata", async () => {
+    await mockDelivery();
+
+    const result = await emitExecutionTransitionNotification(notification({
+      sessionKey: "agent:main:slack:default:direct:u0al9t5u89z",
+      replyToMessageId: "",
+      transitionKind: "spawn_started",
+      projection: projection({
+        status: "running",
+        dispatchExecuted: true,
+        spawnExecuted: true,
+      }),
+    }));
+
+    expect(result.sent).toBe(true);
+    expect(mockFetchLatestUserMessageTsForSessionKey).toHaveBeenCalledWith(
+      "agent:main:slack:default:direct:u0al9t5u89z",
+      1200,
+    );
+    expect(mockSendIMMessage).toHaveBeenCalledWith(expect.objectContaining({
+      replyToMessageId: "1779106321.001122",
+      deliveryTargetSource: "inbound_anchor",
     }));
   });
 
