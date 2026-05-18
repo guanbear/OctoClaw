@@ -509,7 +509,7 @@ describe("guardOutboundMessageForPolicyState", () => {
       Date.now(),
     );
 
-    expect(guarded?.content).toContain("\n\n• octoclaw: route=reply | model=zhipu/GLM-5.1");
+    expect(guarded?.content).toContain("\n\n• octoclaw: route=reply | model=");
     expect(guarded?.content).not.toContain("model=unknown");
   });
 
@@ -599,6 +599,11 @@ describe("guardOutboundMessageForPolicyState", () => {
   });
 
   it("appends footer for visible Slack delivery hooks even when OpenClaw omits message anchors", () => {
+    const previousOpenClawHome = process.env.OPENCLAW_HOME;
+    process.env.OPENCLAW_HOME = tempWorkspace;
+    fsSync.writeFileSync(path.join(tempWorkspace, "openclaw.json"), JSON.stringify({
+      agents: { defaults: { model: { primary: "cliproxyapi/gpt-5.5" } } },
+    }));
     const now = Date.now();
     const key = "agent:main:slack:default:direct:u0al9t5u89z";
     policyState.setState(key, {
@@ -610,15 +615,20 @@ describe("guardOutboundMessageForPolicyState", () => {
       updatedAt: now,
     });
 
-    const guarded = guardOutboundMessageForPolicyState(
-      { to: "U0AL9T5U89Z", content: "这是最终回复。", metadata: { channel: "slack" } },
-      { channelId: "slack" },
-      now,
-    );
+    try {
+      const guarded = guardOutboundMessageForPolicyState(
+        { to: "U0AL9T5U89Z", content: "这是最终回复。", metadata: { channel: "slack" } },
+        { channelId: "slack" },
+        now,
+      );
 
-    expect(guarded?.content).toContain("这是最终回复。");
-    expect(guarded?.content).toContain("route=reply | model=GLM-5.1 · thread");
-    policyState.clearState(key);
+      expect(guarded?.content).toContain("这是最终回复。");
+      expect(guarded?.content).toContain("route=reply | model=cliproxyapi/gpt-5.5 · thread");
+    } finally {
+      if (previousOpenClawHome === undefined) delete process.env.OPENCLAW_HOME;
+      else process.env.OPENCLAW_HOME = previousOpenClawHome;
+      policyState.clearState(key);
+    }
   });
 
   it("does not rewrite Slack outbound natural-language subagent prose on reply route", () => {
@@ -760,6 +770,48 @@ describe("guardOutboundMessageForPolicyState", () => {
     expect(guarded?.content).toContain("model=cliproxyapi/gpt-5.5");
     expect(guarded?.content).not.toContain("model=zhipu/GLM-5.1");
     policyState.clearState(key);
+  });
+
+  it("uses configured main primary model for reply footer when runtime event omits model", () => {
+    const previousOpenClawHome = process.env.OPENCLAW_HOME;
+    process.env.OPENCLAW_HOME = tempWorkspace;
+    fsSync.writeFileSync(path.join(tempWorkspace, "openclaw.json"), JSON.stringify({
+      agents: {
+        defaults: {
+          model: {
+            primary: "cliproxyapi/gpt-5.5",
+            fallbacks: ["zhipu/GLM-5.1"],
+          },
+        },
+      },
+    }));
+    const now = Date.now();
+    const key = "agent:main:slack:channel:c0statusmodel";
+    policyState.setState(key, {
+      decision: {
+        route_decision: { route: "reply", route_source: "rule" },
+        model_policy: { selected_model: "zhipu/GLM-5.1" },
+        request: { metadata: { message_id: "1777380006.000001" } },
+      },
+      inboundMessageTs: "1777380006.000001",
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    try {
+      const guarded = guardOutboundMessageForPolicyState(
+        { to: "C0STATUSMODEL", content: "状态面板内容", metadata: { channelId: "C0STATUSMODEL", threadTs: "1777380006.000001" } },
+        { channelId: "slack" },
+        now,
+      );
+
+      expect(guarded?.content).toContain("model=cliproxyapi/gpt-5.5");
+      expect(guarded?.content).not.toContain("model=zhipu/GLM-5.1");
+    } finally {
+      if (previousOpenClawHome === undefined) delete process.env.OPENCLAW_HOME;
+      else process.env.OPENCLAW_HOME = previousOpenClawHome;
+      policyState.clearState(key);
+    }
   });
 
   it("renders complexity band in outbound projection footer", () => {

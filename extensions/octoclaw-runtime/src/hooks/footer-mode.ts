@@ -1,7 +1,10 @@
+import fsSync from "node:fs";
+import path from "node:path";
 import { type WorkContract } from "@octoclaw/contracts/work-contract";
 import { cancelNeutralAckTimersByCandidates, type CanceledNeutralAckTimer } from "../ack/ack-scheduler.js";
 import { nativeSpawnIntentStore } from "../delegate/native-spawn-intent-store.js";
 import { stringValue } from "../extension-entry-shared.js";
+import { resolveOpenClawConfigDir } from "../resolve/env.js";
 import {
   contractNativeIds,
   findRecentOutboundPolicyState,
@@ -75,8 +78,9 @@ export function resolveDisplayModel(state: UnknownRecord, event: UnknownRecord, 
 
   const routeSource = stringValue(routeDecision.route_source || routeDecision.final_judge_source || snapshot.via || snapshot.source);
   const route = stringValue(workContract.route || routeDecision.route || state.route || snapshot.route || "reply");
-  if ((route === "reply" || routeSource === "budgeted_main_escalation") && mainRuntimeModel) {
-    return mainRuntimeModel;
+  if (route === "reply" || routeSource === "budgeted_main_escalation") {
+    const mainModel = mainRuntimeModel || configuredMainRuntimeModel();
+    if (mainModel) return mainModel;
   }
 
   return firstDisplayModel(
@@ -98,6 +102,22 @@ export function resolveDisplayModel(state: UnknownRecord, event: UnknownRecord, 
     state.model_profile,
     "direct_main",
   );
+}
+
+function configuredMainRuntimeModel(): string {
+  try {
+    const config = asRecord(JSON.parse(fsSync.readFileSync(path.join(resolveOpenClawConfigDir(), "openclaw.json"), "utf8")));
+    const agents = asRecord(config.agents);
+    const defaults = asRecord(agents.defaults);
+    const defaultModel = asRecord(defaults.model);
+    const primary = displayModelOrEmpty(defaultModel.primary, defaults.model);
+    if (primary) return primary;
+    const list = Array.isArray(agents.list) ? agents.list : [];
+    const main = list.map((entry) => asRecord(entry)).find((entry) => stringValue(entry.id) === "main");
+    return displayModelOrEmpty(main?.model);
+  } catch {
+    return "";
+  }
 }
 
 export function displayModelOrEmpty(...values: unknown[]): string {

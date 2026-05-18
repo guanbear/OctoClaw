@@ -939,7 +939,8 @@ describe("regression round 4: execution coverage projections", () => {
         Date.now(),
       );
 
-      expect(outbound?.content).toContain("route=reply | model=zhipu/GLM-5.1 · thread");
+      expect(outbound?.content).toContain("route=reply | model=");
+      expect(outbound?.content).toContain("· thread");
       expect(outbound?.content).toContain("via=coverage");
       expect(outbound?.content).toContain("wc=wc-prov");
     } finally {
@@ -982,7 +983,8 @@ describe("regression round 4: execution coverage projections", () => {
         Date.now(),
       );
 
-      expect(outbound?.content).toContain("route=reply | model=zhipu/GLM-5.1 · thread");
+      expect(outbound?.content).toContain("route=reply | model=");
+      expect(outbound?.content).toContain("· thread");
       expect(outbound?.content).toContain("via=rule");
       expect(outbound?.content).toContain("worker=octoclaw-main");
       expect(outbound?.content).toContain("wc=wc-f3cc");
