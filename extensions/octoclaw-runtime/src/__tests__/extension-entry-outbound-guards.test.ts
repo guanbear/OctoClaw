@@ -735,6 +735,32 @@ describe("guardOutboundMessageForPolicyState", () => {
     policyState.clearState(key);
   });
 
+  it("prefers actual main runtime model for budgeted main escalation footer", () => {
+    const now = Date.now();
+    const key = "agent:main:slack:channel:c0budgetedmain";
+    policyState.setState(key, {
+      decision: {
+        route_decision: { route: "delegate", route_source: "budgeted_main_escalation" },
+        model_policy: { selected_model: "zhipu/GLM-5.1" },
+        request: { metadata: { message_id: "1777380005.000001" } },
+      },
+      inboundMessageTs: "1777380005.000001",
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    const guarded = guardOutboundMessageForPolicyState(
+      { to: "C0BUDGETEDMAIN", content: "测试。", metadata: { channelId: "C0BUDGETEDMAIN", threadTs: "1777380005.000001" } },
+      { channelId: "slack", model: "cliproxyapi/gpt-5.5" },
+      now,
+    );
+
+    expect(guarded?.content).toContain("via=budgeted_main_escalation");
+    expect(guarded?.content).toContain("model=cliproxyapi/gpt-5.5");
+    expect(guarded?.content).not.toContain("model=zhipu/GLM-5.1");
+    policyState.clearState(key);
+  });
+
   it("renders complexity band in outbound projection footer", () => {
     const now = Date.now();
     const key = "agent:main:slack:channel:c0complexity";

@@ -1,9 +1,16 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  cancelAllAckTimers,
+  createAckTimers,
   shouldScheduleTier,
   DEFAULT_TIER_DELAYS_MS,
   getAckTierDelays,
 } from "./ack-timing.js";
+
+afterEach(() => {
+  cancelAllAckTimers();
+  vi.useRealTimers();
+});
 
 describe("ack-timing: shouldScheduleTier", () => {
   it("schedules tier 0 for reply", () => {
@@ -63,5 +70,27 @@ describe("ack-timing: getAckTierDelays", () => {
 
   it("keeps reply tier delays", () => {
     expect(getAckTierDelays("reply")).toEqual([12_000, 30_000, 90_000]);
+  });
+});
+
+describe("ack-timing: createAckTimers", () => {
+  it("does not schedule text ACK tiers when Slack partial streaming is enabled", () => {
+    vi.useFakeTimers();
+    const fired: number[] = [];
+
+    createAckTimers({
+      stateKey: "state-partial-stream",
+      sessionKey: "session-partial-stream",
+      routePhase: "reply",
+      config: { tierDelaysMs: [1, 1, 1, 0] },
+      channelStreaming: "partial",
+      onTierFire: (result) => {
+        fired.push(result.tier);
+      },
+    });
+
+    vi.advanceTimersByTime(10);
+
+    expect(fired).toEqual([]);
   });
 });

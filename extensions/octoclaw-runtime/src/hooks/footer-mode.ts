@@ -52,6 +52,7 @@ export function outboundProjectionSnapshot(state: UnknownRecord): UnknownRecord 
 export function resolveDisplayModel(state: UnknownRecord, event: UnknownRecord, ctx: UnknownRecord): string {
   const snapshot = outboundProjectionSnapshot(state);
   const decision = asRecord(state.decision);
+  const routeDecision = asRecord(decision.route_decision);
   const modelPolicy = asRecord(decision.model_policy);
   const runtimeTruth = asRecord(decision.runtime_truth);
   const workContract = asRecord(decision.work_contract);
@@ -63,6 +64,19 @@ export function resolveDisplayModel(state: UnknownRecord, event: UnknownRecord, 
     delegate.model,
     delegate.model_profile,
   );
+  const mainRuntimeModel = displayModelOrEmpty(
+    event.model,
+    event.modelId,
+    event.model_id,
+    ctx.model,
+    ctx.modelId,
+    ctx.model_id,
+  );
+
+  const routeSource = stringValue(routeDecision.route_source || routeDecision.final_judge_source || snapshot.via || snapshot.source);
+  if (routeSource === "budgeted_main_escalation" && mainRuntimeModel) {
+    return mainRuntimeModel;
+  }
 
   return firstDisplayModel(
     spawnModel || undefined,

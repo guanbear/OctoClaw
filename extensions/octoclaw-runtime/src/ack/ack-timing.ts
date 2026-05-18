@@ -197,7 +197,7 @@ export function createAckTimers(params: CreateAckTimersParams): AckTimerState {
     cancelled: false,
   };
 
-  const streamingSkipsTiers = params.channelStreaming === "native";
+  const streamingSkipsTiers = params.channelStreaming === "native" || params.channelStreaming === "partial";
 
   if (!streamingSkipsTiers) {
     for (let tier = 0; tier <= 3; tier++) {
