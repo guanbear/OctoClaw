@@ -12,6 +12,7 @@ import {
   checkAndSetExecTransition,
   detectExecutionTransition,
   emitExecutionTransitionNotification,
+  projectTransitionText,
   resetExecTransitionState,
 } from "../execution-transition-notifier.js";
 
@@ -81,6 +82,14 @@ describe("execution transition notifier", () => {
     expect(result.sent).toBe(true);
     expect(result.transitionKind).toBe("spawn_failed");
     expect(deliveredText(findReplayPayload(replaySpy))).toMatch(/失败|恢复/);
+  });
+
+  it("labels spawn_started ACK as a child task start", () => {
+    expect(projectTransitionText("spawn_started", projection({
+      status: "running",
+      dispatchExecuted: true,
+      spawnExecuted: true,
+    }))).toContain("子任务");
   });
 
   it("emits stale heartbeat notification before final timeout", async () => {

@@ -173,6 +173,14 @@ describe("parseSlackAcceptanceConfig — fail closed", () => {
     expect(config.maxTranscriptMessages).toBe(50);
   });
 
+  it("gives default delegated_work smoke enough time for native subagent run timeout plus delivery", () => {
+    const config = parseSlackAcceptanceConfig(validConfig(), validEnv());
+    const delegated = config.cases.find((item) => item.kind === "delegated_work");
+    expect(delegated?.ackTimeoutMs).toBe(90_000);
+    expect(delegated?.finalTimeoutMs).toBe(360_000);
+    expect(delegated?.expectFinalAll).toContain("via=native_announce");
+  });
+
   it("uses provided cases when specified", () => {
     const config = parseSlackAcceptanceConfig(validConfig({
       cases: [{ kind: "plain_chat", prompt: "custom" }],

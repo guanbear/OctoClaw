@@ -257,7 +257,7 @@ export function projectTransitionText(
   const textByKind: Record<ExecutionTransitionKind, { zh: string; en: string }> = {
     dispatch_materialized: { zh: "任务已派发，排队中。", en: "Task dispatched, queuing." },
     materialized_no_spawn: { zh: "任务已登记，尚未启动。", en: "Task registered, not yet started." },
-    spawn_started: { zh: "任务已启动。", en: "Task started." },
+    spawn_started: { zh: "子任务已启动。", en: "Child task started." },
     spawn_failed: { zh: "任务启动失败，正在恢复。", en: "Task failed to start, recovering." },
     queued_stale: { zh: "任务排队超时，正在检查。", en: "Task queue timeout, checking." },
     heartbeat_stale: { zh: "任务进度停滞，正在检查。", en: "Task progress stalled, checking." },
