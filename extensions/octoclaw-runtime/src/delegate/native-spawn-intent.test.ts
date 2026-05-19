@@ -220,6 +220,25 @@ describe("canonical args hash", () => {
     );
   });
 
+  it("treats copied JSON newline escaping in planner task text as equivalent", () => {
+    const plannerTask = [
+      "[OctoClaw delegated work]",
+      "```json",
+      "{",
+      '  "currentUserAsk": "line 1\\nline 2"',
+      "}",
+      "```",
+      "Task:",
+      "line 1",
+    ].join("\n");
+    const copiedByModel = plannerTask.replaceAll("\\n", "\\\\n");
+
+    expect(copiedByModel).not.toBe(plannerTask);
+    expect(computePlanHash({ ...baseArgs, task: copiedByModel })).toBe(
+      computePlanHash({ ...baseArgs, task: plannerTask }),
+    );
+  });
+
   it("ignores OpenClaw default/enrichment fields that do not change the plan", () => {
     expect(computePlanHash({ task: "a", runtime: "subagent", timeoutSeconds: 0, attachments: [] })).toBe(
       computePlanHash({ task: "a" }),
@@ -354,6 +373,36 @@ describe("NativeSpawnIntentStore state transitions", () => {
       now: BASE_NOW,
     });
     expect(result).toMatchObject({ ok: false, error: "args_hash_mismatch" });
+  });
+
+  it("allows transition when only embedded JSON newline escaping differs", () => {
+    const store = createStore();
+    const plannerTask = [
+      "[OctoClaw delegated work]",
+      "```json",
+      "{",
+      '  "taskBrief": "line 1\\nline 2"',
+      "}",
+      "```",
+    ].join("\n");
+    const storedArgs = { ...baseArgs, task: plannerTask };
+    const copiedArgs = { ...storedArgs, task: plannerTask.replaceAll("\\n", "\\\\n") };
+    const intent = store.create({
+      workContractId: "wc_json_escape",
+      sessionKey: "parent_session_1",
+      sessionsSpawnArgs: storedArgs,
+      ttlMs: 60_000,
+      now: BASE_NOW,
+    });
+
+    const result = store.transitionToSpawnCallStarted({
+      spawnIntentId: intent.spawnIntentId,
+      sessionKey: "parent_session_1",
+      sessionsSpawnArgs: copiedArgs,
+      now: BASE_NOW,
+    });
+
+    expect(result.ok).toBe(true);
   });
 
   it("rejects transition from non-planned status", () => {

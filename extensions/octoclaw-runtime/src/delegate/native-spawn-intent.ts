@@ -77,10 +77,15 @@ function normalizedNonNegativeInteger(value: unknown): number | undefined {
     : undefined;
 }
 
+function normalizePlannerTaskCopyEscapes(value: string): string {
+  if (!value.startsWith("[OctoClaw delegated work]") || !value.includes("```json")) return value;
+  return value.replaceAll("\\\\n", "\\n");
+}
+
 function normalizeSessionsSpawnArgs(args: SessionsSpawnArgs): Record<string, unknown> {
   const record = asRecord(args);
   const normalized: Record<string, unknown> = {
-    task: asNonEmptyString(record.task),
+    task: normalizePlannerTaskCopyEscapes(asNonEmptyString(record.task)),
   };
 
   const message = asNonEmptyString(record.message);
