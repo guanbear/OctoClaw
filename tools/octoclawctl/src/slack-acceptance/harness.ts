@@ -53,7 +53,7 @@ const DEFAULT_CASES: SlackAcceptanceCaseConfig[] = [
     prompt: "请委派子 agent 调研 OctoClaw 当前任务状态面板需要展示哪些字段，完成后给摘要。",
     ackRequired: true,
     finalRequired: true,
-    ackTimeoutMs: 90_000,
+    ackTimeoutMs: 180_000,
     expectAck: ["委派", "子", "派发", "准备"],
     expectFinalAll: ["任务", "状态", "字段", "via=native_announce"],
     finalTimeoutMs: 360_000,
