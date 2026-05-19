@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { ERROR_CODES } from "@octoclaw/errors";
-import { FeishuAdapter } from "./feishu-adapter.js";
+import { FeishuAdapter, decodeFeishuCardAction, normalizeFeishuCardCallback, buildFeishuTextFallback } from "./feishu-adapter.js";
 import * as env from "../../resolve/env.js";
 
 function mockRun(code: number, stdout: string, stderr = "") {
@@ -218,6 +218,31 @@ describe("FeishuAdapter", () => {
     expect(args).not.toContain("--message");
   });
 
+  it("MOF-013: falls back to text when Feishu card delivery fails", async () => {
+    const adapter = new FeishuAdapter();
+    const spy = vi.spyOn(env, "runCommand")
+      .mockResolvedValueOnce({ code: 1, stdout: JSON.stringify({ ok: false, error: "card_send_failed" }), stderr: "", timedOut: false })
+      .mockResolvedValueOnce({ code: 0, stdout: JSON.stringify({ ok: true, message_id: "om_text_fallback" }), stderr: "", timedOut: false });
+
+    const card = {
+      schema: "2.0",
+      header: { title: { tag: "plain_text", content: "wizard" }, template: "blue" },
+      body: { elements: [{ tag: "markdown", content: "start" }] },
+    };
+    const result = await adapter.send({
+      sessionKey: "agent:main:feishu:default:direct:ou_user1",
+      message: "配置 Auto Router\n运行 `octoclawctl router wizard --cli`",
+      interactiveBlocks: [{ type: "feishu_card", card }],
+    });
+
+    expect(result.sent).toBe(true);
+    expect(result.messageId).toBe("om_text_fallback");
+    expect(spy).toHaveBeenCalledTimes(2);
+    const fallbackArgs = spy.mock.calls[1]![1] as string[];
+    expect(fallbackArgs).toEqual(expect.arrayContaining(["--message"]));
+    expect(fallbackArgs[fallbackArgs.indexOf("--message") + 1]).toContain("octoclawctl router wizard --cli");
+  });
+
   it("react returns not_supported (L2 without emoji reactions)", async () => {
     const adapter = new FeishuAdapter();
     const result = await adapter.react({
@@ -237,5 +262,50 @@ describe("FeishuAdapter", () => {
   it("shouldUseThread returns true when replyToMode is 'all'", () => {
     const adapter = new FeishuAdapter({ replyToMode: "all" });
     expect(adapter.shouldUseThread()).toBe(true);
+  });
+});
+
+describe("Feishu card action decoder", () => {
+  it("decodes a Feishu card button callback", () => {
+    const callback = { action: { value: "start_questions", tag: "button" } };
+    const decoded = decodeFeishuCardAction(callback);
+    expect(decoded).toMatchObject({ action: "button", value: "start_questions" });
+  });
+
+  it("decodes plan_subscription with model value", () => {
+    const callback = { action: { value: "plan_subscription:openai/gpt-5.5", tag: "button" } };
+    const decoded = decodeFeishuCardAction(callback);
+    expect(decoded).toMatchObject({ value: "plan_subscription:openai/gpt-5.5" });
+  });
+
+  it("returns null for callback without value", () => {
+    expect(decodeFeishuCardAction({ action: { tag: "button" } })).toBeNull();
+    expect(decodeFeishuCardAction(null)).toBeNull();
+    expect(decodeFeishuCardAction({})).toBeNull();
+  });
+
+  it("normalizes Feishu card callback to Slack-like event", () => {
+    const callback = { action: { value: "use_defaults", tag: "button" } };
+    const normalized = normalizeFeishuCardCallback(callback);
+    expect(normalized).toEqual({
+      actions: [{ action_id: "use_defaults", value: "use_defaults" }],
+    });
+  });
+
+  it("normalizes returns empty for invalid callback", () => {
+    expect(normalizeFeishuCardCallback({})).toEqual({});
+    expect(normalizeFeishuCardCallback({ action: {} })).toEqual({});
+  });
+});
+
+describe("Feishu text fallback builder", () => {
+  it("builds text fallback with guidance only", () => {
+    expect(buildFeishuTextFallback("配置 Auto Router")).toBe("配置 Auto Router");
+  });
+
+  it("builds text fallback with manual command", () => {
+    const result = buildFeishuTextFallback("配置 Auto Router", "octoclawctl router wizard --incremental");
+    expect(result).toContain("配置 Auto Router");
+    expect(result).toContain("octoclawctl router wizard --incremental");
   });
 });

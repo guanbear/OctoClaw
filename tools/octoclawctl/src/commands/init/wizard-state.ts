@@ -1,7 +1,7 @@
 export interface WizardState {
   openclawVersion: string | null;
   judgeModel: {
-    type: "ollama-qwen3" | "ollama-custom" | "remote-groq" | "remote-custom" | "skip";
+    type: "ollama-qwen3" | "ollama-custom" | "remote-groq" | "remote-gpt-5-4-mini" | "remote-custom" | "skip";
     modelId: string;
     baseUrl: string;
     apiKey: string;

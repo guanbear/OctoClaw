@@ -295,7 +295,7 @@ describe("emitRouterLiteShadowEvent", () => {
       currentNativePosition: "default",
       cooldownReason: "rate_limit_429",
       suggestedAction: {
-        command: "openclaw models fallbacks remove cliproxyapi/gpt-5.5",
+        command: "manual fallback review: demote cliproxyapi/gpt-5.5 only if the operator approves",
       },
       evidence: {
         reasonCodes: ["cooldown:rate_limit_429:cliproxyapi/gpt-5.5"],

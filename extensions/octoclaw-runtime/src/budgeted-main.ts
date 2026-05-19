@@ -300,14 +300,67 @@ function curlLooksReadOnly(tokens: string[]): boolean {
   return true;
 }
 
+type OpenClawReadOnlySpec = {
+  path: readonly string[];
+  allowArgs?: boolean;
+};
+
+const OPENCLAW_READ_ONLY_COMMANDS: readonly OpenClawReadOnlySpec[] = [
+  { path: ["--version"] },
+  { path: ["-v"] },
+  { path: ["version"] },
+  { path: ["status"] },
+  { path: ["gateway", "status"] },
+  { path: ["models", "list"] },
+  { path: ["models", "fallbacks", "list"] },
+  { path: ["tasks", "list"] },
+  { path: ["tasks", "status"], allowArgs: true },
+  { path: ["config", "get"], allowArgs: true },
+  { path: ["config", "list"] },
+  { path: ["config", "show"], allowArgs: true },
+  { path: ["plugins", "list"] },
+  { path: ["plugins", "show"], allowArgs: true },
+  { path: ["plugins", "status"], allowArgs: true },
+  { path: ["directory", "get"], allowArgs: true },
+  { path: ["directory", "list"] },
+  { path: ["directory", "show"], allowArgs: true },
+  { path: ["directory", "pwd"] },
+];
+
+function openclawReadOnlyArgLooksSafe(token: string): boolean {
+  const value = token.toLowerCase();
+  if (!value) return false;
+  if (value.startsWith("-")) {
+    return [
+      "--json",
+      "--usage",
+      "--help",
+      "-h",
+      "--verbose",
+      "-v",
+      "--days",
+    ].includes(value) || /^--days=\d+$/u.test(value);
+  }
+  return /^[A-Za-z0-9._:/@-]+$/u.test(token);
+}
+
+function openclawReadOnlySpecMatches(args: string[], spec: OpenClawReadOnlySpec): boolean {
+  if (args.length < spec.path.length) return false;
+  for (let i = 0; i < spec.path.length; i += 1) {
+    if (args[i] !== spec.path[i]) return false;
+  }
+  const rest = args.slice(spec.path.length);
+  if (rest.length === 0) return true;
+  return rest.every((token) => {
+    if (token.startsWith("-")) return openclawReadOnlyArgLooksSafe(token);
+    return spec.allowArgs === true && openclawReadOnlyArgLooksSafe(token);
+  });
+}
+
 function openclawLooksReadOnly(tokens: string[]): boolean {
-  const action = asString(tokens[1]).toLowerCase();
-  const detail = asString(tokens[2]).toLowerCase();
-  if (!action || ["--version", "-v", "version", "status", "models", "tasks"].includes(action)) return true;
-  if (action === "config") return !detail || ["get", "list", "show"].includes(detail);
-  if (action === "plugins") return !detail || ["list", "show", "status"].includes(detail);
-  if (action === "directory") return !detail || ["get", "list", "show", "pwd"].includes(detail);
-  return false;
+  const args = tokens.slice(1).map((token) => token.toLowerCase()).filter(Boolean);
+  if (args.length === 0) return true;
+  return OPENCLAW_READ_ONLY_COMMANDS.some((spec) => openclawReadOnlySpecMatches(args, spec));
 }
 
 function segmentLooksReadOnlyShell(segment: string): boolean {

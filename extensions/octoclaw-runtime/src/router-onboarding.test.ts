@@ -7,6 +7,7 @@ import type { IMAdapter, IMSendParams } from "./im/adapter.js";
 import { registerIMAdapter } from "./im/index.js";
 import {
   buildRouterWizardSlackBlocks,
+  buildRouterWizardFeishuBlocks,
   discoverConfiguredRouterModels,
   extractRouterWizardAction,
   handleRouterWizardAction,
@@ -147,6 +148,34 @@ function writeGatewayFamilyDiscoverySnapshot(): void {
 }
 
 describe("router wizard Slack onboarding", () => {
+  function writeJudgeConfigToOpenclaw(home: string): void {
+    const configPath = path.join(home, "openclaw.json");
+    let existing: Record<string, unknown> = {};
+    try {
+      existing = JSON.parse(fs.readFileSync(configPath, "utf8")) as Record<string, unknown>;
+    } catch {}
+    if (!existing.plugins) existing.plugins = {};
+    if (!(existing.plugins as Record<string, unknown>).entries) (existing.plugins as Record<string, unknown>).entries = {};
+    const entries = (existing.plugins as Record<string, unknown>).entries as Record<string, unknown>;
+    if (!entries["octoclaw-runtime"]) entries["octoclaw-runtime"] = {};
+    const entry = entries["octoclaw-runtime"] as Record<string, unknown>;
+    if (!entry.config) entry.config = {};
+    const config = entry.config as Record<string, unknown>;
+    config.judgeFast = {
+      enabled: true,
+      modelId: "gpt-5.4-mini",
+      baseUrl: "https://api.openai.com/v1",
+      apiKey: "redacted-test-key",
+      timeoutMs: 3000,
+      timeoutLocalMs: 3000,
+      minConfidence: 0.6,
+      shadowMode: false,
+      judgeAckEnabled: true,
+      local: false,
+    };
+    fs.writeFileSync(configPath, JSON.stringify(existing), "utf8");
+  }
+
   it("builds a Slack interactive onboarding card", () => {
     const blocks = buildRouterWizardSlackBlocks();
     expect(blocks.some((block) => block.type === "actions")).toBe(true);
@@ -740,4 +769,305 @@ describe("router wizard Slack onboarding", () => {
     expect(extractRouterWizardAction({ actions: [{ action_id: "octoclaw_router_wizard_remind_later" }] })).toBe("remind_later");
     expect(extractRouterWizardAction({ payload: { message: { blocks: [{ elements: [{ action_id: "octoclaw_router_wizard_skip" }] }] } } })).toBe("skip");
   });
+
+  it("MOF-007: shows Judge warning when Judge is missing during Slack onboarding", async () => {
+    const sends: Parameters<RouterWizardOnboardingSendMessage>[0][] = [];
+    const sendMessage: RouterWizardOnboardingSendMessage = async (params) => {
+      sends.push(params);
+      return { sent: true, messageId: "1777770001.000001" };
+    };
+
+    const result = await maybeSendRouterWizardOnboarding({
+      sessionKey: "agent:main:slack:default:direct:u123abc",
+      replyToMessageId: "1777770000.000001",
+      openclawHome: tempHome,
+      now: new Date("2026-05-14T00:00:00.000Z"),
+      sendMessage,
+    });
+
+    expect(result.sent).toBe(true);
+    const sent = sends[0]!;
+    expect(sent.message).toContain("Judge 未配置");
+    expect(sent.message).toContain("octoclawctl init");
+    expect(sent.message).toContain("gpt-5.4-mini");
+    const blocksJson = JSON.stringify(sent.interactiveBlocks);
+    expect(blocksJson).toContain("Judge 未配置");
+
+    expect(isRouterWizardComplete(tempHome)).toBe(false);
+  });
+
+  it("MOF-007: router wizard use-defaults does not write Judge config", async () => {
+    writeOpenclawConfig();
+    const sends: Parameters<RouterWizardOnboardingSendMessage>[0][] = [];
+    const sendMessage: RouterWizardOnboardingSendMessage = async (params) => {
+      sends.push(params);
+      return { sent: true, messageId: "1777770001.000001" };
+    };
+
+    const result = await handleRouterWizardAction({
+      event: { payload: { actions: [{ action_id: "octoclaw_router_wizard_use_defaults", value: "use_defaults" }] } },
+      sessionKey: "agent:main:slack:default:direct:u123abc",
+      replyToMessageId: "1777770000.000001",
+      openclawHome: tempHome,
+      now: new Date("2026-05-14T00:00:00.000Z"),
+      sendMessage,
+    });
+
+    expect(result.handled).toBe(true);
+    expect(result.path).toBeTruthy();
+
+    const wizardConfig = JSON.parse(fs.readFileSync(routerWizardConfigPath(tempHome), "utf8")) as Record<string, unknown>;
+    expect(wizardConfig.schemaVersion).toBe("octoclaw.router_wizard/v1");
+
+    const openclawConfig = JSON.parse(fs.readFileSync(path.join(tempHome, "openclaw.json"), "utf8")) as Record<string, unknown>;
+    const plugins = openclawConfig.plugins as Record<string, unknown> | undefined;
+    const entries = plugins?.entries as Record<string, unknown> | undefined;
+    const runtimeEntry = entries?.["octoclaw-runtime"] as Record<string, unknown> | undefined;
+    const config = runtimeEntry?.config as Record<string, unknown> | undefined;
+    expect(config?.judgeFast).toBeUndefined();
+  });
+
+  it("MOF-008: healthy Judge suppresses onboarding warning", async () => {
+    writeOpenclawConfig();
+    writeJudgeConfigToOpenclaw(tempHome);
+
+    const sends: Parameters<RouterWizardOnboardingSendMessage>[0][] = [];
+    const sendMessage: RouterWizardOnboardingSendMessage = async (params) => {
+      sends.push(params);
+      return { sent: true, messageId: "1777770001.000001" };
+    };
+
+    const result = await maybeSendRouterWizardOnboarding({
+      sessionKey: "agent:main:slack:default:direct:u123abc",
+      replyToMessageId: "1777770000.000001",
+      openclawHome: tempHome,
+      now: new Date("2026-05-14T00:00:00.000Z"),
+      sendMessage,
+    });
+
+    expect(result.sent).toBe(true);
+    const sent = sends[0]!;
+    expect(sent.message).not.toContain("Judge 未配置");
+    expect(sent.message).not.toContain("octoclawctl init");
+    expect(sent.message).toContain("Auto Router");
+
+    const blocksJson = JSON.stringify(sent.interactiveBlocks);
+    expect(blocksJson).not.toContain("Judge 未配置");
+
+    expect(blocksJson).toContain("octoclaw_router_wizard_start_questions");
+    expect(blocksJson).toContain("octoclaw_router_wizard_use_defaults");
+  });
+});
+
+describe("router wizard Feishu onboarding", () => {
+  it("MOF-009: Feishu onboarding renders a card", async () => {
+    const sends: Parameters<RouterWizardOnboardingSendMessage>[0][] = [];
+    const sendMessage: RouterWizardOnboardingSendMessage = async (params) => {
+      sends.push(params);
+      return { sent: true, messageId: "om_feishu_001" };
+    };
+
+    const result = await maybeSendRouterWizardOnboarding({
+      sessionKey: "agent:main:feishu:default:direct:ou_AbcDef",
+      replyToMessageId: "om_parent",
+      openclawHome: tempHome,
+      now: new Date("2026-05-14T00:00:00.000Z"),
+      sendMessage,
+    });
+
+    expect(result.sent).toBe(true);
+    const sent = sends[0]!;
+    expect(sent.interactiveBlocks!.length).toBeGreaterThan(0);
+
+    const blocksJson = JSON.stringify(sent.interactiveBlocks);
+    expect(blocksJson).toContain("feishu_card");
+    expect(blocksJson).toContain("start_questions");
+    expect(blocksJson).toContain("use_defaults");
+    expect(blocksJson).toContain("remind_later");
+    expect(blocksJson).toContain("skip");
+
+    expect(sent.message).toContain("还没完成首次配置");
+  });
+
+  it("MOF-009: Feishu onboarding card includes text fallback", async () => {
+    const sends: Parameters<RouterWizardOnboardingSendMessage>[0][] = [];
+    const sendMessage: RouterWizardOnboardingSendMessage = async (params) => {
+      sends.push(params);
+      return { sent: true, messageId: "om_feishu_002" };
+    };
+
+    await maybeSendRouterWizardOnboarding({
+      sessionKey: "agent:main:feishu:default:direct:ou_AbcDef",
+      openclawHome: tempHome,
+      now: new Date("2026-05-14T00:00:00.000Z"),
+      sendMessage,
+    });
+
+    const sent = sends[0]!;
+    expect(sent.message).toContain("Auto Router");
+    expect(sent.message).toContain("octoclawctl router wizard");
+  });
+
+  it("MOF-010: Feishu wizard button advances the same state", async () => {
+    writeOpenclawConfig();
+    const sends: Parameters<RouterWizardOnboardingSendMessage>[0][] = [];
+    const sendMessage: RouterWizardOnboardingSendMessage = async (params) => {
+      sends.push(params);
+      return { sent: true, messageId: `om_feishu_${sends.length}` };
+    };
+    const common = {
+      sessionKey: "agent:main:feishu:default:direct:ou_AbcDef",
+      replyToMessageId: "om_parent",
+      openclawHome: tempHome,
+      now: new Date("2026-05-14T00:00:00.000Z"),
+      sendMessage,
+    };
+
+    const started = await handleRouterWizardAction({
+      ...common,
+      event: { action: { value: "start_questions", tag: "button" } },
+    });
+    expect(started).toMatchObject({ handled: true, action: "start_questions" });
+    expect(sends.at(-1)?.interactiveBlocks?.some((b) => b.type === "feishu_card")).toBe(true);
+    expect(sends.at(-1)?.message).toContain("模型扫描");
+  });
+
+  it("MOF-010: Feishu wizard full question flow uses Feishu cards", async () => {
+    writeOpenclawConfig();
+    const sends: Parameters<RouterWizardOnboardingSendMessage>[0][] = [];
+    const sendMessage: RouterWizardOnboardingSendMessage = async (params) => {
+      sends.push(params);
+      return { sent: true, messageId: `om_feishu_${sends.length}` };
+    };
+    const common = {
+      sessionKey: "agent:main:feishu:default:direct:ou_AbcDef",
+      replyToMessageId: "om_parent",
+      openclawHome: tempHome,
+      now: new Date("2026-05-14T00:00:00.000Z"),
+      sendMessage,
+    };
+
+    await handleRouterWizardAction({ ...common, event: { action: { value: "start_questions", tag: "button" } } });
+    expect(sends.at(-1)?.interactiveBlocks?.some((b) => b.type === "feishu_card")).toBe(true);
+
+    await handleRouterWizardAction({ ...common, event: { action: { value: "model_scan_continue", tag: "button" } } });
+    expect(sends.at(-1)?.message).toContain("Plan 类型");
+
+    await handleRouterWizardAction({ ...common, event: { action: { value: "plan_confirm", tag: "button" } } });
+    await handleRouterWizardAction({ ...common, event: { action: { value: "budget_100", tag: "button" } } });
+    await handleRouterWizardAction({ ...common, event: { action: { value: "privacy_standard", tag: "button" } } });
+    await handleRouterWizardAction({ ...common, event: { action: { value: "language_auto", tag: "button" } } });
+    await handleRouterWizardAction({ ...common, event: { action: { value: "restricted_none", tag: "button" } } });
+    await handleRouterWizardAction({ ...common, event: { action: { value: "same_provider_skip", tag: "button" } } });
+    await handleRouterWizardAction({ ...common, event: { action: { value: "confirm", tag: "button" } } });
+
+    const confirmed = sends.at(-1)!;
+    expect(confirmed.message).toContain("配置已写入");
+    expect(isRouterWizardComplete(tempHome)).toBe(true);
+  });
+
+  it("MOF-011: Feishu duplicate click is idempotent", async () => {
+    writeOpenclawConfig();
+    const sends: Parameters<RouterWizardOnboardingSendMessage>[0][] = [];
+    const sendMessage: RouterWizardOnboardingSendMessage = async (params) => {
+      sends.push(params);
+      return { sent: true, messageId: `om_dup_${sends.length}` };
+    };
+    const common = {
+      sessionKey: "agent:main:feishu:default:direct:ou_AbcDef",
+      replyToMessageId: "om_parent",
+      openclawHome: tempHome,
+      now: new Date("2026-05-14T00:00:00.000Z"),
+      sendMessage,
+    };
+
+    await handleRouterWizardAction({ ...common, event: { action: { value: "start_questions", tag: "button" } } });
+    await handleRouterWizardAction({ ...common, event: { action: { value: "model_scan_continue", tag: "button" } } });
+
+    const stateBefore = JSON.parse(fs.readFileSync(routerWizardOnboardingStatePath(tempHome), "utf8")) as Record<string, unknown>;
+    const activeBefore = JSON.stringify((stateBefore as Record<string, unknown>).active);
+
+    const repeat = await handleRouterWizardAction({ ...common, event: { action: { value: "model_scan_continue", tag: "button" } } });
+    expect(repeat.handled).toBe(true);
+
+    const stateAfter = JSON.parse(fs.readFileSync(routerWizardOnboardingStatePath(tempHome), "utf8")) as Record<string, unknown>;
+    const activeAfter = JSON.stringify((stateAfter as Record<string, unknown>).active);
+    expect(activeAfter).toBe(activeBefore);
+
+    expect(sends.at(-1)?.message).toContain("这一步已经回答过");
+  });
+
+  it("MOF-012: Feishu unknown action does not mutate state", async () => {
+    writeOpenclawConfig();
+    const sends: Parameters<RouterWizardOnboardingSendMessage>[0][] = [];
+    const sendMessage: RouterWizardOnboardingSendMessage = async (params) => {
+      sends.push(params);
+      return { sent: true, messageId: `om_unk_${sends.length}` };
+    };
+
+    const result = await handleRouterWizardAction({
+      event: { action: { value: "totally_unknown_action", tag: "button" } },
+      sessionKey: "agent:main:feishu:default:direct:ou_AbcDef",
+      openclawHome: tempHome,
+      now: new Date("2026-05-14T00:00:00.000Z"),
+      sendMessage,
+    });
+
+    expect(result.handled).toBe(true);
+    expect(result.action).toBe("unknown");
+    expect(sends).toHaveLength(1);
+    expect(sends[0]?.message).toContain("无法识别");
+    expect(fs.existsSync(routerWizardOnboardingStatePath(tempHome))).toBe(false);
+  });
+
+  it("MOF-013: Feishu onboarding card send failure is reported when the injected sender has no adapter fallback", async () => {
+    const sends: Parameters<RouterWizardOnboardingSendMessage>[0][] = [];
+    const sendMessage: RouterWizardOnboardingSendMessage = async (params) => {
+      sends.push(params);
+      if (params.interactiveBlocks?.some((b) => b.type === "feishu_card")) {
+        return { sent: false, error: "card_send_failed" };
+      }
+      return { sent: true, messageId: "om_text_fallback" };
+    };
+
+    const result = await maybeSendRouterWizardOnboarding({
+      sessionKey: "agent:main:feishu:default:direct:ou_AbcDef",
+      openclawHome: tempHome,
+      now: new Date("2026-05-14T00:00:00.000Z"),
+      sendMessage,
+    });
+
+    expect(result.sent).toBe(false);
+    expect(result.reason).toContain("card_send_failed");
+  });
+
+  it("MOF-019: Feishu onboarding does not attempt streaming", async () => {
+    const sends: Parameters<RouterWizardOnboardingSendMessage>[0][] = [];
+    const sendMessage: RouterWizardOnboardingSendMessage = async (params) => {
+      sends.push(params);
+      return { sent: true, messageId: "om_no_stream" };
+    };
+
+    await maybeSendRouterWizardOnboarding({
+      sessionKey: "agent:main:feishu:default:direct:ou_AbcDef",
+      openclawHome: tempHome,
+      now: new Date("2026-05-14T00:00:00.000Z"),
+      sendMessage,
+    });
+
+    const sent = sends[0]!;
+    expect(sent.interactiveBlocks!.every((b) => b.type === "feishu_card")).toBe(true);
+  });
+
+  it("MOF-009: Feishu builds onboarding card blocks", () => {
+    const blocks = buildRouterWizardFeishuBlocks();
+    expect(blocks.length).toBeGreaterThan(0);
+    expect(blocks[0]).toMatchObject({ type: "feishu_card" });
+    const cardJson = JSON.stringify(blocks);
+    expect(cardJson).toContain("start_questions");
+    expect(cardJson).toContain("use_defaults");
+    expect(cardJson).toContain("remind_later");
+    expect(cardJson).toContain("skip");
+  });
+
 });

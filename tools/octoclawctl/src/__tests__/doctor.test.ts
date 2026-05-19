@@ -84,12 +84,12 @@ describe("runDoctor", () => {
     try {
       const result = await runDoctor({ json: false, lang: "en", openclawHome });
 
-      expect(result.output.match(/^(✅|⚠️|❌)/gmu)).toHaveLength(5);
       expect(result.output).toContain("Node.js");
       expect(result.output).toContain("OpenClaw");
       expect(result.output).toContain("Judge model");
       expect(result.output).toContain("IM tokens");
       expect(result.output).toContain("Config writable");
+      expect(result.output).toContain("OctoClaw Readiness");
     } finally {
       await fs.rm(tmpDir, { recursive: true, force: true });
     }
@@ -200,10 +200,38 @@ describe("runDoctor", () => {
     const { tmpDir, openclawHome } = await makeHome("doctor-json");
     try {
       const result = await runDoctor({ json: true, lang: "en", openclawHome });
-      const parsed = JSON.parse(result.output) as { checks?: unknown[] };
+      const parsed = JSON.parse(result.output) as { checks?: unknown[]; readiness?: { checks?: unknown[] } };
 
       expect(parsed.checks).toHaveLength(5);
       expect(parsed.checks?.[0]).toMatchObject({ name: "Node.js" });
+      expect(parsed.readiness?.checks).toEqual(expect.any(Array));
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("MOF-005 shows Judge readiness warning with init remediation when Judge is unconfigured", async () => {
+    mockedSpawnSync.mockReturnValue(openClawSuccess());
+    const { tmpDir, openclawHome } = await makeHome("doctor-readiness-judge-warn");
+    try {
+      const result = await runDoctor({ json: false, lang: "en", openclawHome });
+
+      expect(result.output).toContain("⚠️ judge  Judge not configured");
+      expect(result.output).toContain("octoclawctl init");
+      expect(result.exitCode).toBe(0);
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("MOF-006 shows runtime_plugin readiness failure when runtime plugin is missing", async () => {
+    mockedSpawnSync.mockReturnValue(openClawSuccess());
+    const { tmpDir, openclawHome } = await makeHome("doctor-readiness-runtime-fail");
+    try {
+      const result = await runDoctor({ json: false, lang: "en", openclawHome });
+
+      expect(result.output).toContain("❌ runtime_plugin  octoclaw-runtime plugin not found");
+      expect(result.output).toContain("octoclawctl install && octoclawctl deploy");
     } finally {
       await fs.rm(tmpDir, { recursive: true, force: true });
     }

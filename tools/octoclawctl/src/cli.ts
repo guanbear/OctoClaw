@@ -14,6 +14,7 @@ import { SlackWebApiAcceptanceClient } from "./slack-acceptance/index.js";
 import { disablePlugin, enablePlugin, getConfigValue, restartAll, setConfigValue, showStatus } from "./manage.js";
 import { buildWorkspace, cloneOrUpdate, DEFAULT_REF, DEFAULT_REPO_URL, deployExtension, deployPackages, setupSymlinks, syncOctoClawCoreRules, syncOpenClawPluginEntry, syncSlackDeliveryHookCompatibility, uninstallDeployment, validateLoad, writeSourceManifest } from "./install.js";
 import { readConfig, syncToOpenClawPluginConfig, writeConfig } from "./config.js";
+import { generateReadinessReport, redactReadinessReport, formatReadinessSummary } from "./readiness.js";
 import type { ModelIntelSnapshot } from "@octoclaw/policy/router-lite";
 import type { CostEvent, RouterShadowEvent } from "@octoclaw/router";
 import type { CalibrationInputFile } from "./calibration/types.js";
@@ -3222,7 +3223,16 @@ async function runInstallCommand(parsed: ParsedCliArgs, env: Record<string, stri
     if (parsed.restartServices) {
       await restartAll(openclawHome);
     }
-    return `OctoClaw ${parsed.command} completed at ${octoclawRoot}`;
+
+    let readinessLines = "";
+    try {
+      const report = redactReadinessReport(await generateReadinessReport(openclawHome));
+      readinessLines = `\n\n${formatReadinessSummary(report, parsed.lang ?? "en")}`;
+    } catch {
+      // Readiness is observational
+    }
+
+    return `OctoClaw ${parsed.command} completed at ${octoclawRoot}${readinessLines}`;
   } finally {
     restoreEnv();
   }

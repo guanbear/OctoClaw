@@ -152,6 +152,50 @@ export function buildSlackStatusOutput(
   };
 }
 
+export interface PlainTextStatusOutput {
+  text: string;
+  agentInstruction: string;
+}
+
+export function buildPlainTextStatusOutput(
+  tasks: StatusTaskSummary[],
+  options: {
+    totalCount?: number;
+    hiddenCount?: number;
+  } = {},
+): PlainTextStatusOutput {
+  const visible = tasks.length;
+  const total = options.totalCount ?? visible;
+  const lines: string[] = [`OctoClaw Status: ${visible}/${total} task${total === 1 ? "" : "s"}`];
+
+  if (tasks.length === 0) {
+    lines.push("No active or recent tasks.");
+  } else {
+    for (const task of tasks) {
+      const title = task.title || task.summary || "untitled task";
+      const fields = [
+        `status=${task.status}`,
+        task.route && task.route !== "unknown" ? `route=${task.route}` : "",
+        task.model && task.model !== "unknown" ? `model=${task.model}` : "",
+        task.complexityBand && task.complexityBand !== "unknown" ? `complexity=${task.complexityBand}` : "",
+        task.elapsedText && task.elapsedText !== "unknown" ? `elapsed=${task.elapsedText}` : "",
+      ].filter(Boolean);
+      lines.push(`- ${task.taskId.slice(-8)} ${title.slice(0, 100)} (${fields.join(", ")})`);
+      if (task.summary && task.summary !== title) lines.push(`  ${task.summary.slice(0, 180)}`);
+    }
+  }
+
+  if (options.hiddenCount && options.hiddenCount > 0) {
+    lines.push(`${options.hiddenCount} expired records hidden. Run octoclawctl status --format table for more detail.`);
+  }
+
+  return {
+    text: lines.join("\n"),
+    agentInstruction:
+      "Forward the status panel below to the user as plain text. Do not add claims beyond the shown projection fields.",
+  };
+}
+
 // ─── Native card/block builders ───────────────────────────────────────────────
 
 export interface FeishuCardElement {
@@ -173,6 +217,7 @@ export function buildFeishuStatusCard(
     content: [
       `**${statusEmoji(task.status)} ${task.status}** \`${task.taskId.slice(-8)}\``,
       task.title ? `标题：${task.title.slice(0, 120)}` : "",
+      task.route && task.route !== "reply" && task.route !== "unknown" ? `路由：${task.route}` : "",
       task.complexityBand !== "unknown" ? `复杂度：${task.complexityBand}` : "",
       task.model !== "unknown" ? `模型：${task.model}` : "",
       task.elapsedText !== "unknown" ? `耗时：${task.elapsedText}` : "",

@@ -143,12 +143,279 @@ export function isRouterWizardComplete(openclawHome = ""): boolean {
   }
 }
 
+export function isJudgeConfigured(openclawHome = ""): boolean {
+  const home = resolveOpenclawHome(openclawHome);
+
+  try {
+    const raw = JSON.parse(fsSync.readFileSync(path.join(home, "openclaw.json"), "utf8")) as UnknownRecord;
+    const judgeFast = asRecord(
+      asRecord(
+        asRecord(
+          asRecord(asRecord(raw).plugins).entries,
+        )["octoclaw-runtime"],
+      ).config,
+    ).judgeFast;
+    const jf = asRecord(judgeFast);
+    if (jf.enabled !== false && stringValue(jf.modelId) && stringValue(jf.baseUrl)) return true;
+  } catch {}
+
+  try {
+    const raw = JSON.parse(fsSync.readFileSync(path.join(home, "judge-fast.json"), "utf8")) as UnknownRecord;
+    if (stringValue(asRecord(raw).modelId) && stringValue(asRecord(raw).baseUrl)) return true;
+  } catch {}
+
+  return false;
+}
+
 export function buildRouterWizardOnboardingMessage(): string {
   return [
     "OctoClaw Auto Router 还没完成首次配置。",
     "可以逐步配置，也可以直接使用默认设置；主 agent 模型不会被自动切换，子 agent 才会按 judge 和结构化信号自动选型。",
     "也可以之后手动运行：`octoclawctl router wizard --incremental`。",
   ].join("\n");
+}
+
+export function buildJudgeWarningText(): string {
+  return [
+    "⚠️ Judge 未配置或不可达，Auto Router 会保守退回主模型。",
+    "推荐运行 `octoclawctl init` 配置 Judge；远端推荐 `gpt-5.4-mini`（便宜、快速、无推理）。",
+  ].join("\n");
+}
+
+export function buildJudgeWarningSlackBlocks(): Array<Record<string, unknown>> {
+  return [
+    {
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text: "⚠️ *Judge 未配置或不可达*\nAuto Router 会保守退回主模型。推荐运行 `octoclawctl init` 配置 Judge。\n远端推荐 `gpt-5.4-mini`（便宜、快速、无推理）。",
+      },
+    },
+    {
+      type: "context",
+      elements: [
+        { type: "mrkdwn", text: "路由向导按钮只写入 router-wizard.json，不会自动修改 Judge 配置。" },
+      ],
+    },
+  ];
+}
+
+// ─── Feishu card helpers ────────────────────────────────────────────────────
+
+interface FeishuCardButton {
+  tag: "button";
+  text: { tag: "plain_text"; content: string };
+  type: "primary" | "default" | "danger";
+  value: string;
+}
+
+function feishuButton(text: string, _surface: string, _action: string, value: string, style: "primary" | "default" | "danger" = "default"): FeishuCardButton {
+  return { tag: "button", text: { tag: "plain_text", content: text }, type: style, value };
+}
+
+function feishuCard(headerText: string, template: string, elements: Array<Record<string, unknown>>): Record<string, unknown> {
+  return {
+    type: "feishu_card",
+    card: {
+      schema: "2.0",
+      header: { title: { tag: "plain_text", content: headerText }, template },
+      body: { elements },
+    },
+  };
+}
+
+function feishuMarkdownElement(content: string): Record<string, unknown> {
+  return { tag: "markdown", content };
+}
+
+function feishuActionElement(buttons: FeishuCardButton[]): Record<string, unknown> {
+  return { tag: "action", actions: buttons };
+}
+
+export function buildRouterWizardFeishuBlocks(): Array<Record<string, unknown>> {
+  return [
+    feishuCard("OctoClaw Auto Router 首次配置", "blue", [
+      feishuMarkdownElement("可以逐步回答几个问题，也可以用当前 OpenClaw 模型生成默认配置。主 agent 不会被静默切换。\n配置只写入本机 `~/.openclaw/octoclaw/router-wizard.json`。"),
+      feishuActionElement([
+        feishuButton("开始配置", "wizard", "start_questions", "start_questions", "primary"),
+        feishuButton("启用默认设置", "wizard", "use_defaults", "use_defaults"),
+        feishuButton("稍后提醒", "wizard", "remind_later", "remind_later"),
+        feishuButton("不再提醒", "wizard", "skip", "skip", "danger"),
+      ]),
+    ]),
+  ];
+}
+
+export function buildJudgeWarningFeishuBlocks(): Array<Record<string, unknown>> {
+  return [
+    feishuCard("⚠️ Judge 未配置", "orange", [
+      feishuMarkdownElement("Auto Router 会保守退回主模型。推荐运行 `octoclawctl init` 配置 Judge。\n远端推荐 `gpt-5.4-mini`（便宜、快速、无推理）。\n路由向导按钮只写入 router-wizard.json，不会自动修改 Judge 配置。"),
+    ]),
+  ];
+}
+
+function feishuQuestionCard(headerText: string, bodyMd: string, buttons: FeishuCardButton[]): Array<Record<string, unknown>> {
+  return [
+    feishuCard(headerText, "blue", [
+      feishuMarkdownElement(bodyMd),
+      feishuActionElement(buttons),
+    ]),
+  ];
+}
+
+function feishuModelScanQuestion(models: string[]): { message: string; feishuBlocks: Array<Record<string, unknown>> } {
+  const modelText = models.length ? models.map((model) => `- \`${model}\``).join("\n") : "未发现 OpenClaw 已配置模型。";
+  return {
+    message: `Auto Router 向导 1/7：模型扫描。\n${modelText}`,
+    feishuBlocks: feishuQuestionCard("1/7 模型扫描", `当前 OpenClaw 已配置模型：\n${modelText}`, [
+      feishuButton("继续", "wizard", "model_scan_continue", "model_scan_continue", "primary"),
+    ]),
+  };
+}
+
+function feishuPlanQuestion(models: string[], answers: RouterWizardAnswers = {}): { message: string; feishuBlocks: Array<Record<string, unknown>> } {
+  const current = nextPlanModel(models, answers);
+  const index = current ? models.indexOf(current) + 1 : models.length;
+  const modelText = models.length
+    ? models.map((model) => {
+      const selected = answers.modelPlanTypes?.[model];
+      return `- \`${model}\` → ${selected ? `已选 \`${selected}\`` : "未确认"}`;
+    }).join("\n")
+    : "未发现 OpenClaw 已配置模型。";
+  const currentText = current ? `\n当前确认：\`${current}\`（${index}/${models.length}）` : "";
+  const buttons: FeishuCardButton[] = current
+    ? [
+      feishuButton("订阅/Plan", "wizard", "plan_subscription", `plan_subscription:${current}`),
+      feishuButton("按量付费", "wizard", "plan_pay_as_you_go", `plan_pay_as_you_go:${current}`),
+      feishuButton("我不确定", "wizard", "plan_unknown", `plan_unknown:${current}`),
+      feishuButton("剩余全部订阅", "wizard", "plan_all_subscription", "plan_all_subscription"),
+      feishuButton("剩余全部按量", "wizard", "plan_all_pay_as_you_go", "plan_all_pay_as_you_go"),
+      feishuButton("跳过剩余", "wizard", "plan_confirm", "plan_confirm"),
+    ]
+    : [feishuButton("继续", "wizard", "plan_confirm", "plan_confirm", "primary")];
+  return {
+    message: `Auto Router 向导 2/7：确认 Plan 类型。\n${modelText}${currentText}`,
+    feishuBlocks: feishuQuestionCard("2/7 Plan 类型", `逐个确认每个模型是否属于订阅/额度内，还是按量付费；不确定可先标记。\n${modelText}${currentText}`, buttons),
+  };
+}
+
+function feishuBudgetQuestion(): { message: string; feishuBlocks: Array<Record<string, unknown>> } {
+  return {
+    message: "Auto Router 向导 3/7：选择月预算。",
+    feishuBlocks: feishuQuestionCard("3/7 月预算", "用于成本报告和预算保护；可以不设置。", [
+      feishuButton("不设置", "wizard", "budget_none", "budget_none"),
+      feishuButton("$50", "wizard", "budget_50", "budget_50"),
+      feishuButton("$100", "wizard", "budget_100", "budget_100", "primary"),
+      feishuButton("$200", "wizard", "budget_200", "budget_200"),
+      feishuButton("自定义", "wizard", "budget_custom", "budget_custom"),
+    ]),
+  };
+}
+
+function feishuBudgetTextQuestion(): { message: string; feishuBlocks: Array<Record<string, unknown>> } {
+  return {
+    message: "请回复 `budget 100` 这样的格式设置月预算，数字单位是 USD。",
+    feishuBlocks: [feishuCard("设置月预算", "blue", [feishuMarkdownElement("回复 `budget 100` 这样的格式设置月预算，数字单位是 USD。")])],
+  };
+}
+
+function feishuPrivacyQuestion(): { message: string; feishuBlocks: Array<Record<string, unknown>> } {
+  return {
+    message: "Auto Router 向导 4/7：选择隐私模式。",
+    feishuBlocks: feishuQuestionCard("4/7 隐私模式", "`standard` 会允许使用云端模型能力数据；`local_only` 只考虑本地/私有模型。", [
+      feishuButton("标准", "wizard", "privacy_standard", "privacy_standard", "primary"),
+      feishuButton("仅本地", "wizard", "privacy_local_only", "privacy_local_only"),
+      feishuButton("我来挑选", "wizard", "privacy_custom", "privacy_custom"),
+    ]),
+  };
+}
+
+function feishuLanguageQuestion(): { message: string; feishuBlocks: Array<Record<string, unknown>> } {
+  return {
+    message: "Auto Router 向导 5/7：选择语言偏好。",
+    feishuBlocks: feishuQuestionCard("5/7 语言偏好", "用于后续提示和报告文案；`auto` 会跟随会话语言。", [
+      feishuButton("自动", "wizard", "language_auto", "language_auto", "primary"),
+      feishuButton("中文", "wizard", "language_zh", "language_zh"),
+      feishuButton("English", "wizard", "language_en", "language_en"),
+    ]),
+  };
+}
+
+function feishuRestrictedModelsQuestion(models: string[], answers: RouterWizardAnswers = {}): { message: string; feishuBlocks: Array<Record<string, unknown>> } {
+  const current = nextRestrictedModel(models, answers);
+  const index = current ? models.indexOf(current) + 1 : models.length;
+  const restricted = new Set(answers.restrictedModels ?? []);
+  const reviewed = restrictedReviewed(answers);
+  const modelText = models.length
+    ? models.map((model) => {
+      const status = restricted.has(model) ? "已禁用" : reviewed.has(model) ? "保留" : "未确认";
+      return `- \`${model}\` → ${status}`;
+    }).join("\n")
+    : "未发现 OpenClaw 模型。";
+  const currentText = current ? `\n当前确认：\`${current}\`（${index}/${models.length}）` : "";
+  const buttons: FeishuCardButton[] = current
+    ? [
+      feishuButton("禁用此模型", "wizard", "restricted_ban", `restricted_ban:${current}`, "danger"),
+      feishuButton("保留此模型", "wizard", "restricted_allow", `restricted_allow:${current}`, "primary"),
+      feishuButton("全部保留", "wizard", "restricted_none", "restricted_none"),
+    ]
+    : [feishuButton("继续", "wizard", "restricted_none", "restricted_none", "primary")];
+  return {
+    message: `Auto Router 向导 6/7：禁用模型设置。\n${modelText}${currentText}`,
+    feishuBlocks: feishuQuestionCard("6/7 禁用模型", `逐个选择哪些模型不允许 Auto Router 使用。\n${modelText}${currentText}`, buttons),
+  };
+}
+
+function feishuRestrictedTextQuestion(): { message: string; feishuBlocks: Array<Record<string, unknown>> } {
+  return {
+    message: "请回复 `ban model-a, model-b`，我会把这些模型加入 restrictedModels。",
+    feishuBlocks: [feishuCard("禁用模型", "blue", [feishuMarkdownElement("回复 `ban model-a, model-b`，我会把这些模型加入 `restrictedModels`。")])],
+  };
+}
+
+function feishuSameProviderQuestion(models: string[], answers: RouterWizardAnswers = {}): { message: string; feishuBlocks: Array<Record<string, unknown>> } {
+  const current = nextSameProviderModel(models, answers);
+  const selected = new Set(answers.sameProviderModels ?? []);
+  const reviewed = sameProviderReviewed(answers);
+  const modelText = models.length
+    ? models.map((model) => {
+      const status = selected.has(model) ? "已导入" : reviewed.has(model) ? "已跳过" : "待确认";
+      return `- \`${model}\` → ${status}`;
+    }).join("\n")
+    : "没有发现可导入的同供应商候选模型。";
+  const currentText = current ? `\n当前候选：\`${current}\`` : "";
+  const buttons: FeishuCardButton[] = current
+    ? [
+      feishuButton("导入此模型", "wizard", "same_provider_add", `same_provider_add:${current}`, "primary"),
+      feishuButton("跳过此模型", "wizard", "same_provider_skip_one", `same_provider_skip_one:${current}`),
+      feishuButton("全部导入", "wizard", "same_provider_import_all", "same_provider_import_all"),
+      feishuButton("全部跳过", "wizard", "same_provider_skip", "same_provider_skip"),
+    ]
+    : [feishuButton("继续", "wizard", "same_provider_skip", "same_provider_skip", "primary")];
+  return {
+    message: `Auto Router 向导 7/7：同供应商模型发现。\n${modelText}${currentText}`,
+    feishuBlocks: feishuQuestionCard("7/7 同供应商模型发现", `${modelText}${currentText}`, buttons),
+  };
+}
+
+function feishuConfirmQuestion(answers: RouterWizardAnswers, models: string[]): { message: string; feishuBlocks: Array<Record<string, unknown>> } {
+  const budget = answers.monthlyBudget === undefined ? "不设置" : `$${answers.monthlyBudget} USD/月`;
+  const restricted = answers.restrictedModels?.length ? answers.restrictedModels.join(", ") : "无";
+  const sameProvider = answers.sameProviderModels?.length ? answers.sameProviderModels.join(", ") : "无";
+  return {
+    message: [
+      "Auto Router 向导：确认写入配置。",
+      `隐私模式：${answers.privacy ?? "standard"}`,
+      `语言偏好：${answers.language ?? "auto"}`,
+      `月预算：${budget}`,
+      `禁用模型：${restricted}`,
+      `导入候选模型：${sameProvider}`,
+      `识别模型数：${models.length}`,
+    ].join("\n"),
+    feishuBlocks: feishuQuestionCard("确认写入", `隐私模式：\`${answers.privacy ?? "standard"}\`\n语言偏好：\`${answers.language ?? "auto"}\`\n月预算：${budget}\n禁用模型：${restricted}\n导入候选模型：${sameProvider}\n识别模型数：${models.length}`, [
+      feishuButton("确认写入", "wizard", "confirm", "confirm", "primary"),
+    ]),
+  };
 }
 
 export function buildRouterWizardSlackBlocks(): Array<Record<string, unknown>> {
@@ -274,7 +541,10 @@ export async function maybeSendRouterWizardOnboarding(input: {
 }): Promise<{ sent: boolean; reason?: string; messageId?: string }> {
   const sessionKey = stringValue(input.sessionKey);
   if ((process.env.VITEST || process.env.VITEST_WORKER_ID) && !input.sendMessage) return { sent: false, reason: "test_env" };
-  if (!/(?:^|:)slack:/u.test(sessionKey.toLowerCase())) return { sent: false, reason: "not_slack" };
+  const lowerSessionKey = sessionKey.toLowerCase();
+  const isSlack = /(?:^|:)slack:/u.test(lowerSessionKey);
+  const isFeishu = /(?:^|:)feishu:/u.test(lowerSessionKey);
+  if (!isSlack && !isFeishu) return { sent: false, reason: "not_im_channel" };
   const openclawHome = resolveOpenclawHome(input.openclawHome);
   if (isRouterWizardComplete(openclawHome)) return { sent: false, reason: "wizard_complete" };
   const now = input.now ?? new Date();
@@ -282,10 +552,16 @@ export async function maybeSendRouterWizardOnboarding(input: {
   if (!shouldPrompt(state, sessionKey, now)) return { sent: false, reason: "already_prompted" };
 
   const sendMessage = input.sendMessage ?? ((params) => sendIMMessage(params));
+  const judgePresent = isJudgeConfigured(openclawHome);
+  const baseMessage = buildRouterWizardOnboardingMessage();
+  const message = judgePresent ? baseMessage : `${buildJudgeWarningText()}\n\n${baseMessage}`;
+  const interactiveBlocks = isFeishu
+    ? (judgePresent ? buildRouterWizardFeishuBlocks() : [...buildJudgeWarningFeishuBlocks(), ...buildRouterWizardFeishuBlocks()])
+    : (judgePresent ? buildRouterWizardSlackBlocks() : [...buildJudgeWarningSlackBlocks(), ...buildRouterWizardSlackBlocks()]);
   const result = await sendMessage({
     sessionKey,
-    message: buildRouterWizardOnboardingMessage(),
-    interactiveBlocks: buildRouterWizardSlackBlocks(),
+    message,
+    interactiveBlocks,
     replyToMessageId: stringValue(input.replyToMessageId) || undefined,
     timeoutMs: 5000,
     cwd: input.cwd,
@@ -312,7 +588,7 @@ function collectActionCandidates(value: unknown, depth = 0): UnknownRecord[] {
   const record = asRecord(value);
   const actions = Array.isArray(record.actions) ? record.actions.map(asRecord) : [];
   return [
-    ("action_id" in record || "actionId" in record) ? record : {},
+    ("action_id" in record || "actionId" in record || ("value" in record && "tag" in record)) ? record : {},
     ...actions,
     ...Object.values(record).flatMap((entry) => Array.isArray(entry)
       ? entry.flatMap((item) => collectActionCandidates(item, depth + 1))
@@ -375,6 +651,14 @@ function extractSlackStateWizardAction(event: unknown): RouterWizardButtonAction
     }
   }
   return null;
+}
+
+function hasCardActionCandidate(event: unknown): boolean {
+  return collectActionCandidates(event).some((action) => {
+    const actionId = stringValue(action.action_id || action.actionId);
+    const value = stringValue(action.value);
+    return Boolean(actionId || value);
+  });
 }
 
 export function discoverConfiguredRouterModels(openclawHome = ""): string[] {
@@ -608,19 +892,21 @@ function questionBlocks(text: string, elements: Record<string, unknown>[]): Arra
   ];
 }
 
-function modelScanQuestion(models: string[]): { message: string; blocks: Array<Record<string, unknown>> } {
+function modelScanQuestion(models: string[]): WizardQuestion {
   const modelText = models.length ? models.map((model) => `- \`${model}\``).join("\n") : "未发现 OpenClaw 已配置模型。";
   const message = `Auto Router 向导 1/7：模型扫描。\n${modelText}`;
+  const feishu = feishuModelScanQuestion(models);
   return {
     message,
     blocks: [
       { type: "section", text: { type: "mrkdwn", text: `*1/7 模型扫描*\n当前 OpenClaw 已配置模型：\n${modelText}` } },
       actionsBlock([actionButton("继续", "octoclaw_router_wizard_model_scan_continue", "model_scan_continue", "primary")]),
     ],
+    feishuBlocks: feishu.feishuBlocks,
   };
 }
 
-function planQuestion(models: string[], answers: RouterWizardAnswers = {}): { message: string; blocks: Array<Record<string, unknown>> } {
+function planQuestion(models: string[], answers: RouterWizardAnswers = {}): WizardQuestion {
   const current = nextPlanModel(models, answers);
   const index = current ? models.indexOf(current) + 1 : models.length;
   const modelText = models.length
@@ -641,17 +927,20 @@ function planQuestion(models: string[], answers: RouterWizardAnswers = {}): { me
       actionButton("跳过剩余", "octoclaw_router_wizard_plan_confirm", "plan_confirm"),
     ]
     : [actionButton("继续", "octoclaw_router_wizard_plan_confirm", "plan_confirm", "primary")];
+  const feishu = feishuPlanQuestion(models, answers);
   return {
     message,
     blocks: [
       { type: "section", text: { type: "mrkdwn", text: `*2/7 Plan 类型*\n逐个确认每个模型是否属于订阅/额度内，还是按量付费；不确定可先标记。\n${modelText}${currentText}` } },
       actionsBlock(elements),
     ],
+    feishuBlocks: feishu.feishuBlocks,
   };
 }
 
-function privacyQuestion(): { message: string; blocks: Array<Record<string, unknown>> } {
+function privacyQuestion(): WizardQuestion {
   const message = "Auto Router 向导 4/7：选择隐私模式。";
+  const feishu = feishuPrivacyQuestion();
   return {
     message,
     blocks: questionBlocks("*4/7 隐私模式*\n`standard` 会允许使用云端模型能力数据；`local_only` 只考虑本地/私有模型。", [
@@ -659,11 +948,13 @@ function privacyQuestion(): { message: string; blocks: Array<Record<string, unkn
       actionButton("仅本地", "octoclaw_router_wizard_privacy_local_only", "privacy_local_only"),
       actionButton("我来挑选", "octoclaw_router_wizard_privacy_custom", "privacy_custom"),
     ]),
+    feishuBlocks: feishu.feishuBlocks,
   };
 }
 
-function budgetQuestion(): { message: string; blocks: Array<Record<string, unknown>> } {
+function budgetQuestion(): WizardQuestion {
   const message = "Auto Router 向导 3/7：选择月预算。";
+  const feishu = feishuBudgetQuestion();
   return {
     message,
     blocks: questionBlocks("*3/7 月预算*\n用于成本报告和预算保护；可以不设置。", [
@@ -673,18 +964,22 @@ function budgetQuestion(): { message: string; blocks: Array<Record<string, unkno
       actionButton("$200", "octoclaw_router_wizard_budget_200", "budget_200"),
       actionButton("自定义", "octoclaw_router_wizard_budget_custom", "budget_custom"),
     ]),
+    feishuBlocks: feishu.feishuBlocks,
   };
 }
 
-function budgetTextQuestion(): { message: string; blocks: Array<Record<string, unknown>> } {
+function budgetTextQuestion(): WizardQuestion {
+  const feishu = feishuBudgetTextQuestion();
   return {
     message: "请回复 `budget 100` 这样的格式设置月预算，数字单位是 USD。",
     blocks: [{ type: "section", text: { type: "mrkdwn", text: "回复 `budget 100` 这样的格式设置月预算，数字单位是 USD。" } }],
+    feishuBlocks: feishu.feishuBlocks,
   };
 }
 
-function languageQuestion(): { message: string; blocks: Array<Record<string, unknown>> } {
+function languageQuestion(): WizardQuestion {
   const message = "Auto Router 向导 5/7：选择语言偏好。";
+  const feishu = feishuLanguageQuestion();
   return {
     message,
     blocks: questionBlocks("*5/7 语言偏好*\n用于后续提示和报告文案；`auto` 会跟随会话语言。", [
@@ -692,10 +987,11 @@ function languageQuestion(): { message: string; blocks: Array<Record<string, unk
       actionButton("中文", "octoclaw_router_wizard_language_zh", "language_zh"),
       actionButton("English", "octoclaw_router_wizard_language_en", "language_en"),
     ]),
+    feishuBlocks: feishu.feishuBlocks,
   };
 }
 
-function restrictedModelsQuestion(models: string[], answers: RouterWizardAnswers = {}): { message: string; blocks: Array<Record<string, unknown>> } {
+function restrictedModelsQuestion(models: string[], answers: RouterWizardAnswers = {}): WizardQuestion {
   const current = nextRestrictedModel(models, answers);
   const index = current ? models.indexOf(current) + 1 : models.length;
   const restricted = new Set(answers.restrictedModels ?? []);
@@ -714,23 +1010,27 @@ function restrictedModelsQuestion(models: string[], answers: RouterWizardAnswers
       actionButton("全部保留", "octoclaw_router_wizard_restricted_none", "restricted_none"),
     ]
     : [actionButton("继续", "octoclaw_router_wizard_restricted_none", "restricted_none", "primary")];
+  const feishu = feishuRestrictedModelsQuestion(models, answers);
   return {
     message: `Auto Router 向导 6/7：禁用模型设置。\n${modelText}${currentText}`,
     blocks: [
       { type: "section", text: { type: "mrkdwn", text: `*6/7 禁用模型*\n逐个选择哪些模型不允许 Auto Router 使用。\n${modelText}${currentText}` } },
       actionsBlock(elements),
     ],
+    feishuBlocks: feishu.feishuBlocks,
   };
 }
 
-function restrictedTextQuestion(): { message: string; blocks: Array<Record<string, unknown>> } {
+function restrictedTextQuestion(): WizardQuestion {
+  const feishu = feishuRestrictedTextQuestion();
   return {
     message: "请回复 `ban model-a, model-b`，我会把这些模型加入 restrictedModels。",
     blocks: [{ type: "section", text: { type: "mrkdwn", text: "回复 `ban model-a, model-b`，我会把这些模型加入 `restrictedModels`。" } }],
+    feishuBlocks: feishu.feishuBlocks,
   };
 }
 
-function sameProviderQuestion(models: string[], answers: RouterWizardAnswers = {}): { message: string; blocks: Array<Record<string, unknown>> } {
+function sameProviderQuestion(models: string[], answers: RouterWizardAnswers = {}): WizardQuestion {
   const current = nextSameProviderModel(models, answers);
   const selected = new Set(answers.sameProviderModels ?? []);
   const reviewed = sameProviderReviewed(answers);
@@ -749,16 +1049,18 @@ function sameProviderQuestion(models: string[], answers: RouterWizardAnswers = {
       actionButton("全部跳过", "octoclaw_router_wizard_same_provider_skip", "same_provider_skip"),
     ]
     : [actionButton("继续", "octoclaw_router_wizard_same_provider_skip", "same_provider_skip", "primary")];
+  const feishu = feishuSameProviderQuestion(models, answers);
   return {
     message: `Auto Router 向导 7/7：同供应商模型发现。\n${modelText}${currentText}`,
     blocks: [
       { type: "section", text: { type: "mrkdwn", text: `*7/7 同供应商模型发现*\n${modelText}${currentText}` } },
       actionsBlock(elements),
     ],
+    feishuBlocks: feishu.feishuBlocks,
   };
 }
 
-function confirmQuestion(answers: RouterWizardAnswers, models: string[]): { message: string; blocks: Array<Record<string, unknown>> } {
+function confirmQuestion(answers: RouterWizardAnswers, models: string[]): WizardQuestion {
   const budget = answers.monthlyBudget === undefined ? "不设置" : `$${answers.monthlyBudget} USD/月`;
   const restricted = answers.restrictedModels?.length ? answers.restrictedModels.join(", ") : "无";
   const sameProvider = answers.sameProviderModels?.length ? answers.sameProviderModels.join(", ") : "无";
@@ -771,26 +1073,36 @@ function confirmQuestion(answers: RouterWizardAnswers, models: string[]): { mess
     `导入候选模型：${sameProvider}`,
     `识别模型数：${models.length}`,
   ].join("\n");
+  const feishu = feishuConfirmQuestion(answers, models);
   return {
     message,
     blocks: [
       { type: "section", text: { type: "mrkdwn", text: `*确认写入*\n隐私模式：\`${answers.privacy ?? "standard"}\`\n语言偏好：\`${answers.language ?? "auto"}\`\n月预算：${budget}\n禁用模型：${restricted}\n导入候选模型：${sameProvider}\n识别模型数：${models.length}` } },
       actionsBlock([actionButton("确认写入", CONFIRM_ACTION, "confirm", "primary")]),
     ],
+    feishuBlocks: feishu.feishuBlocks,
   };
 }
+
+type WizardQuestion = {
+  message: string;
+  blocks: Array<Record<string, unknown>>;
+  feishuBlocks?: Array<Record<string, unknown>>;
+};
 
 async function sendWizardQuestion(input: {
   sendMessage: RouterWizardOnboardingSendMessage;
   sessionKey: string;
   replyToMessageId?: string;
   cwd?: string;
-  question: { message: string; blocks: Array<Record<string, unknown>> };
+  question: WizardQuestion;
 }): Promise<void> {
+  const isFeishu = /(?:^|:)feishu:/u.test(input.sessionKey.toLowerCase());
+  const useFeishu = isFeishu && input.question.feishuBlocks;
   await input.sendMessage({
     sessionKey: input.sessionKey,
     message: input.question.message,
-    interactiveBlocks: input.question.blocks,
+    interactiveBlocks: useFeishu ? input.question.feishuBlocks! : input.question.blocks,
     replyToMessageId: input.replyToMessageId,
     cwd: input.cwd,
     suppressProjectionFooter: true,
@@ -910,8 +1222,39 @@ export async function handleRouterWizardAction(input: {
   const actionValue = actionDetails?.value ?? "";
   if (!action && active?.step === "budget_custom" && parseBudgetText(text) !== undefined) action = "budget_text";
   if (!action && (active?.step === "restricted_models" || active?.step === "restricted_models_text") && text) action = "restricted_models_text";
-  if (!action) return { handled: false };
-  if (!actionMatchesActiveStep(action, active?.step)) return { handled: true, action };
+  if (!action) {
+    const isFeishu = /(?:^|:)feishu:/u.test(input.sessionKey.toLowerCase());
+    if (isFeishu && hasCardActionCandidate(input.event)) {
+      await sendMessage({
+        sessionKey: input.sessionKey,
+        message: "这个按钮已经失效或无法识别，请重新打开向导。",
+        replyToMessageId: input.replyToMessageId,
+        cwd: input.cwd,
+        suppressProjectionFooter: true,
+        deliveryKind: "status_reply",
+        deliveryTargetSource: input.replyToMessageId ? "inbound_anchor" : "session_fallback",
+        footerMode: "off",
+      });
+      return { handled: true, action: "unknown" };
+    }
+    return { handled: false };
+  }
+  if (!actionMatchesActiveStep(action, active?.step)) {
+    const isFeishu = /(?:^|:)feishu:/u.test(input.sessionKey.toLowerCase());
+    if (isFeishu && active?.step) {
+      await sendMessage({
+        sessionKey: input.sessionKey,
+        message: "这一步已经回答过",
+        replyToMessageId: input.replyToMessageId,
+        cwd: input.cwd,
+        suppressProjectionFooter: true,
+        deliveryKind: "status_reply",
+        deliveryTargetSource: input.replyToMessageId ? "inbound_anchor" : "session_fallback",
+        footerMode: "off",
+      });
+    }
+    return { handled: true, action };
+  }
   if (action === "use_defaults") {
     const models = discoverConfiguredRouterModels(openclawHome);
     const filePath = await writeWizardConfig(openclawHome, models, now);

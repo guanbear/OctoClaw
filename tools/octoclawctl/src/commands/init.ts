@@ -6,6 +6,7 @@ import { runStepImChannel } from "./init/steps/step-im-channel.js";
 import { runStepImToken } from "./init/steps/step-im-token.js";
 import { runStepDoctorVerify } from "./init/steps/step-doctor-verify.js";
 import { readConfig, writeConfig } from "../config.js";
+import { generateReadinessReport, redactReadinessReport, formatReadinessSummary } from "../readiness.js";
 
 export interface InitWizardOpts {
   nonInteractive: boolean;
@@ -65,6 +66,14 @@ export async function runInitWizard(opts: InitWizardOpts): Promise<string> {
   // Step 5: Doctor verification (design.md §7)
   const doctorLines = await runStepDoctorVerify(state, wizardOpts);
   lines.push("", ...doctorLines);
+
+  // Step 6: Readiness summary after init
+  try {
+    const report = redactReadinessReport(await generateReadinessReport(opts.openclawHome));
+    lines.push("", formatReadinessSummary(report, lang));
+  } catch {
+    // Readiness is observational — never fail init
+  }
 
   return lines.join("\n");
 }

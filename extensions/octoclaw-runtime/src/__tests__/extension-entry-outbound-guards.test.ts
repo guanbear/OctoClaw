@@ -130,7 +130,7 @@ describe("guardOutboundMessageForPolicyState", () => {
     previousReplyProjectionFooter = undefined;
   });
 
-  it("does not keyword-rewrite Slack outbound direct answer when delegate route has no execution evidence", () => {
+  it("renders reply footer for Slack outbound direct answer when delegate route has no execution evidence", () => {
     const now = Date.now();
     const key = "agent:main:slack:channel:c0as4dappu3";
     policyState.setState(key, {
@@ -150,7 +150,8 @@ describe("guardOutboundMessageForPolicyState", () => {
     );
 
     expect(guarded?.content).toContain("刚才的子 agent 已经跑完了");
-    expect(guarded?.content).toContain("route=delegate | model=");
+    expect(guarded?.content).toContain("route=reply | model=");
+    expect(guarded?.content).not.toContain("route=delegate | model=");
     policyState.clearState(key);
   });
 

@@ -61,6 +61,7 @@ function judgeLabel(state: WizardState): string {
   if (!state.judgeModel) return "Judge";
   if (state.judgeModel.type === "ollama-qwen3") return "Ollama Qwen3 0.6B";
   if (state.judgeModel.type === "remote-groq") return "Groq";
+  if (state.judgeModel.type === "remote-gpt-5-4-mini") return "gpt-5.4-mini (remote)";
   return state.judgeModel.modelId || state.judgeModel.type;
 }
 

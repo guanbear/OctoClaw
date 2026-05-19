@@ -3,6 +3,43 @@ import { runCommand, resolveWorkspaceRoot } from "../../resolve/env.js";
 import type { IMAdapter, IMDeliveryTarget, IMReactParams, IMReactResult, IMSendParams, IMSendResult } from "../adapter.js";
 import { splitIMText } from "../text-split.js";
 
+// ─── Feishu card action decoder ──────────────────────────────────────────────
+
+export interface FeishuDecodedAction {
+  action: string;
+  value: string;
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  return value as Record<string, unknown>;
+}
+
+function str(value: unknown): string {
+  return String(value ?? "").trim();
+}
+
+export function decodeFeishuCardAction(callback: unknown): FeishuDecodedAction | null {
+  const record = asRecord(callback);
+  const action = asRecord(record.action);
+  const value = str(action.value);
+  if (!value) return null;
+  const actionName = str(action.action || action.tag);
+  return { action: actionName, value };
+}
+
+export function normalizeFeishuCardCallback(callback: unknown): Record<string, unknown> {
+  const decoded = decodeFeishuCardAction(callback);
+  if (!decoded) return {};
+  return { actions: [{ action_id: decoded.value, value: decoded.value }] };
+}
+
+export function buildFeishuTextFallback(guidance: string, manualCommand?: string): string {
+  const parts = [guidance];
+  if (manualCommand) parts.push(`或手动运行：\`${manualCommand}\``);
+  return parts.join("\n");
+}
+
 export interface FeishuAdapterConfig {
   /**
    * Controls whether ACK/reply messages are sent as Feishu thread replies.
@@ -260,7 +297,21 @@ export class FeishuAdapter implements IMAdapter {
 
       lastResult = await this.deliver(args, cwdValue, timeoutValue);
       if (!lastResult.sent) {
-        return { ...lastResult, error: ERROR_CODES.IM_SEND_FAILED };
+        if (textSegments.length === 0) return { ...lastResult, error: ERROR_CODES.IM_SEND_FAILED };
+        for (const segment of textSegments) {
+          const fallbackArgs = ["message", "send", "--channel", "feishu", "--target", target.target, "--json", "--message", segment];
+          if (replyToMessageId && this.config.replyToMode !== "off") {
+            fallbackArgs.push("--reply-to", replyToMessageId);
+          }
+          lastResult = await this.deliver(fallbackArgs, cwdValue, timeoutValue);
+          if (!lastResult.sent) {
+            return {
+              ...lastResult,
+              error: textSegments.length > 1 ? ERROR_CODES.IM_SEND_FAILED : lastResult.error || ERROR_CODES.IM_SEND_FAILED,
+            };
+          }
+        }
+        return lastResult;
       }
     }
 

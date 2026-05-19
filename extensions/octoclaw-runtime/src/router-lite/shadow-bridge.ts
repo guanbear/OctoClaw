@@ -220,7 +220,7 @@ function appendFallbackSuggestionDecision(input: {
       currentNativePosition: suggestion?.currentNativePosition ?? (model.tags.includes("default") ? "default" : model.tags.find((tag) => /^fallback#\d+$/iu.test(tag))),
       cooldownReason: suggestion?.cooldownReason ?? reason ?? "cooldown",
       suggestedAction: suggestion?.suggestedAction ?? {
-        command: `openclaw models fallbacks remove ${model.modelKey}`,
+        command: `manual fallback review: demote ${model.modelKey} only if the operator approves`,
         explanation: "Cooldown observed; consider demoting this fallback while it stabilizes",
       },
       evidence: {

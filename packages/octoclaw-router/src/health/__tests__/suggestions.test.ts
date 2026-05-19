@@ -21,7 +21,7 @@ describe("evaluateNativeFallbackSuggestions", () => {
         cooldownReason: "rate_limit_429",
         evidence: { recentFailureRate: 0.5, sampleCount: 12 },
         suggestedAction: {
-          command: "openclaw models fallbacks remove cliproxyapi/gpt-5.5",
+          command: "manual fallback review: demote cliproxyapi/gpt-5.5 only if the operator approves",
           explanation: "Cooldown observed; consider demoting this fallback while it stabilizes",
         },
       },

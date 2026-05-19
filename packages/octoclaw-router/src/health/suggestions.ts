@@ -41,7 +41,7 @@ export function evaluateNativeFallbackSuggestions(
         ...(model.health.sampleCount !== undefined ? { sampleCount: model.health.sampleCount } : {}),
       },
       suggestedAction: {
-        command: `openclaw models fallbacks remove ${model.modelKey}`,
+        command: `manual fallback review: demote ${model.modelKey} only if the operator approves`,
         explanation: "Cooldown observed; consider demoting this fallback while it stabilizes",
       },
     }];

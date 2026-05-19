@@ -3,6 +3,7 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { readConfig, configPath, type OctoclawConfig } from "../config.js";
+import { generateReadinessReport, redactReadinessReport, formatReadinessSummary } from "../readiness.js";
 
 declare const process: { version: string };
 
@@ -29,8 +30,19 @@ export async function runDoctor(opts: DoctorOpts): Promise<{ output: string; exi
   results.push(await checkImTokens(opts));
   results.push(await checkConfigWritable(opts));
 
+  let readinessReport;
+  try {
+    readinessReport = redactReadinessReport(await generateReadinessReport(opts.openclawHome));
+  } catch {
+    readinessReport = null;
+  }
+
   if (opts.json) {
-    return { output: JSON.stringify({ checks: results }, null, 2), exitCode: computeExitCode(results) };
+    const payload: Record<string, unknown> = { checks: results };
+    if (readinessReport) {
+      payload.readiness = readinessReport;
+    }
+    return { output: JSON.stringify(payload, null, 2), exitCode: computeExitCode(results) };
   }
 
   const lines: string[] = ["OctoClaw Doctor", "─".repeat(40)];
@@ -41,6 +53,10 @@ export async function runDoctor(opts: DoctorOpts): Promise<{ output: string; exi
     const detail = result.detail ? `  ${result.detail}` : "";
     lines.push(`${icon} ${name}${detail}`);
     if (result.hint) lines.push(`   → ${result.hint}`);
+  }
+
+  if (readinessReport) {
+    lines.push("", formatReadinessSummary(readinessReport, opts.lang));
   }
 
   lines.push("─".repeat(40));

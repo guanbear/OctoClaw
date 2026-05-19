@@ -293,8 +293,21 @@ export function appendReplyProjectionFooter(content: string, state: UnknownRecor
   const snapshot = outboundProjectionSnapshot(state);
   const workContract = asRecord(decision.work_contract);
   const routeDecision = asRecord(decision.route_decision);
-  const route = stringValue(workContract.route || routeDecision.route || state.route || snapshot.route || "reply") === "delegate"
+  const projectedRoute = stringValue(workContract.route || routeDecision.route || state.route || snapshot.route || "reply") === "delegate"
     ? "delegate" : "reply";
+  const delegateExecutionObserved = state.dispatchExecuted === true
+    || state.dispatch_executed === true
+    || state.spawnExecuted === true
+    || state.spawn_executed === true
+    || decision.dispatchExecuted === true
+    || decision.dispatch_executed === true
+    || decision.spawnExecuted === true
+    || decision.spawn_executed === true
+    || asRecord(workContract.telemetry).dispatchExecuted === true
+    || asRecord(workContract.telemetry).dispatch_executed === true
+    || asRecord(workContract.telemetry).spawnExecuted === true
+    || asRecord(workContract.telemetry).spawn_executed === true;
+  const route = projectedRoute === "delegate" && delegateExecutionObserved ? "delegate" : "reply";
 
   const debug = footerDebugEnabled();
 
