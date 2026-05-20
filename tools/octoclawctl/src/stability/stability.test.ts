@@ -491,6 +491,34 @@ describe("stability smoke v2 synthetic fixtures", () => {
     }
   });
 
+  it("SSV2-024: orchestration executes wizard fixtures instead of leaving the lane unknown", async () => {
+    const tmpDir = path.join(os.homedir(), ".octoclawctl-test-tmp", `stability-wizard-lane-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    const outputDir = path.join(tmpDir, "reports");
+    try {
+      await fs.mkdir(tmpDir, { recursive: true });
+
+      const result = await runStabilityOrchestration({
+        subcommand: "nightly",
+        outputDir,
+        env: {},
+        liveSlackReport: {
+          overallGate: "pass",
+          cases: [
+            { id: "reply_core.simple_chat", status: "pass" },
+            { id: "streaming_core.long_reply", status: "pass" },
+            { id: "delegate_core.native_final", status: "pass" },
+            { id: "footer_truth.current_model", status: "pass" },
+            { id: "status_core.read_only", status: "pass" },
+          ],
+        },
+      });
+
+      expect(result.lanes.find((lane) => lane.name === "wizard_contract")?.gate).toBe("pass");
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   it("SSV2-052b: nightly smoke reads replayPath from the configured Slack acceptance config", async () => {
     const tmpDir = path.join(os.homedir(), ".octoclawctl-test-tmp", `stability-nightly-replay-config-${Date.now()}-${Math.random().toString(36).slice(2)}`);
     const outputDir = path.join(tmpDir, "reports");

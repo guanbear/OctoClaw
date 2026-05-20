@@ -344,11 +344,26 @@ export async function runStabilityOrchestration(options: StabilityRunnerOptions)
   }
 
   if (wizardCases.length > 0) {
+    const wizardFailures: StabilityFailurePacket[] = [];
+    for (const wizardCase of wizardCases) {
+      const kind = syntheticKindForCase(wizardCase.id, wizardCase.expect);
+      const fixture = buildMinimalFixture(wizardCase.id, kind, wizardCase.expect);
+      const result = runSyntheticStabilityFixture(fixture);
+      if (result.gate === "fail") {
+        wizardFailures.push(...result.failures.map((f): StabilityFailurePacket => ({
+          ...f,
+          mode: "wizard",
+          caseId: wizardCase.id,
+          severity: wizardCase.severity,
+        })));
+      }
+    }
+    allFailures.push(...wizardFailures);
     allLanes.push({
       name: "wizard_contract",
-      gate: "unknown",
+      gate: wizardFailures.length > 0 ? "fail" : "pass",
       caseIds: wizardCases.map((c) => c.id),
-      failureCodes: [],
+      failureCodes: [...new Set(wizardFailures.map((f) => f.code))],
     });
   }
 
