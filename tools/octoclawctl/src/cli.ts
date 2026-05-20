@@ -3620,7 +3620,7 @@ async function runStabilityCliCommand(parsed: ParsedCliArgs, env: Record<string,
   }
 
   const cadence = parseCadence(parsed.cadence);
-  const liveSlackReport = parsed.config && env.SLACK_BOT_TOKEN
+  const liveSlackReport = parsed.config
     ? await runStabilityLiveSlackPack(parsed.config, env)
     : undefined;
   const result = await runStabilityOrchestration({

@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { ModelIntelLite } from "@octoclaw/router";
 import {
@@ -8,6 +11,7 @@ import {
   evaluateWizardStabilityState,
   evaluateFixDraftGuard,
   resolveRouterModelExpectation,
+  runStabilityOrchestration,
   runNightlyReplayStabilityLane,
   runSyntheticStabilityFixture,
   sanitizeStabilityArtifact,
@@ -361,6 +365,38 @@ describe("stability smoke v2 AI selection and review guards", () => {
 });
 
 describe("stability smoke v2 synthetic fixtures", () => {
+  it("SSV2-051: honors Slack acceptance config token env names when classifying live availability", async () => {
+    const tmpDir = path.join(os.homedir(), ".octoclawctl-test-tmp", `stability-config-env-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    const outputDir = path.join(tmpDir, "reports");
+    const configPath = path.join(tmpDir, "slack-acceptance.json");
+    try {
+      await fs.mkdir(tmpDir, { recursive: true });
+      await fs.writeFile(configPath, JSON.stringify({
+        botTokenEnv: "OCTOCLAW_SLACK_ACCEPTANCE_BOT_TOKEN",
+        userTokenEnv: "OCTOCLAW_SLACK_ACCEPTANCE_USER_TOKEN",
+        sessionKey: "octoclaw:stability:test",
+        target: { channel: "CSTABILITY", allowDm: false, allowProductionTarget: false },
+        isolation: { enabled: true, allowUserToken: true },
+      }), "utf8");
+
+      const result = await runStabilityOrchestration({
+        subcommand: "post-deploy",
+        outputDir,
+        config: configPath,
+        env: {
+          OCTOCLAW_SLACK_ACCEPTANCE_BOT_TOKEN: "xoxb-test-token",
+          OCTOCLAW_SLACK_ACCEPTANCE_USER_TOKEN: "xoxp-test-token",
+        },
+      });
+
+      const liveLane = result.lanes.find((lane) => lane.name === "slack_delivery");
+      expect(result.skippedLiveReason).toBeUndefined();
+      expect(liveLane?.failureCodes).toEqual(["live_slack_not_run"]);
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   it("SSV2-020: accepts escaped spawn JSON when canonical content matches", () => {
     const result = runSyntheticStabilityFixture({
       id: "delegate.spawn_intent_hash_escape",

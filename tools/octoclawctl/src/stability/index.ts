@@ -8,7 +8,7 @@ export {
 } from "./ai.js";
 export { buildCatalogCasePack } from "./catalog.js";
 export { evaluateWizardStabilityState, resolveRouterModelExpectation } from "./router.js";
-export { runStabilityOrchestration, runStabilityReviewLatest, runStabilityFixDraft, parseCadence } from "./runner.js";
+export { runStabilityOrchestration, runStabilityReviewLatest, runStabilityFixDraft, parseCadence, hasStabilitySlackEnv } from "./runner.js";
 export { sanitizeStabilityArtifact } from "./sanitize.js";
 export { runNightlyReplayStabilityLane, runSyntheticStabilityFixture } from "./synthetic.js";
 export { validateStabilityCasePack } from "./validation.js";

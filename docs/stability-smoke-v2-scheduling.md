@@ -22,7 +22,7 @@ octoclawctl stability nightly \
   --config ~/.openclaw/octoclaw-stability-config.json
 ```
 
-Set `SLACK_BOT_TOKEN` and `SLACK_USER_TOKEN` in the scheduled task environment. If missing, live Slack cases are skipped as `environment_unhealthy` while synthetic, replay, router, wizard, and AI review lanes still run.
+Set the token environment variables named by the Slack acceptance config, for example `botTokenEnv: "OCTOCLAW_SLACK_ACCEPTANCE_BOT_TOKEN"` and optional `userTokenEnv: "OCTOCLAW_SLACK_ACCEPTANCE_USER_TOKEN"`. If no config is passed, the legacy `SLACK_BOT_TOKEN` fallback is used for live-availability classification. If the required token env is missing, live Slack cases are skipped as `environment_unhealthy` while synthetic, replay, router, wizard, and AI review lanes still run.
 
 ### 2. Full Acceptance (Every 3 Days)
 
@@ -89,7 +89,7 @@ Key differences:
 ### Migration Steps
 
 1. Keep existing nightly-eval config as backup. Stability Smoke v2 does not read it.
-2. Set `SLACK_BOT_TOKEN` in the scheduled task environment (or remove it to run non-live lanes only).
+2. Set the token env vars referenced by the Slack acceptance config in the scheduled task environment (or remove them to run non-live lanes only).
 3. Update the scheduled task command from `nightly-eval run` to `stability nightly`.
 4. Replace the separate `nightly-eval deliver-slack` step with scheduled delivery of the generated `*-stability-summary.txt` artifact. The summary is compact and sanitized; the stability command itself does not store credentials or mutate Slack configuration.
 5. Add a second scheduled task for `stability full --cadence 3d` every 3 days.

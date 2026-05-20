@@ -46,8 +46,27 @@ export function parseCadence(value: string | undefined): string {
   return value.trim();
 }
 
-function hasSlackEnv(env: Record<string, string | undefined>): boolean {
-  return Boolean(env.SLACK_BOT_TOKEN?.trim());
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function asString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+export async function hasStabilitySlackEnv(env: Record<string, string | undefined>, configPath?: string): Promise<boolean> {
+  if (!configPath) return Boolean(env.SLACK_BOT_TOKEN?.trim());
+  let raw: unknown;
+  try {
+    raw = JSON.parse(await fs.readFile(configPath, "utf8"));
+  } catch {
+    return false;
+  }
+  if (!isRecord(raw)) return false;
+  const botTokenEnv = asString(raw.botTokenEnv);
+  if (!botTokenEnv || !env[botTokenEnv]?.trim()) return false;
+  const userTokenEnv = asString(raw.userTokenEnv);
+  return !userTokenEnv || Boolean(env[userTokenEnv]?.trim());
 }
 
 function runKindForSubcommand(subcommand: StabilityRunnerOptions["subcommand"]): StabilityRunKind {
@@ -130,7 +149,7 @@ async function findLatestReport(artifactDir: string): Promise<string> {
 export async function runStabilityOrchestration(options: StabilityRunnerOptions): Promise<StabilityRunnerResult> {
   const runKind = runKindForSubcommand(options.subcommand);
   const casePack = buildCatalogCasePack(runKind);
-  const slackAvailable = hasSlackEnv(options.env);
+  const slackAvailable = await hasStabilitySlackEnv(options.env, options.config);
 
   const allLanes: StabilityLaneResult[] = [];
   const allFailures: StabilityFailurePacket[] = [];
