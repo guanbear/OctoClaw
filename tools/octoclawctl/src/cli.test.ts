@@ -1969,8 +1969,11 @@ describe("octoclawctl nightly integration", () => {
       const cases = buildStabilitySlackAcceptanceCases([], { hasReplayPath: true });
 
       expect(cases.find((item) => item.id === "footer_truth.current_model")?.expectReplay).toBeUndefined();
+      expect(cases.find((item) => item.id === "delegate_core.native_final")?.ackTimeoutMs).toBe(180_000);
+      expect(cases.find((item) => item.id === "delegate_core.native_final")?.allowFastFinalAck).toBe(true);
       expect(cases.find((item) => item.id === "delegate_core.native_final")?.expectFinalAll).toEqual([
-        "汇总|总结|结论|状态|运行",
+        "Gateway|系统运行状态摘要|LaunchAgent|连通性",
+        "状态|摘要|结论",
       ]);
     });
 
