@@ -504,7 +504,14 @@ function buildMinimalFixture(id: string, kind: SyntheticFixture["kind"], expect:
         duplicateFinalCount: typeof expect.duplicateFinalCount === "number" ? expect.duplicateFinalCount : 0,
       };
     case "restart_shutdown":
-      return { id, kind, slackText: "Previous run is still shutting down.", restartWindowMs: 12_000 };
+      return {
+        id,
+        kind,
+        slackText: asString(expect.slackText) ?? (expect.restartWindowRecovery === true
+          ? "Gateway recovered after restart and accepted the next request."
+          : "Previous run is still shutting down."),
+        restartWindowMs: typeof expect.restartWindowMs === "number" ? expect.restartWindowMs : 12_000,
+      };
     case "wizard_start":
       return { id, kind, nextState: "step_1" };
     case "escaped_spawn_json":
