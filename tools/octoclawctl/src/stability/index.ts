@@ -1,8 +1,25 @@
+export {
+  buildAiCaseSelectionPrompt,
+  buildAiReviewPrompt,
+  classifyStabilityFailure,
+  evaluateFixDraftGuard,
+  selectStabilityCasePackFromAi,
+  shouldRunFixDraft,
+} from "./ai.js";
 export { buildCatalogCasePack } from "./catalog.js";
 export { evaluateWizardStabilityState, resolveRouterModelExpectation } from "./router.js";
 export { sanitizeStabilityArtifact } from "./sanitize.js";
 export { runNightlyReplayStabilityLane, runSyntheticStabilityFixture } from "./synthetic.js";
 export { validateStabilityCasePack } from "./validation.js";
+export type {
+  AiCaseSelectionOptions,
+  AiCaseSelectionPromptInput,
+  AiCaseSelectionResult,
+  AiPrompt,
+  FixDraftGuardInput,
+  FixDraftGuardResult,
+  StabilityFailureClassification,
+} from "./ai.js";
 export type {
   RouterModelExpectationInput,
   RouterModelExpectationResult,

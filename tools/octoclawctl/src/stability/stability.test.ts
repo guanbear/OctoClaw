@@ -2,11 +2,17 @@ import { describe, expect, it } from "vitest";
 import type { ModelIntelLite } from "@octoclaw/router";
 import {
   buildCatalogCasePack,
+  buildAiCaseSelectionPrompt,
+  buildAiReviewPrompt,
+  classifyStabilityFailure,
   evaluateWizardStabilityState,
+  evaluateFixDraftGuard,
   resolveRouterModelExpectation,
   runNightlyReplayStabilityLane,
   runSyntheticStabilityFixture,
   sanitizeStabilityArtifact,
+  selectStabilityCasePackFromAi,
+  shouldRunFixDraft,
   validateStabilityCasePack,
 } from "./index.js";
 
@@ -252,6 +258,105 @@ describe("stability smoke v2 router and wizard checks", () => {
     expect(first.nextStep).toBe(2);
     expect(duplicate.gate).toBe("pass");
     expect(duplicate.message).toBe("这一步已经回答过");
+  });
+});
+
+describe("stability smoke v2 AI selection and review guards", () => {
+  it("SSV2-040: invalid AI JSON falls back to the catalog nightly pack", () => {
+    const result = selectStabilityCasePackFromAi("not json", {
+      generatedAt: "2026-05-20T00:00:00.000Z",
+      maxLiveCases: 8,
+    });
+
+    expect(result.fallbackUsed).toBe(true);
+    expect(result.pack.generatedBy).toBe("catalog");
+    expect(result.pack.runKind).toBe("nightly");
+    expect(result.failureCode).toBe("smoke_spec_mismatch");
+  });
+
+  it("SSV2-041: low confidence asks GPT-5.5 to review without adding live cases", () => {
+    const prompt = buildAiCaseSelectionPrompt({
+      recentReportSummaries: ["ack_misleading_text yesterday"],
+      modelListSummary: "zhipu/glm-5.1, cliproxyapi/gpt-5.5",
+    });
+    const result = selectStabilityCasePackFromAi(JSON.stringify({
+      confidence: 0.4,
+      casePack: buildCatalogCasePack("nightly", { generatedAt: "2026-05-20T00:00:00.000Z" }),
+    }), { generatedAt: "2026-05-20T00:00:00.000Z", maxLiveCases: 8 });
+
+    expect(prompt.model).toBe("zhipu/GLM-5.1");
+    expect(result.escalationModel).toBe("cliproxyapi/gpt-5.5");
+    expect(result.pack.cases.filter((item) => item.mode === "live_slack").length).toBeLessThanOrEqual(8);
+  });
+
+  it("SSV2-042: AI review prompt uses failure packets and redacts secrets", () => {
+    const prompt = buildAiReviewPrompt([
+      {
+        code: "provider_bare_error",
+        severity: "major",
+        caseId: "provider.402_or_429_fallback",
+        mode: "provider",
+        artifactPaths: { error: "xoxb-secret-token" },
+      },
+    ]);
+
+    expect(prompt.model).toBe("zhipu/GLM-5.1");
+    expect(prompt.prompt).toContain("provider_bare_error");
+    expect(prompt.prompt).not.toContain("xoxb-secret-token");
+  });
+
+  it("SSV2-043: fix draft skips environment-only issues", () => {
+    const classified = classifyStabilityFailure({
+      code: "gateway_restart_drop",
+      severity: "major",
+      caseId: "restart.shutting_down_message",
+      mode: "synthetic",
+    });
+
+    expect(classified.classification).toBe("environment_issue");
+    expect(shouldRunFixDraft([classified])).toBe(false);
+  });
+
+  it("SSV2-044: fix draft runs only for blocker or major runtime bugs", () => {
+    const runtimeBug = classifyStabilityFailure({
+      code: "delegate_footer_without_spawn",
+      severity: "major",
+      caseId: "delegate_core.native_final",
+      mode: "live_slack",
+    });
+
+    expect(runtimeBug.classification).toBe("runtime_bug");
+    expect(shouldRunFixDraft([runtimeBug])).toBe(true);
+  });
+
+  it("SSV2-045: confirmation guard blocks commit push deploy restart and config mutation", () => {
+    const result = evaluateFixDraftGuard({
+      filesChanged: 1,
+      linesChanged: 20,
+      touchesHotPath: false,
+      validationPassed: true,
+      attemptedCommands: ["git commit -m test", "openclaw gateway restart"],
+      mutatesOpenClawConfig: true,
+    });
+
+    expect(result.allowed).toBe(false);
+    expect(result.needsHumanReview).toBe(true);
+    expect(result.reasonCodes).toEqual(expect.arrayContaining(["blocked_command:commit", "blocked_command:restart", "blocked_openclaw_config_mutation"]));
+  });
+
+  it("SSV2-046: size and risk guard marks large or hot-path drafts for human review", () => {
+    const result = evaluateFixDraftGuard({
+      filesChanged: 6,
+      linesChanged: 301,
+      touchesHotPath: true,
+      validationPassed: false,
+      attemptedCommands: [],
+      mutatesOpenClawConfig: false,
+    });
+
+    expect(result.allowed).toBe(false);
+    expect(result.needsHumanReview).toBe(true);
+    expect(result.reasonCodes).toEqual(expect.arrayContaining(["too_many_files", "too_many_lines", "hot_path_touched", "validation_failed"]));
   });
 });
 
