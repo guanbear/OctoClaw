@@ -8,6 +8,7 @@ declare const process: { env: Record<string, string | undefined> };
 import type { RuntimeStateSurfaceRecord } from "@octoclaw/runtime/state-surface";
 import { openSqliteCostEventStore } from "@octoclaw/router";
 import {
+  buildStabilitySlackAcceptanceCases,
   main,
   parseCliArgs,
   resolveRuntimeStateSurfaceRecord,
@@ -1942,6 +1943,19 @@ describe("octoclawctl nightly integration", () => {
         outputDir: "/tmp/stab",
         cadence: "3d",
       });
+    });
+
+    it("SSV2-051: live stability cases preserve the configured Slack mention trigger", () => {
+      const cases = buildStabilitySlackAcceptanceCases([
+        {
+          id: "configured",
+          kind: "plain_chat",
+          prompt: "<@U0ARU7EKGCQ> 在吗",
+        },
+      ]);
+
+      expect(cases.length).toBeGreaterThan(0);
+      expect(cases.every((item) => item.prompt?.startsWith("<@U0ARU7EKGCQ> "))).toBe(true);
     });
 
     it("SSV2-053: full acceptance cadence defaults to 3d", async () => {

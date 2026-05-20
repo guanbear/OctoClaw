@@ -3663,7 +3663,7 @@ async function runStabilityCliCommand(parsed: ParsedCliArgs, env: Record<string,
 
 async function runStabilityLiveSlackPack(configPath: string, env: Record<string, string | undefined>) {
   const resolvedConfig = await loadSlackAcceptanceConfig(configPath, env);
-  const stabilityCases = stabilitySlackAcceptanceCases();
+  const stabilityCases = buildStabilitySlackAcceptanceCases(resolvedConfig.cases);
   const scopedConfig = {
     ...resolvedConfig,
     cases: stabilityCases,
@@ -3680,12 +3680,25 @@ async function runStabilityLiveSlackPack(configPath: string, env: Record<string,
   };
 }
 
-function stabilitySlackAcceptanceCases(): SlackAcceptanceCaseConfig[] {
+function inferSlackMentionTrigger(configuredCases: SlackAcceptanceCaseConfig[]): string {
+  for (const item of configuredCases) {
+    const match = /^(\s*<@[A-Z0-9]+>\s*)/u.exec(item.prompt ?? "");
+    if (match) return match[1];
+  }
+  return "";
+}
+
+function withSlackTrigger(trigger: string, prompt: string): string {
+  return trigger && !prompt.startsWith(trigger) ? `${trigger}${prompt}` : prompt;
+}
+
+export function buildStabilitySlackAcceptanceCases(configuredCases: SlackAcceptanceCaseConfig[] = []): SlackAcceptanceCaseConfig[] {
+  const trigger = inferSlackMentionTrigger(configuredCases);
   return [
     {
       id: "reply_core.simple_chat",
       kind: "plain_chat",
-      prompt: "请用一句话回复：当前 Slack smoke 正常。",
+      prompt: withSlackTrigger(trigger, "请用一句话回复：当前 Slack smoke 正常。"),
       finalRequired: true,
       noSpawnExpected: true,
       expectFooter: { route: "reply" },
@@ -3693,7 +3706,7 @@ function stabilitySlackAcceptanceCases(): SlackAcceptanceCaseConfig[] {
     {
       id: "streaming_core.long_reply",
       kind: "plain_chat",
-      prompt: "写一段 300 字左右的中文说明，用来验证 Slack 流式回复不会出现误导 ACK。",
+      prompt: withSlackTrigger(trigger, "写一段 300 字左右的中文说明，用来验证 Slack 流式回复不会出现误导 ACK。"),
       finalRequired: true,
       ackRequired: false,
       rejectAck: ["任务已启动。", "还没好，再等等"],
@@ -3702,7 +3715,7 @@ function stabilitySlackAcceptanceCases(): SlackAcceptanceCaseConfig[] {
     {
       id: "delegate_core.native_final",
       kind: "delegated_work",
-      prompt: "请委派一个子任务查询当前运行状态，然后汇总结论。",
+      prompt: withSlackTrigger(trigger, "请委派一个子任务查询当前运行状态，然后汇总结论。"),
       ackRequired: true,
       finalRequired: true,
       expectFooter: { route: "delegate", via: "native_announce" },
@@ -3719,7 +3732,7 @@ function stabilitySlackAcceptanceCases(): SlackAcceptanceCaseConfig[] {
     {
       id: "footer_truth.current_model",
       kind: "plain_chat",
-      prompt: "你现在用的是什么模型？",
+      prompt: withSlackTrigger(trigger, "你现在用的是什么模型？"),
       finalRequired: true,
       expectReplay: { deliveryTransport: "slack_api", targetSource: "inbound_anchor" },
     },
