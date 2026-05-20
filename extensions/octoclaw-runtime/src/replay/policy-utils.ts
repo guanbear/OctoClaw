@@ -55,6 +55,8 @@ export function observerControlTools(decision: Record<string, unknown>, routeHin
   if (routeHintTool) allowed.add(String(routeHintTool).trim());
   allowed.add("octoclaw_status");
   allowed.add("octoclaw_task_action");
+  allowed.add("octoclaw_dispatch_confirm");
+  allowed.add("sessions_yield");
   allowed.add("session_status");
   for (const toolName of asStringArray(workContract.allowedTools ?? workContract.allowed_tools)) {
     allowed.add(toolName);

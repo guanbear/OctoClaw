@@ -2463,6 +2463,73 @@ describe("before_tool_call route hint guard", () => {
     policyState.clearState(key);
   });
 
+  it("allows native dispatch confirm for control observer decisions after sessions_spawn accepts", async () => {
+    const handlers = new Map<string, Function>();
+    plugin.register({
+      on: (event, handler) => handlers.set(event, handler),
+      registerTool: () => {},
+      registerCommand: () => {},
+      logger: {},
+    });
+
+    const key = "agent:main:slack:channel:c0as4dappu3:thread:t-control-observer-confirm";
+    policyState.setState(key, {
+      decision: {
+        route_decision: {
+          route: "reply",
+          decision_bucket: "control_observer",
+          task_class: "control_observer",
+        },
+        hook_interface: {
+          before_tool_call: {
+            enabled: true,
+            route_hint_required: false,
+            route_hint_tool: "octoclaw_route_hint",
+            delegation_enforcement: true,
+          },
+        },
+        route_hint_policy: { required: false, submitted: false },
+        tool_policy: {
+          allow_direct_tools: false,
+          observer_control_tools: ["octoclaw_status", "octoclaw_task_action"],
+          allowed_control_tools: ["octoclaw_dispatch"],
+        },
+      },
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    });
+
+    const beforeToolCall = handlers.get("before_tool_call");
+    expect(beforeToolCall).toBeTruthy();
+    const confirmResult = await beforeToolCall!(
+      {
+        toolName: "octoclaw_dispatch_confirm",
+        params: {
+          spawnIntentId: "nsp_test",
+          workContractId: "wc-test",
+          sessionsSpawnStatus: "accepted",
+          runId: "run-test",
+          childSessionKey: "agent:main:subagent:child-test",
+        },
+      },
+      { sessionKey: key, agentId: "main", sessionId: "session-test" },
+    );
+    const ordinaryResult = await beforeToolCall!(
+      { toolName: "read", params: { path: "README.md" } },
+      { sessionKey: key, agentId: "main", sessionId: "session-test" },
+    ) as { block?: boolean; blockReason?: string } | undefined;
+    const yieldResult = await beforeToolCall!(
+      { toolName: "sessions_yield", params: { message: "等待 native 子任务完成。" } },
+      { sessionKey: key, agentId: "main", sessionId: "session-test" },
+    );
+
+    expect(confirmResult).toBeUndefined();
+    expect(yieldResult).toBeUndefined();
+    expect(ordinaryResult?.block).toBe(true);
+    expect(ordinaryResult?.blockReason).toContain("control/observer request");
+    policyState.clearState(key);
+  });
+
 
 
   it("blocks main-session direct tools after a sealed delegate route unless direct tools are explicitly allowed", async () => {
