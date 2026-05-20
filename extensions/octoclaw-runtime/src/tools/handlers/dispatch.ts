@@ -25,7 +25,7 @@ import {
 import { createOpenClawDistTaskFlowPort } from "../../ports/openclaw-dist-taskflow-port.js";
 import { checkTaskflowCapability } from "../../ports/taskflow-port.js";
 import type { NativeBindingRef, WorkContract } from "@octoclaw/contracts/work-contract";
-import { loadWorkContract } from "../../work-contract/store.js";
+import { loadWorkContract, updateWorkContract } from "../../work-contract/store.js";
 import { materializeWorkContractSuccess, materializeWorkContractFailure } from "../../work-contract/materializer.js";
 import { selectPreferredChildSession } from "../../work-contract/continuity.js";
 import { emitExecutionTransitionNotification } from "../../ack/execution-transition-notifier.js";
@@ -154,6 +154,19 @@ function resolveDispatchComplexityBand(input: {
   const taskClass = asString(routeDecision.task_class || routeDecision.judge_role || decision._judge_role);
   if (taskClass === "control_observer" || taskClass === "observer_probe") return "simple";
   return "normal";
+}
+
+function persistDispatchComplexityBand(contract: WorkContract | null, complexityBand: string): WorkContract | null {
+  if (!contract || !complexityBand) return contract;
+  return updateWorkContract(contract.workContractId, (current) => ({
+    ...current,
+    telemetry: {
+      ...current.telemetry,
+      complexityBand,
+      complexity_band: complexityBand,
+    } as WorkContract["telemetry"] & Record<string, unknown>,
+    updatedAt: new Date().toISOString(),
+  })) ?? contract;
 }
 
 export async function executeOctoclawDispatch(params: Record<string, unknown>, _rawCtx: Record<string, unknown>, options: ToolRegistrationOptions = {}): Promise<Record<string, unknown>> {
@@ -549,6 +562,7 @@ export async function executeOctoclawDispatch(params: Record<string, unknown>, _
         if (complexityBand) {
           metadata.complexityBand = complexityBand;
           metadata.complexity_band = complexityBand;
+          dispatchWorkContract = persistDispatchComplexityBand(dispatchWorkContract, complexityBand);
         }
         if (selectedModel) {
           metadata.model = selectedModel;

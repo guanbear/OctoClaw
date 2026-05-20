@@ -457,6 +457,36 @@ describe("stability smoke v2 synthetic fixtures", () => {
     }
   });
 
+  it("SSV2-052: post-deploy smoke does not require nightly replay evidence", async () => {
+    const tmpDir = path.join(os.homedir(), ".octoclawctl-test-tmp", `stability-post-deploy-no-replay-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    const outputDir = path.join(tmpDir, "reports");
+    try {
+      await fs.mkdir(tmpDir, { recursive: true });
+
+      const result = await runStabilityOrchestration({
+        subcommand: "post-deploy",
+        outputDir,
+        env: {},
+        liveSlackReport: {
+          overallGate: "pass",
+          cases: [
+            { id: "reply_core.simple_chat", status: "pass" },
+            { id: "streaming_core.long_reply", status: "pass" },
+            { id: "delegate_core.native_final", status: "pass" },
+            { id: "footer_truth.current_model", status: "pass" },
+            { id: "status_core.read_only", status: "pass" },
+          ],
+        },
+      });
+
+      expect(result.overallGate).toBe("pass");
+      expect(result.failures.find((item) => item.caseId === "nightly_replay")).toBeUndefined();
+      expect(result.lanes.some((lane) => lane.name.startsWith("nightly:"))).toBe(false);
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   it("SSV2-013/SSV2-022: orchestration treats expected synthetic regression classifications as pass evidence", async () => {
     const tmpDir = path.join(os.homedir(), ".octoclawctl-test-tmp", `stability-expected-regression-${Date.now()}-${Math.random().toString(36).slice(2)}`);
     const outputDir = path.join(tmpDir, "reports");

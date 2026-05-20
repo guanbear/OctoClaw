@@ -286,7 +286,7 @@ export async function runStabilityOrchestration(options: StabilityRunnerOptions)
     });
   }
 
-  {
+  if (runKind === "nightly" || runKind === "full_3d") {
     const result = runNightlyReplayStabilityLane(undefined);
     allLanes.push(...result.lanes);
     allFailures.push(...result.failures);

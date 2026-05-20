@@ -302,6 +302,10 @@ describe("octoclaw_dispatch planner backend", () => {
       complexityBand: "deep",
       complexity_band: "deep",
     });
+    expect(loadWorkContract(contract.workContractId)?.telemetry as Record<string, unknown>).toMatchObject({
+      complexityBand: "deep",
+      complexity_band: "deep",
+    });
     expect(readReplayEvents()).toContainEqual(expect.objectContaining({
       event: "dispatch_planner_intent_created",
       work_contract_id: contract.workContractId,
