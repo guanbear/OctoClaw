@@ -20,7 +20,18 @@ const mockedSpawnSync = vi.mocked(spawnSync);
 function openClawSuccess(): ReturnType<typeof spawnSync> {
   return {
     status: 0,
-    stdout: "openclaw v2026.4.29\n",
+    stdout: "OpenClaw 2026.5.12 (test)\n",
+    stderr: "",
+    signal: null,
+    output: [],
+    pid: 123,
+  };
+}
+
+function openClawVersion(stdout: string): ReturnType<typeof spawnSync> {
+  return {
+    status: 0,
+    stdout,
     stderr: "",
     signal: null,
     output: [],
@@ -103,6 +114,9 @@ describe("readiness", () => {
       expect(gptChoice.name).toContain("gpt-5.4-mini");
       expect(gptChoice.name).toContain("cheap");
       expect(gptChoice.name).toContain("no reasoning");
+      expect(gptChoice.name).toContain("glm-4.5-air");
+      expect(gptChoice.name).toContain("xiaomi/mimo-v2-flash");
+      expect(gptChoice.name).toContain("deepseek/deepseek-v4-flash");
     });
   });
 
@@ -270,6 +284,20 @@ describe("readiness", () => {
   });
 
   describe("readiness report structure", () => {
+    it("fails OpenClaw readiness below 2026.5.12", async () => {
+      mockedSpawnSync.mockReturnValue(openClawVersion("OpenClaw 2026.5.11 (old)\n"));
+      const { tmpDir, openclawHome } = await makeHome("readiness-openclaw-old");
+      try {
+        const report = await generateReadinessReport(openclawHome);
+        const openclawCheck = report.checks.find((c) => c.id === "openclaw");
+
+        expect(openclawCheck?.status).toBe("fail");
+        expect(openclawCheck?.summary).toContain("requires OpenClaw >= 2026.5.12");
+      } finally {
+        await fs.rm(tmpDir, { recursive: true, force: true });
+      }
+    });
+
     it("includes all 7 check ids", async () => {
       mockedSpawnSync.mockReturnValue(openClawSuccess());
       const { tmpDir, openclawHome } = await makeHome("readiness-ids");
@@ -323,6 +351,50 @@ describe("readiness", () => {
         const pluginCheck = report.checks.find((c) => c.id === "runtime_plugin");
 
         expect(pluginCheck?.status).toBe("fail");
+      } finally {
+        await fs.rm(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    it("treats Feishu appId/appSecret as configured", async () => {
+      mockedSpawnSync.mockReturnValue(openClawSuccess());
+      const { tmpDir, openclawHome } = await makeHome("readiness-feishu-configured");
+      try {
+        await fs.mkdir(path.join(tmpDir, ".octoclaw"), { recursive: true });
+        await fs.writeFile(
+          path.join(tmpDir, ".octoclaw", "config.json"),
+          JSON.stringify({
+            _version: "1",
+            _updatedAt: new Date(0).toISOString(),
+            enabled: true,
+            features: { delegation: true, imNotifications: true, statusPanel: true },
+            judge: {
+              enabled: false,
+              modelId: "",
+              baseUrl: "",
+              apiKey: "",
+              timeoutMs: 3000,
+              timeoutLocalMs: 3000,
+              minConfidence: 0.6,
+              shadowMode: false,
+              judgeAckEnabled: true,
+              local: false,
+            },
+            models: { mode: "auto", overrides: {} },
+            pluginConfig: {
+              enabled: true,
+              delegationEnabled: true,
+              channels: { feishu: { appId: "cli_a", appSecret: "secret" } },
+            },
+          }),
+          "utf8",
+        );
+
+        const report = await generateReadinessReport(openclawHome);
+        const feishuCheck = report.checks.find((c) => c.id === "im.feishu");
+
+        expect(feishuCheck?.status).toBe("pass");
+        expect(feishuCheck?.summary).toContain("feishu credentials configured");
       } finally {
         await fs.rm(tmpDir, { recursive: true, force: true });
       }

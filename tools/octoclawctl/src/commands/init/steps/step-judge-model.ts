@@ -17,6 +17,23 @@ const DEFAULT_GROQ_URL = "https://api.groq.com/openai/v1";
 const GPT_5_4_MINI_MODEL_ID = "gpt-5.4-mini";
 
 export async function runStepJudgeModel(state: WizardState, opts: WizardOpts): Promise<void> {
+  if (opts.autoRemoteJudge) {
+    const discovered = await discoverOpenClawProvider(opts.openclawHome);
+    if (discovered) {
+      state.judgeModel = {
+        type: "remote-gpt-5-4-mini",
+        modelId: GPT_5_4_MINI_MODEL_ID,
+        baseUrl: discovered.baseUrl,
+        apiKey: discovered.apiKey,
+      };
+      return;
+    }
+    if (opts.nonInteractive) {
+      state.judgeModel = null;
+      return;
+    }
+  }
+
   if (opts.nonInteractive) {
     state.judgeModel = null;
     return;
@@ -93,7 +110,7 @@ export function judgeChoices(lang: WizardOpts["lang"]): JudgeChoice[] {
     return [
       { value: "ollama-qwen3", name: "本地 Ollama — Qwen3 0.6B（免费，毫秒级，推荐）" },
       { value: "ollama-custom", name: "本地 Ollama — 自定义模型" },
-      { value: "remote-gpt-5-4-mini", name: "远端 OpenAI-compatible — gpt-5.4-mini（便宜、快速、无推理，推荐远端）" },
+      { value: "remote-gpt-5-4-mini", name: "远端 OpenAI-compatible — gpt-5.4-mini（便宜、快速、无推理，默认）；可按评测改填 glm-4.5-air、xiaomi/mimo-v2-flash 或 deepseek/deepseek-v4-flash" },
       { value: "remote-groq", name: "远端 endpoint — Groq（免费额度）" },
       { value: "remote-custom", name: "远端 endpoint — 自定义 OpenAI-compatible URL" },
       { value: "skip", name: "跳过（稍后配置）" },
@@ -102,7 +119,7 @@ export function judgeChoices(lang: WizardOpts["lang"]): JudgeChoice[] {
   return [
     { value: "ollama-qwen3", name: "Local Ollama — Qwen3 0.6B (free, ms-level, recommended)" },
     { value: "ollama-custom", name: "Local Ollama — Custom model" },
-    { value: "remote-gpt-5-4-mini", name: "Remote OpenAI-compatible — gpt-5.4-mini (cheap, fast, no reasoning)" },
+    { value: "remote-gpt-5-4-mini", name: "Remote OpenAI-compatible — gpt-5.4-mini default (cheap, fast, no reasoning); evaluated alternatives: glm-4.5-air, xiaomi/mimo-v2-flash, deepseek/deepseek-v4-flash" },
     { value: "remote-groq", name: "Remote endpoint — Groq (free tier)" },
     { value: "remote-custom", name: "Remote endpoint — Custom OpenAI-compatible URL" },
     { value: "skip", name: "Skip (configure later)" },

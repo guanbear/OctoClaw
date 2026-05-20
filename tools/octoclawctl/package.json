@@ -15,11 +15,27 @@
     }
   },
   "dependencies": {
+    "@inquirer/prompts": "^7.0.0"
+  },
+  "peerDependencies": {
     "@octoclaw/policy": "workspace:*",
     "@octoclaw/router": "workspace:*",
     "@octoclaw/runtime": "workspace:*",
-    "@octoclaw/status-surface": "workspace:*",
-    "@inquirer/prompts": "^7.0.0"
+    "@octoclaw/status-surface": "workspace:*"
+  },
+  "peerDependenciesMeta": {
+    "@octoclaw/policy": {
+      "optional": true
+    },
+    "@octoclaw/router": {
+      "optional": true
+    },
+    "@octoclaw/runtime": {
+      "optional": true
+    },
+    "@octoclaw/status-surface": {
+      "optional": true
+    }
   },
   "scripts": {
     "build": "tsc --build",

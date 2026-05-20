@@ -18,7 +18,18 @@ declare const process: { version: string };
 function openClawSuccess(): ReturnType<typeof spawnSync> {
   return {
     status: 0,
-    stdout: "openclaw v2026.4.29\n",
+    stdout: "OpenClaw 2026.5.12 (test)\n",
+    stderr: "",
+    signal: null,
+    output: [],
+    pid: 123,
+  };
+}
+
+function openClawVersion(stdout: string): ReturnType<typeof spawnSync> {
+  return {
+    status: 0,
+    stdout,
     stderr: "",
     signal: null,
     output: [],
@@ -136,6 +147,21 @@ describe("runDoctor", () => {
     }
   });
 
+  it("fails when OpenClaw is older than 2026.5.12", async () => {
+    mockedSpawnSync.mockReturnValue(openClawVersion("openclaw v2026.5.11\n"));
+    vi.spyOn(process, "version", "get").mockReturnValue("v22.0.0");
+    const { tmpDir, openclawHome } = await makeHome("doctor-openclaw-old");
+    try {
+      const result = await runDoctor({ json: false, lang: "en", openclawHome });
+
+      expect(result.output).toContain("❌ OpenClaw");
+      expect(result.output).toContain("Requires OpenClaw >= 2026.5.12");
+      expect(result.exitCode).toBe(1);
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   it("ERR-D-005 warns when judge is not configured without failing", async () => {
     mockedSpawnSync.mockReturnValue(openClawSuccess());
     const { tmpDir, openclawHome } = await makeHome("doctor-judge-warn");
@@ -159,6 +185,26 @@ describe("runDoctor", () => {
       expect(result.output).toContain("⚠️ IM tokens");
       expect(result.output).toContain("not configured");
       expect(result.exitCode).toBe(0);
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("treats Feishu appId/appSecret as IM credentials", async () => {
+    mockedSpawnSync.mockReturnValue(openClawSuccess());
+    vi.spyOn(process, "version", "get").mockReturnValue("v22.1.0");
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(null, { status: 200 }));
+    const { tmpDir, openclawHome } = await makeHome("doctor-feishu-credentials");
+    try {
+      const config = configuredConfig("http://127.0.0.1:12345");
+      config.pluginConfig.channels = { feishu: { appId: "cli_a", appSecret: "secret" } };
+      await writeConfig(openclawHome, config);
+
+      const result = await runDoctor({ json: false, lang: "en", openclawHome });
+
+      expect(result.output).toContain("✅ IM tokens");
+      expect(result.exitCode).toBe(0);
+      expect(fetchSpy).toHaveBeenCalled();
     } finally {
       await fs.rm(tmpDir, { recursive: true, force: true });
     }

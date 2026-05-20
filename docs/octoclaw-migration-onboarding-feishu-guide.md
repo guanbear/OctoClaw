@@ -10,7 +10,7 @@ Run the setup wizard first:
 octoclawctl init
 ```
 
-For a remote Judge, choose `gpt-5.4-mini` when available. OctoClaw prefers an existing OpenAI-compatible OpenClaw provider such as `cliproxyapi`; if none is found, the wizard asks for a base URL and API key. The router wizard does not store Judge credentials.
+For a remote Judge, start with `gpt-5.4-mini` when available. OctoClaw prefers an existing OpenAI-compatible OpenClaw provider such as `cliproxyapi`; if none is found, the wizard asks for a base URL and API key. The current judge eval also marks `glm-4.5-air`, `xiaomi/mimo-v2-flash`, and `deepseek/deepseek-v4-flash` as usable remote alternatives, but they should be selected explicitly after checking latency and JSON reliability. `glm-4.5-air` is fast when it returns but has long-tail timeout risk in the eval. The router wizard does not store Judge credentials.
 
 After setup or deploy, check readiness:
 

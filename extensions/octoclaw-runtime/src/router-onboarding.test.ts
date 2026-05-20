@@ -790,8 +790,13 @@ describe("router wizard Slack onboarding", () => {
     expect(sent.message).toContain("Judge 未配置");
     expect(sent.message).toContain("octoclawctl init");
     expect(sent.message).toContain("gpt-5.4-mini");
+    expect(sent.message).toContain("glm-4.5-air");
+    expect(sent.message).toContain("xiaomi/mimo-v2-flash");
+    expect(sent.message).toContain("deepseek/deepseek-v4-flash");
     const blocksJson = JSON.stringify(sent.interactiveBlocks);
     expect(blocksJson).toContain("Judge 未配置");
+    expect(blocksJson).toContain("glm-4.5-air");
+    expect(blocksJson).toContain("xiaomi/mimo-v2-flash");
 
     expect(isRouterWizardComplete(tempHome)).toBe(false);
   });

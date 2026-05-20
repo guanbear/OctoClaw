@@ -54,7 +54,7 @@ describe("runStepOpenClawCheck", () => {
   it("CLI-I-002 extracts and stores the OpenClaw version", async () => {
     mockedSpawnSync.mockReturnValue({
       status: 0,
-      stdout: "openclaw v2026.4.29\n",
+      stdout: "OpenClaw 2026.5.12 (test)\n",
       stderr: "",
       signal: null,
       output: [],
@@ -63,12 +63,28 @@ describe("runStepOpenClawCheck", () => {
     const state = createState();
 
     await expect(runStepOpenClawCheck(state, createOpts())).resolves.toEqual({
-      version: "openclaw v2026.4.29",
+      version: "OpenClaw 2026.5.12 (test)",
     });
-    expect(state.openclawVersion).toBe("openclaw v2026.4.29");
+    expect(state.openclawVersion).toBe("OpenClaw 2026.5.12 (test)");
     expect(mockedSpawnSync).toHaveBeenCalledWith("openclaw", ["--version"], {
       timeout: 3000,
       encoding: "utf8",
+    });
+  });
+
+  it("throws OPENCLAW_UNSUPPORTED_VERSION below 2026.5.12", async () => {
+    mockedSpawnSync.mockReturnValue({
+      status: 0,
+      stdout: "openclaw v2026.5.11\n",
+      stderr: "",
+      signal: null,
+      output: [],
+      pid: 123,
+    });
+
+    await expect(runStepOpenClawCheck(createState(), createOpts())).rejects.toMatchObject({
+      code: "OPENCLAW_UNSUPPORTED_VERSION",
+      exitCode: 1,
     });
   });
 });

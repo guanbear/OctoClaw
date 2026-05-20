@@ -76,6 +76,46 @@ describe("Judge model init step", () => {
     }
   });
 
+  it("auto-configures gpt-5.4-mini from discovered provider in non-interactive mode", async () => {
+    const { tmpDir, openclawHome } = await makeHome("judge-step-auto-remote");
+    try {
+      await fs.writeFile(
+        path.join(openclawHome, "openclaw.json"),
+        JSON.stringify({
+          models: {
+            providers: {
+              cliproxyapi: {
+                baseUrl: "https://cliproxyapi.example.com/v1",
+                apiKey: "sk-cliproxy",
+                models: [{ id: "gpt-5.4-mini" }],
+              },
+            },
+          },
+        }),
+        "utf8",
+      );
+
+      const state = emptyState();
+      await runStepJudgeModel(state, {
+        nonInteractive: true,
+        autoRemoteJudge: true,
+        lang: "en",
+        openclawHome,
+      });
+
+      expect(state.judgeModel).toEqual({
+        type: "remote-gpt-5-4-mini",
+        modelId: "gpt-5.4-mini",
+        baseUrl: "https://cliproxyapi.example.com/v1",
+        apiKey: "sk-cliproxy",
+      });
+      expect(mockedSelect).not.toHaveBeenCalled();
+      expect(mockedInput).not.toHaveBeenCalled();
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   it("prompts for base URL and API key when no compatible provider is discovered", async () => {
     mockedSelect.mockResolvedValue("remote-gpt-5-4-mini");
     mockedInput

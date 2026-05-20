@@ -4,6 +4,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { readConfig } from "./config.js";
 
+export const MIN_OPENCLAW_VERSION = "2026.5.12";
+
 export type ReadinessStatus = "pass" | "warn" | "fail";
 
 export interface OctoclawReadinessCheck {
@@ -49,6 +51,14 @@ function checkOpenClaw(): OctoclawReadinessCheck {
     const result = spawnSync("openclaw", ["--version"], { timeout: 3000, encoding: "utf8" });
     if (!result.error && result.status === 0) {
       const version = String(result.stdout || "").trim();
+      if (!isOpenClawVersionSupported(version)) {
+        return {
+          id: "openclaw",
+          status: "fail",
+          summary: `${version || "unknown version"} — requires OpenClaw >= ${MIN_OPENCLAW_VERSION}`,
+          remediation: "Upgrade OpenClaw before installing OctoClaw on this machine.",
+        };
+      }
       return { id: "openclaw", status: "pass", summary: version || "installed" };
     }
     return {
@@ -102,7 +112,7 @@ async function checkJudge(openclawHome: string): Promise<OctoclawReadinessCheck>
         id: "judge",
         status: "warn",
         summary: "Judge not configured",
-        remediation: "Run: octoclawctl init — recommended remote preset: gpt-5.4-mini",
+        remediation: "Run: octoclawctl init --auto-remote-judge — default remote preset: gpt-5.4-mini; evaluated alternatives: glm-4.5-air, xiaomi/mimo-v2-flash, deepseek/deepseek-v4-flash",
       };
     }
 
@@ -139,21 +149,18 @@ async function checkImChannel(openclawHome: string, channel: "slack" | "feishu")
         id,
         status: "warn",
         summary: `${channel} not configured`,
-        remediation: `Run: octoclawctl config set pluginConfig.channels.${channel}.botToken <token>`,
+        remediation: imRemediation(channel),
       };
     }
     const channelConfig = channels[channel] as Record<string, unknown>;
-    const hasToken = Object.entries(channelConfig).some(
-      ([key, value]) => key.toLowerCase().includes("token") && typeof value === "string" && value.trim().length > 0,
-    );
-    if (hasToken) {
-      return { id, status: "pass", summary: `${channel} token configured` };
+    if (hasImCredentials(channel, channelConfig)) {
+      return { id, status: "pass", summary: `${channel} credentials configured` };
     }
     return {
       id,
       status: "warn",
-      summary: `${channel} token not found`,
-      remediation: `Run: octoclawctl config set pluginConfig.channels.${channel}.botToken <token>`,
+      summary: `${channel} credentials not found`,
+      remediation: imRemediation(channel),
     };
   } catch (error) {
     return {
@@ -163,6 +170,50 @@ async function checkImChannel(openclawHome: string, channel: "slack" | "feishu")
       remediation: `Check ${channel} configuration`,
     };
   }
+}
+
+export function isOpenClawVersionSupported(rawVersion: string): boolean {
+  const parsed = parseOpenClawVersion(rawVersion);
+  if (!parsed) return false;
+  const minimum = parseOpenClawVersion(MIN_OPENCLAW_VERSION);
+  if (!minimum) return false;
+  return compareVersions(parsed, minimum) >= 0;
+}
+
+function parseOpenClawVersion(rawVersion: string): [number, number, number] | null {
+  const match = rawVersion.match(/(\d{4})\.(\d+)\.(\d+)/u);
+  if (!match) return null;
+  const year = Number.parseInt(match[1] ?? "", 10);
+  const minor = Number.parseInt(match[2] ?? "", 10);
+  const patch = Number.parseInt(match[3] ?? "", 10);
+  if (![year, minor, patch].every(Number.isFinite)) return null;
+  return [year, minor, patch];
+}
+
+function compareVersions(left: [number, number, number], right: [number, number, number]): number {
+  for (let index = 0; index < left.length; index += 1) {
+    const delta = left[index] - right[index];
+    if (delta !== 0) return delta;
+  }
+  return 0;
+}
+
+function hasImCredentials(channel: "slack" | "feishu", channelConfig: Record<string, unknown>): boolean {
+  if (channel === "feishu") {
+    const appId = typeof channelConfig.appId === "string" ? channelConfig.appId.trim() : "";
+    const appSecret = typeof channelConfig.appSecret === "string" ? channelConfig.appSecret.trim() : "";
+    if (appId && appSecret) return true;
+  }
+  return Object.entries(channelConfig).some(
+    ([key, value]) => key.toLowerCase().includes("token") && typeof value === "string" && value.trim().length > 0,
+  );
+}
+
+function imRemediation(channel: "slack" | "feishu"): string {
+  if (channel === "feishu") {
+    return "Run: octoclawctl init and choose Feishu, or set pluginConfig.channels.feishu.appId/appSecret";
+  }
+  return "Run: octoclawctl config set pluginConfig.channels.slack.botToken <token>";
 }
 
 async function checkRouterWizard(openclawHome: string): Promise<OctoclawReadinessCheck> {

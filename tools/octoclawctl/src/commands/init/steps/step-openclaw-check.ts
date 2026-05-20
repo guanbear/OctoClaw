@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import type { WizardState } from "../wizard-state.js";
 import type { WizardOpts } from "../wizard-opts.js";
+import { isOpenClawVersionSupported, MIN_OPENCLAW_VERSION } from "../../../readiness.js";
 
 export interface StepOpenClawResult {
   version: string;
@@ -24,6 +25,16 @@ export async function runStepOpenClawCheck(
   }
 
   const version = (result.stdout || "").trim();
+  if (!isOpenClawVersionSupported(version)) {
+    const msg = opts.lang === "zh"
+      ? `OpenClaw 版本过旧。OctoClaw 需要 OpenClaw >= ${MIN_OPENCLAW_VERSION}。`
+      : `OpenClaw is too old. OctoClaw requires OpenClaw >= ${MIN_OPENCLAW_VERSION}.`;
+    throw Object.assign(new Error(`${msg}\n→ ${version || "unknown version"}`), {
+      code: "OPENCLAW_UNSUPPORTED_VERSION",
+      exitCode: 1,
+    });
+  }
+
   state.openclawVersion = version;
   return { version };
 }

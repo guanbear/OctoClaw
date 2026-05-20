@@ -10,6 +10,7 @@ import { generateReadinessReport, redactReadinessReport, formatReadinessSummary 
 
 export interface InitWizardOpts {
   nonInteractive: boolean;
+  autoRemoteJudge?: boolean;
   lang: "zh" | "en";
   openclawHome: string;
 }
@@ -23,7 +24,12 @@ export async function runInitWizard(opts: InitWizardOpts): Promise<string> {
     imTokens: {},
     doctorResults: [],
   };
-  const wizardOpts: WizardOpts = { nonInteractive: opts.nonInteractive, lang, openclawHome: opts.openclawHome };
+  const wizardOpts: WizardOpts = {
+    nonInteractive: opts.nonInteractive,
+    autoRemoteJudge: opts.autoRemoteJudge,
+    lang,
+    openclawHome: opts.openclawHome,
+  };
   const lines: string[] = [];
 
   // Step 1: OpenClaw detection (design.md §3)

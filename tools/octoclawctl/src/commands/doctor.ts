@@ -3,7 +3,7 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { readConfig, configPath, type OctoclawConfig } from "../config.js";
-import { generateReadinessReport, redactReadinessReport, formatReadinessSummary } from "../readiness.js";
+import { generateReadinessReport, redactReadinessReport, formatReadinessSummary, isOpenClawVersionSupported, MIN_OPENCLAW_VERSION } from "../readiness.js";
 
 declare const process: { version: string };
 
@@ -89,6 +89,12 @@ function checkOpenClaw(lang: DoctorOpts["lang"]): DoctorCheckResult {
     const result = spawnSync("openclaw", ["--version"], { timeout: 3000, encoding: "utf8" });
     if (!result.error && result.status === 0) {
       const version = String(result.stdout || "").trim() || (lang === "zh" ? "已安装" : "installed");
+      if (!isOpenClawVersionSupported(version)) {
+        const hint = lang === "zh"
+          ? `需要 OpenClaw >= ${MIN_OPENCLAW_VERSION}`
+          : `Requires OpenClaw >= ${MIN_OPENCLAW_VERSION}`;
+        return check("OpenClaw", "OpenClaw", "fail", version, hint);
+      }
       return check("OpenClaw", "OpenClaw", "pass", version);
     }
     const detail = result.error ? result.error.message : String(result.stderr || (lang === "zh" ? "未检测到" : "not found")).trim();
@@ -102,7 +108,15 @@ async function checkJudgeModel(opts: DoctorOpts): Promise<DoctorCheckResult> {
   try {
     const config = await readConfig(opts.openclawHome);
     if (!config.judge.enabled || !config.judge.modelId.trim() || !config.judge.baseUrl.trim()) {
-      return check("Judge model", "Judge 模型", "warn", opts.lang === "zh" ? "未配置" : "not configured");
+      return check(
+        "Judge model",
+        "Judge 模型",
+        "warn",
+        opts.lang === "zh" ? "未配置" : "not configured",
+        opts.lang === "zh"
+          ? "运行 octoclawctl init --auto-remote-judge 半自动配置远端 gpt-5.4-mini；也可按评测改填 glm-4.5-air、xiaomi/mimo-v2-flash 或 deepseek/deepseek-v4-flash"
+          : "Run octoclawctl init --auto-remote-judge to semi-automatically configure remote gpt-5.4-mini; evaluated alternatives: glm-4.5-air, xiaomi/mimo-v2-flash, deepseek/deepseek-v4-flash",
+      );
     }
 
     const reachable = await pingEndpoint(config.judge.baseUrl, config.judge.apiKey);
@@ -161,6 +175,9 @@ function hasImTokens(config: OctoclawConfig): boolean {
 function hasTokenValue(value: unknown): boolean {
   if (typeof value === "string") return value.trim().length > 0;
   if (!isRecord(value)) return false;
+  const appId = typeof value.appId === "string" ? value.appId.trim() : "";
+  const appSecret = typeof value.appSecret === "string" ? value.appSecret.trim() : "";
+  if (appId && appSecret) return true;
   return Object.entries(value).some(([key, nested]) => key.toLowerCase().includes("token") && typeof nested === "string" && nested.trim().length > 0);
 }
 

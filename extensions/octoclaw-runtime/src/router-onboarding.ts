@@ -178,7 +178,7 @@ export function buildRouterWizardOnboardingMessage(): string {
 export function buildJudgeWarningText(): string {
   return [
     "⚠️ Judge 未配置或不可达，Auto Router 会保守退回主模型。",
-    "推荐运行 `octoclawctl init` 配置 Judge；远端推荐 `gpt-5.4-mini`（便宜、快速、无推理）。",
+    "推荐运行 `octoclawctl init --auto-remote-judge` 配置 Judge；默认远端是 `gpt-5.4-mini`，也可按评测改填 `glm-4.5-air`、`xiaomi/mimo-v2-flash` 或 `deepseek/deepseek-v4-flash`。",
   ].join("\n");
 }
 
@@ -188,7 +188,7 @@ export function buildJudgeWarningSlackBlocks(): Array<Record<string, unknown>> {
       type: "section",
       text: {
         type: "mrkdwn",
-        text: "⚠️ *Judge 未配置或不可达*\nAuto Router 会保守退回主模型。推荐运行 `octoclawctl init` 配置 Judge。\n远端推荐 `gpt-5.4-mini`（便宜、快速、无推理）。",
+        text: "⚠️ *Judge 未配置或不可达*\nAuto Router 会保守退回主模型。推荐运行 `octoclawctl init --auto-remote-judge` 配置 Judge。\n默认远端是 `gpt-5.4-mini`；也可按评测改填 `glm-4.5-air`、`xiaomi/mimo-v2-flash` 或 `deepseek/deepseek-v4-flash`。",
       },
     },
     {
@@ -249,7 +249,7 @@ export function buildRouterWizardFeishuBlocks(): Array<Record<string, unknown>> 
 export function buildJudgeWarningFeishuBlocks(): Array<Record<string, unknown>> {
   return [
     feishuCard("⚠️ Judge 未配置", "orange", [
-      feishuMarkdownElement("Auto Router 会保守退回主模型。推荐运行 `octoclawctl init` 配置 Judge。\n远端推荐 `gpt-5.4-mini`（便宜、快速、无推理）。\n路由向导按钮只写入 router-wizard.json，不会自动修改 Judge 配置。"),
+      feishuMarkdownElement("Auto Router 会保守退回主模型。推荐运行 `octoclawctl init --auto-remote-judge` 配置 Judge。\n默认远端是 `gpt-5.4-mini`；也可按评测改填 `glm-4.5-air`、`xiaomi/mimo-v2-flash` 或 `deepseek/deepseek-v4-flash`。\n路由向导按钮只写入 router-wizard.json，不会自动修改 Judge 配置。"),
     ]),
   ];
 }

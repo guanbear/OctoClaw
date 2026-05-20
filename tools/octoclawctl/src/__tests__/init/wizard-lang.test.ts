@@ -22,7 +22,7 @@ describe("init wizard language", () => {
     try {
       mockedSpawnSync.mockImplementation((command: string) => {
         if (command === "openclaw") {
-          return { status: 0, stdout: "openclaw v2026.4.29\n", stderr: "", signal: null, output: [], pid: 123 };
+          return { status: 0, stdout: "OpenClaw 2026.5.12 (test)\n", stderr: "", signal: null, output: [], pid: 123 };
         }
         return { status: 0, stdout: "", stderr: "", signal: null, output: [], pid: 124 };
       });

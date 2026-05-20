@@ -11,6 +11,7 @@ import {
   buildStabilitySlackAcceptanceCases,
   main,
   parseCliArgs,
+  isCliEntrypoint,
   resolveRuntimeStateSurfaceRecord,
   runOctoClawCtl,
 } from "./cli.js";
@@ -470,6 +471,11 @@ describe("octoclawctl cli", () => {
       nonInteractive: true,
       lang: "en",
     });
+    expect(parseCliArgs(["init", "--non-interactive", "--auto-remote-judge"])).toMatchObject({
+      command: "init",
+      nonInteractive: true,
+      autoRemoteJudge: true,
+    });
   });
 
   it("prints package version", async () => {
@@ -479,6 +485,41 @@ describe("octoclawctl cli", () => {
     expect(exitCode).toBe(0);
     expect(capture.stdout).toEqual(["0.6.0"]);
     expect(capture.stderr).toEqual([]);
+  });
+
+  it("recognizes npm bin symlinks as the CLI entrypoint", async () => {
+    const tmpDir = path.join(os.homedir(), ".octoclawctl-test-tmp", `cli-entrypoint-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    const target = path.join(tmpDir, "dist", "cli.js");
+    const link = path.join(tmpDir, "bin", "octoclawctl");
+    try {
+      await fs.mkdir(path.dirname(target), { recursive: true });
+      await fs.mkdir(path.dirname(link), { recursive: true });
+      await fs.writeFile(target, "export {};\n", "utf8");
+      await runTestCommand("ln", ["-s", target, link]);
+
+      expect(isCliEntrypoint(`file://${target}`, link)).toBe(true);
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps the published CLI installable without unpublished workspace packages", async () => {
+    const raw = await fs.readFile(path.join("tools", "octoclawctl", "package.json"), "utf8");
+    const pkg = JSON.parse(raw) as {
+      dependencies?: Record<string, string>;
+      peerDependenciesMeta?: Record<string, { optional?: boolean }>;
+    };
+    const runtimePackages = [
+      "@octoclaw/policy",
+      "@octoclaw/router",
+      "@octoclaw/runtime",
+      "@octoclaw/status-surface",
+    ];
+
+    for (const packageName of runtimePackages) {
+      expect(pkg.dependencies ?? {}).not.toHaveProperty(packageName);
+      expect(pkg.peerDependenciesMeta?.[packageName]?.optional).toBe(true);
+    }
   });
 
   it("runs init non-interactively without runtime data", async () => {

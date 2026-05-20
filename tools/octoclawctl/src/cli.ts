@@ -22,7 +22,6 @@ import type { CalibrationInputFile } from "./calibration/types.js";
 import type { SlackAcceptanceCaseConfig, SlackAcceptanceFormat } from "./slack-acceptance/types.js";
 import type { NightlyEvalConfig, LaunchAgentConfig } from "./nightly-eval/index.js";
 import { installLaunchAgent, uninstallLaunchAgent } from "./platform.js";
-import { runRouterWizardCli } from "./commands/router-wizard.js";
 
 // Lazy-loaded workspace modules — only loaded when their commands are used.
 // This allows `init` to work standalone without workspace packages installed.
@@ -152,6 +151,7 @@ interface ParsedCliArgs {
   scheduleHour?: number;
   logDir?: string;
   nonInteractive: boolean;
+  autoRemoteJudge: boolean;
   cooldownOnly: boolean;
   lang?: "zh" | "en";
   nightlyEvalSubcommand?: "run" | "install-launchagent" | "uninstall-launchagent" | "print-plist" | "deliver-slack" | "promote" | "clear-baseline" | "show-baseline";
@@ -1062,6 +1062,7 @@ export function parseCliArgs(argv: string[]): ParsedCliArgs {
   let scheduleHour: number | undefined;
   let logDir: string | undefined;
   let nonInteractive = false;
+  let autoRemoteJudge = false;
   let cooldownOnly = false;
   let lang: "zh" | "en" | undefined;
   let nightlyEvalSubcommand: ParsedCliArgs["nightlyEvalSubcommand"];
@@ -1325,6 +1326,10 @@ export function parseCliArgs(argv: string[]): ParsedCliArgs {
       nonInteractive = true;
       continue;
     }
+    if (argument === "--auto-remote-judge") {
+      autoRemoteJudge = true;
+      continue;
+    }
     if (argument === "--cooldown-only") {
       cooldownOnly = true;
       continue;
@@ -1501,6 +1506,7 @@ export function parseCliArgs(argv: string[]): ParsedCliArgs {
     scheduleHour,
     logDir,
     nonInteractive,
+    autoRemoteJudge,
     cooldownOnly,
     lang,
     nightlyEvalSubcommand,
@@ -1530,7 +1536,7 @@ export function printUsage(): string {
     "",
     "Commands:",
     "  octoclawctl doctor [--json] [--lang zh|en] [--openclaw-home DIR]",
-    "  octoclawctl init [--non-interactive] [--lang zh|en] [--openclaw-home DIR]",
+    "  octoclawctl init [--non-interactive] [--auto-remote-judge] [--lang zh|en] [--openclaw-home DIR]",
     "  octoclawctl install [--repo-url URL] [--branch NAME] [--openclaw-home DIR] [--octoclaw-root DIR] [--skip-build] [--restart]",
     "  octoclawctl update [--repo-url URL] [--branch NAME] [--openclaw-home DIR] [--octoclaw-root DIR] [--skip-build] [--restart]",
     "  octoclawctl deploy [--openclaw-home DIR] [--octoclaw-root DIR] [--skip-build] [--restart]",
@@ -2812,6 +2818,7 @@ async function runRouterLiteCommand(parsed: ParsedCliArgs, env: Record<string, s
     }
     const configured = await discoverConfiguredRouterModels(openclawHome);
     if (parsed.cliMode) {
+      const { runRouterWizardCli } = await import("./commands/router-wizard.js");
       return runRouterWizardCli({
         openclawHome,
         models: configured,
@@ -3376,6 +3383,7 @@ export async function main(
       const { runInitWizard } = await import("./commands/init.js");
       io.stdout(await runInitWizard({
         nonInteractive: parsed.nonInteractive,
+        autoRemoteJudge: parsed.autoRemoteJudge,
         lang: parsed.lang ?? "zh",
         openclawHome,
       }));
@@ -3421,7 +3429,21 @@ process.on("uncaughtException", (err: unknown) => {
   process.exit(1);
 });
 
-if (import.meta.url === new URL(process.argv[1] ?? "", "file:").href) {
+export function isCliEntrypoint(moduleUrl: string, argvPath: string | undefined): boolean {
+  if (!argvPath) return false;
+  try {
+    const realpathSync = (fsSync as unknown as { realpathSync(target: string): string }).realpathSync;
+    return realpathSync(filePathFromUrl(moduleUrl)) === realpathSync(argvPath);
+  } catch {
+    return moduleUrl === new URL(argvPath, "file:").href;
+  }
+}
+
+function filePathFromUrl(moduleUrl: string): string {
+  return decodeURIComponent(new URL(moduleUrl).pathname);
+}
+
+if (isCliEntrypoint(import.meta.url, process.argv[1])) {
   void main().then((exitCode) => {
     process.exit(exitCode);
   });
