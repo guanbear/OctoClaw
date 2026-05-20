@@ -111,6 +111,7 @@ Per-case misses:
 Interpretation:
 
 - `xiaomi/mimo-v2-flash` is the only OpenRouter candidate close to the 2 s judge budget, but half the cases still exceeded 2 s.
+- `nvidia/nemotron-3-nano-30b-a3b:free` is the only tested free OpenRouter route that was both fast and JSON-stable, but its 6/10 route accuracy makes it suitable only for free shadow comparison, not for the primary judge.
 - `google/gemma-4-26b-a4b-it` and `google/gemma-4-31b-it` are accurate enough to remain shadow candidates, but they are not fast enough for a 2 s hot-path judge.
 - OpenRouter's Baidu/ERNIE route is not compatible with the current structured-output judge path in this run.
 - Qwen Flash models are accurate but too slow for hot-path judge.
@@ -151,10 +152,11 @@ Potential remote/shadow candidates:
 
 ```text
 1. glm-4.5-air with thinking disabled
-2. xiaomi/mimo-v2-flash through OpenRouter
-3. google/gemma-4-26b-a4b-it through OpenRouter, only as a slower shadow candidate
-4. qwen/qwen3.6-flash through OpenRouter, only if latency is acceptable
-5. gpt-5.4-mini as accurate but slower remote adjudicator
+2. nvidia/nemotron-3-nano-30b-a3b:free through OpenRouter, only as a free fast shadow comparator
+3. xiaomi/mimo-v2-flash through OpenRouter
+4. google/gemma-4-26b-a4b-it through OpenRouter, only as a slower accurate shadow candidate
+5. qwen/qwen3.6-flash through OpenRouter, only if latency is acceptable
+6. gpt-5.4-mini as accurate but slower remote adjudicator
 ```
 
 Do not currently use:
