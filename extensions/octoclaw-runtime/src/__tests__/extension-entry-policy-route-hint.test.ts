@@ -1480,6 +1480,48 @@ describe("budgeted_main_then_delegate runtime budget", () => {
     policyState.clearState(key);
   });
 
+  it("blocks real exec_command installs before execution and tells the main agent the command did not run", async () => {
+    const handlers = new Map<string, Function>();
+    plugin.register({
+      on: (event, handler) => handlers.set(event, handler),
+      registerTool: () => {},
+      registerCommand: () => {},
+      logger: {},
+    });
+
+    const beforeToolCall = handlers.get("before_tool_call");
+    expect(beforeToolCall).toBeTruthy();
+    const now = Date.now();
+    const key = "agent:main:slack:direct:u0as4dappu3:thread:t-budget-real-exec-command-install";
+    policyState.setState(key, {
+      decision: budgetedMainDecision(),
+      budgetedMain: budgetedMainState(now - 1_000),
+      budgeted_main: budgetedMainState(now - 1_000),
+      createdAt: now - 2_000,
+      updatedAt: now,
+    });
+
+    const result = await beforeToolCall!(
+      { toolName: "functions.exec_command", params: { cmd: "brew install --cask docker", yield_time_ms: 1_000 } },
+      { sessionKey: key, sessionId: "session-budget-real-exec-command-install", agentId: "main" },
+    ) as { block?: boolean; blockReason?: string } | undefined;
+
+    expect(result?.block).toBe(true);
+    expect(result?.blockReason).toContain("write_tool_detected");
+    expect(result?.blockReason).toContain("octoclaw_dispatch");
+    expect(result?.blockReason).toContain("did not execute");
+    expect(policyState.getState(key)?.decision?.route_decision).toMatchObject({
+      route: "delegate",
+      route_source: "budgeted_main_escalation",
+    });
+    expect(policyState.getState(key)).toMatchObject({
+      dispatchStatus: "budgeted_main_escalated",
+      dispatchExecuted: false,
+      spawnExecuted: false,
+    });
+    policyState.clearState(key);
+  });
+
   it("escalates must_reply main-lane work on write, long, or ordinary tool over-budget", async () => {
     const handlers = new Map<string, Function>();
     plugin.register({
@@ -1538,12 +1580,15 @@ describe("budgeted_main_then_delegate runtime budget", () => {
 
     expect(writeResult?.block).toBe(true);
     expect(writeResult?.blockReason).toContain("write_tool_detected");
+    expect(writeResult?.blockReason).toContain("did not execute");
     expect(longResult?.block).toBe(true);
     expect(longResult?.blockReason).toContain("long_tool_detected");
+    expect(longResult?.blockReason).toContain("did not execute");
     expect(firstReadResult).toBeUndefined();
     expect(secondReadResult).toBeUndefined();
     expect(thirdReadResult?.block).toBe(true);
     expect(thirdReadResult?.blockReason).toContain("multi_step_tool_chain");
+    expect(thirdReadResult?.blockReason).toContain("did not execute");
     await waitForFireAndForget();
     const events = readReplayEvents();
     expect(events).toContainEqual(expect.objectContaining({

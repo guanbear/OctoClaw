@@ -7,6 +7,7 @@ import type { NativeStatusProjection } from "../state/native-status-projector.js
 import { createOpenClawRuntimeAdapter, statusSnapshotToNativeProjection } from "../runtime-host/openclaw-adapter.js";
 import { buildLegacyHeuristicFallbackEvent, legacyHeuristicVerdict } from "../state/legacy-heuristics.js";
 import { buildSlackStatusOutput, buildStatusInteractiveBlocks, type IMType, type StatusTaskSummary } from "../im-status-renderer.js";
+import { parseSessionRoute } from "../resolve/session.js";
 import { normalizeLiveRoute } from "../resolve/route-helpers.js";
 import type { NativeBindingRef } from "@octoclaw/contracts/work-contract";
 import { asBoolean, asRecord, asString, isRecord, type UnknownRecord } from "../util/type-coercion.js";
@@ -121,6 +122,68 @@ function sortTaskStateRecords(tasks: RuntimeTaskStateRecord[]): RuntimeTaskState
 const STATUS_PANEL_STALE_VISIBLE_MS = 30 * 60 * 1000;
 // completed/failed/canceled stay visible for 4h (was 24h — don't need yesterday's tasks cluttering the panel)
 const STATUS_PANEL_TERMINAL_VISIBLE_MS = 4 * 60 * 60 * 1000;
+
+interface StatusPanelScope {
+  origin: string;
+  target: string;
+}
+
+function normalizedSessionScope(sessionKey: string): StatusPanelScope | null {
+  const parsed = parseSessionRoute(sessionKey);
+  if (!parsed.origin || !parsed.target) return null;
+  return {
+    origin: parsed.origin.toLowerCase(),
+    target: parsed.target.toLowerCase(),
+  };
+}
+
+function resolveStatusPanelScope(imType: string, ctx: UnknownRecord): StatusPanelScope | null {
+  if (imType !== "slack") return null;
+  const sessionKey = optionalString(
+    ctx.sessionKey,
+    ctx.canonicalSessionKey,
+    ctx.agentId,
+    ctx.session_key,
+    ctx.canonical_session_key,
+    ctx.sessionId,
+    ctx.session_id,
+  ) ?? "";
+  const scope = normalizedSessionScope(sessionKey);
+  return scope?.origin === "slack" ? scope : null;
+}
+
+function taskStatusPanelSessionKeys(task: RuntimeTaskStateRecord): string[] {
+  const workContract = Object.keys(asRecord(task.workContract)).length > 0
+    ? asRecord(task.workContract)
+    : asRecord(task.work_contract);
+  const continuity = asRecord(workContract.continuity);
+  const metadata = asRecord(task.metadata);
+  const delivery = deliveryEvidence(task);
+  return [
+    task.sessionKey,
+    task.session_key,
+    workContract.sessionKey,
+    workContract.session_key,
+    continuity.parentSessionKey,
+    continuity.parent_session_key,
+    continuity.preferredChildSessionKey,
+    continuity.preferred_child_session_key,
+    delivery.sessionKey,
+    delivery.session_key,
+    task.childSessionKey,
+    task.child_session_key,
+    metadata.sessionKey,
+    metadata.session_key,
+  ].map((value) => asString(value)).filter(Boolean);
+}
+
+function taskMatchesStatusPanelScope(task: RuntimeTaskStateRecord, scope: StatusPanelScope | null): boolean {
+  if (!scope) return true;
+  return taskStatusPanelSessionKeys(task).some((sessionKey) => {
+    const taskScope = normalizedSessionScope(sessionKey);
+    return taskScope?.origin === scope.origin && taskScope.target === scope.target;
+  });
+}
 
 
 export function hasNonNewWorkFollowupEvidence(decision: UnknownRecord, metadata: UnknownRecord): boolean {
@@ -629,7 +692,11 @@ export async function buildNativeStatusPanelOutput(format: string, imType: strin
   const nowMs = Date.now();
   const includeExpired = shouldIncludeExpiredStatus(normalizedFormat);
   const retention = pruneRuntimeTaskStateCache();
-  const tasks = sortTaskStateRecords(await readRuntimeTaskState({ includeArchive: includeExpired }));
+  const scope = resolveStatusPanelScope(imType, ctx);
+  const tasks = sortTaskStateRecords(
+    (await readRuntimeTaskState({ includeArchive: includeExpired }))
+      .filter((task) => taskMatchesStatusPanelScope(task, scope)),
+  );
   const nativeInputs = tasks.map((task) => nativeStatusInputForTask(task, ctx));
   const runtimeHost = createOpenClawRuntimeAdapter();
   const nativeProjections = await Promise.all(nativeInputs.map(async (input) => statusSnapshotToNativeProjection(await runtimeHost.readStatus({

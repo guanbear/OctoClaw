@@ -266,4 +266,63 @@ describe("runtime status lifecycle projection", () => {
       expect.anything(),
     );
   });
+
+  it("scopes Slack status panel records to the current Slack channel", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-12T12:10:00.000Z"));
+    readTaskStateRecordsMock.mockReturnValue([
+      task({
+        id: "wc-current-channel",
+        workContractId: "wc-current-channel",
+        title: "Current channel task",
+        summary: "Current channel task",
+        sessionKey: "agent:main:slack:channel:CSTATUSA:thread:171.000001",
+        session_key: "agent:main:slack:channel:CSTATUSA:thread:171.000001",
+        status: "completed",
+        completed_at: "2026-05-12T12:09:00.000Z",
+        delivery: {
+          status: "delivered",
+          messageId: "171.000101",
+        },
+      }),
+      task({
+        id: "wc-other-channel",
+        workContractId: "wc-other-channel",
+        title: "Other channel task should not leak",
+        summary: "Other channel task should not leak",
+        sessionKey: "agent:main:slack:channel:CSTATUSB:thread:172.000002",
+        session_key: "agent:main:slack:channel:CSTATUSB:thread:172.000002",
+        status: "completed",
+        completed_at: "2026-05-12T12:09:00.000Z",
+        delivery: {
+          status: "delivered",
+          messageId: "172.000202",
+        },
+      }),
+    ]);
+    readStatusMock.mockResolvedValue({
+      found: true,
+      degraded: false,
+      status: "completed",
+      nativeStatus: "completed",
+      rawStatus: "completed",
+      source: "run",
+      reason: "resolved_by_openclaw_run_id",
+      nativeKind: "spawn-child",
+      agentRuntimeId: "acp-primary",
+    });
+
+    try {
+      const output = await buildNativeStatusPanelOutput("anchors", "slack", {
+        sessionKey: "agent:main:slack:channel:CSTATUSA:thread:179.000009",
+        channelId: "slack",
+      });
+
+      expect(output.text).toContain("Current channel task");
+      expect(output.text).not.toContain("Other channel task should not leak");
+      expect(readStatusMock).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

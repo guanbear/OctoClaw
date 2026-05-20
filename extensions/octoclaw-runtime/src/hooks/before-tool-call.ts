@@ -151,7 +151,7 @@ export function makeBeforeToolCallHook(deps: BeforeToolCallDeps) {
           }));
           return {
             block: true,
-            blockReason: `OctoClaw budgeted main execution escalated (${escalationReason}). Call octoclaw_dispatch with the original task; do not use ordinary tools or claim the task has started before dispatch_confirm.`,
+            blockReason: `OctoClaw budgeted main execution escalated (${escalationReason}). This tool call did not execute. Call octoclaw_dispatch with the original task; do not use ordinary tools or claim the task has started before dispatch_confirm.`,
           };
         }
         state = updateBudgetedMainForContext({
@@ -548,7 +548,7 @@ export function makeBeforeToolCallHook(deps: BeforeToolCallDeps) {
           }));
           return {
             block: true,
-            blockReason: `OctoClaw main reply tool budget escalated (${escalationReason}). Call octoclaw_dispatch with the original task; do not continue ordinary tool execution in the main agent.`,
+            blockReason: `OctoClaw main reply tool budget escalated (${escalationReason}). This tool call did not execute. Call octoclaw_dispatch with the original task; do not continue ordinary tool execution in the main agent.`,
           };
         }
         state = updateBudgetedMainForContext({
