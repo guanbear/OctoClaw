@@ -1155,6 +1155,58 @@ describe("guardOutboundMessageForPolicyState", () => {
     }
   });
 
+  it("uses current WorkContract telemetry for native announce footer difficulty over stale state", async () => {
+    const previousProjectionFooterMode = process.env.OCTOCLAW_PROJECTION_FOOTER_MODE;
+    process.env.OCTOCLAW_PROJECTION_FOOTER_MODE = "debug";
+    const parentKey = "agent:main:slack:channel:c0as4dappu3:thread:1777709667.918049";
+    const contract = buildWorkContractFromPolicy(
+      parentKey,
+      "只读检查 Gateway 状态",
+      "fresh_live_lookup",
+      coverageSnapshot(),
+      buildWorkDecisionSeal("local_judge", "delegate", ["native_spawn_confirmed"]),
+      { status: "sealed" },
+    );
+    contract.telemetry = {
+      ...contract.telemetry,
+      complexityBand: "simple",
+      complexity_band: "simple",
+    } as typeof contract.telemetry;
+    let sent: { message: string } | undefined;
+
+    try {
+      const result = await deliverNativeAnnounceCompletion({
+        contract,
+        completion: {
+          sourceSessionKey: "agent:main:subagent:native-announce-child",
+          sourceSessionId: "child-session",
+          sourceTool: "subagent_announce",
+          status: "completed successfully",
+          resultText: "Gateway 正常，OctoClaw readiness 正常。",
+          resultHash: "hash-native-simple",
+        },
+        state: {
+          decision: {
+            work_contract: { telemetry: {} },
+            route_decision: { route: "delegate", route_source: "native_announce" },
+          },
+        },
+        ctx: { sessionKey: parentKey, channelId: "slack" },
+        sendMessage: async (params) => {
+          sent = params;
+          return { sent: true, messageId: "1777709670.123456", threadTs: params.replyToMessageId, transport: "slack_api", targetSource: "inbound_anchor", footerSource: "envelope" };
+        },
+      });
+
+      expect(result.sent).toBe(true);
+      expect(sent?.message).toContain("difficulty=simple");
+      expect(sent?.message).toContain("via=native_announce");
+    } finally {
+      if (previousProjectionFooterMode === undefined) delete process.env.OCTOCLAW_PROJECTION_FOOTER_MODE;
+      else process.env.OCTOCLAW_PROJECTION_FOOTER_MODE = previousProjectionFooterMode;
+    }
+  });
+
   it("treats native subagent announce completion as existing WorkContract delivery", async () => {
     const previousProjectionFooterMode = process.env.OCTOCLAW_PROJECTION_FOOTER_MODE;
     process.env.OCTOCLAW_PROJECTION_FOOTER_MODE = "debug";

@@ -7,6 +7,7 @@ import type {
   SlackAcceptanceCaseResult,
   SlackAcceptanceClient,
   SlackAcceptanceConfig,
+  SlackAcceptanceFooterExpectation,
   SlackAcceptanceReport,
   SlackAcceptanceReplayEvidence,
   SlackAcceptanceResolvedConfig,
@@ -533,6 +534,20 @@ function footerFieldFromText(text: string, field: "route" | "model" | "difficult
   return value || undefined;
 }
 
+function messageMatchesExpectedFooter(text: string, footer: SlackAcceptanceFooterExpectation | undefined): boolean {
+  if (!footer) return true;
+  const route = footerFieldFromText(text, "route");
+  const model = footerFieldFromText(text, "model");
+  const difficulty = footerFieldFromText(text, "difficulty");
+  const via = footerFieldFromText(text, "via");
+  if (footer.route !== undefined && route !== footer.route) return false;
+  if (footer.model !== undefined && model !== footer.model) return false;
+  if (footer.difficulty !== undefined && difficulty !== footer.difficulty) return false;
+  if (footer.difficultyRequired === true && !difficulty) return false;
+  if (footer.via !== undefined && via !== footer.via) return false;
+  return true;
+}
+
 function normalizedMessageText(text: string): string {
   return text.trim().replace(/\s+/gu, " ");
 }
@@ -925,6 +940,7 @@ async function collectRepliesUntil(params: {
   expectedAny?: string[];
   expectedAll?: string[];
   rejected?: string[];
+  expectedFooter?: SlackAcceptanceFooterExpectation;
   required: boolean;
   phase: "ack" | "final";
   caseStartMs: number;
@@ -958,7 +974,9 @@ async function collectRepliesUntil(params: {
       firstReplySeen = true;
       params.progress.push(progressEvent(params.caseStartMs, "first_reply_seen", `${params.phase}; replies=${latest.length}`));
     }
-    const assertionMessages = latest.filter((message) => !(params.ignoreAssertionTs ?? []).includes(message.ts));
+    const assertionMessages = latest
+      .filter((message) => !(params.ignoreAssertionTs ?? []).includes(message.ts))
+      .filter((message) => params.phase !== "final" || messageMatchesExpectedFooter(message.text, params.expectedFooter));
     assertion = assertText(assertionMessages, params.expectedAny, params.expectedAll, params.rejected, params.required);
     if (shouldStopPolling(assertion)) {
       params.progress.push(progressEvent(params.caseStartMs, `${params.phase}_assertion_${assertion.status}`, assertion.reason));
@@ -1264,6 +1282,7 @@ async function runCase(client: SlackAcceptanceClient, config: SlackAcceptanceRes
     expectedAny: caseConfig.expectFinal,
     expectedAll: caseConfig.expectFinalAll,
     rejected: caseConfig.rejectFinal,
+    expectedFooter: caseConfig.expectFooter,
     required: caseConfig.finalRequired !== false,
     phase: "final",
     caseStartMs,

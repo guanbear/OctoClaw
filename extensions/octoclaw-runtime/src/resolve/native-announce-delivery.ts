@@ -148,11 +148,20 @@ function nativeAnnounceDeliveryProvenance(
 
 function nativeAnnounceFooterState(contract: WorkContract, state: UnknownRecord): UnknownRecord {
   const decision = asRecord(state.decision);
+  const staleWorkContract = asRecord(decision.work_contract);
+  const currentContract = contract as unknown as UnknownRecord;
   return {
     ...state,
     decision: {
       ...decision,
-      work_contract: asRecord(decision.work_contract || contract),
+      work_contract: {
+        ...staleWorkContract,
+        ...currentContract,
+        telemetry: {
+          ...asRecord(staleWorkContract.telemetry),
+          ...asRecord(currentContract.telemetry),
+        },
+      },
     },
   };
 }

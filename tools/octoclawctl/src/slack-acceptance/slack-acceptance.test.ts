@@ -1001,6 +1001,42 @@ describe("no-spawn replay assertion", () => {
     expect(delegatedCase.errors.join("\n")).not.toContain("footer_difficulty");
   });
 
+  it("SSV2-053: waits for native final footer instead of accepting parent dispatch text", async () => {
+    const client = createMockClientSequence([
+      [
+        { ts: "1234567890.100001", text: "子任务已启动。" },
+        { ts: "1234567890.110001", text: "子 agent 已派发，正在检查 Gateway 和 OctoClaw 状态。\n\n• route=delegate | model=zhipu/GLM-5.1 · thread | via=policy" },
+      ],
+      [
+        { ts: "1234567890.100001", text: "子任务已启动。" },
+        { ts: "1234567890.110001", text: "子 agent 已派发，正在检查 Gateway 和 OctoClaw 状态。\n\n• route=delegate | model=zhipu/GLM-5.1 · thread | via=policy" },
+        { ts: "1234567890.200001", text: "Gateway 正常，OctoClaw readiness 正常。\n\n• route=delegate | model=zai/glm-4.7 | difficulty=simple · thread | via=native_announce" },
+      ],
+    ]);
+    const config = parseSlackAcceptanceConfig(validConfig({
+      cases: [{
+        kind: "delegated_work",
+        prompt: "test",
+        ackRequired: true,
+        finalRequired: true,
+        expectAck: ["子任务已启动"],
+        expectFinalAll: ["Gateway", "OctoClaw"],
+        expectFooter: { route: "delegate", via: "native_announce", difficultyRequired: true },
+      }],
+    }), validEnv());
+    config.ackTimeoutMs = 100;
+    config.finalTimeoutMs = 100;
+    config.pollIntervalMs = 1;
+
+    const report = await runSlackAcceptanceHarness(client, config);
+    const delegatedCase = report.cases.find((c) => c.kind === "delegated_work")!;
+
+    expect(delegatedCase.status).toBe("pass");
+    expect(delegatedCase.final.matchedText).toContain("via=native_announce");
+    expect(delegatedCase.final.matchedText).toContain("difficulty=simple");
+    expect(delegatedCase.final.matchedText).not.toContain("via=policy");
+  });
+
   it("SSV2-015: fails footer model mismatch against expected footer truth", async () => {
     const client = createMockClient([
       { ts: "1234567890.150001", text: "OpenClaw 总结\n\n• route=reply | model=cliproxyapi/gpt-5.5 · thread | via=rule" },
