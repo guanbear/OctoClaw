@@ -37,7 +37,7 @@ Stability Smoke v2 has four stages:
 2. **Execution**
    - Post-deploy smoke runs a small live Slack pack.
    - Nightly stability runs selected live Slack cases, synthetic fixtures, replay classifiers, router/model consistency checks, and wizard state-machine checks.
-   - Weekly full acceptance runs longer wizard/provider/failure-injection flows.
+   - Full acceptance runs every 3 days for longer wizard/provider/failure-injection flows.
 
 3. **Scoring**
    - Produce a single stability report with lanes for Slack delivery, ACK, streaming, delegation, footer truth, router model choice, wizard, provider fallback, and replay health.
@@ -47,6 +47,9 @@ Stability Smoke v2 has four stages:
    - Convert failures into structured packets with case id, thread ts, prompt hash, footer fields, work contract id, spawn intent id, child session, replay event ids, stage timings, and related commits.
    - AI review classifies each packet as `runtime_bug`, `smoke_spec_bug`, or `environment_issue`.
    - Automated Codex fix drafts are allowed only for small, evidence-backed `runtime_bug` items. Otherwise the job records blockers and next actions.
+   - Fix drafts are local drafts only. They must not commit, push, deploy, restart Gateway, or mutate OpenClaw config.
+   - If a draft changes more than 5 files, changes more than 300 lines, touches runtime delegate/ACK/router hot paths, or has failing validation, it is marked `needs_human_review` and stops.
+   - Even a passing draft requires explicit user confirmation before Codex commits, deploys, or restarts anything.
 
 ## Case Packs
 
@@ -78,9 +81,9 @@ Runs:
 - Provider failure simulation and health/fallback suggestion checks.
 - Replay classifier over the last 24 hours.
 
-### Weekly Full Acceptance
+### 3-Day Full Acceptance
 
-Runs the broad suite:
+Runs every 3 days and covers the broad suite:
 
 - Full Slack wizard flow.
 - Model discovery and proposal/acceptance analysis.
@@ -145,7 +148,7 @@ Use OpenClaw scheduled tasks as the orchestrator:
 
 - `octoclaw stability post-deploy`
 - `octoclaw stability nightly`
-- `octoclaw stability weekly`
+- `octoclaw stability full --cadence 3d`
 - `octoclaw stability review-latest`
 - `octoclaw stability fix-draft`
 
@@ -162,6 +165,7 @@ Expected additions:
 - A stability report and failure packet format.
 - Updated nightly orchestration script or `octoclawctl` subcommands.
 - Updated AI review and fix-draft prompts.
+- A confirmation gate so generated fixes are reviewed by the user before commit/deploy.
 
 Non-goals:
 
@@ -169,7 +173,8 @@ Non-goals:
 - No new live task engine.
 - No automatic OpenClaw fallback mutation.
 - No credential storage in reports.
-- No automated fix commit/push from nightly.
+- No automated fix commit/push from scheduled jobs.
+- No automated deploy/restart from nightly or 3-day full acceptance.
 
 ## Acceptance
 
@@ -179,6 +184,6 @@ The change is ready when:
 - Nightly stability produces a report that can explain ACK, delegate, footer, wizard, router model, provider, and replay failures separately.
 - Synthetic fixtures cover known regressions from recent repairs.
 - AI review produces actionable grouped findings without relying on raw transcripts or secrets.
-- OpenClaw scheduling can run the nightly without macOS launchd-specific logic.
+- OpenClaw scheduling can run nightly and every-3-day full acceptance without macOS launchd-specific logic.
+- AI review can generate repair drafts, but commit/deploy requires explicit user confirmation.
 - Existing `pnpm check` and `pnpm test` remain green.
-

@@ -22,6 +22,7 @@ Hard constraints:
 - Structured gates decide pass/fail; AI only selects, summarizes, and recommends.
 - Do not store secrets, raw transcripts, full prompts, full responses, auth headers, or chain-of-thought in artifacts.
 - Use GLM-5.1 as the default AI review/case-selection model and GPT-5.5 only as escalation.
+- Fix-draft may create local repair drafts, but must not commit, push, deploy, restart Gateway, or mutate OpenClaw config. User confirmation is required before those actions.
 - Run GitNexus impact analysis before editing any function/class/method symbol.
 - Add tests for every BDD scenario covered by your WP.
 
@@ -154,6 +155,8 @@ Required BDD:
 - SSV2-042
 - SSV2-043
 - SSV2-044
+- SSV2-045
+- SSV2-046
 
 Run:
 
@@ -173,7 +176,7 @@ Allowed write scope:
 - docs under `docs/`
 - tests under `tools/octoclawctl/src/cli.test.ts` and stability tests
 
-Add scheduler-friendly commands but do not depend on macOS launchd as the primary mechanism.
+Add scheduler-friendly commands but do not depend on macOS launchd as the primary mechanism. Full acceptance runs every 3 days, not weekly.
 
 Required BDD:
 
@@ -181,6 +184,7 @@ Required BDD:
 - SSV2-051
 - SSV2-052
 - SSV2-053
+- SSV2-054
 
 Run:
 
@@ -189,4 +193,3 @@ pnpm vitest run tools/octoclawctl/src/cli.test.ts tools/octoclawctl/src/stabilit
 pnpm check
 pnpm test
 ```
-

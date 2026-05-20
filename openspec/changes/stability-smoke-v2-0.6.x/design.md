@@ -41,7 +41,7 @@ interface StabilityFailurePacket {
 interface StabilityReport {
   schemaVersion: "octoclaw.stability_smoke.report/v2";
   generatedAt: string;
-  runKind: "post_deploy" | "nightly" | "weekly" | "manual";
+  runKind: "post_deploy" | "nightly" | "full_3d" | "manual";
   overallGate: StabilityGate;
   lanes: StabilityLaneResult[];
   failures: StabilityFailurePacket[];
@@ -60,7 +60,7 @@ interface StabilityCasePack {
   schemaVersion: "octoclaw.stability_smoke.case_pack/v2";
   generatedAt: string;
   generatedBy: "catalog" | "glm-5.1" | "gpt-5.5" | "manual";
-  runKind: "post_deploy" | "nightly" | "weekly" | "manual";
+  runKind: "post_deploy" | "nightly" | "full_3d" | "manual";
   cases: StabilityCase[];
 }
 
@@ -106,9 +106,9 @@ Includes post-deploy pack plus:
 - `provider.402_or_429_fallback`
 - `restart.shutting_down_message`
 
-### Weekly Pack
+### Full Acceptance Pack
 
-Includes nightly pack plus:
+Runs every 3 days. Includes nightly pack plus:
 
 - Full Slack wizard flow.
 - Router model discovery/proposal checks.
@@ -232,8 +232,11 @@ Fix-draft rules:
 
 - Only run Codex fix-draft when at least one blocker/major failure is classified as `runtime_bug`.
 - Fix-draft must keep changes small and local.
-- Fix-draft must not push, deploy, or mutate OpenClaw config.
+- Fix-draft must not commit, push, deploy, restart Gateway, or mutate OpenClaw config.
 - If evidence is insufficient, it must leave the worktree unchanged and record blockers.
+- If the draft changes more than 5 files, changes more than 300 lines, touches runtime delegate/ACK/router hot paths, or has failing validation, mark it `needs_human_review` and stop.
+- Passing validation does not authorize commit/deploy. The report must ask the user to confirm before Codex commits, deploys, or restarts anything.
+- After user confirmation, Codex independently reviews the diff, runs required tests, commits, deploys, and runs post-deploy smoke.
 
 ## OpenClaw Scheduling
 
@@ -242,7 +245,7 @@ Add scheduler-friendly commands:
 ```bash
 octoclawctl stability post-deploy --config <config> --output-dir <dir>
 octoclawctl stability nightly --config <config> --output-dir <dir>
-octoclawctl stability weekly --config <config> --output-dir <dir>
+octoclawctl stability full --config <config> --output-dir <dir> --cadence 3d
 octoclawctl stability review-latest --output-dir <dir>
 octoclawctl stability fix-draft --output-dir <dir>
 ```
@@ -293,4 +296,3 @@ Rollback is non-invasive:
 - Restore old nightly config.
 - Keep generated reports as artifacts.
 - No runtime data migration is required.
-

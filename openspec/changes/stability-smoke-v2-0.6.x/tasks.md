@@ -35,7 +35,7 @@ Tasks:
 
 - [ ] Define stability case-pack/report/failure-packet types.
 - [ ] Implement schema validation with fail-closed behavior.
-- [ ] Add catalog packs for post-deploy, nightly, and weekly.
+- [ ] Add catalog packs for post-deploy, nightly, and every-3-day full acceptance.
 - [ ] Enforce live-case caps and provider-probe safety.
 - [ ] Add JSON sanitization helpers for prompt hashes and secret stripping.
 - [ ] Tests: valid catalog loads; invalid mode/severity fails; live case requires prompt/max runtime; AI pack over live cap fails; secrets are redacted.
@@ -174,7 +174,9 @@ Tasks:
 - [ ] Add AI review prompt over failure packets.
 - [ ] Classify failures as `runtime_bug`, `smoke_spec_bug`, `environment_issue`, or `unknown`.
 - [ ] Add fix-draft guard: only run when blocker/major `runtime_bug` exists.
-- [ ] Tests: invalid AI JSON falls back; low confidence requests escalation; fix-draft skips environment issues; secrets are redacted.
+- [ ] Add confirmation guard: fix-draft never commits, pushes, deploys, restarts Gateway, or mutates OpenClaw config.
+- [ ] Add size/risk guard: drafts over 5 files, over 300 changed lines, hot-path touching, or failing validation are marked `needs_human_review`.
+- [ ] Tests: invalid AI JSON falls back; low confidence requests escalation; fix-draft skips environment issues; confirmation guard works; secrets are redacted.
 
 Acceptance:
 
@@ -190,6 +192,8 @@ BDD:
 - SSV2-042
 - SSV2-043
 - SSV2-044
+- SSV2-045
+- SSV2-046
 
 ## WP-F: OpenClaw Scheduled Orchestration And Closeout
 
@@ -204,13 +208,13 @@ Tasks:
 
 - [ ] Add `octoclawctl stability post-deploy`.
 - [ ] Add `octoclawctl stability nightly`.
-- [ ] Add `octoclawctl stability weekly`.
+- [ ] Add `octoclawctl stability full --cadence 3d`.
 - [ ] Add `octoclawctl stability review-latest`.
 - [ ] Add `octoclawctl stability fix-draft`.
 - [ ] Add OpenClaw scheduled task install/update guidance.
 - [ ] Write migration notes from old nightly/slack acceptance config to Stability Smoke v2.
 - [ ] Verify Slack summary posting uses sanitized compact report.
-- [ ] Tests: CLI parses commands; missing Slack env skips live cases but runs synthetic/replay; report paths are written.
+- [ ] Tests: CLI parses commands; missing Slack env skips live cases but runs synthetic/replay; report paths are written; full acceptance cadence defaults to 3 days.
 
 Acceptance:
 
@@ -226,6 +230,7 @@ BDD:
 - SSV2-051
 - SSV2-052
 - SSV2-053
+- SSV2-054
 
 ## Final Verification
 
@@ -253,4 +258,3 @@ Record:
 - live Slack smoke thread
 - AI model used for case selection/review
 - remaining gaps and observe-only lanes
-

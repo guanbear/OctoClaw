@@ -24,7 +24,7 @@ The current nightly and Slack acceptance checks are useful but dated:
 ### WP-A: Stability Case Schema And Catalog
 
 - Add a case-pack schema that supports live Slack, synthetic fixture, replay-only, router-model, wizard, and provider cases.
-- Add a fixed catalog for post-deploy, nightly, and weekly packs.
+- Add a fixed catalog for post-deploy, nightly, and every-3-day full acceptance packs.
 - Add severity, tags, expected evidence, and failure-code mapping.
 
 ### WP-B: Slack Acceptance Evidence Assertions
@@ -47,7 +47,7 @@ The current nightly and Slack acceptance checks are useful but dated:
 
 ### WP-E: OpenClaw Scheduled Orchestration
 
-- Add or wire `octoclawctl stability` commands for post-deploy, nightly, weekly, review-latest, and fix-draft.
+- Add or wire `octoclawctl stability` commands for post-deploy, nightly, full acceptance, review-latest, and fix-draft.
 - Prefer OpenClaw scheduled tasks for nightly orchestration.
 - Keep macOS launchd compatibility only as a fallback wrapper if still needed.
 
@@ -58,7 +58,7 @@ The current nightly and Slack acceptance checks are useful but dated:
 - Do not automatically mutate OpenClaw model fallback order.
 - Do not make AI-generated case packs authoritative without schema validation.
 - Do not store Slack tokens, API keys, raw transcripts, full prompts, or full responses in reports.
-- Do not automatically commit, push, or deploy fixes from nightly.
+- Do not automatically commit, push, deploy, restart Gateway, or mutate OpenClaw config from nightly or full acceptance.
 
 ## Acceptance Gate
 
@@ -66,9 +66,10 @@ This change is complete when:
 
 - [ ] Post-deploy smoke runs a small live Slack pack and blocks on core stability failures.
 - [ ] Nightly stability runs live selected cases, synthetic fixtures, replay classification, router model consistency, and AI review.
-- [ ] Weekly full acceptance can run broader wizard/provider/restart/failure-injection scenarios.
+- [ ] Full acceptance can run every 3 days and cover broader wizard/provider/restart/failure-injection scenarios.
 - [ ] Reports contain normalized failure codes and structured failure packets.
 - [ ] AI review uses GLM-5.1 by default and GPT-5.5 only for escalation.
+- [ ] AI fix-draft can generate local repair drafts, but commit/deploy requires explicit user confirmation.
 - [ ] OpenClaw scheduled tasks can invoke the nightly workflow and post a compact Slack summary.
 - [ ] Known recent regressions are represented in BDD scenarios.
 - [ ] `pnpm check && pnpm test` passes, or unrelated pre-existing failures are documented with targeted green tests.
@@ -79,4 +80,3 @@ This change is complete when:
 - AI-generated cases can drift. Validate generated case packs against schema and cap live Slack volume.
 - Synthetic fixtures can become stale if replay event schema changes. Tests must fail clearly on schema mismatch.
 - Provider failure tests must use controlled simulation unless explicitly configured for live probing.
-

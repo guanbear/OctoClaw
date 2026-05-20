@@ -280,9 +280,35 @@
 
 **Then** Codex receives the failure packet and related files
 
-**And** it must not push, deploy, or mutate OpenClaw config
+**And** it must not commit, push, deploy, restart Gateway, or mutate OpenClaw config
 
-### SSV2-044: AI Review Does Not Use Raw Transcript
+### SSV2-044: Large Or Risky Fix Draft Needs Human Review
+
+**Given** fix-draft produces a patch touching more than 5 files
+
+**Or** it changes more than 300 lines
+
+**Or** it touches runtime delegate, ACK, or router hot paths
+
+**When** the draft is scored
+
+**Then** it is marked `needs_human_review`
+
+**And** no commit or deploy action is attempted
+
+### SSV2-045: Passing Fix Draft Still Requires User Confirmation
+
+**Given** fix-draft produces a small patch
+
+**And** targeted validation passes
+
+**When** the nightly Slack summary is posted
+
+**Then** it asks the user to confirm before commit/deploy
+
+**And** the scheduled job stops without committing
+
+### SSV2-046: AI Review Does Not Use Raw Transcript
 
 **Given** a Slack acceptance report contains transcript text
 
@@ -312,7 +338,17 @@
 
 **Then** it runs selected live Slack cases, synthetic fixtures, replay lanes, router model checks, wizard checks, and AI review
 
-### SSV2-052: Missing Slack Env Still Runs Non-Live Lanes
+### SSV2-052: Full Acceptance Runs Every 3 Days
+
+**Given** the OpenClaw scheduled task is installed
+
+**When** full acceptance is configured
+
+**Then** its cadence is every 3 days
+
+**And** it runs the broader wizard, provider, restart, and failure-injection scenarios
+
+### SSV2-053: Missing Slack Env Still Runs Non-Live Lanes
 
 **Given** Slack token env is missing
 
@@ -322,7 +358,7 @@
 
 **And** synthetic, replay, router, wizard, and AI review lanes still run where possible
 
-### SSV2-053: Scheduled Task Posts Compact Slack Summary
+### SSV2-054: Scheduled Task Posts Compact Slack Summary
 
 **Given** nightly stability writes a report
 
@@ -331,4 +367,3 @@
 **Then** it posts a compact sanitized Slack summary
 
 **And** the summary links or points to local artifact paths
-
