@@ -113,6 +113,32 @@ function executionFollowupBlocked(decision: unknown): boolean {
     || asBooleanStrict(coverageExecution.supports_provenance_reply);
 }
 
+function hasRecoverablePlannerTaskDrift(expectedTask: string, actualTask: string): boolean {
+  const marker = "\n## Runtime Context Packet\n";
+  const expectedMarkerIndex = expectedTask.indexOf(marker);
+  const actualMarkerIndex = actualTask.indexOf(marker);
+  if (expectedMarkerIndex <= 0 || actualMarkerIndex <= 0) return false;
+
+  const expectedPrefix = expectedTask.slice(0, expectedMarkerIndex);
+  const actualPrefix = actualTask.slice(0, actualMarkerIndex);
+  const expectedSuffix = expectedTask.slice(expectedMarkerIndex);
+  const actualSuffix = actualTask.slice(actualMarkerIndex);
+  if (expectedSuffix !== actualSuffix) return false;
+  if (!actualPrefix.startsWith(expectedPrefix)) return false;
+
+  const completedTail = actualPrefix.slice(expectedPrefix.length);
+  if (completedTail.length === 0 || completedTail.length > 256) return false;
+  return !/```|## Runtime Context Packet|Operational rules:|Rules:|Task:|workContractId:|delegateTaskId:|attemptId:/iu.test(completedTail);
+}
+
+function hasRecoverablePlannerArgsDrift(expected: SessionsSpawnArgs, actual: SessionsSpawnArgs, expectedHash: string): boolean {
+  const expectedTask = asString(expected.task);
+  const actualTask = asString(actual.task);
+  if (!expectedTask || !actualTask || expectedTask === actualTask) return false;
+  if (!hasRecoverablePlannerTaskDrift(expectedTask, actualTask)) return false;
+  return hashSessionsSpawnArgs({ ...actual, task: expectedTask }) === expectedHash;
+}
+
 export function evaluateNativeSpawnGate(input: NativeSpawnGateInput): NativeSpawnGateDecision {
   if (executionFollowupBlocked(input.decision)) {
     return { allowed: false, reason: "execution_followup_spawn_blocked" };
@@ -133,7 +159,9 @@ export function evaluateNativeSpawnGate(input: NativeSpawnGateInput): NativeSpaw
       continue;
     }
     if (!pending) continue;
-    if (pending.canonicalArgsHash !== actualHash) {
+    const recoverableArgsDrift = pending.canonicalArgsHash !== actualHash
+      && hasRecoverablePlannerArgsDrift(pending.sessionsSpawnArgs, input.args, pending.canonicalArgsHash);
+    if (pending.canonicalArgsHash !== actualHash && !recoverableArgsDrift) {
       firstMismatch ??= {
         allowed: false,
         reason: "args_hash_mismatch",
@@ -147,7 +175,7 @@ export function evaluateNativeSpawnGate(input: NativeSpawnGateInput): NativeSpaw
     const started = nativeSpawnIntentStore.transitionToSpawnCallStarted({
       spawnIntentId: pending.spawnIntentId,
       sessionKey,
-      sessionsSpawnArgs: input.args,
+      sessionsSpawnArgs: recoverableArgsDrift ? pending.sessionsSpawnArgs : input.args,
       now: input.now,
     });
     if (!started.ok) {
