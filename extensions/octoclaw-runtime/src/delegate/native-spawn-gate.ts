@@ -150,7 +150,10 @@ function hasRecoverablePlannerTaskDrift(expectedTask: string, actualTask: string
 function hasRecoverablePlannerArgsDrift(expected: SessionsSpawnArgs, actual: SessionsSpawnArgs, expectedHash: string): boolean {
   const expectedTask = asString(expected.task);
   const actualTask = asString(actual.task);
-  if (!expectedTask || !actualTask || expectedTask === actualTask) return false;
+  if (!expectedTask || !actualTask) return false;
+  if (expectedTask === actualTask) {
+    return hashSessionsSpawnArgs({ ...actual, label: expected.label }) === expectedHash;
+  }
   if (!hasRecoverablePlannerTaskDrift(expectedTask, actualTask)) return false;
   return hashSessionsSpawnArgs({ ...actual, task: expectedTask }) === expectedHash
     || hashSessionsSpawnArgs({ ...actual, task: expectedTask, label: expected.label }) === expectedHash;
