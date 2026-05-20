@@ -491,6 +491,63 @@ describe("stability smoke v2 synthetic fixtures", () => {
     }
   });
 
+  it("SSV2-052b: nightly smoke reads replayPath from the configured Slack acceptance config", async () => {
+    const tmpDir = path.join(os.homedir(), ".octoclawctl-test-tmp", `stability-nightly-replay-config-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    const outputDir = path.join(tmpDir, "reports");
+    const replayPath = path.join(tmpDir, "runtime-policy-replay.jsonl");
+    const configPath = path.join(tmpDir, "slack-acceptance.json");
+    try {
+      await fs.mkdir(tmpDir, { recursive: true });
+      await fs.writeFile(replayPath, [
+        JSON.stringify({
+          schema_version: "octoclaw.runtime_policy.replay_event/v1",
+          event: "policy_resolved",
+          at: "2026-05-20T00:00:00.000Z",
+          sessionKey: "slack:channel:C123:thread:456",
+          route: "delegate",
+          systemPreferredRoute: "delegate",
+          routerDecisionValid: true,
+          confidence: 0.9,
+          routeCommitId: "wc-001",
+          turnId: "turn-1",
+        }),
+        JSON.stringify({
+          schema_version: "octoclaw.runtime_policy.replay_event/v1",
+          event: "route_commit_ack",
+          at: "2026-05-20T00:00:00.100Z",
+          sessionKey: "slack:channel:C123:thread:456",
+          routeCommitId: "wc-001",
+          turnId: "turn-1",
+          ackSent: true,
+          ack_delivery_state: "sent",
+        }),
+      ].join("\n"), "utf8");
+      await fs.writeFile(configPath, JSON.stringify({ replayPath }), "utf8");
+
+      const result = await runStabilityOrchestration({
+        subcommand: "nightly",
+        outputDir,
+        config: configPath,
+        env: {},
+        liveSlackReport: {
+          overallGate: "pass",
+          cases: [
+            { id: "reply_core.simple_chat", status: "pass" },
+            { id: "streaming_core.long_reply", status: "pass" },
+            { id: "delegate_core.native_final", status: "pass" },
+            { id: "footer_truth.current_model", status: "pass" },
+            { id: "status_core.read_only", status: "pass" },
+          ],
+        },
+      });
+
+      expect(result.failures.map((item) => item.code)).not.toContain("replay_missing");
+      expect(result.lanes.map((lane) => lane.name)).toContain("nightly:route_quality");
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   it("SSV2-013/SSV2-022: orchestration treats expected synthetic regression classifications as pass evidence", async () => {
     const tmpDir = path.join(os.homedir(), ".octoclawctl-test-tmp", `stability-expected-regression-${Date.now()}-${Math.random().toString(36).slice(2)}`);
     const outputDir = path.join(tmpDir, "reports");

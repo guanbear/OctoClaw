@@ -4,6 +4,7 @@ import { buildCatalogCasePack } from "./catalog.js";
 import { sanitizeStabilityArtifact } from "./sanitize.js";
 import { buildAiReviewPrompt, classifyStabilityFailure, evaluateFixDraftGuard, shouldRunFixDraft } from "./ai.js";
 import { runNightlyReplayStabilityLane, runSyntheticStabilityFixture, type SyntheticFixture } from "./synthetic.js";
+import type { ReplayEvent } from "../nightly/index.js";
 import { REPORT_SCHEMA_VERSION, type StabilityFailurePacket, type StabilityGate, type StabilityLaneResult, type StabilityReport, type StabilityRunKind } from "./types.js";
 
 export interface StabilityRunnerOptions {
@@ -160,6 +161,39 @@ function syntheticKindForCase(caseId: string, expect: Record<string, unknown>): 
   return "escaped_spawn_json";
 }
 
+async function loadReplayEventsFromConfig(configPath?: string): Promise<ReplayEvent[] | undefined> {
+  if (!configPath) return undefined;
+  let rawConfig: unknown;
+  try {
+    rawConfig = JSON.parse(await fs.readFile(configPath, "utf8"));
+  } catch {
+    return undefined;
+  }
+  if (!isRecord(rawConfig)) return undefined;
+  const replayPath = asString(rawConfig.replayPath);
+  if (!replayPath) return undefined;
+
+  let content = "";
+  try {
+    content = await fs.readFile(replayPath, "utf8");
+  } catch {
+    return undefined;
+  }
+
+  const events: ReplayEvent[] = [];
+  for (const line of content.split(/\r?\n/u)) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    try {
+      const parsed = JSON.parse(trimmed) as unknown;
+      if (isRecord(parsed)) events.push(parsed as ReplayEvent);
+    } catch {
+      // Ignore malformed replay fragments; nightly classifiers can work with partial logs.
+    }
+  }
+  return events.length > 0 ? events : undefined;
+}
+
 async function findLatestReport(artifactDir: string): Promise<string> {
   let rawEntries: Awaited<ReturnType<typeof fs.readdir>>;
   try {
@@ -288,7 +322,7 @@ export async function runStabilityOrchestration(options: StabilityRunnerOptions)
   }
 
   if (runKind === "nightly" || runKind === "full_3d") {
-    const result = runNightlyReplayStabilityLane(undefined);
+    const result = runNightlyReplayStabilityLane(await loadReplayEventsFromConfig(options.config));
     allLanes.push(...result.lanes);
     allFailures.push(...result.failures);
   }
