@@ -49,6 +49,14 @@ export type SyntheticFixture =
     }
   | {
       id: string;
+      kind: "native_spawn_recovery";
+      mismatchBlocked: boolean;
+      redispatchAfterMismatch: boolean;
+      terminalError?: string;
+      finalSpawnAllowed: boolean;
+    }
+  | {
+      id: string;
       kind: "native_final_delivery";
       nativeFinalDelivered: boolean;
       parentEchoAfterNativeFinalCount: number;
@@ -185,6 +193,17 @@ function syntheticFailures(fixture: SyntheticFixture): StabilityFailurePacket[] 
             }),
           ]
         : [];
+    case "native_spawn_recovery":
+      if (!fixture.mismatchBlocked) return [];
+      if (fixture.redispatchAfterMismatch || fixture.terminalError?.includes("ticket_used")) {
+        return [
+          failure("native_spawn_redispatch_after_mismatch", fixture.id, "synthetic", {
+            classification: "runtime_bug",
+            errors: ["native spawn mismatch recovery redispatched and hit ticket_used instead of retrying sessions_spawn"],
+          }),
+        ];
+      }
+      return fixture.finalSpawnAllowed ? [] : [failure("native_spawn_retry_not_allowed", fixture.id, "synthetic")];
     case "native_final_delivery": {
       const failures: StabilityFailurePacket[] = [];
       if (fixture.nativeFinalDelivered && fixture.parentEchoAfterNativeFinalCount > 0) {
@@ -246,6 +265,14 @@ function syntheticEvidence(fixture: SyntheticFixture): Record<string, unknown> {
       attemptedToolName: fixture.attemptedToolName,
       ordinaryToolRanAfterEscalation: fixture.ordinaryToolRanAfterEscalation,
       dispatchCalled: fixture.dispatchCalled,
+    };
+  }
+  if (fixture.kind === "native_spawn_recovery") {
+    return {
+      mismatchBlocked: fixture.mismatchBlocked,
+      redispatchAfterMismatch: fixture.redispatchAfterMismatch,
+      terminalError: fixture.terminalError,
+      finalSpawnAllowed: fixture.finalSpawnAllowed,
     };
   }
   if (fixture.kind === "native_final_delivery") {

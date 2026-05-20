@@ -368,7 +368,7 @@ export function makeBeforeToolCallHook(deps: BeforeToolCallDeps) {
           return {
             block: true,
             blockReason: gate.reason === "args_hash_mismatch"
-              ? "OctoClaw blocked sessions_spawn because the arguments do not match the pending native spawn intent. Call octoclaw_dispatch again or use the exact sessionsSpawnArgs."
+              ? "OctoClaw blocked sessions_spawn because the arguments do not match the pending native spawn intent. Retry sessions_spawn with the exact sessionsSpawnArgs from the most recent octoclaw_dispatch result; do not call octoclaw_dispatch again."
               : "OctoClaw blocked sessions_spawn because no current pending native spawn intent exists. Call octoclaw_dispatch first.",
           };
         }
@@ -474,7 +474,7 @@ export function makeBeforeToolCallHook(deps: BeforeToolCallDeps) {
           return {
             block: true,
             blockReason: gate.reason === "args_hash_mismatch"
-              ? "OctoClaw blocked sessions_send because the arguments do not match the pending speculative send intent. Call octoclaw_dispatch again or use the exact sessionsSendArgs."
+              ? "OctoClaw blocked sessions_send because the arguments do not match the pending speculative send intent. Retry sessions_send with the exact sessionsSendArgs from the most recent octoclaw_dispatch result; do not call octoclaw_dispatch again."
               : "OctoClaw blocked sessions_send because no current pending speculative send intent exists. Call octoclaw_dispatch first.",
           };
         }

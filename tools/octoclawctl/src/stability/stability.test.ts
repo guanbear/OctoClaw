@@ -53,6 +53,10 @@ describe("stability smoke v2 catalog", () => {
       fixtureKind: "main_tool_guard",
       failureCode: "main_tool_after_escalation",
     });
+    expect(nightly.cases.find((item) => item.id === "delegate.spawn_mismatch_recovery")?.expect).toMatchObject({
+      fixtureKind: "native_spawn_recovery",
+      failureCode: "native_spawn_redispatch_after_mismatch",
+    });
     expect(nightly.cases.find((item) => item.id === "provider.402_or_429_fallback")?.expect).toMatchObject({
       fixtureKind: "provider_status",
       failureCode: "provider_bare_error",
@@ -627,6 +631,34 @@ describe("stability smoke v2 synthetic fixtures", () => {
       attemptedToolName: "exec",
       ordinaryToolRanAfterEscalation: false,
       dispatchCalled: true,
+    });
+
+    expect(result.gate).toBe("pass");
+    expect(result.failures).toHaveLength(0);
+  });
+
+  it("SSV2-019: native spawn mismatch recovery must not redispatch into ticket_used", () => {
+    const result = runSyntheticStabilityFixture({
+      id: "delegate.spawn_mismatch_recovery",
+      kind: "native_spawn_recovery",
+      mismatchBlocked: true,
+      redispatchAfterMismatch: true,
+      terminalError: "delegation_ticket_rejected:ticket_used",
+      finalSpawnAllowed: false,
+    });
+
+    expect(result.gate).toBe("fail");
+    expect(result.failures.map((item) => item.code)).toContain("native_spawn_redispatch_after_mismatch");
+  });
+
+  it("SSV2-019: retrying sessions_spawn after a mismatch passes the synthetic guard", () => {
+    const result = runSyntheticStabilityFixture({
+      id: "delegate.spawn_mismatch_recovery",
+      kind: "native_spawn_recovery",
+      mismatchBlocked: true,
+      redispatchAfterMismatch: false,
+      terminalError: "",
+      finalSpawnAllowed: true,
     });
 
     expect(result.gate).toBe("pass");

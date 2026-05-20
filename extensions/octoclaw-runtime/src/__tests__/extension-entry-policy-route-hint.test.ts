@@ -3325,6 +3325,77 @@ describe("before_tool_call route hint guard", () => {
     nativeSpawnIntentStore.clearForTests();
   });
 
+  it("[invariant-3] sessions_spawn hash mismatch tells the model to retry sessions_spawn, not redispatch", async () => {
+    nativeSpawnIntentStore.clearForTests();
+    const handlers = new Map<string, Function>();
+    plugin.register({
+      on: (event, handler) => handlers.set(event, handler),
+      registerTool: () => {},
+      registerCommand: () => {},
+      logger: {},
+    });
+
+    const key = "agent:main:slack:channel:c0invariant3:thread:t-spawn-mismatch";
+    const plannedArgs = {
+      task: "[OctoClaw delegated work]\nTask:\nRun a read-only health check.",
+      label: "read-only health check [wc-mismatch-retry]",
+      runtime: "subagent" as const,
+      model: "zhipu/GLM-5.1",
+      cwd: tempWorkspace,
+      mode: "run" as const,
+      cleanup: "keep" as const,
+      sandbox: "inherit" as const,
+      context: "isolated" as const,
+      lightContext: true,
+    };
+    nativeSpawnIntentStore.create({
+      workContractId: "wc-mismatch-retry",
+      sessionKey: key,
+      sessionsSpawnArgs: plannedArgs,
+      ttlMs: 60_000,
+    });
+    policyState.setState(key, {
+      decision: {
+        request: { session_key: key },
+        route_decision: { route: "delegate", decision_bucket: "must_delegate" },
+        hook_interface: {
+          before_tool_call: {
+            enabled: true,
+            route_hint_required: false,
+            route_hint_tool: "octoclaw_route_hint",
+            delegation_enforcement: true,
+          },
+        },
+        route_hint_policy: { required: false, submitted: true },
+        tool_policy: {
+          must_delegate_via: "octoclaw_dispatch",
+          allowed_control_tools: ["octoclaw_dispatch", "octoclaw_status", "octoclaw_route_hint"],
+        },
+      },
+      routeHintSubmitted: true,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    });
+
+    const beforeToolCall = handlers.get("before_tool_call");
+    expect(beforeToolCall).toBeTruthy();
+
+    const result = await beforeToolCall!(
+      { toolName: "sessions_spawn", params: { ...plannedArgs, task: "changed task" } },
+      { sessionKey: key, agentId: "main" },
+    ) as { block?: boolean; blockReason?: string } | undefined;
+
+    expect(result?.block).toBe(true);
+    expect(result?.blockReason).toContain("Retry sessions_spawn");
+    expect(result?.blockReason).toContain("most recent octoclaw_dispatch result");
+    expect(result?.blockReason).not.toContain("Call octoclaw_dispatch again");
+    expect(result?.blockReason).not.toContain("retry octoclaw_dispatch");
+    expect(nativeSpawnIntentStore.get(nativeSpawnIntentStore.findPendingForSession(key)?.spawnIntentId || "")?.status).toBe("planned");
+
+    policyState.clearState(key);
+    nativeSpawnIntentStore.clearForTests();
+  });
+
   // ── Invariant 4: read-only version/release lookup stays main fast path ──
   // A read-only lookup command (cat package.json | grep version) MUST NOT be classified as write_tool_detected.  It should
   // stay on the main fast path under budgeted-main without triggering

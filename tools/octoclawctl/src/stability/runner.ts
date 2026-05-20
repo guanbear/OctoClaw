@@ -143,6 +143,7 @@ function isSyntheticFixtureKind(value: unknown): value is SyntheticFixture["kind
     "provider_status",
     "delegate_footer",
     "main_tool_guard",
+    "native_spawn_recovery",
     "native_final_delivery",
     "restart_shutdown",
     "wizard_start",
@@ -428,6 +429,15 @@ function buildMinimalFixture(id: string, kind: SyntheticFixture["kind"], expect:
         attemptedToolName: asString(expect.attemptedToolName) ?? "exec",
         ordinaryToolRanAfterEscalation: typeof expect.ordinaryToolRanAfterEscalation === "boolean" ? expect.ordinaryToolRanAfterEscalation : false,
         dispatchCalled: typeof expect.dispatchCalled === "boolean" ? expect.dispatchCalled : true,
+      };
+    case "native_spawn_recovery":
+      return {
+        id,
+        kind,
+        mismatchBlocked: typeof expect.mismatchBlocked === "boolean" ? expect.mismatchBlocked : true,
+        redispatchAfterMismatch: typeof expect.redispatchAfterMismatch === "boolean" ? expect.redispatchAfterMismatch : false,
+        terminalError: asString(expect.terminalError),
+        finalSpawnAllowed: typeof expect.finalSpawnAllowed === "boolean" ? expect.finalSpawnAllowed : true,
       };
     case "native_final_delivery":
       return {
