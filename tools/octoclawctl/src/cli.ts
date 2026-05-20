@@ -3729,6 +3729,7 @@ export function buildStabilitySlackAcceptanceCases(
       prompt: withSlackTrigger(trigger, "请委派一个子任务查询当前运行状态，然后汇总结论。"),
       ackRequired: true,
       finalRequired: true,
+      expectFinalAll: ["汇总|总结|结论|状态|运行"],
       expectFooter: { route: "delegate", via: "native_announce" },
       expectReplay: hasReplayPath ? {
         footerVia: "native_announce",
@@ -3745,7 +3746,6 @@ export function buildStabilitySlackAcceptanceCases(
       kind: "plain_chat",
       prompt: withSlackTrigger(trigger, "你现在用的是什么模型？"),
       finalRequired: true,
-      expectReplay: hasReplayPath ? { deliveryTransport: "slack_api", targetSource: "inbound_anchor" } : undefined,
     },
   ];
 }

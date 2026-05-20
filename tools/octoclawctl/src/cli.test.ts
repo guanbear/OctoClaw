@@ -1965,6 +1965,15 @@ describe("octoclawctl nightly integration", () => {
       expect(cases.find((item) => item.id === "delegate_core.native_final")?.expectReplay).toBeUndefined();
     });
 
+    it("SSV2-051: footer truth uses the visible footer while delegate final waits for a real summary", () => {
+      const cases = buildStabilitySlackAcceptanceCases([], { hasReplayPath: true });
+
+      expect(cases.find((item) => item.id === "footer_truth.current_model")?.expectReplay).toBeUndefined();
+      expect(cases.find((item) => item.id === "delegate_core.native_final")?.expectFinalAll).toEqual([
+        "汇总|总结|结论|状态|运行",
+      ]);
+    });
+
     it("SSV2-053: full acceptance cadence defaults to 3d", async () => {
       const tmpDir = path.join(os.homedir(), ".octoclawctl-test-tmp", `stability-full-cadence-${Date.now()}-${Math.random().toString(36).slice(2)}`);
       const outputDir = path.join(tmpDir, "reports");
