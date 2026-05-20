@@ -122,18 +122,34 @@ function renderCompactStabilitySummary(report: StabilityReport): string {
 }
 
 const SYNTHETIC_KIND_MAP: Record<string, SyntheticFixture["kind"]> = {
-  ack: "late_ack",
+  ack: "ack_thread",
   delegate: "escaped_spawn_json",
   provider: "provider_status",
   restart: "restart_shutdown",
   wizard: "wizard_start",
   router: "escaped_spawn_json",
-  footer: "escaped_spawn_json",
-  delivery: "escaped_spawn_json",
+  footer: "delegate_footer",
+  delivery: "native_final_delivery",
   status: "escaped_spawn_json",
 };
 
-function syntheticKindForId(caseId: string): SyntheticFixture["kind"] {
+function isSyntheticFixtureKind(value: unknown): value is SyntheticFixture["kind"] {
+  return typeof value === "string" && [
+    "escaped_spawn_json",
+    "late_ack",
+    "ack_thread",
+    "provider_status",
+    "delegate_footer",
+    "native_final_delivery",
+    "restart_shutdown",
+    "wizard_start",
+  ].includes(value);
+}
+
+function syntheticKindForCase(caseId: string, expect: Record<string, unknown>): SyntheticFixture["kind"] {
+  if (isSyntheticFixtureKind(expect.fixtureKind)) {
+    return expect.fixtureKind;
+  }
   for (const [key, kind] of Object.entries(SYNTHETIC_KIND_MAP)) {
     if (caseId.includes(key)) return kind;
   }
@@ -233,10 +249,22 @@ export async function runStabilityOrchestration(options: StabilityRunnerOptions)
     const syntheticCaseIds: string[] = [];
     for (const fixtureCase of syntheticCases) {
       syntheticCaseIds.push(fixtureCase.id);
-      const kind = syntheticKindForId(fixtureCase.id);
+      const kind = syntheticKindForCase(fixtureCase.id, fixtureCase.expect);
       const fixture = buildMinimalFixture(fixtureCase.id, kind, fixtureCase.expect);
       const result = runSyntheticStabilityFixture(fixture);
-      if (result.gate === "fail") {
+      const expectedFailureCode = asString(fixtureCase.expect.failureCode);
+      if (expectedFailureCode) {
+        if (!result.failures.some((failure) => failure.code === expectedFailureCode)) {
+          syntheticFailures.push({
+            code: "smoke_spec_mismatch",
+            severity: fixtureCase.severity,
+            caseId: fixtureCase.id,
+            mode: "synthetic",
+            classification: "smoke_spec_bug",
+            errors: [`expected synthetic fixture to emit ${expectedFailureCode}`],
+          });
+        }
+      } else if (result.gate === "fail") {
         syntheticFailures.push(...result.failures.map((f): StabilityFailurePacket => ({
           ...f,
           mode: "synthetic",
@@ -279,11 +307,38 @@ export async function runStabilityOrchestration(options: StabilityRunnerOptions)
   }
 
   if (providerCases.length > 0) {
+    const providerFailures: StabilityFailurePacket[] = [];
+    for (const providerCase of providerCases) {
+      const kind = syntheticKindForCase(providerCase.id, providerCase.expect);
+      const fixture = buildMinimalFixture(providerCase.id, kind, providerCase.expect);
+      const result = runSyntheticStabilityFixture(fixture);
+      const expectedFailureCode = asString(providerCase.expect.failureCode);
+      if (expectedFailureCode) {
+        if (!result.failures.some((failure) => failure.code === expectedFailureCode)) {
+          providerFailures.push({
+            code: "smoke_spec_mismatch",
+            severity: providerCase.severity,
+            caseId: providerCase.id,
+            mode: "provider",
+            classification: "smoke_spec_bug",
+            errors: [`expected provider fixture to emit ${expectedFailureCode}`],
+          });
+        }
+      } else if (result.gate === "fail") {
+        providerFailures.push(...result.failures.map((f): StabilityFailurePacket => ({
+          ...f,
+          mode: "provider",
+          caseId: providerCase.id,
+          severity: providerCase.severity,
+        })));
+      }
+    }
+    allFailures.push(...providerFailures);
     allLanes.push({
       name: "provider_resilience",
-      gate: "unknown",
+      gate: providerFailures.length > 0 ? "fail" : "pass",
       caseIds: providerCases.map((c) => c.id),
-      failureCodes: [],
+      failureCodes: [...new Set(providerFailures.map((f) => f.code))],
     });
   }
 
@@ -335,8 +390,38 @@ function buildMinimalFixture(id: string, kind: SyntheticFixture["kind"], expect:
   switch (kind) {
     case "late_ack":
       return { id, kind, ackMs: expect.ackMs as number ?? 0, ackDeadlineMs: expect.ackDeadlineMs as number ?? 90_000, finalDelivered: true };
+    case "ack_thread":
+      return {
+        id,
+        kind,
+        expectedThreadTs: asString(expect.expectedThreadTs) ?? "thread-ok",
+        observedThreadTs: asString(expect.observedThreadTs) ?? "thread-ok",
+        ackText: asString(expect.ackText),
+      };
     case "provider_status":
-      return { id, kind, statusCode: (expect.statusCodes as number[])?.[0] ?? 402, slackText: `${(expect.statusCodes as number[])?.[0] ?? 402} status code (no body)`, fallbackAvailable: true };
+      return {
+        id,
+        kind,
+        statusCode: (expect.statusCodes as number[])?.[0] ?? 402,
+        slackText: asString(expect.slackText) ?? `${(expect.statusCodes as number[])?.[0] ?? 402} status code (no body)`,
+        fallbackAvailable: typeof expect.fallbackAvailable === "boolean" ? expect.fallbackAvailable : true,
+      };
+    case "delegate_footer":
+      return {
+        id,
+        kind,
+        footerRoute: asString(expect.footerRoute) ?? "reply",
+        hasSpawnIntent: typeof expect.hasSpawnIntent === "boolean" ? expect.hasSpawnIntent : true,
+        hasChildSession: typeof expect.hasChildSession === "boolean" ? expect.hasChildSession : true,
+      };
+    case "native_final_delivery":
+      return {
+        id,
+        kind,
+        nativeFinalDelivered: typeof expect.nativeFinalDelivered === "boolean" ? expect.nativeFinalDelivered : true,
+        parentEchoAfterNativeFinalCount: typeof expect.parentEchoAfterNativeFinalCount === "number" ? expect.parentEchoAfterNativeFinalCount : 0,
+        duplicateFinalCount: typeof expect.duplicateFinalCount === "number" ? expect.duplicateFinalCount : 0,
+      };
     case "restart_shutdown":
       return { id, kind, slackText: "Previous run is still shutting down.", restartWindowMs: 12_000 };
     case "wizard_start":

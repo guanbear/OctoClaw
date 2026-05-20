@@ -1977,6 +1977,36 @@ describe("octoclawctl nightly integration", () => {
       ]);
     });
 
+    it("SSV2-010/SSV2-011: post-deploy live pack includes read-only status and rejects bare infrastructure errors", () => {
+      const cases = buildStabilitySlackAcceptanceCases([], { hasReplayPath: true });
+      const ids = cases.map((item) => item.id);
+
+      expect(ids).toEqual([
+        "reply_core.simple_chat",
+        "streaming_core.long_reply",
+        "delegate_core.native_final",
+        "footer_truth.current_model",
+        "status_core.read_only",
+      ]);
+
+      const statusCase = cases.find((item) => item.id === "status_core.read_only");
+      expect(statusCase).toMatchObject({
+        kind: "plain_chat",
+        finalRequired: true,
+        noSpawnExpected: true,
+        expectFooter: { route: "reply" },
+      });
+      expect(statusCase?.prompt).toContain("只读");
+
+      for (const liveCase of cases) {
+        expect(liveCase.rejectFinal).toEqual(expect.arrayContaining([
+          "402 status code \\(no body\\)",
+          "429 status code \\(no body\\)",
+          "Previous run is still shutting down",
+        ]));
+      }
+    });
+
     it("SSV2-053: full acceptance cadence defaults to 3d", async () => {
       const tmpDir = path.join(os.homedir(), ".octoclawctl-test-tmp", `stability-full-cadence-${Date.now()}-${Math.random().toString(36).slice(2)}`);
       const outputDir = path.join(tmpDir, "reports");

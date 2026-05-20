@@ -36,6 +36,29 @@ describe("stability smoke v2 catalog", () => {
     expect(pack.cases.every((item) => item.severity === "blocker" || item.severity === "major")).toBe(true);
   });
 
+  it("SSV2-001: nightly and full catalog cases carry executable fixture metadata for historical regressions", () => {
+    const nightly = buildCatalogCasePack("nightly", { generatedAt: "2026-05-20T00:00:00.000Z" });
+    const full = buildCatalogCasePack("full_3d", { generatedAt: "2026-05-20T00:00:00.000Z" });
+
+    expect(nightly.cases.find((item) => item.id === "ack.thread_anchor")?.expect).toMatchObject({
+      fixtureKind: "ack_thread",
+      expectedThreadTs: "thread-ok",
+      observedThreadTs: "thread-ok",
+    });
+    expect(nightly.cases.find((item) => item.id === "footer.no_delegate_without_spawn")?.expect).toMatchObject({
+      fixtureKind: "delegate_footer",
+      failureCode: "delegate_footer_without_spawn",
+    });
+    expect(nightly.cases.find((item) => item.id === "provider.402_or_429_fallback")?.expect).toMatchObject({
+      fixtureKind: "provider_status",
+      failureCode: "provider_bare_error",
+    });
+    expect(full.cases.find((item) => item.id === "delivery.duplicate_final_parent_echo")?.expect).toMatchObject({
+      fixtureKind: "native_final_delivery",
+      failureCode: "parent_echo_after_native_final",
+    });
+  });
+
   it("SSV2-002: rejects invalid AI case packs and leaves callers with catalog fallback", () => {
     const result = validateStabilityCasePack({
       schemaVersion: "octoclaw.stability_smoke.case_pack/v2",
@@ -430,6 +453,28 @@ describe("stability smoke v2 synthetic fixtures", () => {
     }
   });
 
+  it("SSV2-013/SSV2-022: orchestration treats expected synthetic regression classifications as pass evidence", async () => {
+    const tmpDir = path.join(os.homedir(), ".octoclawctl-test-tmp", `stability-expected-regression-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    const outputDir = path.join(tmpDir, "reports");
+    try {
+      await fs.mkdir(tmpDir, { recursive: true });
+
+      const result = await runStabilityOrchestration({
+        subcommand: "nightly",
+        outputDir,
+        env: {},
+      });
+
+      expect(result.lanes.find((lane) => lane.name === "synthetic_fixtures")?.gate).toBe("pass");
+      expect(result.lanes.find((lane) => lane.name === "synthetic_fixtures")?.caseIds).toContain("footer.no_delegate_without_spawn");
+      expect(result.failures.find((item) => item.caseId === "footer.no_delegate_without_spawn")).toBeUndefined();
+      expect(result.lanes.find((lane) => lane.name === "provider_resilience")?.gate).toBe("pass");
+      expect(result.failures.find((item) => item.caseId === "provider.402_or_429_fallback")).toBeUndefined();
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   it("SSV2-020: accepts escaped spawn JSON when canonical content matches", () => {
     const result = runSyntheticStabilityFixture({
       id: "delegate.spawn_intent_hash_escape",
@@ -458,6 +503,20 @@ describe("stability smoke v2 synthetic fixtures", () => {
     expect(result.evidence.finalDelivered).toBe(true);
   });
 
+  it("SSV2-021: classifies ACK delivered outside the target thread", () => {
+    const result = runSyntheticStabilityFixture({
+      id: "ack.thread_anchor",
+      kind: "ack_thread",
+      expectedThreadTs: "1770000000.000001",
+      observedThreadTs: "1770000000.000999",
+      ackText: "任务已启动。",
+    });
+
+    expect(result.gate).toBe("fail");
+    expect(result.failures.map((item) => item.code)).toContain("ack_wrong_thread");
+    expect(result.failures[0]?.threadTs).toBe("1770000000.000999");
+  });
+
   it("SSV2-022: provider 402 fixture rejects bare Slack provider errors", () => {
     const result = runSyntheticStabilityFixture({
       id: "provider.402_or_429_fallback",
@@ -469,6 +528,48 @@ describe("stability smoke v2 synthetic fixtures", () => {
 
     expect(result.gate).toBe("fail");
     expect(result.failures.map((item) => item.code)).toContain("provider_bare_error");
+  });
+
+  it("SSV2-022: provider fallback unavailable must be clear instead of a raw provider error", () => {
+    const result = runSyntheticStabilityFixture({
+      id: "provider.402_or_429_fallback",
+      kind: "provider_status",
+      statusCode: 429,
+      slackText: "429 status code (no body)",
+      fallbackAvailable: false,
+    });
+
+    expect(result.gate).toBe("fail");
+    expect(result.failures.map((item) => item.code)).toContain("provider_no_fallback");
+  });
+
+  it("SSV2-013: delegate footer without spawn evidence is covered synthetically", () => {
+    const result = runSyntheticStabilityFixture({
+      id: "footer.no_delegate_without_spawn",
+      kind: "delegate_footer",
+      footerRoute: "delegate",
+      hasSpawnIntent: false,
+      hasChildSession: false,
+    });
+
+    expect(result.gate).toBe("fail");
+    expect(result.failures.map((item) => item.code)).toContain("delegate_footer_without_spawn");
+  });
+
+  it("SSV2-014: parent echo after native final is covered synthetically", () => {
+    const result = runSyntheticStabilityFixture({
+      id: "delivery.duplicate_final_parent_echo",
+      kind: "native_final_delivery",
+      nativeFinalDelivered: true,
+      parentEchoAfterNativeFinalCount: 1,
+      duplicateFinalCount: 1,
+    });
+
+    expect(result.gate).toBe("fail");
+    expect(result.failures.map((item) => item.code)).toEqual(expect.arrayContaining([
+      "parent_echo_after_native_final",
+      "duplicate_final",
+    ]));
   });
 
   it("SSV2-023: restart shutdown message is classified as gateway restart drop", () => {

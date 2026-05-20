@@ -3705,6 +3705,11 @@ export function buildStabilitySlackAcceptanceCases(
 ): SlackAcceptanceCaseConfig[] {
   const trigger = inferSlackMentionTrigger(configuredCases);
   const hasReplayPath = options.hasReplayPath !== false;
+  const rejectInfrastructureErrors = [
+    "402 status code \\(no body\\)",
+    "429 status code \\(no body\\)",
+    "Previous run is still shutting down",
+  ];
   return [
     {
       id: "reply_core.simple_chat",
@@ -3713,6 +3718,7 @@ export function buildStabilitySlackAcceptanceCases(
       finalRequired: true,
       noSpawnExpected: true,
       expectFooter: { route: "reply" },
+      rejectFinal: rejectInfrastructureErrors,
     },
     {
       id: "streaming_core.long_reply",
@@ -3721,7 +3727,7 @@ export function buildStabilitySlackAcceptanceCases(
       finalRequired: true,
       ackRequired: false,
       rejectAck: ["任务已启动。", "还没好，再等等"],
-      rejectFinal: ["402 status code \\(no body\\)", "Previous run is still shutting down"],
+      rejectFinal: rejectInfrastructureErrors,
     },
     {
       id: "delegate_core.native_final",
@@ -3742,12 +3748,24 @@ export function buildStabilitySlackAcceptanceCases(
         requireRunId: true,
         requireChildSession: true,
       } : undefined,
+      rejectFinal: rejectInfrastructureErrors,
     },
     {
       id: "footer_truth.current_model",
       kind: "plain_chat",
       prompt: withSlackTrigger(trigger, "你现在用的是什么模型？"),
       finalRequired: true,
+      rejectFinal: rejectInfrastructureErrors,
+    },
+    {
+      id: "status_core.read_only",
+      kind: "plain_chat",
+      prompt: withSlackTrigger(trigger, "请只读检查当前 Gateway 是否运行正常，用一句话回答状态，不要委派子任务。"),
+      finalRequired: true,
+      noSpawnExpected: true,
+      expectFooter: { route: "reply" },
+      rejectAck: ["任务已启动。", "还没好，再等等"],
+      rejectFinal: rejectInfrastructureErrors,
     },
   ];
 }

@@ -18,10 +18,31 @@ export type SyntheticFixture =
     }
   | {
       id: string;
+      kind: "ack_thread";
+      expectedThreadTs: string;
+      observedThreadTs: string;
+      ackText?: string;
+    }
+  | {
+      id: string;
       kind: "provider_status";
       statusCode: number;
       slackText: string;
       fallbackAvailable: boolean;
+    }
+  | {
+      id: string;
+      kind: "delegate_footer";
+      footerRoute: string;
+      hasSpawnIntent: boolean;
+      hasChildSession: boolean;
+    }
+  | {
+      id: string;
+      kind: "native_final_delivery";
+      nativeFinalDelivered: boolean;
+      parentEchoAfterNativeFinalCount: number;
+      duplicateFinalCount: number;
     }
   | {
       id: string;
@@ -116,14 +137,37 @@ function syntheticFailures(fixture: SyntheticFixture): StabilityFailurePacket[] 
             }),
           ]
         : [];
-    case "provider_status":
-      return isBareProviderError(fixture.statusCode, fixture.slackText)
+    case "ack_thread":
+      return fixture.expectedThreadTs !== fixture.observedThreadTs
         ? [
-            failure("provider_bare_error", fixture.id, "provider", {
-              stageMs: { statusCode: fixture.statusCode },
+            failure("ack_wrong_thread", fixture.id, "synthetic", {
+              threadTs: fixture.observedThreadTs,
             }),
           ]
         : [];
+    case "provider_status":
+      if (!isBareProviderError(fixture.statusCode, fixture.slackText)) {
+        return [];
+      }
+      return [
+        failure(fixture.fallbackAvailable ? "provider_bare_error" : "provider_no_fallback", fixture.id, "provider", {
+          stageMs: { statusCode: fixture.statusCode },
+        }),
+      ];
+    case "delegate_footer":
+      return fixture.footerRoute === "delegate" && (!fixture.hasSpawnIntent || !fixture.hasChildSession)
+        ? [failure("delegate_footer_without_spawn", fixture.id, "synthetic")]
+        : [];
+    case "native_final_delivery": {
+      const failures: StabilityFailurePacket[] = [];
+      if (fixture.nativeFinalDelivered && fixture.parentEchoAfterNativeFinalCount > 0) {
+        failures.push(failure("parent_echo_after_native_final", fixture.id, "synthetic"));
+      }
+      if (fixture.duplicateFinalCount > 0) {
+        failures.push(failure("duplicate_final", fixture.id, "synthetic"));
+      }
+      return failures;
+    }
     case "restart_shutdown":
       return fixture.slackText.includes("Previous run is still shutting down")
         ? [
@@ -145,12 +189,33 @@ function syntheticEvidence(fixture: SyntheticFixture): Record<string, unknown> {
       ackMs: fixture.ackMs,
       ackDeadlineMs: fixture.ackDeadlineMs,
       finalDelivered: fixture.finalDelivered,
+      };
+    }
+  if (fixture.kind === "ack_thread") {
+    return {
+      expectedThreadTs: fixture.expectedThreadTs,
+      observedThreadTs: fixture.observedThreadTs,
+      ackText: fixture.ackText,
     };
   }
   if (fixture.kind === "provider_status") {
     return {
       statusCode: fixture.statusCode,
       fallbackAvailable: fixture.fallbackAvailable,
+    };
+  }
+  if (fixture.kind === "delegate_footer") {
+    return {
+      footerRoute: fixture.footerRoute,
+      hasSpawnIntent: fixture.hasSpawnIntent,
+      hasChildSession: fixture.hasChildSession,
+    };
+  }
+  if (fixture.kind === "native_final_delivery") {
+    return {
+      nativeFinalDelivered: fixture.nativeFinalDelivered,
+      parentEchoAfterNativeFinalCount: fixture.parentEchoAfterNativeFinalCount,
+      duplicateFinalCount: fixture.duplicateFinalCount,
     };
   }
   return {};

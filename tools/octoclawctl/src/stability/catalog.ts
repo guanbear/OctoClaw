@@ -39,23 +39,25 @@ const POST_DEPLOY_CASES: StabilityCase[] = [
   },
   {
     id: "status_core.read_only",
-    mode: "synthetic",
+    mode: "live_slack",
     severity: "major",
     tags: ["status", "read-only"],
+    prompt: "请只读检查当前 Gateway 是否运行正常，用一句话回答状态，不要委派子任务。",
+    maxRuntimeMs: 90_000,
     expect: { command: "openclaw gateway status", readOnly: true },
   },
 ];
 
 const NIGHTLY_EXTRA_CASES: StabilityCase[] = [
-  syntheticCase("ack.thread_anchor", "major", ["ack", "thread"], { sameThread: true }),
-  syntheticCase("ack.no_misleading_text", "major", ["ack", "streaming"], { forbiddenText: ["任务已启动。", "还没好，再等等"] }),
-  syntheticCase("delegate.spawn_intent_hash_escape", "major", ["delegate", "spawn-intent"], { canonicalSpawnArgs: true }),
-  syntheticCase("delegate.native_final_footer", "blocker", ["delegate", "footer"], { footerVia: "native_announce" }),
-  syntheticCase("footer.no_delegate_without_spawn", "blocker", ["footer", "delegate"], { delegateRequiresSpawn: true }),
+  syntheticCase("ack.thread_anchor", "major", ["ack", "thread"], { fixtureKind: "ack_thread", expectedThreadTs: "thread-ok", observedThreadTs: "thread-ok" }),
+  syntheticCase("ack.no_misleading_text", "major", ["ack", "streaming"], { fixtureKind: "late_ack", ackMs: 0, ackDeadlineMs: 90_000, forbiddenText: ["任务已启动。", "还没好，再等等"] }),
+  syntheticCase("delegate.spawn_intent_hash_escape", "major", ["delegate", "spawn-intent"], { fixtureKind: "escaped_spawn_json", canonicalSpawnArgs: true }),
+  syntheticCase("delegate.native_final_footer", "blocker", ["delegate", "footer"], { fixtureKind: "delegate_footer", footerRoute: "delegate", hasSpawnIntent: true, hasChildSession: true, footerVia: "native_announce" }),
+  syntheticCase("footer.no_delegate_without_spawn", "blocker", ["footer", "delegate"], { fixtureKind: "delegate_footer", footerRoute: "delegate", hasSpawnIntent: false, hasChildSession: false, failureCode: "delegate_footer_without_spawn" }),
   syntheticCase("router.simple_normal_deep_model_matrix", "major", ["router", "model-choice"], { complexityMatrix: ["simple", "normal", "deep"] }),
   wizardCase("wizard.start_resume_idempotent", "major", ["wizard", "idempotency"], { duplicateClickIdempotent: true }),
-  providerCase("provider.402_or_429_fallback", "major", ["provider", "fallback"], { providerProbe: "synthetic", statusCodes: [402, 429] }),
-  syntheticCase("restart.shutting_down_message", "major", ["restart", "gateway"], { classify: "gateway_restart_drop" }),
+  providerCase("provider.402_or_429_fallback", "major", ["provider", "fallback"], { fixtureKind: "provider_status", providerProbe: "synthetic", statusCodes: [402, 429], fallbackAvailable: true, failureCode: "provider_bare_error" }),
+  syntheticCase("restart.shutting_down_message", "major", ["restart", "gateway"], { fixtureKind: "restart_shutdown", classify: "gateway_restart_drop", failureCode: "gateway_restart_drop" }),
 ];
 
 const FULL_EXTRA_CASES: StabilityCase[] = [
@@ -63,7 +65,7 @@ const FULL_EXTRA_CASES: StabilityCase[] = [
   syntheticCase("router.model_discovery_proposals", "major", ["router", "discovery"], { discoveredUnconfigured: "proposal_only" }),
   syntheticCase("router.health_cooldown_fallback_suggestion", "major", ["router", "health"], { cooldownExcludesExpected: true }),
   syntheticCase("restart.interruption_recovery", "major", ["restart", "recovery"], { restartWindowRecovery: true }),
-  syntheticCase("delivery.duplicate_final_parent_echo", "blocker", ["delivery", "delegate"], { failureCode: "parent_echo_after_native_final" }),
+  syntheticCase("delivery.duplicate_final_parent_echo", "blocker", ["delivery", "delegate"], { fixtureKind: "native_final_delivery", nativeFinalDelivered: true, parentEchoAfterNativeFinalCount: 1, duplicateFinalCount: 1, failureCode: "parent_echo_after_native_final" }),
 ];
 
 export function buildCatalogCasePack(runKind: StabilityRunKind, options: BuildCatalogOptions = {}): StabilityCasePack {
