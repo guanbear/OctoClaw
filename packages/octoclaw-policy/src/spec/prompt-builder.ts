@@ -33,7 +33,8 @@ function renderSrP1Rules(): string {
   return [
     "## SR-P1 routing rules",
     "- Judge only decides route=reply or route=delegate plus complexity. Runtime maps route and runtime facts to must_reply, must_delegate, or budgeted_main_then_delegate.",
-    "- status/provenance follow-up: route=reply when execution coverage can answer or when there is no verifiable record; never spawn only to inspect provenance/status.",
+    "- status/provenance follow-up: route=reply when the user is asking about an existing execution record; never spawn only to inspect provenance/status.",
+    "- Explicit requests to delegate, use a subagent, or create a separate execution unit are route=delegate even when the requested deliverable is a status or lookup summary.",
     "- route=delegate when the user asks for a new execution unit: background/subagent/parallel execution, code/file mutation, command execution, tests/builds, log/workspace investigation needing tools, review/validation, multi-step probing, or clearly long-running work.",
     "- Bare opencode/glm/model/tool names or discussion of routing/config/models are not delegate unless the user asks that agent/tool to execute work.",
     "- Unknown scope/target -> route=reply.",
@@ -46,6 +47,7 @@ function renderBoundaryExamples(): string {
     "## Boundary examples",
     "- Explain a type / answer a concept -> reply.",
     "- Which version/latest/release changed? fresh environment or external lookup -> delegate.",
+    "- 请委派一个子任务查询当前运行状态，然后汇总结论 -> delegate.",
     "- Check repo status/logs, run tests, inspect failures, fix code -> delegate.",
     "- 后台跑测试并修复失败用例 -> delegate.",
     "- Was that done by you or a sub-agent? -> reply using execution receipt/no verifiable record; never spawn.",

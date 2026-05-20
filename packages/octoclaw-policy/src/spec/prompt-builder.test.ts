@@ -14,6 +14,8 @@ describe("local judge prompt", () => {
     expect(prompt).toContain("role, workType, scope, tool_need_hint, duration_hint");
     expect(prompt).toContain("complexity is simple, normal, complex, or deep");
     expect(prompt).toContain("Runtime maps route and runtime facts");
+    expect(prompt).toContain("Explicit requests to delegate");
+    expect(prompt).toContain("请委派一个子任务查询当前运行状态");
     expect(prompt).toContain("must_reply");
     expect(prompt).toContain("must_delegate");
     expect(prompt).toContain("budgeted_main_then_delegate");
