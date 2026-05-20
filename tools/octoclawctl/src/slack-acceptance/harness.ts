@@ -911,6 +911,7 @@ async function collectRepliesUntil(params: {
   requestTimeoutMs: number;
   pollIntervalMs: number;
   limit: number;
+  ignoreAssertionTs?: string[];
   expectedAny?: string[];
   expectedAll?: string[];
   rejected?: string[];
@@ -947,7 +948,8 @@ async function collectRepliesUntil(params: {
       firstReplySeen = true;
       params.progress.push(progressEvent(params.caseStartMs, "first_reply_seen", `${params.phase}; replies=${latest.length}`));
     }
-    assertion = assertText(latest, params.expectedAny, params.expectedAll, params.rejected, params.required);
+    const assertionMessages = latest.filter((message) => !(params.ignoreAssertionTs ?? []).includes(message.ts));
+    assertion = assertText(assertionMessages, params.expectedAny, params.expectedAll, params.rejected, params.required);
     if (shouldStopPolling(assertion)) {
       params.progress.push(progressEvent(params.caseStartMs, `${params.phase}_assertion_${assertion.status}`, assertion.reason));
       return { replies: latest, assertion, errors };
@@ -1238,6 +1240,7 @@ async function runCase(client: SlackAcceptanceClient, config: SlackAcceptanceRes
   errors.push(...ackCollection.errors);
   const ackReplies = ackCollection.replies;
   const ack = ackCollection.assertion;
+  const acceptedAckTs = ack.status === "pass" ? matchedReplyTs(ackReplies, ack) : undefined;
   const finalCollection = await collectRepliesUntil({
     client,
     channel: posted.channel,
@@ -1247,6 +1250,7 @@ async function runCase(client: SlackAcceptanceClient, config: SlackAcceptanceRes
     requestTimeoutMs: config.requestTimeoutMs,
     pollIntervalMs,
     limit: config.maxTranscriptMessages,
+    ignoreAssertionTs: acceptedAckTs ? [acceptedAckTs] : undefined,
     expectedAny: caseConfig.expectFinal,
     expectedAll: caseConfig.expectFinalAll,
     rejected: caseConfig.rejectFinal,
@@ -1274,7 +1278,7 @@ async function runCase(client: SlackAcceptanceClient, config: SlackAcceptanceRes
     progress.push(progressEvent(caseStartMs, "ack_satisfied_by_fast_final", effectiveAck.reason));
   }
   errors.push(...evidenceExpectationErrors(caseConfig, replayEvidence, effectiveAck));
-  const acceptedAckAt = tsToMillis(matchedReplyTs(ackReplies, ack));
+  const acceptedAckAt = tsToMillis(acceptedAckTs);
   const legacyAckAt = acceptedAckAt ?? tsToMillis(ackReplies[0]?.ts) ?? tsToMillis(allReplies.find((message) => message.text.trim())?.ts);
   const neutralAckAt = tsToMillis(neutralAckCollection.matchedTs) ?? neutralAckCollection.observedAtMs;
   const finalAt = tsToMillis(allReplies[allReplies.length - 1]?.ts);

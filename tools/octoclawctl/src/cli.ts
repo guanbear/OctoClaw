@@ -3663,7 +3663,7 @@ async function runStabilityCliCommand(parsed: ParsedCliArgs, env: Record<string,
 
 async function runStabilityLiveSlackPack(configPath: string, env: Record<string, string | undefined>) {
   const resolvedConfig = await loadSlackAcceptanceConfig(configPath, env);
-  const stabilityCases = buildStabilitySlackAcceptanceCases(resolvedConfig.cases);
+  const stabilityCases = buildStabilitySlackAcceptanceCases(resolvedConfig.cases, { hasReplayPath: Boolean(resolvedConfig.replayPath) });
   const scopedConfig = {
     ...resolvedConfig,
     cases: stabilityCases,
@@ -3675,7 +3675,10 @@ async function runStabilityLiveSlackPack(configPath: string, env: Record<string,
     cases: report.cases.map((item) => ({
       id: item.id,
       status: item.status,
+      threadTs: item.threadTs,
       errors: item.errors,
+      progress: item.progress,
+      replayEvidence: item.replayEvidence,
     })),
   };
 }
@@ -3692,8 +3695,16 @@ function withSlackTrigger(trigger: string, prompt: string): string {
   return trigger && !prompt.startsWith(trigger) ? `${trigger}${prompt}` : prompt;
 }
 
-export function buildStabilitySlackAcceptanceCases(configuredCases: SlackAcceptanceCaseConfig[] = []): SlackAcceptanceCaseConfig[] {
+export interface BuildStabilitySlackAcceptanceCasesOptions {
+  hasReplayPath?: boolean;
+}
+
+export function buildStabilitySlackAcceptanceCases(
+  configuredCases: SlackAcceptanceCaseConfig[] = [],
+  options: BuildStabilitySlackAcceptanceCasesOptions = {},
+): SlackAcceptanceCaseConfig[] {
   const trigger = inferSlackMentionTrigger(configuredCases);
+  const hasReplayPath = options.hasReplayPath !== false;
   return [
     {
       id: "reply_core.simple_chat",
@@ -3719,7 +3730,7 @@ export function buildStabilitySlackAcceptanceCases(configuredCases: SlackAccepta
       ackRequired: true,
       finalRequired: true,
       expectFooter: { route: "delegate", via: "native_announce" },
-      expectReplay: {
+      expectReplay: hasReplayPath ? {
         footerVia: "native_announce",
         deliveryTransport: "slack_api",
         targetSource: "inbound_anchor",
@@ -3727,14 +3738,14 @@ export function buildStabilitySlackAcceptanceCases(configuredCases: SlackAccepta
         requireSpawnIntent: true,
         requireRunId: true,
         requireChildSession: true,
-      },
+      } : undefined,
     },
     {
       id: "footer_truth.current_model",
       kind: "plain_chat",
       prompt: withSlackTrigger(trigger, "你现在用的是什么模型？"),
       finalRequired: true,
-      expectReplay: { deliveryTransport: "slack_api", targetSource: "inbound_anchor" },
+      expectReplay: hasReplayPath ? { deliveryTransport: "slack_api", targetSource: "inbound_anchor" } : undefined,
     },
   ];
 }

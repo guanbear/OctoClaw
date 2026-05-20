@@ -31,6 +31,8 @@ export interface StabilityFailurePacket {
   caseId: string;
   mode: StabilityCaseMode;
   classification?: "runtime_bug" | "smoke_spec_bug" | "environment_issue" | "unknown";
+  errors?: string[];
+  progress?: Array<{ event: string; elapsedMs?: number; detail?: string }>;
   threadTs?: string;
   promptHash?: string;
   route?: string;

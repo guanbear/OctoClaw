@@ -344,6 +344,37 @@ describe("content assertions via runSlackAcceptanceHarness", () => {
     expect(lookupCase.transcript).toHaveLength(2);
   });
 
+  it("does not use the accepted ACK as the final reply when no final text pattern is configured", async () => {
+    const client = createMockClientSequence([
+      [{ ts: "1234567890.000002", text: "还在跑，稍等" }],
+      [{ ts: "1234567890.000002", text: "还在跑，稍等" }],
+      [
+        { ts: "1234567890.000002", text: "还在跑，稍等" },
+        { ts: "1234567890.000003", text: "子任务完成，系统正常。" },
+      ],
+    ]);
+    const config = parseSlackAcceptanceConfig(validConfig({
+      cases: [{
+        kind: "delegated_work",
+        prompt: "test",
+        ackRequired: true,
+        finalRequired: true,
+        expectAck: ["还在跑"],
+      }],
+    }), validEnv());
+    config.ackTimeoutMs = 100;
+    config.finalTimeoutMs = 100;
+    config.pollIntervalMs = 1;
+
+    const report = await runSlackAcceptanceHarness(client, config);
+    const delegatedCase = report.cases.find((c) => c.kind === "delegated_work")!;
+
+    expect(delegatedCase.ack.status).toBe("pass");
+    expect(delegatedCase.final.status).toBe("pass");
+    expect(delegatedCase.final.matchedText).toContain("子任务完成");
+    expect(delegatedCase.transcript).toHaveLength(2);
+  });
+
   it("does not treat a trailing footer pipe reject pattern as a wildcard", async () => {
     const client = createMockClientSequence([
       [{ ts: "1234567890.000002", text: "任务已启动。" }],

@@ -397,6 +397,39 @@ describe("stability smoke v2 synthetic fixtures", () => {
     }
   });
 
+  it("SSV2-051: preserves live Slack failure diagnostics in stability reports", async () => {
+    const tmpDir = path.join(os.homedir(), ".octoclawctl-test-tmp", `stability-live-diag-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    const outputDir = path.join(tmpDir, "reports");
+    try {
+      await fs.mkdir(tmpDir, { recursive: true });
+
+      const result = await runStabilityOrchestration({
+        subcommand: "post-deploy",
+        outputDir,
+        env: {},
+        liveSlackReport: {
+          overallGate: "fail",
+          cases: [
+            {
+              id: "delegate_core.native_final",
+              status: "fail",
+              threadTs: "1779247876.372879",
+              errors: ["footer_via_mismatch:expected=native_announce:actual=budgeted_main_escalation"],
+              progress: [{ event: "final_timed_out", elapsedMs: 180000, detail: "required final missing" }],
+            },
+          ],
+        },
+      });
+
+      const failure = result.failures.find((item) => item.caseId === "delegate_core.native_final");
+      expect(failure?.threadTs).toBe("1779247876.372879");
+      expect(failure?.errors).toContain("footer_via_mismatch:expected=native_announce:actual=budgeted_main_escalation");
+      expect(failure?.progress?.[0]?.event).toBe("final_timed_out");
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   it("SSV2-020: accepts escaped spawn JSON when canonical content matches", () => {
     const result = runSyntheticStabilityFixture({
       id: "delegate.spawn_intent_hash_escape",

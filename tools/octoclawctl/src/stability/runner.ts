@@ -32,7 +32,19 @@ export interface StabilityLiveSlackReport {
   cases: Array<{
     id: string;
     status: StabilityGate;
+    threadTs?: string;
     errors?: string[];
+    progress?: Array<{ event: string; elapsedMs?: number; detail?: string }>;
+    replayEvidence?: {
+      footerRoute?: string;
+      footerModel?: string;
+      footerVia?: string;
+      workContractId?: string;
+      spawnIntentId?: string;
+      runId?: string;
+      childSessionKey?: string;
+      stageMs?: Record<string, number>;
+    };
   }>;
 }
 
@@ -172,6 +184,17 @@ export async function runStabilityOrchestration(options: StabilityRunnerOptions)
             caseId: item.id,
             mode: "live_slack",
             classification: "runtime_bug",
+            errors: item.errors,
+            progress: item.progress,
+            threadTs: item.threadTs,
+            route: item.replayEvidence?.footerRoute,
+            model: item.replayEvidence?.footerModel,
+            footerVia: item.replayEvidence?.footerVia,
+            workContractId: item.replayEvidence?.workContractId,
+            spawnIntentId: item.replayEvidence?.spawnIntentId,
+            runId: item.replayEvidence?.runId,
+            childSessionKey: item.replayEvidence?.childSessionKey,
+            stageMs: item.replayEvidence?.stageMs,
           };
         });
       allFailures.push(...liveFailures);

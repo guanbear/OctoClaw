@@ -1958,6 +1958,13 @@ describe("octoclawctl nightly integration", () => {
       expect(cases.every((item) => item.prompt?.startsWith("<@U0ARU7EKGCQ> "))).toBe(true);
     });
 
+    it("SSV2-051: live stability cases skip replay-only assertions when replayPath is absent", () => {
+      const cases = buildStabilitySlackAcceptanceCases([], { hasReplayPath: false });
+
+      expect(cases.find((item) => item.id === "footer_truth.current_model")?.expectReplay).toBeUndefined();
+      expect(cases.find((item) => item.id === "delegate_core.native_final")?.expectReplay).toBeUndefined();
+    });
+
     it("SSV2-053: full acceptance cadence defaults to 3d", async () => {
       const tmpDir = path.join(os.homedir(), ".octoclawctl-test-tmp", `stability-full-cadence-${Date.now()}-${Math.random().toString(36).slice(2)}`);
       const outputDir = path.join(tmpDir, "reports");
