@@ -527,7 +527,7 @@ function footerViaFromText(text: string): string | undefined {
   return footerFieldFromText(text, "via");
 }
 
-function footerFieldFromText(text: string, field: "route" | "model" | "via"): string | undefined {
+function footerFieldFromText(text: string, field: "route" | "model" | "difficulty" | "via"): string | undefined {
   const match = text.match(new RegExp(`\\b${field}=([^|\\n]+)`, "iu"));
   const value = match?.[1]?.split("·")[0]?.trim();
   return value || undefined;
@@ -560,6 +560,7 @@ function enrichReplayEvidenceFromTranscript(
     ...evidence,
     footerRoute: evidence.footerRoute || footerFieldFromText(finalText, "route"),
     footerModel: evidence.footerModel || footerFieldFromText(finalText, "model"),
+    footerDifficulty: evidence.footerDifficulty || footerFieldFromText(finalText, "difficulty"),
     footerVia: evidence.footerVia || footerVia,
     duplicateFinalCount: evidence.duplicateFinalCount ?? duplicateCount,
   };
@@ -602,6 +603,12 @@ function evidenceExpectationErrors(caseConfig: SlackAcceptanceCaseConfig, replay
   }
   if (footer?.model !== undefined && replayEvidence.footerModel !== footer.model) {
     errors.push(`footer_model_mismatch:expected=${footer.model}:actual=${replayEvidence.footerModel ?? "missing"}`);
+  }
+  if (footer?.difficulty !== undefined && replayEvidence.footerDifficulty !== footer.difficulty) {
+    errors.push(`footer_difficulty_mismatch:expected=${footer.difficulty}:actual=${replayEvidence.footerDifficulty ?? "missing"}`);
+  }
+  if (footer?.difficultyRequired === true && !replayEvidence.footerDifficulty) {
+    errors.push("footer_difficulty_missing");
   }
   if (footer?.via !== undefined && replayEvidence.footerVia !== footer.via) {
     errors.push(`footer_via_mismatch:expected=${footer.via}:actual=${replayEvidence.footerVia ?? "missing"}`);
@@ -652,6 +659,7 @@ async function collectReplayEvidence(
   let budgetEscalationReason = "";
   let visibleElapsedMs: number | undefined;
   let footerVia = "";
+  let footerDifficulty = "";
   let deliveryTransport = "";
   let targetSource = "";
   let footerSource = "";
@@ -750,6 +758,7 @@ async function collectReplayEvidence(
       budgetEscalationReason = budgetEscalationReason || replayEventBudgetEscalationReason(event);
     }
     visibleElapsedMs ??= replayEventVisibleElapsedMs(event);
+    footerDifficulty = footerDifficulty || asString(event.footerDifficulty || event.footer_difficulty || asRecord(event.footer).difficulty || asRecord(event.footer).complexityBand || asRecord(event.footer).complexity_band);
     footerVia = footerVia || asString(event.footerVia || event.footer_via || asRecord(event.footer).via);
     if (eventName === "native_announce_final_delivered" || eventName === "native_announce_completion_matched") {
       deliveryTransport = deliveryTransport || replayEventDeliveryTransport(event);
@@ -773,6 +782,7 @@ async function collectReplayEvidence(
     budgetElapsedMs,
     budgetEscalationReason: budgetEscalationReason || undefined,
     visibleElapsedMs,
+    footerDifficulty: footerDifficulty || undefined,
     footerVia: footerVia || undefined,
     deliveryTransport: deliveryTransport || undefined,
     targetSource: targetSource || undefined,

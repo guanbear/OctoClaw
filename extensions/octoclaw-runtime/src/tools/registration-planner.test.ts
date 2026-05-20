@@ -257,6 +257,8 @@ describe("octoclaw_dispatch planner backend", () => {
       event: "dispatch_planner_intent_created",
       work_contract_id: contract.workContractId,
       spawn_intent_id: body.spawnIntentId,
+      complexityBand: "normal",
+      complexity_band: "normal",
       native_acp_fallback: expect.objectContaining({
         owner: "openclaw_acp",
         primaryRuntimeId: "acpx",
@@ -265,6 +267,46 @@ describe("octoclaw_dispatch planner backend", () => {
         reason: "host_runtime_owns_backend_failover",
       }),
       elapsedMs: expect.any(Number),
+    }));
+    expect(policyState.get(contract.sessionKey)).toMatchObject({
+      complexityBand: "normal",
+      complexity_band: "normal",
+    });
+  });
+
+  it("preserves judge complexity_band for planner native final footers", async () => {
+    process.env.OCTOCLAW_SPAWN_BACKEND = "planner";
+    process.env.OCTOCLAW_RUNTIME_LEDGER = "enforce";
+    process.env.OPENCLAW_HOME = tempWorkspace;
+    fsSync.writeFileSync(path.join(tempWorkspace, "openclaw.json"), JSON.stringify({
+      acp: { fallbacks: ["acpx", "codex-native"] },
+    }));
+    const contract = seedWorkContract("session-planner-complexity");
+    const decision = delegateDecision(contract);
+    (decision.route_decision as Record<string, unknown>).complexity_band = "deep";
+
+    const response = await dispatchTool().execute({
+      task: contract.userAsk,
+      workContractId: contract.workContractId,
+      policyJson: JSON.stringify(decision),
+      timeoutSeconds: 900,
+    }, {
+      sessionKey: contract.sessionKey,
+      sessionId: "session-planner-complexity-test",
+      cwd: tempWorkspace,
+    });
+
+    const body = JSON.parse(String(response.text));
+    expect(body.ok).toBe(true);
+    expect(policyState.get(contract.sessionKey)).toMatchObject({
+      complexityBand: "deep",
+      complexity_band: "deep",
+    });
+    expect(readReplayEvents()).toContainEqual(expect.objectContaining({
+      event: "dispatch_planner_intent_created",
+      work_contract_id: contract.workContractId,
+      complexityBand: "deep",
+      complexity_band: "deep",
     }));
   });
 

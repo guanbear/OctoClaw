@@ -246,6 +246,7 @@ function hasUnsafeWriteRedirection(command: string): boolean {
 function commandLooksMutation(command: string): boolean {
   if (!command) return false;
   return /(?:^|\s)(?:rm|mv|cp|mkdir|touch|chmod|chown|git\s+(?:commit|merge|rebase|push|pull|checkout|switch|reset)|npm\s+install|pnpm\s+(?:add|install)|yarn\s+add|bun\s+add)\b/iu.test(command)
+    || /\bbrew\s+(?:install|uninstall|upgrade|reinstall|tap|untap|link|unlink|services\s+(?:start|stop|restart|run))\b/iu.test(command)
     || /\b(?:gh\s+(?:release|pr)\s+(?:create|edit|delete|close|reopen|merge)|openclaw\s+(?:update|upgrade|install|uninstall|deploy|restart))\b/iu.test(command)
     || /\b(?:find)\b[\s\S]*\s-(?:delete|exec|execdir|ok|okdir)\b/iu.test(command)
     || hasUnsafeWriteRedirection(command)

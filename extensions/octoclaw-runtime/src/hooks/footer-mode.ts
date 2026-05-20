@@ -157,16 +157,28 @@ export function resolveFooterComplexityBand(state: UnknownRecord): string {
   const routeDecision = asRecord(decision.route_decision);
   const workContract = asRecord(decision.work_contract);
   const metadata = asRecord(workContract.metadata);
+  const workContractDecision = asRecord(workContract.decision);
+  const workContractTelemetry = asRecord(workContract.telemetry);
   for (const value of [
     state.complexityBand,
     state.complexity_band,
     snapshot.complexityBand,
     snapshot.complexity_band,
     decision._judge_complexity_band,
+    decision.complexityBand,
+    decision.complexity_band,
+    decision.complexity,
     routeDecision._judge_complexity_band,
     routeDecision.complexity_band,
+    routeDecision.complexity,
     metadata.complexityBand,
     metadata.complexity_band,
+    workContractDecision.complexityBand,
+    workContractDecision.complexity_band,
+    workContractDecision.complexity,
+    workContractTelemetry.complexityBand,
+    workContractTelemetry.complexity_band,
+    workContractTelemetry.complexity,
   ]) {
     const band = stringValue(value);
     if (band) return band;
@@ -182,13 +194,13 @@ export function resolveRouteSource(state: UnknownRecord): string {
   const routeHintPolicy = asRecord(decision.route_hint_policy);
   const routeSeal = asRecord(decision.routeSeal || state.routeSeal);
   const routeSealSource = stringValue(routeSeal.source);
-  if (routeSealSource === "accepted_objection" || Boolean(routeHintPolicy.objection_accepted)) {
-    return "accepted_objection";
-  }
   const source = stringValue(routeDecision.route_source || routeDecision.final_judge_source || snapshot.via || snapshot.source);
   const confidence = asRecord(decision).judge_confidence ?? routeDecision.route_confidence;
   const finalRoute = stringValue(routeDecision.route);
   const judgeRoute = stringValue(routeHintPolicy.judge_route || decision._judge_route);
+  if (routeSealSource === "accepted_objection" || Boolean(routeHintPolicy.objection_accepted)) {
+    return judgeRoute ? `agent↑(judge=${judgeRoute})` : "accepted_objection";
+  }
 
   // Judge said one thing, final route is different → agent override
   if (judgeRoute && finalRoute && judgeRoute !== finalRoute) {

@@ -59,6 +59,8 @@ export interface SlackAcceptanceCaseConfig {
 export interface SlackAcceptanceFooterExpectation {
   route?: string;
   model?: string;
+  difficulty?: string;
+  difficultyRequired?: boolean;
   via?: string;
 }
 
@@ -196,6 +198,7 @@ export interface SlackAcceptanceReplayEvidence {
   visibleElapsedMs?: number;
   footerRoute?: string;
   footerModel?: string;
+  footerDifficulty?: string;
   footerVia?: string;
   deliveryTransport?: string;
   targetSource?: string;

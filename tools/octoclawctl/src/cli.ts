@@ -3738,7 +3738,7 @@ export function buildStabilitySlackAcceptanceCases(
       ackTimeoutMs: 180_000,
       finalRequired: true,
       expectFinalAll: ["Gateway|OpenClaw|OctoClaw|readiness", "状态|摘要|结论"],
-      expectFooter: { route: "delegate", via: "native_announce" },
+      expectFooter: { route: "delegate", via: "native_announce", difficultyRequired: true },
       expectReplay: hasReplayPath ? {
         footerVia: "native_announce",
         deliveryTransport: "slack_api",

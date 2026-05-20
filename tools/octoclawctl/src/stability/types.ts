@@ -37,6 +37,7 @@ export interface StabilityFailurePacket {
   promptHash?: string;
   route?: string;
   model?: string;
+  footerDifficulty?: string;
   footerVia?: string;
   workContractId?: string;
   spawnIntentId?: string;

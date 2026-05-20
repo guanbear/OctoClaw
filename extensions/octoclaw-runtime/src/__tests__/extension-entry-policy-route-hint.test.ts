@@ -1436,6 +1436,50 @@ describe("budgeted_main_then_delegate runtime budget", () => {
     policyState.clearState(delegateKey);
   });
 
+  it("keeps ordinary tools blocked after budgeted-main escalation creates a delegate WorkContract", async () => {
+    const handlers = new Map<string, Function>();
+    plugin.register({
+      on: (event, handler) => handlers.set(event, handler),
+      registerTool: () => {},
+      registerCommand: () => {},
+      logger: {},
+    });
+
+    const beforeToolCall = handlers.get("before_tool_call");
+    expect(beforeToolCall).toBeTruthy();
+    const now = Date.now();
+    const key = "agent:main:slack:channel:c0as4dappu3:thread:t-budget-delegate-contract-exec";
+    policyState.setState(key, {
+      decision: {
+        ...budgetedMainDecision("delegate"),
+        route_decision: {
+          route: "delegate",
+          route_source: "budgeted_main_escalation",
+          decision_bucket: "budgeted_main_then_delegate",
+        },
+        work_contract: {
+          workContractId: "wc-budget-delegate-contract-exec",
+          route: "delegate",
+        },
+      },
+      dispatchStatus: "budgeted_main_escalated",
+      dispatchExecuted: false,
+      spawnExecuted: false,
+      routeHintSubmitted: true,
+      createdAt: now - 2_000,
+      updatedAt: now,
+    });
+
+    const result = await beforeToolCall!(
+      { toolName: "exec", params: { command: "brew install --cask docker", timeout: 120 } },
+      { sessionKey: key, sessionId: "session-budget-delegate-contract-exec", agentId: "main" },
+    ) as { block?: boolean; blockReason?: string } | undefined;
+
+    expect(result?.block).toBe(true);
+    expect(result?.blockReason).toContain("octoclaw_dispatch");
+    policyState.clearState(key);
+  });
+
   it("escalates must_reply main-lane work on write, long, or ordinary tool over-budget", async () => {
     const handlers = new Map<string, Function>();
     plugin.register({
@@ -2421,7 +2465,7 @@ describe("before_tool_call route hint guard", () => {
 
 
 
-  it("allows main-session direct tools after a sealed delegate route (coordinator prompt + delivery lock prevent conflicts)", async () => {
+  it("blocks main-session direct tools after a sealed delegate route unless direct tools are explicitly allowed", async () => {
     const handlers = new Map<string, Function>();
     plugin.register({
       on: (event, handler) => handlers.set(event, handler),
@@ -2454,7 +2498,8 @@ describe("before_tool_call route hint guard", () => {
       { sessionKey: key, agentId: "main" },
     );
 
-    expect(result).toBeUndefined();
+    expect(result?.block).toBe(true);
+    expect(result?.blockReason).toContain("octoclaw_dispatch");
     policyState.clearState(key);
   });
 

@@ -943,6 +943,64 @@ describe("no-spawn replay assertion", () => {
     expect(plainCase.errors.join("\n")).toContain("delegate_footer_without_spawn");
   });
 
+  it("SSV2-016: fails delegate footer when difficulty is missing", async () => {
+    const replayPath = path.join(tmpDir, "replay-footer-with-spawn-no-difficulty.jsonl");
+    const threadTs = "1234567890.000001";
+    const sessionKey = `slack:channel:C_ACC_TEST:thread:${threadTs}`;
+    const replayEvents = [
+      { at: "2099-12-31T23:59:49.000Z", event: "message_received_observed", sessionKey, inboundMessageTs: threadTs },
+      { at: "2099-12-31T23:59:50.000Z", event: "dispatch_planner_intent_created", sessionKey, work_contract_id: "wc-footer-difficulty", spawn_intent_id: "nsp-footer-difficulty" },
+      { at: "2099-12-31T23:59:51.000Z", event: "execution_transition", transitionKind: "spawn_started", sessionKey, workContractId: "wc-footer-difficulty", childSessionKey: "agent:main:subagent:footer-difficulty" },
+    ];
+    await fs.writeFile(replayPath, replayEvents.map((event) => JSON.stringify(event)).join("\n"), "utf8");
+
+    const client = createMockClient([
+      { ts: "1234567890.150001", text: "OpenClaw 总结\n\n• route=delegate | model=zhipu/GLM-5.1 · thread | via=native_announce" },
+    ]);
+    const config = parseSlackAcceptanceConfig(validConfig({
+      cases: [{
+        kind: "delegated_work",
+        prompt: "test",
+        finalRequired: true,
+        expectFinal: ["OpenClaw"],
+        expectFooter: { route: "delegate", via: "native_announce", difficultyRequired: true },
+      }],
+      replayPath,
+    }), validEnv());
+    config.finalTimeoutMs = 100;
+    config.pollIntervalMs = 1;
+
+    const report = await runSlackAcceptanceHarness(client, config);
+    const delegatedCase = report.cases.find((c) => c.kind === "delegated_work")!;
+
+    expect(delegatedCase.status).toBe("fail");
+    expect(delegatedCase.errors.join("\n")).toContain("footer_difficulty_missing");
+  });
+
+  it("SSV2-017: records delegate footer difficulty from transcript", async () => {
+    const client = createMockClient([
+      { ts: "1234567890.150001", text: "OpenClaw 总结\n\n• route=delegate | model=zhipu/GLM-5.1 | difficulty=normal · thread | via=native_announce" },
+    ]);
+    const config = parseSlackAcceptanceConfig(validConfig({
+      cases: [{
+        kind: "delegated_work",
+        prompt: "test",
+        finalRequired: true,
+        expectFinal: ["OpenClaw"],
+        expectFooter: { route: "delegate", difficulty: "normal", via: "native_announce" },
+      }],
+    }), validEnv());
+    config.finalTimeoutMs = 100;
+    config.pollIntervalMs = 1;
+
+    const report = await runSlackAcceptanceHarness(client, config);
+    const delegatedCase = report.cases.find((c) => c.kind === "delegated_work")!;
+
+    expect(delegatedCase.status).toBe("pass");
+    expect(delegatedCase.replayEvidence?.footerDifficulty).toBe("normal");
+    expect(delegatedCase.errors.join("\n")).not.toContain("footer_difficulty");
+  });
+
   it("SSV2-015: fails footer model mismatch against expected footer truth", async () => {
     const client = createMockClient([
       { ts: "1234567890.150001", text: "OpenClaw 总结\n\n• route=reply | model=cliproxyapi/gpt-5.5 · thread | via=rule" },

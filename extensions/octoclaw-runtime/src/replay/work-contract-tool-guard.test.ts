@@ -112,6 +112,22 @@ describe("WorkContract tool guard projection", () => {
     expect(rule.block).toBe(false);
   });
 
+  it("blocks ordinary tools for sealed delegate WorkContract unless direct tools are explicitly allowed", () => {
+    const rule = workflowEnforcementRule(
+      {
+        work_contract: { route: "delegate" },
+        route_decision: { route: "delegate", route_source: "budgeted_main_escalation" },
+        tool_policy: { allow_direct_tools: false, must_delegate_via: "octoclaw_dispatch" },
+      },
+      "exec",
+      "octoclaw_route_hint",
+    );
+
+    expect(rule.block).toBe(true);
+    expect(rule.delegateTool).toBe("octoclaw_dispatch");
+    expect(rule.allowedTools).toContain("octoclaw_dispatch");
+  });
+
   it("keeps session_status available before route hint", () => {
     const decision = {
       route_decision: { route: "reply" },

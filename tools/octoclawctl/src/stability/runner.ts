@@ -38,6 +38,7 @@ export interface StabilityLiveSlackReport {
     replayEvidence?: {
       footerRoute?: string;
       footerModel?: string;
+      footerDifficulty?: string;
       footerVia?: string;
       workContractId?: string;
       spawnIntentId?: string;
@@ -124,6 +125,7 @@ function renderCompactStabilitySummary(report: StabilityReport): string {
 const SYNTHETIC_KIND_MAP: Record<string, SyntheticFixture["kind"]> = {
   ack: "ack_thread",
   delegate: "escaped_spawn_json",
+  exec: "main_tool_guard",
   provider: "provider_status",
   restart: "restart_shutdown",
   wizard: "wizard_start",
@@ -140,6 +142,7 @@ function isSyntheticFixtureKind(value: unknown): value is SyntheticFixture["kind
     "ack_thread",
     "provider_status",
     "delegate_footer",
+    "main_tool_guard",
     "native_final_delivery",
     "restart_shutdown",
     "wizard_start",
@@ -205,6 +208,7 @@ export async function runStabilityOrchestration(options: StabilityRunnerOptions)
             threadTs: item.threadTs,
             route: item.replayEvidence?.footerRoute,
             model: item.replayEvidence?.footerModel,
+            footerDifficulty: item.replayEvidence?.footerDifficulty,
             footerVia: item.replayEvidence?.footerVia,
             workContractId: item.replayEvidence?.workContractId,
             spawnIntentId: item.replayEvidence?.spawnIntentId,
@@ -411,8 +415,19 @@ function buildMinimalFixture(id: string, kind: SyntheticFixture["kind"], expect:
         id,
         kind,
         footerRoute: asString(expect.footerRoute) ?? "reply",
+        footerDifficulty: asString(expect.footerDifficulty),
         hasSpawnIntent: typeof expect.hasSpawnIntent === "boolean" ? expect.hasSpawnIntent : true,
         hasChildSession: typeof expect.hasChildSession === "boolean" ? expect.hasChildSession : true,
+      };
+    case "main_tool_guard":
+      return {
+        id,
+        kind,
+        route: asString(expect.route) ?? "reply",
+        escalationReason: asString(expect.escalationReason),
+        attemptedToolName: asString(expect.attemptedToolName) ?? "exec",
+        ordinaryToolRanAfterEscalation: typeof expect.ordinaryToolRanAfterEscalation === "boolean" ? expect.ordinaryToolRanAfterEscalation : false,
+        dispatchCalled: typeof expect.dispatchCalled === "boolean" ? expect.dispatchCalled : true,
       };
     case "native_final_delivery":
       return {

@@ -34,8 +34,18 @@ export type SyntheticFixture =
       id: string;
       kind: "delegate_footer";
       footerRoute: string;
+      footerDifficulty?: string;
       hasSpawnIntent: boolean;
       hasChildSession: boolean;
+    }
+  | {
+      id: string;
+      kind: "main_tool_guard";
+      route: string;
+      escalationReason?: string;
+      attemptedToolName: string;
+      ordinaryToolRanAfterEscalation: boolean;
+      dispatchCalled: boolean;
     }
   | {
       id: string;
@@ -155,8 +165,25 @@ function syntheticFailures(fixture: SyntheticFixture): StabilityFailurePacket[] 
         }),
       ];
     case "delegate_footer":
-      return fixture.footerRoute === "delegate" && (!fixture.hasSpawnIntent || !fixture.hasChildSession)
-        ? [failure("delegate_footer_without_spawn", fixture.id, "synthetic")]
+      return [
+        fixture.footerRoute === "delegate" && (!fixture.hasSpawnIntent || !fixture.hasChildSession)
+          ? failure("delegate_footer_without_spawn", fixture.id, "synthetic")
+          : null,
+        fixture.footerRoute === "delegate" && !fixture.footerDifficulty
+          ? failure("delegate_footer_missing_difficulty", fixture.id, "synthetic")
+          : null,
+      ].filter((item): item is StabilityFailurePacket => item !== null);
+    case "main_tool_guard":
+      return fixture.route === "reply"
+        && fixture.escalationReason
+        && fixture.ordinaryToolRanAfterEscalation
+        && !fixture.dispatchCalled
+        ? [
+            failure("main_tool_after_escalation", fixture.id, "synthetic", {
+              classification: "runtime_bug",
+              errors: [`${fixture.attemptedToolName} ran after budget escalation ${fixture.escalationReason}`],
+            }),
+          ]
         : [];
     case "native_final_delivery": {
       const failures: StabilityFailurePacket[] = [];
@@ -189,8 +216,8 @@ function syntheticEvidence(fixture: SyntheticFixture): Record<string, unknown> {
       ackMs: fixture.ackMs,
       ackDeadlineMs: fixture.ackDeadlineMs,
       finalDelivered: fixture.finalDelivered,
-      };
-    }
+    };
+  }
   if (fixture.kind === "ack_thread") {
     return {
       expectedThreadTs: fixture.expectedThreadTs,
@@ -207,8 +234,18 @@ function syntheticEvidence(fixture: SyntheticFixture): Record<string, unknown> {
   if (fixture.kind === "delegate_footer") {
     return {
       footerRoute: fixture.footerRoute,
+      footerDifficulty: fixture.footerDifficulty,
       hasSpawnIntent: fixture.hasSpawnIntent,
       hasChildSession: fixture.hasChildSession,
+    };
+  }
+  if (fixture.kind === "main_tool_guard") {
+    return {
+      route: fixture.route,
+      escalationReason: fixture.escalationReason,
+      attemptedToolName: fixture.attemptedToolName,
+      ordinaryToolRanAfterEscalation: fixture.ordinaryToolRanAfterEscalation,
+      dispatchCalled: fixture.dispatchCalled,
     };
   }
   if (fixture.kind === "native_final_delivery") {

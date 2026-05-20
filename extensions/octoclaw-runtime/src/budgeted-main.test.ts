@@ -23,4 +23,28 @@ describe("classifyBudgetedMainTool", () => {
     expect(classification.readOnly).toBe(false);
     expect(classification.escalationReason).not.toBe("");
   });
+
+  it("classifies Homebrew installs as mutating work instead of unknown shell risk", () => {
+    const classification = classifyBudgetedMainTool("exec", {
+      command: "brew install --cask docker",
+      timeout: 120,
+    });
+
+    expect(classification.readOnly).toBe(false);
+    expect(classification.writeToolDetected).toBe(true);
+    expect(classification.unknownToolRiskDetected).toBe(false);
+    expect(classification.escalationReason).toBe("write_tool_detected");
+  });
+
+  it("escalates unrecognized shell commands unless they are proven read-only", () => {
+    const classification = classifyBudgetedMainTool("exec", {
+      command: "some-new-installer provision docker-desktop",
+      timeout: 120,
+    });
+
+    expect(classification.readOnly).toBe(false);
+    expect(classification.counted).toBe(true);
+    expect(classification.unknownToolRiskDetected).toBe(true);
+    expect(classification.escalationReason).toBe("tool_risk_unknown");
+  });
 });

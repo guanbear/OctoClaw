@@ -727,7 +727,7 @@ describe("guardOutboundMessageForPolicyState", () => {
         now,
       );
 
-      expect(guarded?.content).toContain("via=accepted_objection");
+      expect(guarded?.content).toContain("via=agent↑(judge=delegate)");
     } finally {
       policyState.clearState(key);
       if (previousProjectionFooterMode === undefined) delete process.env.OCTOCLAW_PROJECTION_FOOTER_MODE;

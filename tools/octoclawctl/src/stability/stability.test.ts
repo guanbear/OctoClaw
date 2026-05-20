@@ -49,6 +49,10 @@ describe("stability smoke v2 catalog", () => {
       fixtureKind: "delegate_footer",
       failureCode: "delegate_footer_without_spawn",
     });
+    expect(nightly.cases.find((item) => item.id === "exec.heavy_main_tool_after_escalation")?.expect).toMatchObject({
+      fixtureKind: "main_tool_guard",
+      failureCode: "main_tool_after_escalation",
+    });
     expect(nightly.cases.find((item) => item.id === "provider.402_or_429_fallback")?.expect).toMatchObject({
       fixtureKind: "provider_status",
       failureCode: "provider_bare_error",
@@ -554,6 +558,49 @@ describe("stability smoke v2 synthetic fixtures", () => {
 
     expect(result.gate).toBe("fail");
     expect(result.failures.map((item) => item.code)).toContain("delegate_footer_without_spawn");
+  });
+
+  it("SSV2-016: delegate footer without difficulty is covered synthetically", () => {
+    const result = runSyntheticStabilityFixture({
+      id: "delegate.native_final_footer",
+      kind: "delegate_footer",
+      footerRoute: "delegate",
+      hasSpawnIntent: true,
+      hasChildSession: true,
+    });
+
+    expect(result.gate).toBe("fail");
+    expect(result.failures.map((item) => item.code)).toContain("delegate_footer_missing_difficulty");
+  });
+
+  it("SSV2-018: ordinary main tool after budget escalation is covered synthetically", () => {
+    const result = runSyntheticStabilityFixture({
+      id: "exec.heavy_main_tool_after_escalation",
+      kind: "main_tool_guard",
+      route: "reply",
+      escalationReason: "tool_risk_unknown",
+      attemptedToolName: "exec",
+      ordinaryToolRanAfterEscalation: true,
+      dispatchCalled: false,
+    });
+
+    expect(result.gate).toBe("fail");
+    expect(result.failures.map((item) => item.code)).toContain("main_tool_after_escalation");
+  });
+
+  it("SSV2-018: dispatch after budget escalation passes the synthetic guard", () => {
+    const result = runSyntheticStabilityFixture({
+      id: "exec.heavy_tool_dispatched_after_escalation",
+      kind: "main_tool_guard",
+      route: "reply",
+      escalationReason: "tool_risk_unknown",
+      attemptedToolName: "exec",
+      ordinaryToolRanAfterEscalation: false,
+      dispatchCalled: true,
+    });
+
+    expect(result.gate).toBe("pass");
+    expect(result.failures).toHaveLength(0);
   });
 
   it("SSV2-014: parent echo after native final is covered synthetically", () => {

@@ -108,6 +108,54 @@ import {
   type ToolRegistrationOptions,
 } from "../registration.js";
 
+function normalizeDispatchComplexityBand(value: unknown): string {
+  const normalized = asString(value);
+  return normalized === "simple" || normalized === "normal" || normalized === "complex" || normalized === "deep"
+    ? normalized
+    : "";
+}
+
+function resolveDispatchComplexityBand(input: {
+  params: UnknownRecord;
+  cachedDecision: UnknownRecord;
+  metadata: UnknownRecord;
+  state: UnknownRecord | null | undefined;
+  isDelegatedRoute: boolean;
+}): string {
+  const decision = asRecord(input.cachedDecision);
+  const routeDecision = asRecord(decision.route_decision);
+  const requestMetadata = asRecord(asRecord(decision.request).metadata);
+  const state = asRecord(input.state);
+  for (const value of [
+    input.params.complexityBand,
+    input.params.complexity_band,
+    input.params.complexity,
+    input.metadata.complexityBand,
+    input.metadata.complexity_band,
+    requestMetadata.complexityBand,
+    requestMetadata.complexity_band,
+    decision._judge_complexity_band,
+    routeDecision._judge_complexity_band,
+    routeDecision.complexity_band,
+    routeDecision.complexity,
+    decision.complexityBand,
+    decision.complexity_band,
+    decision.complexity,
+    state.complexityBand,
+    state.complexity_band,
+  ]) {
+    const band = normalizeDispatchComplexityBand(value);
+    if (band) return band;
+  }
+  if (!input.isDelegatedRoute) return "";
+  const durationHint = asString(routeDecision.duration_hint || decision._duration_hint || input.metadata.duration_hint || input.metadata.durationHint);
+  const workType = asString(routeDecision.work_type || input.metadata.work_type || input.metadata.workType);
+  if (durationHint === "long" || workType === "code" || workType === "review") return "deep";
+  const taskClass = asString(routeDecision.task_class || routeDecision.judge_role || decision._judge_role);
+  if (taskClass === "control_observer" || taskClass === "observer_probe") return "simple";
+  return "normal";
+}
+
 export async function executeOctoclawDispatch(params: Record<string, unknown>, _rawCtx: Record<string, unknown>, options: ToolRegistrationOptions = {}): Promise<Record<string, unknown>> {
         const ctx = _rawCtx ?? {};
         const dispatchToolStartedAt = Date.now();
@@ -477,7 +525,13 @@ export async function executeOctoclawDispatch(params: Record<string, unknown>, _
           metadata.delegate_task_id = asString(params.delegateTaskId);
         }
 
-        const complexityBand = asString(params.complexityBand || asRecord(cachedDecision)._judge_complexity_band || asRecord(asRecord(cachedDecision).route_decision)._judge_complexity_band);
+        const complexityBand = resolveDispatchComplexityBand({
+          params: asRecord(params),
+          cachedDecision,
+          metadata,
+          state,
+          isDelegatedRoute,
+        });
         const budgetBand = asString(asRecord(cachedDecision._judge_budget_band ?? asRecord(cachedDecision.route_decision)._judge_budget_band));
 
         // Dynamic model map: reads openclaw models list and maps fallback rank to complexity bands.
@@ -493,6 +547,7 @@ export async function executeOctoclawDispatch(params: Record<string, unknown>, _
             ? budgetModelMap[budgetBand]
             : "");
         if (complexityBand) {
+          metadata.complexityBand = complexityBand;
           metadata.complexity_band = complexityBand;
         }
         if (selectedModel) {
@@ -518,6 +573,8 @@ export async function executeOctoclawDispatch(params: Record<string, unknown>, _
             delegated: true,
             dispatchRoute: "delegate",
             dispatchStatus: "already_started",
+            complexityBand: complexityBand || undefined,
+            complexity_band: complexityBand || undefined,
             dispatchExecuted: true,
             spawnExecuted: true,
             resultMaterialized: false,
@@ -951,6 +1008,8 @@ export async function executeOctoclawDispatch(params: Record<string, unknown>, _
               workContractId,
               dispatchMode,
               dispatch_mode: dispatchMode,
+              complexityBand: complexityBand || undefined,
+              complexity_band: complexityBand || undefined,
               ...(useSpeculativeSend && speculative?.label ? {
                 speculativePreload: serializeSpeculativePreloadState({
                   ...speculative,
@@ -985,6 +1044,8 @@ export async function executeOctoclawDispatch(params: Record<string, unknown>, _
               canonical_args_hash: intent.canonicalArgsHash,
               expires_at: intent.expiresAt,
               dispatch_mode: dispatchMode,
+              complexityBand,
+              complexity_band: complexityBand,
               speculative_session_label: useSpeculativeSend ? speculative?.label : "",
               dispatch_executed: false,
               spawn_executed: false,
@@ -1244,6 +1305,8 @@ export async function executeOctoclawDispatch(params: Record<string, unknown>, _
           delegated: asString(payload.route) === "delegate",
           dispatchRoute: asString(payload.route),
           dispatchStatus: asString(payload.status),
+          complexityBand: complexityBand || undefined,
+          complexity_band: complexityBand || undefined,
           dispatchExecuted: payload.executed === true,
           updatedAt: Date.now(),
         };

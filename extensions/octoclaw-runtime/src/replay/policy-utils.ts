@@ -126,7 +126,9 @@ export function workflowEnforcementRule(
   const sealedContractRoute = String(workContract.route ?? workContract.route_decision ?? "").trim();
   const directToolsAllowed = toolPolicy.allow_direct_tools === true;
   if (sealedContractRoute === "delegate" && !directToolsAllowed) {
-    return { block: false, route, delegateTool, allowedTools: [...allowedTools] };
+    return isDispatchArbiterTool || allowedTools.has(toolName)
+      ? { block: false, route, delegateTool, allowedTools: [...allowedTools] }
+      : { block: true, route, delegateTool, allowedTools: [...allowedTools] };
   }
   const workflowRequired = DELEGATED_ROUTE_NAMES.has(route) && !directToolsAllowed;
   if (!workflowRequired) {
