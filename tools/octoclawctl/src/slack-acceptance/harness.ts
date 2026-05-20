@@ -52,10 +52,22 @@ const DEFAULT_CASES: SlackAcceptanceCaseConfig[] = [
     kind: "delegated_work",
     prompt: "请委派子 agent 调研 OctoClaw 当前任务状态面板需要展示哪些字段，完成后给摘要。",
     ackRequired: true,
+    allowFastFinalAck: true,
     finalRequired: true,
     ackTimeoutMs: 180_000,
     expectAck: ["委派", "子", "派发", "准备"],
     expectFinalAll: ["任务", "状态", "字段", "via=native_announce"],
+    expectReplay: {
+      footerVia: "native_announce",
+      deliveryTransport: "slack_api",
+      targetSource: "inbound_anchor",
+      duplicateFinalCount: 0,
+      parentEchoAfterNativeAnnounceCount: 0,
+      requireWorkContract: true,
+      requireSpawnIntent: true,
+      requireRunId: true,
+      requireChildSession: true,
+    },
     finalTimeoutMs: 360_000,
   },
   {
@@ -512,8 +524,13 @@ function stageNameForReplayEvent(event: Record<string, unknown>): string {
 }
 
 function footerViaFromText(text: string): string | undefined {
-  const match = text.match(/\bvia=([a-z0-9_.:-]+)/iu);
-  return match?.[1];
+  return footerFieldFromText(text, "via");
+}
+
+function footerFieldFromText(text: string, field: "route" | "model" | "via"): string | undefined {
+  const match = text.match(new RegExp(`\\b${field}=([^|\\n]+)`, "iu"));
+  const value = match?.[1]?.split("·")[0]?.trim();
+  return value || undefined;
 }
 
 function normalizedMessageText(text: string): string {
@@ -541,9 +558,61 @@ function enrichReplayEvidenceFromTranscript(
   const duplicateCount = duplicateFinalCount(messages, final);
   return {
     ...evidence,
+    footerRoute: evidence.footerRoute || footerFieldFromText(finalText, "route"),
+    footerModel: evidence.footerModel || footerFieldFromText(finalText, "model"),
     footerVia: evidence.footerVia || footerVia,
     duplicateFinalCount: evidence.duplicateFinalCount ?? duplicateCount,
   };
+}
+
+function evidenceExpectationErrors(caseConfig: SlackAcceptanceCaseConfig, replayEvidence: SlackAcceptanceReplayEvidence, ack: AssertionResult): string[] {
+  const errors: string[] = [];
+  const replay = caseConfig.expectReplay;
+  if (replay?.footerVia !== undefined && replayEvidence.footerVia !== replay.footerVia) {
+    errors.push(`replay_footer_via_mismatch:expected=${replay.footerVia}:actual=${replayEvidence.footerVia ?? "missing"}`);
+  }
+  if (replay?.deliveryTransport !== undefined && replayEvidence.deliveryTransport !== replay.deliveryTransport) {
+    errors.push(`replay_delivery_transport_mismatch:expected=${replay.deliveryTransport}:actual=${replayEvidence.deliveryTransport ?? "missing"}`);
+  }
+  if (replay?.targetSource !== undefined && replayEvidence.targetSource !== replay.targetSource) {
+    errors.push(`replay_target_source_mismatch:expected=${replay.targetSource}:actual=${replayEvidence.targetSource ?? "missing"}`);
+  }
+  if (replay?.duplicateFinalCount !== undefined && replayEvidence.duplicateFinalCount !== replay.duplicateFinalCount) {
+    errors.push(`duplicate_final_count_mismatch:expected=${replay.duplicateFinalCount}:actual=${replayEvidence.duplicateFinalCount ?? "missing"}`);
+  }
+  if (replay?.parentEchoAfterNativeAnnounceCount !== undefined && replayEvidence.parentEchoAfterNativeAnnounceCount !== replay.parentEchoAfterNativeAnnounceCount) {
+    errors.push(`parent_echo_after_native_announce:${replayEvidence.parentEchoAfterNativeAnnounceCount ?? "missing"}`);
+  }
+  if (replay?.requireWorkContract === true && !replayEvidence.workContractId) {
+    errors.push("replay_work_contract_missing");
+  }
+  if (replay?.requireSpawnIntent === true && !replayEvidence.spawnIntentId) {
+    errors.push("replay_spawn_intent_missing");
+  }
+  if (replay?.requireRunId === true && !replayEvidence.runId) {
+    errors.push("replay_run_id_missing");
+  }
+  if (replay?.requireChildSession === true && !replayEvidence.childSessionKey) {
+    errors.push("replay_child_session_missing");
+  }
+
+  const footer = caseConfig.expectFooter;
+  if (footer?.route !== undefined && replayEvidence.footerRoute !== footer.route) {
+    errors.push(`footer_route_mismatch:expected=${footer.route}:actual=${replayEvidence.footerRoute ?? "missing"}`);
+  }
+  if (footer?.model !== undefined && replayEvidence.footerModel !== footer.model) {
+    errors.push(`footer_model_mismatch:expected=${footer.model}:actual=${replayEvidence.footerModel ?? "missing"}`);
+  }
+  if (footer?.via !== undefined && replayEvidence.footerVia !== footer.via) {
+    errors.push(`footer_via_mismatch:expected=${footer.via}:actual=${replayEvidence.footerVia ?? "missing"}`);
+  }
+  if (replayEvidence.status === "pass" && replayEvidence.footerRoute === "delegate" && !replayEvidence.spawnIntentId && !replayEvidence.childSessionKey) {
+    errors.push("delegate_footer_without_spawn");
+  }
+  if (ack.status === "fail" && (ack.reason.includes("matched rejected content") || ack.reason.includes("rejected text observed"))) {
+    errors.push("ack_misleading_text");
+  }
+  return errors;
 }
 
 async function collectReplayEvidence(
@@ -1198,11 +1267,13 @@ async function runCase(client: SlackAcceptanceClient, config: SlackAcceptanceRes
     errors.push(`parent_echo_after_native_announce:${replayEvidence.parentEchoAfterNativeAnnounceCount}`);
   }
   const effectiveAck = caseConfig.ackRequired === true
+    && caseConfig.allowFastFinalAck === true
     ? fastFinalSatisfiesAck(ack, final, allReplies, posted.ts, ackTimeoutMs)
     : ack;
   if (effectiveAck !== ack) {
     progress.push(progressEvent(caseStartMs, "ack_satisfied_by_fast_final", effectiveAck.reason));
   }
+  errors.push(...evidenceExpectationErrors(caseConfig, replayEvidence, effectiveAck));
   const acceptedAckAt = tsToMillis(matchedReplyTs(ackReplies, ack));
   const legacyAckAt = acceptedAckAt ?? tsToMillis(ackReplies[0]?.ts) ?? tsToMillis(allReplies.find((message) => message.text.trim())?.ts);
   const neutralAckAt = tsToMillis(neutralAckCollection.matchedTs) ?? neutralAckCollection.observedAtMs;

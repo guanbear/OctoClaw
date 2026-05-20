@@ -31,6 +31,7 @@ export interface SlackAcceptanceCaseConfig {
   kind: SlackAcceptanceCaseKind;
   prompt?: string;
   enabled?: boolean;
+  allowFastFinalAck?: boolean;
   ackRequired?: boolean;
   neutralAckRequired?: boolean;
   finalRequired?: boolean;
@@ -49,8 +50,28 @@ export interface SlackAcceptanceCaseConfig {
   expectFinal?: string[];
   expectFinalAll?: string[];
   rejectFinal?: string[];
+  expectFooter?: SlackAcceptanceFooterExpectation;
+  expectReplay?: SlackAcceptanceReplayExpectation;
   requiresFixture?: boolean;
   fixtureKey?: string;
+}
+
+export interface SlackAcceptanceFooterExpectation {
+  route?: string;
+  model?: string;
+  via?: string;
+}
+
+export interface SlackAcceptanceReplayExpectation {
+  footerVia?: string;
+  deliveryTransport?: string;
+  targetSource?: string;
+  duplicateFinalCount?: number;
+  parentEchoAfterNativeAnnounceCount?: number;
+  requireWorkContract?: boolean;
+  requireSpawnIntent?: boolean;
+  requireRunId?: boolean;
+  requireChildSession?: boolean;
 }
 
 export interface SlackAcceptanceConfig {
@@ -173,6 +194,8 @@ export interface SlackAcceptanceReplayEvidence {
   budgetElapsedMs?: number;
   budgetEscalationReason?: string;
   visibleElapsedMs?: number;
+  footerRoute?: string;
+  footerModel?: string;
   footerVia?: string;
   deliveryTransport?: string;
   targetSource?: string;

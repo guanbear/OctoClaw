@@ -467,12 +467,29 @@ describe("content assertions via runSlackAcceptanceHarness", () => {
   });
 
 
-  it("allows a fast final reply to satisfy required ACK", async () => {
+  it("does not let a fast final satisfy required ACK unless configured", async () => {
     const client = createMockClient([
       { ts: "1234567890.020001", text: "OpenClaw 4.21 摘要" },
     ]);
     const config = parseSlackAcceptanceConfig(validConfig({
       cases: [{ kind: "fresh_lookup", prompt: "test", ackRequired: true, finalRequired: true, expectAck: ["开始"], expectFinal: ["OpenClaw", "4.21"] }],
+    }), validEnv());
+    config.ackTimeoutMs = 100;
+    config.finalTimeoutMs = 100;
+    config.pollIntervalMs = 10;
+    const report = await runSlackAcceptanceHarness(client, config);
+    const lookupCase = report.cases.find((c) => c.kind === "fresh_lookup")!;
+    expect(lookupCase.ack.status).toBe("fail");
+    expect(lookupCase.final.status).toBe("pass");
+    expect(lookupCase.status).toBe("fail");
+  });
+
+  it("allows a fast final reply to satisfy required ACK when configured", async () => {
+    const client = createMockClient([
+      { ts: "1234567890.020001", text: "OpenClaw 4.21 摘要" },
+    ]);
+    const config = parseSlackAcceptanceConfig(validConfig({
+      cases: [{ kind: "fresh_lookup", prompt: "test", ackRequired: true, allowFastFinalAck: true, finalRequired: true, expectAck: ["开始"], expectFinal: ["OpenClaw", "4.21"] }],
     }), validEnv());
     config.ackTimeoutMs = 100;
     config.finalTimeoutMs = 100;
@@ -815,6 +832,133 @@ describe("no-spawn replay assertion", () => {
     expect(delegatedCase.status).toBe("pass");
     expect(report.overallGate).toBe("pass");
     expect(delegatedCase.replayEvidence?.parentEchoAfterNativeAnnounceCount).toBe(0);
+  });
+
+  it("SSV2-012: fails delegated final when native announce via evidence is missing", async () => {
+    const replayPath = path.join(tmpDir, "replay-wrong-via.jsonl");
+    const threadTs = "1234567890.000001";
+    const sessionKey = `slack:channel:C_ACC_TEST:thread:${threadTs}`;
+    const replayEvents = [
+      { at: "2099-12-31T23:59:49.000Z", event: "message_received_observed", sessionKey, inboundMessageTs: threadTs },
+      { at: "2099-12-31T23:59:58.000Z", event: "native_announce_final_delivered", sessionKey, workContractId: "wc-via", spawn_intent_id: "nsp-via", run_id: "run-via", child_session_key: "agent:child", footer_via: "policy" },
+    ];
+    await fs.writeFile(replayPath, replayEvents.map((event) => JSON.stringify(event)).join("\n"), "utf8");
+
+    const client = createMockClient([
+      { ts: "1234567890.090001", text: "任务已启动。" },
+      { ts: "1234567890.150001", text: "OpenClaw 总结\n\n• route=delegate | via=policy" },
+    ]);
+    const config = parseSlackAcceptanceConfig(validConfig({
+      cases: [{
+        kind: "delegated_work",
+        prompt: "test",
+        ackRequired: true,
+        finalRequired: true,
+        expectAck: ["启动"],
+        expectFinal: ["OpenClaw"],
+        expectReplay: {
+          footerVia: "native_announce",
+          deliveryTransport: "slack_api",
+          requireWorkContract: true,
+          requireSpawnIntent: true,
+          requireRunId: true,
+          requireChildSession: true,
+        },
+      }],
+      replayPath,
+    }), validEnv());
+    config.ackTimeoutMs = 100;
+    config.finalTimeoutMs = 100;
+    config.pollIntervalMs = 1;
+
+    const report = await runSlackAcceptanceHarness(client, config);
+    const delegatedCase = report.cases.find((c) => c.kind === "delegated_work")!;
+
+    expect(delegatedCase.status).toBe("fail");
+    expect(delegatedCase.errors.join("\n")).toContain("replay_footer_via_mismatch");
+    expect(delegatedCase.errors.join("\n")).toContain("replay_delivery_transport_mismatch");
+  });
+
+  it("SSV2-013: fails delegate footer without native spawn evidence", async () => {
+    const replayPath = path.join(tmpDir, "replay-footer-without-spawn.jsonl");
+    const threadTs = "1234567890.000001";
+    const sessionKey = `slack:channel:C_ACC_TEST:thread:${threadTs}`;
+    const replayEvents = [
+      { at: "2099-12-31T23:59:49.000Z", event: "message_received_observed", sessionKey, inboundMessageTs: threadTs },
+      { at: "2099-12-31T23:59:50.000Z", event: "policy_resolved", sessionKey, route: "reply" },
+    ];
+    await fs.writeFile(replayPath, replayEvents.map((event) => JSON.stringify(event)).join("\n"), "utf8");
+
+    const client = createMockClient([
+      { ts: "1234567890.150001", text: "OpenClaw 总结\n\n• route=delegate | model=zhipu/GLM-5.1 · thread | via=rule" },
+    ]);
+    const config = parseSlackAcceptanceConfig(validConfig({
+      cases: [{
+        kind: "plain_chat",
+        prompt: "test",
+        finalRequired: true,
+        expectFinal: ["OpenClaw"],
+        expectFooter: { route: "delegate", model: "zhipu/GLM-5.1", via: "rule" },
+      }],
+      replayPath,
+    }), validEnv());
+    config.finalTimeoutMs = 100;
+    config.pollIntervalMs = 1;
+
+    const report = await runSlackAcceptanceHarness(client, config);
+    const plainCase = report.cases.find((c) => c.kind === "plain_chat")!;
+
+    expect(plainCase.status).toBe("fail");
+    expect(plainCase.errors.join("\n")).toContain("delegate_footer_without_spawn");
+  });
+
+  it("SSV2-015: fails footer model mismatch against expected footer truth", async () => {
+    const client = createMockClient([
+      { ts: "1234567890.150001", text: "OpenClaw 总结\n\n• route=reply | model=cliproxyapi/gpt-5.5 · thread | via=rule" },
+    ]);
+    const config = parseSlackAcceptanceConfig(validConfig({
+      cases: [{
+        kind: "plain_chat",
+        prompt: "test",
+        finalRequired: true,
+        expectFinal: ["OpenClaw"],
+        expectFooter: { route: "reply", model: "zhipu/GLM-5.1", via: "rule" },
+      }],
+    }), validEnv());
+    config.finalTimeoutMs = 100;
+    config.pollIntervalMs = 1;
+
+    const report = await runSlackAcceptanceHarness(client, config);
+    const plainCase = report.cases.find((c) => c.kind === "plain_chat")!;
+
+    expect(plainCase.status).toBe("fail");
+    expect(plainCase.errors.join("\n")).toContain("footer_model_mismatch");
+  });
+
+  it("SSV2-011: maps misleading streaming ACK text to a stable failure code", async () => {
+    const client = createMockClient([
+      { ts: "1234567890.020001", text: "还没好，再等等" },
+      { ts: "1234567890.120001", text: "最终回复" },
+    ]);
+    const config = parseSlackAcceptanceConfig(validConfig({
+      cases: [{
+        kind: "plain_chat",
+        prompt: "test",
+        ackRequired: false,
+        finalRequired: true,
+        expectFinal: ["最终回复"],
+        rejectAck: ["还没好，再等等", "任务已启动。"],
+      }],
+    }), validEnv());
+    config.ackTimeoutMs = 100;
+    config.finalTimeoutMs = 100;
+    config.pollIntervalMs = 1;
+
+    const report = await runSlackAcceptanceHarness(client, config);
+    const plainCase = report.cases.find((c) => c.kind === "plain_chat")!;
+
+    expect(plainCase.status).toBe("fail");
+    expect(plainCase.errors.join("\n")).toContain("ack_misleading_text");
   });
 });
 
