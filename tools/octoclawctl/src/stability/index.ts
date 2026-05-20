@@ -8,6 +8,7 @@ export {
 } from "./ai.js";
 export { buildCatalogCasePack } from "./catalog.js";
 export { evaluateWizardStabilityState, resolveRouterModelExpectation } from "./router.js";
+export { runStabilityOrchestration, runStabilityReviewLatest, runStabilityFixDraft, parseCadence } from "./runner.js";
 export { sanitizeStabilityArtifact } from "./sanitize.js";
 export { runNightlyReplayStabilityLane, runSyntheticStabilityFixture } from "./synthetic.js";
 export { validateStabilityCasePack } from "./validation.js";
@@ -27,6 +28,7 @@ export type {
   WizardStabilityStateInput,
   WizardStabilityStateResult,
 } from "./router.js";
+export type { StabilityLiveSlackReport, StabilityRunnerOptions, StabilityRunnerResult } from "./runner.js";
 export type { NightlyReplayStabilityResult, SyntheticFixture, SyntheticFixtureResult } from "./synthetic.js";
 export type {
   StabilityCase,

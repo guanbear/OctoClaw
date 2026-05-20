@@ -10,6 +10,7 @@ import { generateNightlyReport, filterNightlyReplayEvents, renderMarkdownReport,
 import { loadSlackAcceptanceConfig, runSlackAcceptanceHarness, renderSlackAcceptanceMarkdown } from "./slack-acceptance/index.js";
 import { normalizeCalibrationInputFile, runCalibrationGate, renderCalibrationMarkdown } from "./calibration/index.js";
 import { parseNightlyEvalConfig, runNightlyEval, sanitizeAggregateReport, renderNightlyEvalMarkdown, renderNightlyEvalSlackSummary, generateLaunchAgentPlist, defaultLabel, defaultPlistPath, validateScheduleHour, readStoredBaseline, writeStoredBaseline, clearStoredBaseline } from "./nightly-eval/index.js";
+import { runStabilityOrchestration, runStabilityReviewLatest, runStabilityFixDraft, parseCadence } from "./stability/runner.js";
 import { SlackWebApiAcceptanceClient } from "./slack-acceptance/index.js";
 import { disablePlugin, enablePlugin, getConfigValue, restartAll, setConfigValue, showStatus } from "./manage.js";
 import { buildWorkspace, cloneOrUpdate, DEFAULT_REF, DEFAULT_REPO_URL, deployExtension, deployPackages, setupSymlinks, syncOctoClawCoreRules, syncOpenClawPluginEntry, syncSlackDeliveryHookCompatibility, uninstallDeployment, validateLoad, writeSourceManifest } from "./install.js";
@@ -18,7 +19,7 @@ import { generateReadinessReport, redactReadinessReport, formatReadinessSummary 
 import type { ModelIntelSnapshot } from "@octoclaw/policy/router-lite";
 import type { CostEvent, RouterShadowEvent } from "@octoclaw/router";
 import type { CalibrationInputFile } from "./calibration/types.js";
-import type { SlackAcceptanceFormat } from "./slack-acceptance/types.js";
+import type { SlackAcceptanceCaseConfig, SlackAcceptanceFormat } from "./slack-acceptance/types.js";
 import type { NightlyEvalConfig, LaunchAgentConfig } from "./nightly-eval/index.js";
 import { installLaunchAgent, uninstallLaunchAgent } from "./platform.js";
 import { runRouterWizardCli } from "./commands/router-wizard.js";
@@ -84,7 +85,8 @@ type CliCommand =
   | "nightly"
   | "nightly-eval"
   | "router"
-  | "slack-acceptance";
+  | "slack-acceptance"
+  | "stability";
 type JsonRecord = Record<string, unknown>;
 
 declare const process: {
@@ -154,6 +156,8 @@ interface ParsedCliArgs {
   lang?: "zh" | "en";
   nightlyEvalSubcommand?: "run" | "install-launchagent" | "uninstall-launchagent" | "print-plist" | "deliver-slack" | "promote" | "clear-baseline" | "show-baseline";
   slackAcceptanceFormat: SlackAcceptanceFormat;
+  stabilitySubcommand?: "post-deploy" | "nightly" | "full" | "review-latest" | "fix-draft";
+  cadence?: string;
   extraArgs: string[];
 }
 
@@ -1062,6 +1066,8 @@ export function parseCliArgs(argv: string[]): ParsedCliArgs {
   let lang: "zh" | "en" | undefined;
   let nightlyEvalSubcommand: ParsedCliArgs["nightlyEvalSubcommand"];
   let slackAcceptanceFormat: SlackAcceptanceFormat = "markdown";
+  let stabilitySubcommand: ParsedCliArgs["stabilitySubcommand"];
+  let cadence: string | undefined;
   let rawFormat: string | undefined;
   const positionals: string[] = [];
 
@@ -1333,6 +1339,15 @@ export function parseCliArgs(argv: string[]): ParsedCliArgs {
       lang = parseEnumValue(rawLang, INIT_LANGUAGES, "language");
       continue;
     }
+    if (argument === "--cadence") {
+      cadence = argv[index + 1];
+      index += 1;
+      continue;
+    }
+    if (argument.startsWith("--cadence=")) {
+      [, cadence] = argument.split("=", 2);
+      continue;
+    }
     if (argument.startsWith("--")) {
       throw new Error(`Unknown option: ${argument}`);
     }
@@ -1350,11 +1365,19 @@ export function parseCliArgs(argv: string[]): ParsedCliArgs {
     }
     nightlyEvalSubcommand = sub as ParsedCliArgs["nightlyEvalSubcommand"];
   }
+  if (command === "stability" && positionals[1]) {
+    const sub = positionals[1];
+    const validStabilitySubs = ["post-deploy", "nightly", "full", "review-latest", "fix-draft"];
+    if (!validStabilitySubs.includes(sub)) {
+      throw new Error(`Unknown stability subcommand: ${sub}. Expected one of: ${validStabilitySubs.join(", ")}`);
+    }
+    stabilitySubcommand = sub as ParsedCliArgs["stabilitySubcommand"];
+  }
   if (command === "details" && positionals[1] && !taskId) {
     taskId = positionals[1];
   }
-  if (command && !["doctor", "install", "update", "deploy", "enable", "disable", "config", "uninstall", "calibration-gate", "review", "curate", "status", "details", "queue", "timeline", "health", "up", "down", "restart", "patrol", "reconcile", "repair", "init", "nightly", "nightly-eval", "router", "slack-acceptance"].includes(command)) {
-    throw new Error(`Unknown action: ${command}. Expected one of: doctor, install, update, deploy, enable, disable, config, uninstall, calibration-gate, review, curate, status, details, queue, timeline, health, up, down, restart, patrol, reconcile, repair, init, nightly, nightly-eval, router, slack-acceptance`);
+  if (command && !["doctor", "install", "update", "deploy", "enable", "disable", "config", "uninstall", "calibration-gate", "review", "curate", "status", "details", "queue", "timeline", "health", "up", "down", "restart", "patrol", "reconcile", "repair", "init", "nightly", "nightly-eval", "router", "slack-acceptance", "stability"].includes(command)) {
+    throw new Error(`Unknown action: ${command}. Expected one of: doctor, install, update, deploy, enable, disable, config, uninstall, calibration-gate, review, curate, status, details, queue, timeline, health, up, down, restart, patrol, reconcile, repair, init, nightly, nightly-eval, router, slack-acceptance, stability`);
   }
   if (limit !== undefined && (!Number.isFinite(limit) || limit <= 0)) {
     throw new Error(`Unknown limit: ${String(limit)}. Expected a positive integer`);
@@ -1431,6 +1454,15 @@ export function parseCliArgs(argv: string[]): ParsedCliArgs {
     }
   }
 
+  if (command === "stability") {
+    if (!stabilitySubcommand) {
+      throw new Error("stability requires a subcommand: post-deploy, nightly, full, review-latest, fix-draft");
+    }
+    if (stabilitySubcommand !== "review-latest" && stabilitySubcommand !== "fix-draft" && !outputDir) {
+      throw new Error(`stability ${stabilitySubcommand} requires --output-dir <dir>`);
+    }
+  }
+
   return {
     command,
     format,
@@ -1473,6 +1505,8 @@ export function parseCliArgs(argv: string[]): ParsedCliArgs {
     lang,
     nightlyEvalSubcommand,
     slackAcceptanceFormat,
+    stabilitySubcommand,
+    cadence,
     extraArgs: positionals.slice(1),
   };
 }
@@ -1544,6 +1578,11 @@ export function printUsage(): string {
     "  octoclawctl router shadow-report [--input <shadow.jsonl>] [--format json]",
     "  octoclawctl slack-acceptance --config <acceptance.json> --output-dir <dir> [--format markdown|json]",
     "  octoclawctl calibration-gate --baseline <report.json> --candidate <report.json> --output-dir <dir> [--format markdown|json]",
+    "  octoclawctl stability post-deploy --output-dir <dir> [--config <config>] [--format json]",
+    "  octoclawctl stability nightly --output-dir <dir> [--config <config>] [--format json]",
+    "  octoclawctl stability full --output-dir <dir> [--cadence 3d] [--config <config>] [--format json]",
+    "  octoclawctl stability review-latest --output-dir <dir> [--format json]",
+    "  octoclawctl stability fix-draft --output-dir <dir> [--format json]",
     "",
     "Compatibility:",
     "  status/details/queue/timeline keep existing status-surface behavior when runtime env vars are present.",
@@ -3192,6 +3231,8 @@ async function runCommandFromSnapshot(parsed: ParsedCliArgs, env: Record<string,
       return runSlackAcceptanceCliCommand(parsed, env);
     case "calibration-gate":
       return runCalibrationGateCliCommand(parsed, env);
+    case "stability":
+      return runStabilityCliCommand(parsed, env);
     default:
       throw new Error(`Unknown action: ${parsed.command ?? "(missing)"}`);
   }
@@ -3282,7 +3323,7 @@ export async function main(
       return 0;
     }
     if (!parsed.command) {
-      io.stderr("Unknown action: (missing). Expected one of: doctor, install, update, deploy, enable, disable, config, uninstall, calibration-gate, status, details, queue, timeline, health, up, down, restart, patrol, reconcile, repair, init, nightly, nightly-eval, router, slack-acceptance");
+      io.stderr("Unknown action: (missing). Expected one of: doctor, install, update, deploy, enable, disable, config, uninstall, calibration-gate, status, details, queue, timeline, health, up, down, restart, patrol, reconcile, repair, init, nightly, nightly-eval, router, slack-acceptance, stability");
       return 1;
     }
 
@@ -3554,4 +3595,133 @@ async function runCurateCommand(parsed: ParsedCliArgs, _env: Record<string, stri
   const fixturePath = path.join(fixturesDir, `fixture-${turnId.slice(0, 16)}-${Date.now()}.jsonl`);
   await fs.writeFile(fixturePath, events.map((e) => JSON.stringify({ ...e, fixture: true })).join("\n") + "\n", "utf8");
   return `Fixture saved: ${fixturePath}  (${events.length} events for turn ${turnId})`;
+}
+
+async function runStabilityCliCommand(parsed: ParsedCliArgs, env: Record<string, string | undefined>): Promise<string> {
+  const sub = parsed.stabilitySubcommand;
+  if (!sub) throw new Error("stability requires a subcommand: post-deploy, nightly, full, review-latest, fix-draft");
+  const outputDir = parsed.outputDir ?? path.join(resolveOctoClawHome(env, parsed.openclawHome), "reports");
+  const wantsJson = parsed.format === "json";
+
+  if (sub === "review-latest") {
+    const result = await runStabilityReviewLatest(outputDir);
+    if (wantsJson) {
+      return JSON.stringify({ reportPath: result.reportPath, overallGate: result.overallGate, lanes: result.lanes, failureCount: result.failures.length }, null, 2);
+    }
+    return `Review: ${result.reportPath}\nGate: ${result.overallGate}\nLanes: ${result.lanes.map((l) => `${l.name}=${l.gate}`).join(" ")}\nFailures (${result.failures.length}): ${result.failures.map((f) => `${f.caseId}:${f.code}`).join(", ")}`;
+  }
+
+  if (sub === "fix-draft") {
+    const result = await runStabilityFixDraft(outputDir);
+    if (wantsJson) {
+      return JSON.stringify({ reportPath: result.reportPath, overallGate: result.overallGate, fixDraftSummary: result.fixDraftSummary }, null, 2);
+    }
+    return `Fix-draft: ${result.reportPath}\n${result.fixDraftSummary ?? "No action needed."}`;
+  }
+
+  const cadence = parseCadence(parsed.cadence);
+  const liveSlackReport = parsed.config && env.SLACK_BOT_TOKEN
+    ? await runStabilityLiveSlackPack(parsed.config, env)
+    : undefined;
+  const result = await runStabilityOrchestration({
+    subcommand: sub,
+    outputDir,
+    cadence,
+    config: parsed.config,
+    env,
+    openclawHome: parsed.openclawHome,
+    liveSlackReport,
+  });
+
+  if (wantsJson) {
+    return JSON.stringify({
+      reportPath: result.reportPath,
+      markdownPath: result.markdownPath,
+      summaryPath: result.summaryPath,
+      overallGate: result.overallGate,
+      lanes: result.lanes,
+      failureCount: result.failures.length,
+      skippedLiveReason: result.skippedLiveReason,
+    }, null, 2);
+  }
+
+  const lines = [
+    `Stability ${sub}: gate=${result.overallGate}`,
+    `Report: ${result.reportPath}`,
+    `Markdown: ${result.markdownPath}`,
+    `Summary: ${result.summaryPath}`,
+    `Lanes: ${result.lanes.map((l) => `${l.name}=${l.gate}`).join(" ")}`,
+  ];
+  if (result.skippedLiveReason) {
+    lines.push(`Skipped live: ${result.skippedLiveReason}`);
+  }
+  if (result.failures.length > 0) {
+    lines.push(`Failures (${result.failures.length}): ${result.failures.slice(0, 5).map((f) => `${f.caseId}:${f.code}`).join(", ")}${result.failures.length > 5 ? " ..." : ""}`);
+  }
+  return lines.join("\n");
+}
+
+async function runStabilityLiveSlackPack(configPath: string, env: Record<string, string | undefined>) {
+  const resolvedConfig = await loadSlackAcceptanceConfig(configPath, env);
+  const stabilityCases = stabilitySlackAcceptanceCases();
+  const scopedConfig = {
+    ...resolvedConfig,
+    cases: stabilityCases,
+  };
+  const client = new SlackWebApiAcceptanceClient(resolvedConfig.botToken, { postToken: resolvedConfig.userToken, requestTimeoutMs: resolvedConfig.requestTimeoutMs });
+  const report = await runSlackAcceptanceHarness(client, scopedConfig);
+  return {
+    overallGate: report.overallGate,
+    cases: report.cases.map((item) => ({
+      id: item.id,
+      status: item.status,
+      errors: item.errors,
+    })),
+  };
+}
+
+function stabilitySlackAcceptanceCases(): SlackAcceptanceCaseConfig[] {
+  return [
+    {
+      id: "reply_core.simple_chat",
+      kind: "plain_chat",
+      prompt: "请用一句话回复：当前 Slack smoke 正常。",
+      finalRequired: true,
+      noSpawnExpected: true,
+      expectFooter: { route: "reply" },
+    },
+    {
+      id: "streaming_core.long_reply",
+      kind: "plain_chat",
+      prompt: "写一段 300 字左右的中文说明，用来验证 Slack 流式回复不会出现误导 ACK。",
+      finalRequired: true,
+      ackRequired: false,
+      rejectAck: ["任务已启动。", "还没好，再等等"],
+      rejectFinal: ["402 status code \\(no body\\)", "Previous run is still shutting down"],
+    },
+    {
+      id: "delegate_core.native_final",
+      kind: "delegated_work",
+      prompt: "请委派一个子任务查询当前运行状态，然后汇总结论。",
+      ackRequired: true,
+      finalRequired: true,
+      expectFooter: { route: "delegate", via: "native_announce" },
+      expectReplay: {
+        footerVia: "native_announce",
+        deliveryTransport: "slack_api",
+        targetSource: "inbound_anchor",
+        requireWorkContract: true,
+        requireSpawnIntent: true,
+        requireRunId: true,
+        requireChildSession: true,
+      },
+    },
+    {
+      id: "footer_truth.current_model",
+      kind: "plain_chat",
+      prompt: "你现在用的是什么模型？",
+      finalRequired: true,
+      expectReplay: { deliveryTransport: "slack_api", targetSource: "inbound_anchor" },
+    },
+  ];
 }

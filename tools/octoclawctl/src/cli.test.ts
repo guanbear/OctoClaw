@@ -1917,4 +1917,219 @@ describe("octoclawctl nightly integration", () => {
     const report = JSON.parse(await fs.readFile(jsonPath, "utf8"));
     expect(report.inputEventCount).toBe(2);
   });
+
+  describe("stability smoke v2 scheduling", () => {
+    it("SSV2-050: CLI parses stability post-deploy command", () => {
+      expect(parseCliArgs(["stability", "post-deploy", "--output-dir", "/tmp/stab"])).toMatchObject({
+        command: "stability",
+        stabilitySubcommand: "post-deploy",
+        outputDir: "/tmp/stab",
+      });
+    });
+
+    it("SSV2-050: CLI parses stability nightly command", () => {
+      expect(parseCliArgs(["stability", "nightly", "--output-dir", "/tmp/stab"])).toMatchObject({
+        command: "stability",
+        stabilitySubcommand: "nightly",
+        outputDir: "/tmp/stab",
+      });
+    });
+
+    it("SSV2-050: CLI parses stability full with --cadence", () => {
+      expect(parseCliArgs(["stability", "full", "--output-dir", "/tmp/stab", "--cadence", "3d"])).toMatchObject({
+        command: "stability",
+        stabilitySubcommand: "full",
+        outputDir: "/tmp/stab",
+        cadence: "3d",
+      });
+    });
+
+    it("SSV2-053: full acceptance cadence defaults to 3d", async () => {
+      const tmpDir = path.join(os.homedir(), ".octoclawctl-test-tmp", `stability-full-cadence-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+      const outputDir = path.join(tmpDir, "reports");
+      try {
+        await fs.mkdir(outputDir, { recursive: true });
+        const capture = createIo();
+        const exitCode = await main(
+          ["stability", "full", "--output-dir", outputDir],
+          {},
+          capture.io,
+        );
+
+        expect(exitCode).toBe(0);
+        expect(capture.stdout[0]).toContain("gate=");
+        expect(capture.stdout[0]).toContain("Report:");
+
+        const artifactDir = path.join(outputDir, "stability-smoke-v2");
+        const entries = await fs.readdir(artifactDir, { withFileTypes: true });
+        const reportFiles = entries.filter((e) => e.name.endsWith("-stability-report.json")).map((e) => e.name);
+        expect(reportFiles.length).toBe(1);
+
+        const report = JSON.parse(await fs.readFile(path.join(artifactDir, reportFiles[0]), "utf8"));
+        expect(report.schemaVersion).toBe("octoclaw.stability_smoke.report/v2");
+        expect(report.runKind).toBe("full_3d");
+      } finally {
+        await fs.rm(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    it("SSV2-051: missing Slack env skips live cases but runs non-live lanes", async () => {
+      const tmpDir = path.join(os.homedir(), ".octoclawctl-test-tmp", `stability-no-slack-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+      const outputDir = path.join(tmpDir, "reports");
+      try {
+        await fs.mkdir(outputDir, { recursive: true });
+        const capture = createIo();
+        const exitCode = await main(
+          ["stability", "nightly", "--output-dir", outputDir],
+          {},
+          capture.io,
+        );
+
+        expect(exitCode).toBe(0);
+        expect(capture.stdout[0]).toContain("Skipped live: missing_slack_env");
+
+        const artifactDir = path.join(outputDir, "stability-smoke-v2");
+        const entries = await fs.readdir(artifactDir, { withFileTypes: true });
+        const reportFiles = entries.filter((e) => e.name.endsWith("-stability-report.json")).map((e) => e.name);
+        expect(reportFiles.length).toBe(1);
+
+        const report = JSON.parse(await fs.readFile(path.join(artifactDir, reportFiles[0]), "utf8"));
+        const liveLane = report.lanes.find((lane: { name: string }) => lane.name === "slack_delivery");
+        expect(liveLane).toBeDefined();
+        expect(liveLane.failureCodes).toContain("environment_unhealthy");
+
+        const nonLiveLanes = report.lanes.filter((lane: { name: string }) => lane.name !== "slack_delivery");
+        expect(nonLiveLanes.length).toBeGreaterThan(0);
+      } finally {
+        await fs.rm(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    it("SSV2-052: report paths are written and report is sanitized", async () => {
+      const tmpDir = path.join(os.homedir(), ".octoclawctl-test-tmp", `stability-paths-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+      const outputDir = path.join(tmpDir, "reports");
+      try {
+        await fs.mkdir(outputDir, { recursive: true });
+        const capture = createIo();
+        const exitCode = await main(
+          ["stability", "post-deploy", "--output-dir", outputDir],
+          {},
+          capture.io,
+        );
+
+        expect(exitCode).toBe(0);
+        const output = capture.stdout[0];
+        expect(output).toContain("Report:");
+        expect(output).toContain("-stability-report.json");
+        expect(output).toContain("Markdown:");
+        expect(output).toContain("-stability-report.md");
+        expect(output).toContain("Summary:");
+        expect(output).toContain("-stability-summary.txt");
+
+        const artifactDir = path.join(outputDir, "stability-smoke-v2");
+        const entries = await fs.readdir(artifactDir, { withFileTypes: true });
+        const jsonFiles = entries.filter((e) => e.name.endsWith("-stability-report.json")).map((e) => e.name);
+        const mdFiles = entries.filter((e) => e.name.endsWith("-stability-report.md")).map((e) => e.name);
+        const summaryFiles = entries.filter((e) => e.name.endsWith("-stability-summary.txt")).map((e) => e.name);
+        expect(jsonFiles.length).toBe(1);
+        expect(mdFiles.length).toBe(1);
+        expect(summaryFiles.length).toBe(1);
+
+        const report = JSON.parse(await fs.readFile(path.join(artifactDir, jsonFiles[0]), "utf8"));
+        expect(report.schemaVersion).toBe("octoclaw.stability_smoke.report/v2");
+        expect(report.runKind).toBe("post_deploy");
+        expect(report.generatedAt).toBeTruthy();
+        expect(report.artifactDir).toBe(artifactDir);
+
+        const reportText = JSON.stringify(report);
+        expect(reportText).not.toContain("xoxb-");
+        expect(reportText).not.toContain("sk-");
+        const summary = await fs.readFile(path.join(artifactDir, summaryFiles[0]), "utf8");
+        expect(summary).toContain("Stability Smoke v2");
+        expect(summary).not.toContain("xoxb-");
+        expect(summary).not.toContain("sk-");
+      } finally {
+        await fs.rm(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    it("SSV2-054: review-latest reads and classifies failures", async () => {
+      const tmpDir = path.join(os.homedir(), ".octoclawctl-test-tmp", `stability-review-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+      const outputDir = path.join(tmpDir, "reports");
+      try {
+        await fs.mkdir(path.join(outputDir, "stability-smoke-v2"), { recursive: true });
+
+        await fs.writeFile(path.join(outputDir, "stability-smoke-v2", "2026-05-20-stability-report.json"), JSON.stringify({
+          schemaVersion: "octoclaw.stability_smoke.report/v2",
+          generatedAt: "2026-05-20T12:00:00.000Z",
+          runKind: "nightly",
+          overallGate: "fail",
+          lanes: [{ name: "slack_delivery", gate: "fail", caseIds: ["reply_core.simple_chat"], failureCodes: ["delegate_footer_without_spawn"] }],
+          failures: [{ code: "delegate_footer_without_spawn", severity: "blocker", caseId: "delegate_core.native_final", mode: "live_slack" }],
+          artifactDir: path.join(outputDir, "stability-smoke-v2"),
+        }), "utf8");
+
+        const capture = createIo();
+        const exitCode = await main(
+          ["stability", "review-latest", "--output-dir", outputDir],
+          {},
+          capture.io,
+        );
+
+        expect(exitCode).toBe(0);
+        expect(capture.stdout[0]).toContain("Gate: fail");
+        expect(capture.stdout[0]).toContain("delegate_footer_without_spawn");
+      } finally {
+        await fs.rm(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    it("SSV2-054: fix-draft produces guarded summary without committing", async () => {
+      const tmpDir = path.join(os.homedir(), ".octoclawctl-test-tmp", `stability-fix-draft-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+      const outputDir = path.join(tmpDir, "reports");
+      try {
+        await fs.mkdir(path.join(outputDir, "stability-smoke-v2"), { recursive: true });
+
+        await fs.writeFile(path.join(outputDir, "stability-smoke-v2", "2026-05-20-stability-report.json"), JSON.stringify({
+          schemaVersion: "octoclaw.stability_smoke.report/v2",
+          generatedAt: "2026-05-20T12:00:00.000Z",
+          runKind: "nightly",
+          overallGate: "fail",
+          lanes: [{ name: "delegate_contract", gate: "fail", caseIds: ["delegate_core.native_final"], failureCodes: ["delegate_footer_without_spawn"] }],
+          failures: [{ code: "delegate_footer_without_spawn", severity: "blocker", caseId: "delegate_core.native_final", mode: "live_slack", classification: "runtime_bug" }],
+          artifactDir: path.join(outputDir, "stability-smoke-v2"),
+        }), "utf8");
+
+        const capture = createIo();
+        const exitCode = await main(
+          ["stability", "fix-draft", "--output-dir", outputDir],
+          {},
+          capture.io,
+        );
+
+        expect(exitCode).toBe(0);
+        expect(capture.stdout[0]).toContain("Fix-draft:");
+        expect(capture.stdout[0]).toContain("runtime_bug");
+        expect(capture.stdout[0]).toContain("delegate_core.native_final");
+        expect(capture.stdout[0]).toContain("Do not commit, push, deploy, restart Gateway, or mutate OpenClaw config");
+        expect(capture.stdout[0]).not.toContain("git commit");
+        expect(capture.stdout[0]).not.toContain("git push");
+        expect(capture.stdout[0]).not.toContain("gateway restart");
+      } finally {
+        await fs.rm(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    it("rejects unknown stability subcommand", () => {
+      expect(() => parseCliArgs(["stability", "bogus"])).toThrow("Unknown stability subcommand: bogus");
+    });
+
+    it("requires stability subcommand", () => {
+      expect(() => parseCliArgs(["stability"])).toThrow("stability requires a subcommand");
+    });
+
+    it("requires --output-dir for run subcommands", () => {
+      expect(() => parseCliArgs(["stability", "post-deploy"])).toThrow("requires --output-dir");
+    });
+  });
 });
