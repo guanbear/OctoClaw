@@ -1049,6 +1049,78 @@ describe("octoclaw_dispatch honesty", () => {
     expect(result.work_contract_id).not.toBe(replyContract.workContractId);
   });
 
+  it("does not let a current session param replace the Slack parent session for explicit delegate dispatch", async () => {
+    useTempWorkContractLedger();
+    const stateKey = "agent:main:slack:channel:c0as4dappu3:thread:1779257025.427719";
+    const currentKey = "current";
+    const task = "查询当前系统运行状态并汇报。";
+    const replyContract = seedWorkContract({
+      route: "reply",
+      sessionKey: stateKey,
+      userAsk: task,
+      intentClass: "local_surface_lookup",
+    });
+    const routeSeal = seal({
+      route: "reply",
+      turnId: "turn-current-parent",
+      threadBindingKey: "thread-current-parent",
+    });
+    policyState.set(stateKey, {
+      prompt: task,
+      decision: {
+        request: { session_key: stateKey },
+        routeSeal,
+        workContractId: replyContract.workContractId,
+        work_contract: {
+          workContractId: replyContract.workContractId,
+          work_contract_id: replyContract.workContractId,
+          route: "reply",
+          status: "sealed",
+          forbiddenTools: ["octoclaw_dispatch", "spawn"],
+        },
+        route_decision: {
+          route: "reply",
+          system_preferred_route: "reply",
+          worker_pool: "octoclaw-main",
+          task_class: "main_direct",
+          decision_bucket: "must_reply",
+        },
+        tool_policy: {
+          allow_direct_tools: true,
+          block_tool_patterns: ["octoclaw_dispatch", "spawn"],
+        },
+      },
+      routeSeal,
+      workContractId: replyContract.workContractId,
+      work_contract_id: replyContract.workContractId,
+      dispatchExecuted: false,
+      spawnExecuted: false,
+    });
+
+    const result = await executeDispatch({
+      task,
+      forceRoute: "delegate",
+      sessionKey: currentKey,
+      metadataJson: JSON.stringify({
+        turnId: "turn-current-parent",
+        threadBindingKey: "thread-current-parent",
+        session_key: currentKey,
+      }),
+    }, {
+      sessionKey: currentKey,
+      canonicalSessionKey: stateKey,
+      sessionId: "0ce0498d-965e-4122-bd31-0484262abb12",
+      turnId: "turn-current-parent",
+      threadBindingKey: "thread-current-parent",
+      helperInvoker: spawnedHelper(),
+    });
+
+    expect(result.ok, JSON.stringify(result)).toBe(true);
+    expect(result.work_contract_id).not.toBe(replyContract.workContractId);
+    const delegatedContract = loadWorkContract(String(result.work_contract_id));
+    expect(delegatedContract?.sessionKey).toBe(stateKey);
+  });
+
   it("promotes budgeted-main dispatch when the delegated WorkContract is stored on state", async () => {
     const stateKey = "session-budgeted-main-state-contract";
     const routeSeal = seal({ route: "reply" });

@@ -11,7 +11,7 @@ import { envOverrides } from "../resolve/env.js";
 import { policyState } from "../state/policy-state.js";
 import { openRuntimeLedger } from "../runtime-ledger/index.js";
 import { buildWorkContractFromPolicy, buildWorkDecisionSeal } from "../work-contract/builders.js";
-import { saveWorkContract } from "../work-contract/store.js";
+import { loadWorkContract, saveWorkContract } from "../work-contract/store.js";
 import { getToolRegistrations } from "./registration.js";
 
 const fs = fsSync as unknown as {
@@ -265,6 +265,96 @@ describe("octoclaw_dispatch planner backend", () => {
         reason: "host_runtime_owns_backend_failover",
       }),
       elapsedMs: expect.any(Number),
+    }));
+  });
+
+  it("keeps planner intent and WorkContract anchored to the Slack parent when dispatch passes current", async () => {
+    process.env.OCTOCLAW_SPAWN_BACKEND = "planner";
+    process.env.OCTOCLAW_PLANNER_ALLOWLIST = "agent:main:slack:channel:c0as4dappu3";
+    const sessionKey = "agent:main:slack:channel:c0as4dappu3:thread:1779257025.427719";
+    const task = "查询当前系统运行状态并汇报。";
+    const replyContract = buildWorkContractFromPolicy(
+      sessionKey,
+      task,
+      "local_surface_lookup",
+      coverageSnapshot(),
+      buildWorkDecisionSeal("policy_rule", "reply", ["must_reply"]),
+      { status: "sealed" },
+    );
+    saveWorkContract(replyContract);
+    const routeSeal = {
+      schemaVersion: ROUTE_SEAL_SCHEMA_VERSION,
+      requestId: "req-current-parent",
+      turnId: "turn-current-parent",
+      threadBindingKey: "thread-current-parent",
+      route: "reply",
+      source: "policy_rule",
+      reasonCodes: ["must_reply"],
+      createdAt: "2026-05-20T06:03:48.188Z",
+      inputHash: "hash-current-parent",
+      stateGeneration: 1,
+    };
+    policyState.setState(sessionKey, {
+      prompt: task,
+      decision: {
+        request: { session_key: sessionKey },
+        routeSeal,
+        workContractId: replyContract.workContractId,
+        work_contract: {
+          workContractId: replyContract.workContractId,
+          work_contract_id: replyContract.workContractId,
+          route: "reply",
+          status: "sealed",
+          forbiddenTools: ["octoclaw_dispatch", "spawn"],
+        },
+        route_decision: {
+          route: "reply",
+          system_preferred_route: "reply",
+          worker_pool: "octoclaw-main",
+          task_class: "main_direct",
+          decision_bucket: "must_reply",
+        },
+        tool_policy: {
+          allow_direct_tools: true,
+          block_tool_patterns: ["octoclaw_dispatch", "spawn"],
+        },
+      },
+      routeSeal,
+      workContractId: replyContract.workContractId,
+      work_contract_id: replyContract.workContractId,
+      dispatchExecuted: false,
+      spawnExecuted: false,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    } as unknown as Parameters<typeof policyState.setState>[1]);
+
+    const response = await dispatchTool().execute({
+      task,
+      forceRoute: "delegate",
+      sessionKey: "current",
+      metadataJson: JSON.stringify({
+        turnId: "turn-current-parent",
+        threadBindingKey: "thread-current-parent",
+        session_key: "current",
+      }),
+      timeoutSeconds: 900,
+    }, {
+      sessionKey: "current",
+      canonicalSessionKey: sessionKey,
+      sessionId: "0ce0498d-965e-4122-bd31-0484262abb12",
+      cwd: tempWorkspace,
+    });
+
+    const body = JSON.parse(String(response.text));
+    expect(body.ok, JSON.stringify(body)).toBe(true);
+    expect(body.status).toBe("requires_native_spawn");
+    expect(body.workContractId).not.toBe(replyContract.workContractId);
+    expect(loadWorkContract(body.workContractId)?.sessionKey).toBe(sessionKey);
+    expect(nativeSpawnIntentStore.get(body.spawnIntentId)?.sessionKey).toBe(sessionKey);
+    expect(readReplayEvents()).toContainEqual(expect.objectContaining({
+      event: "dispatch_planner_intent_created",
+      sessionKey,
+      work_contract_id: body.workContractId,
     }));
   });
 

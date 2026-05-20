@@ -167,7 +167,9 @@ export async function executeOctoclawDispatch(params: Record<string, unknown>, _
           },
           parseObjectJson(params.metadataJson),
         );
-        const managedSessionKey = asString(asRecord(cachedDecision.request).session_key || initialMetadata.session_key);
+        initialMetadata = finalizeDispatchMetadata(ctx, initialMetadata, { stateKey, state, cachedDecision });
+        const managedSessionKey = resolveDispatchSessionKey(ctx, initialMetadata, { stateKey, state, cachedDecision })
+          || asString(asRecord(cachedDecision.request).session_key || initialMetadata.session_key);
         let resolvedRoute = resolveDispatchTargetRoute({
           params: asRecord(params),
           metadata: initialMetadata,
