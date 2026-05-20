@@ -137,6 +137,21 @@ describe("route quality", () => {
     expect(lane.routeSourceDistribution["local_judge"]).toBe(1);
     expect(lane.routeSourceDistribution["policy_rule"]).toBe(1);
   });
+
+  it("counts native policy_resolve_completed with a sealed WorkContract as pass", () => {
+    const lane = classifyRouteQuality([
+      makeEvent({
+        event: "policy_resolve_completed",
+        at: "2026-04-26T10:00:00.000Z",
+        route: "reply",
+        decision_bucket: "must_reply",
+        workContractId: "wc-native",
+      }),
+    ]);
+
+    expect(lane.pass).toBe(1);
+    expect(lane.unknown).toBe(0);
+  });
 });
 
 
@@ -237,6 +252,39 @@ describe("route commit ack — real D1 shapes", () => {
     expect(lane.ackSkipped).toBe(1);
     expect(lane.ackSent).toBe(0);
     expect(lane.coverage).toBe(0);
+  });
+
+  it("counts native neutral inbound reaction ACK as pass when route_commit_ack is absent", () => {
+    const lane = classifyRouteCommitAck([
+      makeEvent({
+        event: "policy_resolve_completed",
+        at: "2026-04-26T10:00:00.000Z",
+        route: "reply",
+        workContractId: "wc-native",
+      }),
+      makeEvent({
+        event: "neutral_inbound_ack",
+        at: "2026-04-26T10:00:00.500Z",
+        sent: true,
+        mode: "reaction",
+        reason: "reaction_ack_sent",
+        replyToMessageId: "1700000000.000100",
+        hookName: "message_received",
+      }),
+      makeEvent({
+        event: "neutral_inbound_ack",
+        at: "2026-04-26T10:00:01.000Z",
+        sent: false,
+        mode: "not_sent",
+        reason: "reaction_ack_already_sent",
+        replyToMessageId: "1700000000.000100",
+        hookName: "before_prompt_build",
+      }),
+    ]);
+
+    expect(lane.total).toBe(1);
+    expect(lane.pass).toBe(1);
+    expect(lane.unknown).toBe(0);
   });
 
   it("detects missing ACK when route resolved but no ack event", () => {
@@ -422,6 +470,32 @@ describe("delegation health", () => {
     const lane = classifyDelegationHealth(events);
     expect(lane.timedOutCount).toBe(1);
   });
+
+  it("counts native spawn intent and final delivery as healthy delegation evidence", () => {
+    const lane = classifyDelegationHealth([
+      makeEvent({
+        event: "sessions_spawn_intent_allowed",
+        at: "2026-04-26T10:00:01.000Z",
+        route: "delegate",
+        work_contract_id: "wc-native",
+      }),
+      executionTransition({
+        transitionKind: "spawn_started",
+        sent: true,
+        workContractId: "wc-native",
+        taskId: "delegate-task:wc-native",
+      }),
+      makeEvent({
+        event: "native_announce_final_delivered",
+        at: "2026-04-26T10:00:30.000Z",
+        workContractId: "wc-native",
+      }),
+    ]);
+
+    expect(lane.total).toBeGreaterThan(0);
+    expect(lane.fail).toBe(0);
+    expect(lane.pass).toBe(lane.total);
+  });
 });
 
 
@@ -444,6 +518,46 @@ describe("delivery", () => {
     const lane = classifyDelivery(events);
     expect(lane.retryDeferredCount).toBe(1);
     expect(lane.unknown).toBe(1);
+  });
+
+  it("counts native announce final delivery as delivery success", () => {
+    const lane = classifyDelivery([
+      makeEvent({
+        event: "native_announce_final_delivered",
+        at: "2026-04-26T10:00:30.000Z",
+        workContractId: "wc-native",
+      }),
+    ]);
+
+    expect(lane.total).toBe(1);
+    expect(lane.pass).toBe(1);
+    expect(lane.fail).toBe(0);
+  });
+});
+
+
+describe("native runtime replay filtering", () => {
+  it("filters local test replay events without dropping live Slack runtime events", () => {
+    const { events } = filterNightlyReplayEvents([
+      makeEvent({
+        event: "execution_transition",
+        at: "2026-04-26T10:00:00.000Z",
+        sessionKey: "session-budgeted-main-state-contract",
+      }),
+      makeEvent({
+        event: "route_commit_ack",
+        at: "2026-04-26T10:00:00.100Z",
+        sessionKey: "bogus-no-colon",
+      }),
+      makeEvent({
+        event: "native_announce_final_delivered",
+        at: "2026-04-26T10:00:01.000Z",
+        sessionKey: "agent:main:slack:channel:c0as4dappu3:thread:1779273769.829779",
+      }),
+    ], { now: "2026-04-26T10:01:00.000Z", lookbackHours: 1 });
+
+    expect(events).toHaveLength(1);
+    expect(events[0]?.event).toBe("native_announce_final_delivered");
   });
 });
 

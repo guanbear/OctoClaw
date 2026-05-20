@@ -548,6 +548,92 @@ describe("stability smoke v2 synthetic fixtures", () => {
     }
   });
 
+  it("SSV2-052c: ad-hoc stability runs can scope replay lanes to events after run start", async () => {
+    const tmpDir = path.join(os.homedir(), ".octoclawctl-test-tmp", `stability-nightly-replay-since-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    const outputDir = path.join(tmpDir, "reports");
+    const replayPath = path.join(tmpDir, "runtime-policy-replay.jsonl");
+    const configPath = path.join(tmpDir, "slack-acceptance.json");
+    try {
+      await fs.mkdir(tmpDir, { recursive: true });
+      await fs.writeFile(replayPath, [
+        JSON.stringify({
+          schema_version: "octoclaw.runtime_policy.replay_event/v1",
+          event: "execution_transition",
+          at: "2026-05-20T00:00:00.000Z",
+          sessionKey: "agent:main:slack:channel:C_REAL:thread:old",
+          transitionKind: "spawn_failed",
+          sent: true,
+        }),
+        JSON.stringify({
+          schema_version: "octoclaw.runtime_policy.replay_event/v1",
+          event: "policy_resolve_completed",
+          at: "2026-05-20T01:00:01.000Z",
+          sessionKey: "agent:main:slack:channel:C_REAL:thread:new",
+          route: "reply",
+          decision_bucket: "must_reply",
+          workContractId: "wc-new",
+        }),
+        JSON.stringify({
+          schema_version: "octoclaw.runtime_policy.replay_event/v1",
+          event: "neutral_inbound_ack",
+          at: "2026-05-20T01:00:02.000Z",
+          sessionKey: "agent:main:slack:channel:C_REAL:thread:new",
+          replyToMessageId: "new",
+          hookName: "message_received",
+          sent: true,
+        }),
+        JSON.stringify({
+          schema_version: "octoclaw.runtime_policy.replay_event/v1",
+          event: "execution_transition",
+          at: "2026-05-20T01:00:03.000Z",
+          sessionKey: "agent:main:slack:channel:C_REAL:thread:new",
+          transitionKind: "spawn_started",
+          sent: true,
+          workContractId: "wc-new",
+        }),
+        JSON.stringify({
+          schema_version: "octoclaw.runtime_policy.replay_event/v1",
+          event: "sessions_spawn_intent_allowed",
+          at: "2026-05-20T01:00:04.000Z",
+          sessionKey: "agent:main:slack:channel:C_REAL:thread:new",
+          route: "delegate",
+          work_contract_id: "wc-new",
+        }),
+        JSON.stringify({
+          schema_version: "octoclaw.runtime_policy.replay_event/v1",
+          event: "native_announce_final_delivered",
+          at: "2026-05-20T01:00:05.000Z",
+          sessionKey: "agent:main:slack:channel:C_REAL:thread:new",
+          workContractId: "wc-new",
+        }),
+      ].join("\n"), "utf8");
+      await fs.writeFile(configPath, JSON.stringify({ replayPath }), "utf8");
+
+      const result = await runStabilityOrchestration({
+        subcommand: "nightly",
+        outputDir,
+        config: configPath,
+        replaySince: "2026-05-20T01:00:00.000Z",
+        env: {},
+        liveSlackReport: {
+          overallGate: "pass",
+          cases: [
+            { id: "reply_core.simple_chat", status: "pass" },
+            { id: "streaming_core.long_reply", status: "pass" },
+            { id: "delegate_core.native_final", status: "pass" },
+            { id: "footer_truth.current_model", status: "pass" },
+            { id: "status_core.read_only", status: "pass" },
+          ],
+        },
+      });
+
+      expect(result.failures.map((item) => item.code)).not.toContain("nightly_execution_transition_fail");
+      expect(result.lanes.find((lane) => lane.name === "nightly:execution_transition")?.gate).toBe("pass");
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   it("SSV2-013/SSV2-022: orchestration treats expected synthetic regression classifications as pass evidence", async () => {
     const tmpDir = path.join(os.homedir(), ".octoclawctl-test-tmp", `stability-expected-regression-${Date.now()}-${Math.random().toString(36).slice(2)}`);
     const outputDir = path.join(tmpDir, "reports");

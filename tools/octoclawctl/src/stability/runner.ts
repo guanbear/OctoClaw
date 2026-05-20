@@ -15,6 +15,7 @@ export interface StabilityRunnerOptions {
   env: Record<string, string | undefined>;
   openclawHome?: string;
   liveSlackReport?: StabilityLiveSlackReport;
+  replaySince?: string;
 }
 
 export interface StabilityRunnerResult {
@@ -161,7 +162,7 @@ function syntheticKindForCase(caseId: string, expect: Record<string, unknown>): 
   return "escaped_spawn_json";
 }
 
-async function loadReplayEventsFromConfig(configPath?: string): Promise<ReplayEvent[] | undefined> {
+async function loadReplayEventsFromConfig(configPath?: string, replaySince?: string): Promise<ReplayEvent[] | undefined> {
   if (!configPath) return undefined;
   let rawConfig: unknown;
   try {
@@ -181,12 +182,18 @@ async function loadReplayEventsFromConfig(configPath?: string): Promise<ReplayEv
   }
 
   const events: ReplayEvent[] = [];
+  const replaySinceMs = replaySince ? Date.parse(replaySince) : NaN;
   for (const line of content.split(/\r?\n/u)) {
     const trimmed = line.trim();
     if (!trimmed) continue;
     try {
       const parsed = JSON.parse(trimmed) as unknown;
-      if (isRecord(parsed)) events.push(parsed as ReplayEvent);
+      if (!isRecord(parsed)) continue;
+      if (Number.isFinite(replaySinceMs)) {
+        const atMs = Date.parse(asString(parsed.at) ?? "");
+        if (!Number.isFinite(atMs) || atMs < replaySinceMs) continue;
+      }
+      events.push(parsed as ReplayEvent);
     } catch {
       // Ignore malformed replay fragments; nightly classifiers can work with partial logs.
     }
@@ -322,7 +329,7 @@ export async function runStabilityOrchestration(options: StabilityRunnerOptions)
   }
 
   if (runKind === "nightly" || runKind === "full_3d") {
-    const result = runNightlyReplayStabilityLane(await loadReplayEventsFromConfig(options.config));
+    const result = runNightlyReplayStabilityLane(await loadReplayEventsFromConfig(options.config, options.replaySince));
     allLanes.push(...result.lanes);
     allFailures.push(...result.failures);
   }

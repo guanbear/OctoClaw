@@ -50,12 +50,15 @@ function containsSyntheticMarker(value: unknown): boolean {
   const lower = text.toLowerCase();
   return lower === "bogus-no-colon"
     || lower === "plain-success"
+    || lower === "plain-failure"
     || lower === "agent:main:main"
     || lower === "slack:channel:c1"
     || lower === "agent:main:slack:channel:c1"
+    || lower === "agent:main:slack:channel:c0ackdedupe"
     || lower === "slack:default:channel:c123abc"
     || lower === "slack:channel:c1:thread:1700000000.000100"
     || lower === "session-no-spawn-test"
+    || lower === "session-budgeted-main-state-contract"
     || lower === "session-work-contract-dispatch"
     || lower === "session-legacy-policy-json"
     || lower === "turn-789"
@@ -65,11 +68,17 @@ function containsSyntheticMarker(value: unknown): boolean {
     || lower === "task-delivery-failed"
     || lower === "task-no-target"
     || lower.startsWith("session-dispatch-honesty")
+    || lower.startsWith("session-")
+    || lower.startsWith("policy-")
     || lower === "session-dispatch-spawned-test"
     || lower === "session-work-contract-prior-continuity"
     || lower === "session-contract-wins"
+    || lower.includes("t-spec-preload")
+    || lower.includes(":thread:budget-escalated")
     || lower.includes(":session-dispatch-spawned-test:")
     || lower.includes(":plain-success:")
+    || lower.includes(":plain-failure:")
+    || lower.includes(":session-budgeted-main-state-contract:")
     || lower.includes(":session-no-spawn-test:")
     || lower.includes(":session-work-contract-dispatch:")
     || lower.includes(":session-legacy-policy-json:");
@@ -228,6 +237,8 @@ function classifyRouteVerdict(event: ReplayEvent): RouteVerdict {
   }
 
   if (route === "reply" && (event.actualLatency ?? 0) > 30000) return "direct_path_latency";
+  if ((route === "reply" || route === "delegate") && typeof event.workContractId === "string" && event.workContractId.trim()) return "pass";
+  if ((route === "reply" || route === "delegate") && typeof event.decision_bucket === "string" && event.decision_bucket.trim()) return "pass";
   if (confidence !== undefined && confidence < 0.4) return "unclear";
   if (routerValid === undefined && confidence === undefined) return "unknown";
   return "pass";
@@ -235,7 +246,9 @@ function classifyRouteVerdict(event: ReplayEvent): RouteVerdict {
 
 export function classifyRouteQuality(events: ReplayEvent[]): RouteQualityLane {
   const policyEvents = events.filter(
-    (e) => e.event === "policy_resolved" || e.event === "policy_judged" || e.event === "route_validated" || e.event === "agent_end",
+    (e) => e.event === "policy_resolved" || e.event === "policy_judged" || e.event === "route_validated" ||
+      e.event === "policy_resolve_completed" || e.event === "before_model_policy_resolve_completed" ||
+      (e.event === "agent_end" && (e.routerDecisionValid !== undefined || e.confidence !== undefined || Boolean(e.systemPreferredRoute))),
   );
 
   let pass = 0;
@@ -289,9 +302,12 @@ export function classifyRouteQuality(events: ReplayEvent[]): RouteQualityLane {
 }
 
 export function classifyRouteCommitAck(events: ReplayEvent[]): RouteCommitAckLane {
-  const ackEvents = events.filter((e) => e.event === "route_commit_ack");
+  const routeCommitAckEvents = events.filter((e) => e.event === "route_commit_ack");
+  const nativeAckEvents = events.filter((e) => e.event === "neutral_inbound_ack" && (e.sent === true || typeof e.error === "string"));
+  const useNativeAckEvents = nativeAckEvents.length > 0;
+  const ackEvents = useNativeAckEvents ? nativeAckEvents : routeCommitAckEvents;
   const routedEvents = events.filter(
-    (e) => e.event === "policy_resolved" || e.event === "route_validated",
+    (e) => !useNativeAckEvents && (e.event === "policy_resolved" || e.event === "route_validated"),
   );
 
   let ackSent = 0;
@@ -313,7 +329,9 @@ export function classifyRouteCommitAck(events: ReplayEvent[]): RouteCommitAckLan
   }
 
   for (const event of ackEvents) {
-    const ackKey = event.ackKey ?? `${event.turnId ?? ""}:${event.routeCommitId ?? ""}`;
+    const ackKey = event.ackKey ?? (useNativeAckEvents
+      ? `${event.sessionKey ?? ""}:${event.replyToMessageId ?? ""}:${event.hookName ?? event.event}`
+      : `${event.turnId ?? ""}:${event.routeCommitId ?? ""}`);
 
     if (seenAckKeys.has(ackKey)) {
       ackDuplicate++;
@@ -333,11 +351,12 @@ export function classifyRouteCommitAck(events: ReplayEvent[]): RouteCommitAckLan
     seenAckKeys.add(ackKey);
 
     const sent = event.ackSent === true;
+    const nativeSent = useNativeAckEvents && event.sent === true;
     const deliveryState = event.ack_delivery_state ?? "";
     const targetState = event.ack_target_resolution_state ?? "";
     const reason = event.reason ?? "";
 
-    if (sent && deliveryState === "sent") {
+    if ((sent && deliveryState === "sent") || nativeSent) {
       ackSent++;
       const explicitLatency = typeof event.actualLatency === "number" && Number.isFinite(event.actualLatency)
         ? event.actualLatency
@@ -561,7 +580,8 @@ export function classifyExecutionTransition(events: ReplayEvent[]): ExecutionTra
 export function classifyDelegationHealth(events: ReplayEvent[]): DelegationHealthLane {
   const delegateEvents = events.filter(
     (e) => (e.route === "delegate" || e.finalRoute === "delegate") &&
-      (e.event === "dispatch_called" || e.event === "agent_end" || e.event === "policy_resolved"),
+      (e.event === "dispatch_called" || e.event === "agent_end" || e.event === "policy_resolved" ||
+        e.event === "sessions_spawn_intent_allowed" || e.event === "native_announce_final_delivered"),
   );
 
   let noSpawnCount = 0;
@@ -573,8 +593,13 @@ export function classifyDelegationHealth(events: ReplayEvent[]): DelegationHealt
   const parentTokens: number[] = [];
   const resultTokens: number[] = [];
   const samples: LaneSample[] = [];
+  const nativeSuccessKeys = new Set<string>();
 
   for (const event of delegateEvents) {
+    const successKey = String(event.workContractId ?? event.work_contract_id ?? event.taskId ?? event.sessionKey ?? "");
+    if ((event.event === "sessions_spawn_intent_allowed" || event.event === "native_announce_final_delivered") && successKey) {
+      nativeSuccessKeys.add(successKey);
+    }
     const parentCtx = event.parentContextTokensAdded;
     const resultPkt = event.resultPacketTokens;
     if (parentCtx != null && typeof parentCtx === "number") parentTokens.push(parentCtx);
@@ -589,6 +614,10 @@ export function classifyDelegationHealth(events: ReplayEvent[]): DelegationHealt
   const transitionEvents = events.filter((e) => e.event === "execution_transition");
   for (const event of transitionEvents) {
     const kind = event.transitionKind;
+    if (kind === "spawn_started" && event.sent === true) {
+      const successKey = String(event.workContractId ?? event.taskId ?? event.sessionKey ?? "");
+      if (successKey) nativeSuccessKeys.add(successKey);
+    }
     if (kind === "materialized_no_spawn") noSpawnCount++;
     if (kind === "spawn_failed") spawnFailedCount++;
     if (kind === "queued_stale") staleCount++;
@@ -604,7 +633,7 @@ export function classifyDelegationHealth(events: ReplayEvent[]): DelegationHealt
   parentTokens.sort((a, b) => a - b);
   resultTokens.sort((a, b) => a - b);
 
-  const total = delegateEvents.length;
+  const total = Math.max(delegateEvents.length, nativeSuccessKeys.size + noSpawnCount + spawnFailedCount + staleCount + timedOutCount + resultOrphanCount + contextPollutionCount);
   const fail = noSpawnCount + spawnFailedCount + staleCount + timedOutCount + resultOrphanCount + contextPollutionCount;
   const pass = Math.max(0, total - fail);
 
@@ -625,6 +654,7 @@ export function classifyDelivery(events: ReplayEvent[]): DeliveryLane {
     (e) => e.event === "delivery_observed" || e.event === "delivery_failed" ||
       e.event === "delivery_retry_deferred" || e.event === "delivery_compensated" ||
       e.event === "delivery_reconciled_delivered" || e.event === "delivery_pending" ||
+      e.event === "native_announce_final_delivered" ||
       // New completion file protocol events (replaces old delivery relay)
       e.event === "completion_file_delivered" || e.event === "completion_file_timeout" ||
       e.event === "delivery_outbox_queued" || e.event === "delivery_outbox_flushed",
@@ -656,6 +686,7 @@ export function classifyDelivery(events: ReplayEvent[]): DeliveryLane {
   const pass = deliveryEvents.filter(
     (e) => e.event === "delivery_reconciled_delivered" ||
            e.event === "delivery_observed" ||
+           e.event === "native_announce_final_delivered" ||
            e.event === "completion_file_delivered" ||  // worker wrote file, IM delivery ok
            e.event === "delivery_outbox_flushed",      // outbox retry succeeded
   ).length;

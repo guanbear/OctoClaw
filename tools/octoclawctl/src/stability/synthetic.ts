@@ -1,4 +1,4 @@
-import { generateNightlyReport, type EvaluationLaneResult, type NightlyReport, type ReplayEvent } from "../nightly/index.js";
+import { filterNightlyReplayEvents, generateNightlyReport, type EvaluationLaneResult, type NightlyReport, type ReplayEvent } from "../nightly/index.js";
 import type { StabilityCaseMode, StabilityFailurePacket, StabilityGate, StabilityLaneResult } from "./types.js";
 
 export type SyntheticFixture =
@@ -127,7 +127,8 @@ export function runNightlyReplayStabilityLane(events: ReplayEvent[] | undefined)
     };
   }
 
-  const nightlyReport = generateNightlyReport(events);
+  const filtered = filterNightlyReplayEvents(events);
+  const nightlyReport = generateNightlyReport(filtered.events, filtered.metadata);
   return {
     gate: nightlyReport.overallGate,
     lanes: nightlyReport.lanes.map(nightlyLaneToStabilityLane),

@@ -3620,6 +3620,7 @@ async function runStabilityCliCommand(parsed: ParsedCliArgs, env: Record<string,
   }
 
   const cadence = parseCadence(parsed.cadence);
+  const replaySince = new Date().toISOString();
   const liveSlackReport = parsed.config
     ? await runStabilityLiveSlackPack(parsed.config, env)
     : undefined;
@@ -3631,6 +3632,7 @@ async function runStabilityCliCommand(parsed: ParsedCliArgs, env: Record<string,
     env,
     openclawHome: parsed.openclawHome,
     liveSlackReport,
+    replaySince,
   });
 
   if (wantsJson) {

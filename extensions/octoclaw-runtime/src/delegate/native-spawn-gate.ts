@@ -113,16 +113,32 @@ function executionFollowupBlocked(decision: unknown): boolean {
     || asBooleanStrict(coverageExecution.supports_provenance_reply);
 }
 
-function hasRecoverablePlannerTaskDrift(expectedTask: string, actualTask: string): boolean {
+function splitPlannerTaskAtRuntimePacket(value: string): { prefix: string; suffix: string } | null {
   const marker = "\n## Runtime Context Packet\n";
-  const expectedMarkerIndex = expectedTask.indexOf(marker);
-  const actualMarkerIndex = actualTask.indexOf(marker);
-  if (expectedMarkerIndex <= 0 || actualMarkerIndex <= 0) return false;
+  const markerIndex = value.indexOf(marker);
+  if (markerIndex > 0) return { prefix: value.slice(0, markerIndex), suffix: value.slice(markerIndex) };
 
-  const expectedPrefix = expectedTask.slice(0, expectedMarkerIndex);
-  const actualPrefix = actualTask.slice(0, actualMarkerIndex);
-  const expectedSuffix = expectedTask.slice(expectedMarkerIndex);
-  const actualSuffix = actualTask.slice(actualMarkerIndex);
+  const doubleNewlineMarker = "\n\n## Runtime Context Packet\n";
+  const doubleMarkerIndex = value.indexOf(doubleNewlineMarker);
+  if (doubleMarkerIndex > 0) {
+    return {
+      prefix: value.slice(0, doubleMarkerIndex + 1),
+      suffix: value.slice(doubleMarkerIndex + 1),
+    };
+  }
+
+  return null;
+}
+
+function hasRecoverablePlannerTaskDrift(expectedTask: string, actualTask: string): boolean {
+  const expectedParts = splitPlannerTaskAtRuntimePacket(expectedTask);
+  const actualParts = splitPlannerTaskAtRuntimePacket(actualTask);
+  if (!expectedParts || !actualParts) return false;
+
+  const expectedPrefix = expectedParts.prefix;
+  const actualPrefix = actualParts.prefix;
+  const expectedSuffix = expectedParts.suffix;
+  const actualSuffix = actualParts.suffix;
   if (expectedSuffix !== actualSuffix) return false;
   if (!actualPrefix.startsWith(expectedPrefix)) return false;
 
@@ -136,7 +152,8 @@ function hasRecoverablePlannerArgsDrift(expected: SessionsSpawnArgs, actual: Ses
   const actualTask = asString(actual.task);
   if (!expectedTask || !actualTask || expectedTask === actualTask) return false;
   if (!hasRecoverablePlannerTaskDrift(expectedTask, actualTask)) return false;
-  return hashSessionsSpawnArgs({ ...actual, task: expectedTask }) === expectedHash;
+  return hashSessionsSpawnArgs({ ...actual, task: expectedTask }) === expectedHash
+    || hashSessionsSpawnArgs({ ...actual, task: expectedTask, label: expected.label }) === expectedHash;
 }
 
 export function evaluateNativeSpawnGate(input: NativeSpawnGateInput): NativeSpawnGateDecision {
