@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
+import type { ModelIntelLite } from "@octoclaw/router";
 import {
   buildCatalogCasePack,
+  evaluateWizardStabilityState,
+  resolveRouterModelExpectation,
   runNightlyReplayStabilityLane,
   runSyntheticStabilityFixture,
   sanitizeStabilityArtifact,
@@ -131,6 +134,124 @@ describe("stability smoke v2 catalog", () => {
     expect(sanitized.prompt).toMatch(/^\[STRIPPED:sha256:/u);
     expect(sanitized.rawTranscript).toBe("[STRIPPED]");
     expect(JSON.stringify(sanitized)).not.toContain("private model output");
+  });
+});
+
+function model(modelKey: string, tier: ModelIntelLite["capability"]["codingTier"], overrides: Partial<ModelIntelLite> = {}): ModelIntelLite {
+  const [provider, name] = modelKey.split("/");
+  return {
+    provider,
+    model: name,
+    modelKey,
+    configured: true,
+    available: "yes",
+    proposalOnly: false,
+    tags: [],
+    marketPrice: { blendedUsdPerMTok: 10, confidence: "high", sources: ["test"] },
+    capability: {
+      input: ["text"],
+      toolUse: "yes",
+      structuredOutput: "yes",
+      reasoning: "yes",
+      promptCache: "unknown",
+      codingTier: tier,
+      confidence: "high",
+      evidence: ["declared"],
+      sources: ["test"],
+    },
+    health: {
+      available: "yes",
+      cooldown: false,
+      quotaPressure: "low",
+      recentFailureRate: 0.01,
+      p95LatencyMs: 700,
+      sources: ["test"],
+    },
+    plan: {
+      type: "pay_as_you_go",
+      quotaPressure: "unknown",
+      effectiveCostBand: "unknown",
+      sources: ["test"],
+    },
+    sources: ["test"],
+    ...overrides,
+  };
+}
+
+describe("stability smoke v2 router and wizard checks", () => {
+  it("SSV2-030: computes simple/normal/deep expected models from current router state", () => {
+    const models = [
+      model("cliproxyapi/gpt-5.5", "frontier", { marketPrice: { blendedUsdPerMTok: 30, confidence: "high", sources: ["test"] } }),
+      model("cliproxyapi/gpt-5.4-mini", "mini", { marketPrice: { blendedUsdPerMTok: 1, confidence: "high", sources: ["test"] } }),
+      model("zhipu/glm-5.1", "standard", { marketPrice: { blendedUsdPerMTok: 3, confidence: "high", sources: ["test"] } }),
+    ];
+
+    expect(resolveRouterModelExpectation({ complexity: "simple", models }).expectedModel).toBe("cliproxyapi/gpt-5.4-mini");
+    expect(resolveRouterModelExpectation({ complexity: "normal", models }).expectedModel).toBe("zhipu/glm-5.1");
+    expect(resolveRouterModelExpectation({ complexity: "deep", models }).expectedModel).toBe("cliproxyapi/gpt-5.5");
+  });
+
+  it("SSV2-031: cooldown excludes a model from expected live choice", () => {
+    const result = resolveRouterModelExpectation({
+      complexity: "deep",
+      models: [
+        model("cliproxyapi/gpt-5.5", "frontier", {
+          health: { ...model("x/y", "frontier").health, cooldown: true, cooldownReason: "rate_limit_429" },
+        }),
+        model("zhipu/glm-5.1", "frontier"),
+      ],
+    });
+
+    expect(result.expectedModel).toBe("zhipu/glm-5.1");
+    expect(result.reasonCodes).toContain("cooldown:rate_limit_429:cliproxyapi/gpt-5.5");
+  });
+
+  it("SSV2-032: unconfigured discovered models stay proposal-only for live expectations", () => {
+    const result = resolveRouterModelExpectation({
+      complexity: "simple",
+      models: [
+        model("cliproxyapi/gpt-5.4-mini", "mini", { configured: false, proposalOnly: true }),
+        model("zhipu/glm-5.1", "standard"),
+      ],
+    });
+
+    expect(result.expectedModel).toBe("zhipu/glm-5.1");
+    expect(result.proposalCandidates).toContain("cliproxyapi/gpt-5.4-mini");
+    expect(result.rejectedModels).toContainEqual({ model: "cliproxyapi/gpt-5.4-mini", reason: "not_configured" });
+  });
+
+  it("SSV2-033: native fallback order is a tie-break, not a quality override", () => {
+    const result = resolveRouterModelExpectation({
+      complexity: "deep",
+      nativeFallbackOrder: ["zhipu/glm-5.1"],
+      models: [
+        model("zhipu/glm-5.1", "standard", { tags: ["fallback#1"] }),
+        model("cliproxyapi/gpt-5.5", "frontier"),
+      ],
+    });
+
+    expect(result.expectedModel).toBe("cliproxyapi/gpt-5.5");
+    expect(result.qualityFloor).toBe("frontier");
+  });
+
+  it("SSV2-034: duplicate wizard clicks are idempotent and answered steps are ignored", () => {
+    const first = evaluateWizardStabilityState({
+      currentStep: 1,
+      answeredSteps: [],
+      click: { step: 1, value: "start", atMs: 1_000 },
+      previousClickAtMs: 0,
+    });
+    const duplicate = evaluateWizardStabilityState({
+      currentStep: 2,
+      answeredSteps: [1],
+      click: { step: 1, value: "start", atMs: 1_010 },
+      previousClickAtMs: 1_000,
+    });
+
+    expect(first.gate).toBe("pass");
+    expect(first.nextStep).toBe(2);
+    expect(duplicate.gate).toBe("pass");
+    expect(duplicate.message).toBe("这一步已经回答过");
   });
 });
 
