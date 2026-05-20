@@ -61,6 +61,19 @@ error: HTTP 429 upstream temporarily rate-limited
 provider: Crucible
 ```
 
+Free text-model probe:
+
+| Model | Completed | Valid JSON | Route | Avg Latency | Min | Max | >2 s | Notes |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| `nvidia/nemotron-3-nano-30b-a3b:free` | 10/10 | 10/10 | 6/10 | 961 ms | 708 ms | 1415 ms | 0/10 | Fastest free candidate, but judge accuracy is below baseline |
+| `openai/gpt-oss-20b:free` | 3/10 | 2/10 | 2/10 | 5780 ms | 5646 ms | 5985 ms | 3/3 | Too many failed calls for hot-path use |
+| `z-ai/glm-4.5-air:free` | 9/10 | 0/10 | 0/10 | 8390 ms | 4205 ms | 22307 ms | 9/9 | Free OpenRouter route did not produce parseable judge JSON |
+| `nvidia/nemotron-nano-9b-v2:free` | 10/10 | 0/10 | 0/10 | 9463 ms | 4079 ms | 17164 ms | 10/10 | Not compatible with the JSON judge shape in this run |
+| `openrouter/free` | 2/10 | 1/10 | 0/10 | 8307 ms | 7099 ms | 9515 ms | 2/2 | Router choice is unstable and inaccurate for judge use |
+| `baidu/cobuddy:free` | 0/10 | 0/10 | 0/10 | n/a | n/a | n/a | n/a | Free quota limit reached during this run |
+| `google/gemma-4-26b-a4b-it:free` | 0/10 | 0/10 | 0/10 | n/a | n/a | n/a | n/a | Free quota limit reached during this run |
+| `google/gemma-4-31b-it:free` | 0/10 | 0/10 | 0/10 | n/a | n/a | n/a | n/a | Free quota limit reached during this run |
+
 Paid Flash results:
 
 | Model | Completed | Valid JSON | Route | Avg Latency | Min | Max | >2 s | Notes |
@@ -73,6 +86,17 @@ Paid Flash results:
 | `google/gemini-2.5-flash-lite` | 0/10 | 0/10 | 0/10 | n/a | n/a | n/a | n/a | HTTP 403 |
 | `google/gemini-3-flash-preview` | 0/10 | 0/10 | 0/10 | n/a | n/a | n/a | n/a | HTTP 403 |
 | `google/gemini-3.5-flash` | 0/10 | 0/10 | 0/10 | n/a | n/a | n/a | n/a | HTTP 403 |
+
+Paid Gemma/Baidu results:
+
+| Model | Completed | Valid JSON | Route | Avg Latency | Min | Max | >2 s | Notes |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| `google/gemma-4-26b-a4b-it` | 10/10 | 10/10 | 9/10 | 2934 ms | 849 ms | 7601 ms | 6/10 | Accurate, but exceeds the 2 s judge budget on most cases |
+| `google/gemma-4-31b-it` | 10/10 | 10/10 | 9/10 | 4302 ms | 1573 ms | 8708 ms | 6/10 | Similar accuracy, slower than 26B A4B |
+| `baidu/ernie-4.5-21b-a3b` | 0/10 | 0/10 | 0/10 | n/a | n/a | n/a | n/a | Structured outputs unsupported through this route |
+| `baidu/ernie-4.5-21b-a3b-thinking` | 0/10 | 0/10 | 0/10 | n/a | n/a | n/a | n/a | Structured outputs unsupported through this route |
+| `baidu/ernie-4.5-21b-a3b` without JSON mode | 1/10 | 0/10 | 0/10 | 10730 ms | 10730 ms | 10730 ms | 1/1 | Upstream rate limits/errors and no parseable judge JSON |
+| `baidu/ernie-4.5-21b-a3b-thinking` without JSON mode | 0/10 | 0/10 | 0/10 | n/a | n/a | n/a | n/a | Upstream rate limits/errors |
 
 Per-case misses:
 
@@ -87,6 +111,8 @@ Per-case misses:
 Interpretation:
 
 - `xiaomi/mimo-v2-flash` is the only OpenRouter candidate close to the 2 s judge budget, but half the cases still exceeded 2 s.
+- `google/gemma-4-26b-a4b-it` and `google/gemma-4-31b-it` are accurate enough to remain shadow candidates, but they are not fast enough for a 2 s hot-path judge.
+- OpenRouter's Baidu/ERNIE route is not compatible with the current structured-output judge path in this run.
 - Qwen Flash models are accurate but too slow for hot-path judge.
 - DeepSeek V4 Flash is slower than MiMo and had one truncated JSON result.
 - Step 3.5 Flash should not be used for this JSON-only judge shape.
@@ -126,8 +152,9 @@ Potential remote/shadow candidates:
 ```text
 1. glm-4.5-air with thinking disabled
 2. xiaomi/mimo-v2-flash through OpenRouter
-3. qwen/qwen3.6-flash through OpenRouter, only if latency is acceptable
-4. gpt-5.4-mini as accurate but slower remote adjudicator
+3. google/gemma-4-26b-a4b-it through OpenRouter, only as a slower shadow candidate
+4. qwen/qwen3.6-flash through OpenRouter, only if latency is acceptable
+5. gpt-5.4-mini as accurate but slower remote adjudicator
 ```
 
 Do not currently use:
@@ -136,5 +163,7 @@ Do not currently use:
 google/gemini-*flash* via OpenRouter
 stepfun/step-3.5-flash
 deepseek/deepseek-v4-flash:free
+baidu/cobuddy:free under current free quota state
+baidu/ernie-4.5-21b-a3b through OpenRouter for structured JSON judge
 gpt-5.4-nano through Codex/OAuth/OmniRoute
 ```
