@@ -3732,12 +3732,12 @@ export function buildStabilitySlackAcceptanceCases(
     {
       id: "delegate_core.native_final",
       kind: "delegated_work",
-      prompt: withSlackTrigger(trigger, "请委派一个子任务查询当前运行状态，然后汇总结论。"),
+      prompt: withSlackTrigger(trigger, "请委派一个子 agent 独立做只读检查：确认 OpenClaw Gateway 和 OctoClaw readiness 的当前状态，然后等子任务完成后给 3 条中文摘要。不要由主会话直接回答。"),
       ackRequired: true,
       allowFastFinalAck: true,
       ackTimeoutMs: 180_000,
       finalRequired: true,
-      expectFinalAll: ["Gateway|系统运行状态摘要|LaunchAgent|连通性", "状态|摘要|结论"],
+      expectFinalAll: ["Gateway|OpenClaw|OctoClaw|readiness", "状态|摘要|结论"],
       expectFooter: { route: "delegate", via: "native_announce" },
       expectReplay: hasReplayPath ? {
         footerVia: "native_announce",

@@ -24,7 +24,7 @@ const POST_DEPLOY_CASES: StabilityCase[] = [
     mode: "live_slack",
     severity: "blocker",
     tags: ["slack", "delegate", "native-final"],
-    prompt: "请委派一个子任务查询当前运行状态，然后汇总结论。",
+    prompt: "请委派一个子 agent 独立做只读检查：确认 OpenClaw Gateway 和 OctoClaw readiness 的当前状态，然后等子任务完成后给 3 条中文摘要。不要由主会话直接回答。",
     maxRuntimeMs: 180_000,
     expect: { route: "delegate", footerVia: "native_announce", spawnEvidence: true },
   },

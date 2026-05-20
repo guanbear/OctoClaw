@@ -1972,7 +1972,7 @@ describe("octoclawctl nightly integration", () => {
       expect(cases.find((item) => item.id === "delegate_core.native_final")?.ackTimeoutMs).toBe(180_000);
       expect(cases.find((item) => item.id === "delegate_core.native_final")?.allowFastFinalAck).toBe(true);
       expect(cases.find((item) => item.id === "delegate_core.native_final")?.expectFinalAll).toEqual([
-        "Gateway|系统运行状态摘要|LaunchAgent|连通性",
+        "Gateway|OpenClaw|OctoClaw|readiness",
         "状态|摘要|结论",
       ]);
     });
