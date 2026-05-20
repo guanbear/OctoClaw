@@ -82,6 +82,10 @@ function normalizePlannerTaskCopyEscapes(value: string): string {
   return value.replaceAll("\\\\n", "\\n");
 }
 
+function normalizeDisplayLabel(value: string): string {
+  return value.replaceAll("\\n", "\n").replace(/\s+/gu, "");
+}
+
 function normalizeSessionsSpawnArgs(args: SessionsSpawnArgs): Record<string, unknown> {
   const record = asRecord(args);
   const normalized: Record<string, unknown> = {
@@ -92,7 +96,7 @@ function normalizeSessionsSpawnArgs(args: SessionsSpawnArgs): Record<string, unk
   if (message) normalized.message = message;
 
   const label = asNonEmptyString(record.label);
-  if (label) normalized.label = label;
+  if (label) normalized.label = normalizeDisplayLabel(label);
 
   const runtime = record.runtime === "acp" ? "acp" : record.runtime === "subagent" ? "subagent" : "";
   if (runtime && runtime !== "subagent") normalized.runtime = runtime;

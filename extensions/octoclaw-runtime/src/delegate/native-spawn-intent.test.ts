@@ -239,6 +239,29 @@ describe("canonical args hash", () => {
     );
   });
 
+  it("treats copied planner display label whitespace as equivalent", () => {
+    const storedLabel = "查询当前系统运行状态并汇总：\n1. 运行 `openclaw status` 获取 gateway/插件状态\n2.… [wc-6e761cded9cbf8ff]";
+
+    expect(computePlanHash({ ...baseArgs, label: storedLabel })).toBe(
+      computePlanHash({
+        ...baseArgs,
+        label: "查询当前系统运行状态并汇总：1. 运行 `openclaw status` 获取 gateway/插件状态2.… [wc-6e761cded9cbf8ff]",
+      }),
+    );
+    expect(computePlanHash({ ...baseArgs, label: storedLabel })).toBe(
+      computePlanHash({
+        ...baseArgs,
+        label: "查询当前系统运行状态并汇总：\\n1. 运行 `openclaw status` 获取 gateway/插件状态\\n2.… [wc-6e761cded9cbf8ff]",
+      }),
+    );
+  });
+
+  it("still distinguishes materially different labels", () => {
+    expect(computePlanHash({ ...baseArgs, label: "octoclaw-speculative-a" })).not.toBe(
+      computePlanHash({ ...baseArgs, label: "octoclaw-speculative-b" }),
+    );
+  });
+
   it("ignores OpenClaw default/enrichment fields that do not change the plan", () => {
     expect(computePlanHash({ task: "a", runtime: "subagent", timeoutSeconds: 0, attachments: [] })).toBe(
       computePlanHash({ task: "a" }),

@@ -137,6 +137,44 @@ describe("evaluateNativeSpawnGate", () => {
     expect(allowed.allowed ? allowed.intent.spawnIntentId : "").toBe(intent.spawnIntentId);
   });
 
+  it("allows copied planner args when only JSON escape depth and display label whitespace drift", () => {
+    const task = [
+      "[OctoClaw delegated work]",
+      "workContractId: wc-6e761cded9cbf8ff",
+      "## Runtime Context Packet",
+      "```json",
+      "{",
+      '  "currentUserAsk": "查询当前系统运行状态并汇总：\\n1. 运行 `openclaw status`\\n2. 运行 `uptime`"',
+      "}",
+      "```",
+      "Task:",
+      "查询当前系统运行状态并汇总：",
+      "1. 运行 `openclaw status`",
+    ].join("\n");
+    const label = "查询当前系统运行状态并汇总：\n1. 运行 `openclaw status`\n2.… [wc-6e761cded9cbf8ff]";
+    const storedArgs: SessionsSpawnArgs = { ...args, task, label };
+    const copiedArgs: SessionsSpawnArgs = {
+      ...storedArgs,
+      task: task.replaceAll("\\n", "\\\\n"),
+      label: "查询当前系统运行状态并汇总：1. 运行 `openclaw status`2.… [wc-6e761cded9cbf8ff]",
+    };
+
+    const intent = nativeSpawnIntentStore.create({
+      workContractId: "wc-copied-planner",
+      sessionKey: "session-copied-planner",
+      sessionsSpawnArgs: storedArgs,
+      ttlMs: 60_000,
+    });
+
+    const allowed = evaluateNativeSpawnGate({
+      sessionKeys: ["session-copied-planner"],
+      args: copiedArgs,
+    });
+
+    expect(allowed.allowed).toBe(true);
+    expect(allowed.allowed ? allowed.intent.spawnIntentId : "").toBe(intent.spawnIntentId);
+  });
+
   it("blocks planner sessions_spawn args when the isolated context flag is missing", () => {
     nativeSpawnIntentStore.create({
       workContractId: "wc-context-isolated",
