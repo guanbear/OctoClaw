@@ -3764,6 +3764,7 @@ export function buildStabilitySlackAcceptanceCases(
       finalRequired: true,
       noSpawnExpected: true,
       expectFooter: { route: "reply" },
+      expectFinal: ["octoclaw: route=reply"],
       rejectAck: ["任务已启动。", "还没好，再等等"],
       rejectFinal: rejectInfrastructureErrors,
     },

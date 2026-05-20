@@ -1995,6 +1995,7 @@ describe("octoclawctl nightly integration", () => {
         finalRequired: true,
         noSpawnExpected: true,
         expectFooter: { route: "reply" },
+        expectFinal: ["octoclaw: route=reply"],
       });
       expect(statusCase?.prompt).toContain("只读");
 
