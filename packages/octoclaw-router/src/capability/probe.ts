@@ -134,6 +134,10 @@ function defaultOpenClawRunner(args: string[], options: { timeoutMs: number }): 
         reject(timeoutError);
         return;
       }
+      if (error && typeof error.code !== "number") {
+        reject(error);
+        return;
+      }
       resolve({
         exitCode: typeof error?.code === "number" ? error.code : 0,
         stdout,

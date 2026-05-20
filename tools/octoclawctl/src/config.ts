@@ -2,6 +2,7 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { atomicWriteText } from "./atomic-write.js";
 
 export interface OctoclawConfig {
   _version: "1";
@@ -70,7 +71,7 @@ export async function writeConfig(openclawHome: string, config: OctoclawConfig):
   const pathname = configPath(openclawHome);
   await fs.mkdir(path.dirname(pathname), { recursive: true });
   const next = { ...config, _version: "1" as const, _updatedAt: new Date().toISOString() };
-  await fs.writeFile(pathname, `${JSON.stringify(next, null, 2)}\n`, "utf8");
+  await atomicWriteText(pathname, `${JSON.stringify(next, null, 2)}\n`);
 }
 
 export async function setConfigField(openclawHome: string, key: string, value: string): Promise<OctoclawConfig> {
@@ -129,7 +130,7 @@ export async function syncToOpenClawPluginConfig(openclawHome: string, config: O
     const raw = await fs.readFile(manifestPath, "utf8");
     const manifest = JSON.parse(raw) as JsonRecord;
     manifest.pluginConfig = config.pluginConfig;
-    await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+    await atomicWriteText(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
   }
 
   await syncOpenClawEntryConfig(openclawHome, config.pluginConfig);
@@ -199,7 +200,7 @@ async function syncOpenClawEntryConfig(openclawHome: string, pluginConfig: JsonR
   }
   entry.config = nextConfig;
   entries["octoclaw-runtime"] = entry;
-  await fs.writeFile(openclawConfigPath, `${JSON.stringify(openclawConfig, null, 2)}\n`, "utf8");
+  await atomicWriteText(openclawConfigPath, `${JSON.stringify(openclawConfig, null, 2)}\n`);
 }
 
 function normalizeConfig(raw: JsonRecord): OctoclawConfig {

@@ -5,33 +5,37 @@
  * This bypasses the gateway websocket but exercises all the same runtime code.
  */
 import { createRequire } from "node:module";
-import { readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
-process.env.OCTOCLAW_JUDGE_FAST = JSON.stringify({
-  modelId: "qwen3-judge:0.6b-q4km",
-  baseUrl: "http://127.0.0.1:11434/v1",
-  apiKey: "ollama",
-  enabled: true,
-  shadowMode: false,
-  timeoutMs: 10000,
-  timeoutLocalMs: 5000,
-  minConfidence: 0.6,
-  local: true,
-  judgeAckEnabled: true,
-  ackReactionEmoji: "ok_hand",
-});
+if (!process.env.OCTOCLAW_JUDGE_FAST) {
+  process.env.OCTOCLAW_JUDGE_FAST = JSON.stringify({
+    modelId: "qwen3-judge:0.6b-q4km",
+    baseUrl: "http://127.0.0.1:11434/v1",
+    apiKey: "ollama",
+    enabled: true,
+    shadowMode: false,
+    timeoutMs: 10000,
+    timeoutLocalMs: 5000,
+    minConfidence: 0.6,
+    local: true,
+    judgeAckEnabled: true,
+    ackReactionEmoji: "ok_hand",
+  });
+}
 
-process.env.OCTOCLAW_JUDGE_REMOTE = JSON.stringify({
-  enabled: true,
-  modelId: "gpt-5.4-mini",
-  baseUrl: "http://localhost:8317/v1",
-  apiKey: "sk-local-cliproxyapi",
-  timeoutMs: 8000,
-  shadowMode: true,
-});
+if (!process.env.OCTOCLAW_JUDGE_REMOTE) {
+  process.env.OCTOCLAW_JUDGE_REMOTE = JSON.stringify({ enabled: false });
+}
 
 const require = createRequire(import.meta.url);
-const policyResolver = require("/Users/guanbear/.openclaw/extensions/octoclaw-runtime/dist/resolve/policy-resolver.js");
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const resolverPath = path.join(repoRoot, "extensions", "octoclaw-runtime", "dist", "resolve", "policy-resolver.js");
+if (!existsSync(resolverPath)) {
+  throw new Error(`Missing built runtime resolver at ${resolverPath}. Run pnpm --filter @octoclaw/runtime build first.`);
+}
+const policyResolver = require(resolverPath);
 const resolveDecision = policyResolver.resolveStatelessPolicyDecision;
 
 const TEST_CASES = [

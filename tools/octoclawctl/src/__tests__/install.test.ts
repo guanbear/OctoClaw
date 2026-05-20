@@ -6,6 +6,7 @@ import path from "node:path";
 
 import { main } from "../cli.js";
 import { defaultConfig, syncToOpenClawPluginConfig, writeConfig } from "../config.js";
+import { cloneOrUpdate } from "../install.js";
 import { generateReadinessReport } from "../readiness.js";
 
 vi.mock("node:child_process", async () => {
@@ -41,6 +42,7 @@ vi.mock("../install.js", async () => {
 });
 
 const mockedSpawnSync = vi.mocked(spawnSync);
+const mockedCloneOrUpdate = vi.mocked(cloneOrUpdate);
 
 function openClawSuccess(): ReturnType<typeof spawnSync> {
   return {
@@ -129,6 +131,23 @@ describe("install readiness", () => {
       expect(stderr).toHaveLength(0);
       expect(output).toContain("octoclawctl init");
       expect(output).not.toMatch(/api\s*key|API\s*key|enter.*key|prompt/iu);
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("uses the current release branch by default for install/update", async () => {
+    mockedSpawnSync.mockReturnValue(openClawSuccess());
+    const { tmpDir, openclawHome, octoclawRoot } = await makeHome("install-default-branch");
+    try {
+      const exitCode = await main(
+        ["install", "--openclaw-home", openclawHome, "--octoclaw-root", octoclawRoot, "--skip-build", "--lang", "en"],
+        {},
+        { stdout: () => {}, stderr: () => {} },
+      );
+
+      expect(exitCode).toBe(0);
+      expect(mockedCloneOrUpdate).toHaveBeenCalledWith(octoclawRoot, expect.any(String), "v0.5.0");
     } finally {
       await fs.rm(tmpDir, { recursive: true, force: true });
     }

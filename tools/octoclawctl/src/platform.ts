@@ -64,28 +64,61 @@ async function tryRun(command: string, args: string[], env: Record<string, strin
     const child = spawn(command, args, { stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, ...env } });
     let stderr = "";
     let settled = false;
-    const settle = (result: ServiceRestartResult) => {
+    let closed = false;
+    let escalationTimeout: ReturnType<typeof setTimeout> | undefined;
+    const kill = (signal: "SIGTERM" | "SIGKILL") => {
+      try {
+        (child as unknown as { kill(signal: string): void }).kill(signal);
+      } catch {
+        // Best-effort cleanup only.
+      }
+    };
+    const settle = (result: ServiceRestartResult, options: { keepEscalation?: boolean } = {}) => {
       if (settled) return;
       settled = true;
       clearTimeout(timeout);
+      if (!options.keepEscalation && escalationTimeout) clearTimeout(escalationTimeout);
       resolve(result);
     };
     const timeout = setTimeout(() => {
-      (child as unknown as { kill(signal: string): void }).kill("SIGTERM");
-      settle({ success: false, error: `${command} ${args.join(" ")} timed out after ${timeoutMs}ms` });
+      kill("SIGTERM");
+      escalationTimeout = setTimeout(() => {
+        if (!closed) kill("SIGKILL");
+      }, 1_000);
+      settle({ success: false, error: `${command} ${args.join(" ")} timed out after ${timeoutMs}ms` }, { keepEscalation: true });
     }, timeoutMs);
     child.stderr?.on("data", (chunk: Uint8Array | string) => { stderr += chunk.toString(); });
     child.on("error", (error: Error) => settle({ success: false, error: error.message }));
-    child.on("close", (code: number | null) => settle(code === 0 ? { success: true } : { success: false, error: stderr.trim() || `${command} exited ${code ?? 1}` }));
+    child.on("close", (code: number | null) => {
+      closed = true;
+      settle(code === 0 ? { success: true } : { success: false, error: stderr.trim() || `${command} exited ${code ?? 1}` });
+    });
   });
 }
 
-async function captureOutput(command: string, args: string[]): Promise<string> {
+async function captureOutput(command: string, args: string[], timeoutMs = 5_000): Promise<string> {
   return new Promise((resolve) => {
     const child = spawn(command, args, { stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "";
+    let settled = false;
+    const settle = (value: string) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      resolve(value);
+    };
+    const timeout = setTimeout(() => {
+      try {
+        (child as unknown as { kill(signal: string): void }).kill("SIGTERM");
+      } catch {
+        // Best-effort cleanup only.
+      }
+      settle("");
+    }, timeoutMs);
     child.stdout?.on("data", (chunk: Uint8Array | string) => { stdout += chunk.toString(); });
-    child.on("error", () => resolve(""));
-    child.on("close", () => resolve(stdout.trim()));
+    child.on("error", () => settle(""));
+    child.on("close", () => settle(stdout.trim()));
   });
 }
+
+export const __test = { tryRun, captureOutput };

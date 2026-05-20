@@ -2,11 +2,12 @@ import { spawn } from "node:child_process";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { atomicWriteText } from "./atomic-write.js";
 
 declare const process: { env: Record<string, string | undefined> };
 
 export const DEFAULT_REPO_URL = "https://github.com/guanbear/OctoClaw.git";
-export const DEFAULT_REF = "refactor/0.4.0-stable";
+export const DEFAULT_REF = "v0.5.0";
 
 interface DeployUnit {
   name: string;
@@ -87,7 +88,7 @@ export async function syncOctoClawCoreRules(openclawHome: string): Promise<void>
     ? existing.replace(markerPattern, block)
     : `${existing.trimEnd()}\n\n${block}\n`;
   await fs.mkdir(path.dirname(workspaceAgentsPath), { recursive: true });
-  await fs.writeFile(workspaceAgentsPath, next.endsWith("\n") ? next : `${next}\n`, "utf8");
+  await atomicWriteText(workspaceAgentsPath, next.endsWith("\n") ? next : `${next}\n`);
 }
 
 
@@ -181,7 +182,7 @@ export async function syncOpenClawPluginEntry(openclawHome: string, octoclawRoot
   entries["octoclaw-runtime"] = entry;
 
   await fs.mkdir(path.dirname(openclawConfigPath), { recursive: true });
-  await fs.writeFile(openclawConfigPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
+  await atomicWriteText(openclawConfigPath, `${JSON.stringify(config, null, 2)}\n`);
 }
 
 export async function removeOpenClawPluginEntry(openclawHome: string): Promise<void> {
@@ -192,7 +193,7 @@ export async function removeOpenClawPluginEntry(openclawHome: string): Promise<v
   const entries = plugins && isRecord(plugins.entries) ? plugins.entries : null;
   if (!entries || !("octoclaw-runtime" in entries)) return;
   delete entries["octoclaw-runtime"];
-  await fs.writeFile(openclawConfigPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
+  await atomicWriteText(openclawConfigPath, `${JSON.stringify(config, null, 2)}\n`);
 }
 
 export async function writeSourceManifest(openclawHome: string, octoclawRoot: string): Promise<void> {
@@ -205,7 +206,7 @@ export async function writeSourceManifest(openclawHome: string, octoclawRoot: st
     octoclawRoot,
   };
   await fs.mkdir(path.dirname(manifestPath), { recursive: true });
-  await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+  await atomicWriteText(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
 }
 
 async function discoverPackageUnits(octoclawRoot: string): Promise<DeployUnit[]> {

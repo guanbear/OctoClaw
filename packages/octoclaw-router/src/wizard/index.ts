@@ -140,6 +140,28 @@ function wizardPath(openclawHome: string): string {
   return path.join(openclawHome, "octoclaw", "router-wizard.json");
 }
 
+function tempPathFor(targetPath: string): string {
+  return `${targetPath}.tmp.${Date.now()}.${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function safeTimestampForPath(value: string): string {
+  return value.replace(/[:/\\]/gu, "-");
+}
+
+function atomicWriteFileSync(filePath: string, text: string): void {
+  const tmpPath = tempPathFor(filePath);
+  fsSync.mkdirSync(path.dirname(filePath), { recursive: true });
+  try {
+    fsSync.writeFileSync(tmpPath, text, "utf8");
+    fsSync.renameSync(tmpPath, filePath);
+  } catch (error) {
+    try {
+      fsSync.rmSync(tmpPath, { force: true });
+    } catch {}
+    throw error;
+  }
+}
+
 async function readWizardFile(openclawHome: string): Promise<RouterWizardConfig> {
   const value = await readJsonFile(wizardPath(openclawHome));
   if (!isRecord(value) || value.schemaVersion !== "octoclaw.router_wizard/v1") {
@@ -172,8 +194,7 @@ async function readWizardFileOrDefault(openclawHome: string, now: string): Promi
 
 function writeWizardFile(openclawHome: string, config: RouterWizardConfig): void {
   const filePath = wizardPath(openclawHome);
-  fsSync.mkdirSync(path.dirname(filePath), { recursive: true });
-  fsSync.writeFileSync(filePath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
+  atomicWriteFileSync(filePath, `${JSON.stringify(config, null, 2)}\n`);
 }
 
 function providerNotConfiguredMessage(provider: string): string {
@@ -256,10 +277,10 @@ export async function acceptProposal(
   }
   providers[provider] = providerBlock;
 
-  const backupPath = path.join(openclawHome, `openclaw.json.octoclaw-bak-${nowText}`);
+  const backupPath = path.join(openclawHome, `openclaw.json.octoclaw-bak-${safeTimestampForPath(nowText)}`);
   if (fsSync.existsSync(backupPath)) throw new Error(`Backup already exists: ${backupPath}`);
-  fsSync.writeFileSync(backupPath, originalOpenclawConfigText, "utf8");
-  fsSync.writeFileSync(openclawConfigPath, `${JSON.stringify(openclawConfig, null, 2)}\n`);
+  atomicWriteFileSync(backupPath, originalOpenclawConfigText);
+  atomicWriteFileSync(openclawConfigPath, `${JSON.stringify(openclawConfig, null, 2)}\n`);
 
   wizard.models[modelKey] = {
     ...wizardModel,

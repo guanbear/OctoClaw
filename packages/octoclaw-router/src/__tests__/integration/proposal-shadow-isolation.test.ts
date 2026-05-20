@@ -1,7 +1,7 @@
 import fsSync from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { buildPromotionState, getPromotionState } from "../../promotion/index.js";
 import { acceptProposal, createWizardConfig, recordProbeSuccess } from "../../wizard/index.js";
@@ -53,6 +53,7 @@ describe("proposal/shadow isolation", () => {
       };
       fsSync.mkdirSync(path.join(openclawHome, "octoclaw"), { recursive: true });
       fsSync.writeFileSync(path.join(openclawHome, "octoclaw", "router-wizard.json"), `${JSON.stringify(wizard, null, 2)}\n`);
+      const renameSpy = vi.spyOn(fsSync, "renameSync");
 
       const result = await acceptProposal("openai/gpt-5-mini", openclawHome, {
         now: "2026-05-15T00:00:00.000Z",
@@ -63,14 +64,18 @@ describe("proposal/shadow isolation", () => {
         models: { providers: { openai: { models: Array<{ id: string }> } } };
       };
       expect(openclaw.models.providers.openai.models).toEqual([{ id: "gpt-5.5" }, { id: "gpt-5-mini", name: "gpt-5-mini" }]);
-      const backupPath = path.join(openclawHome, "openclaw.json.octoclaw-bak-2026-05-15T00:00:00.000Z");
+      const backupPath = path.join(openclawHome, "openclaw.json.octoclaw-bak-2026-05-15T00-00-00.000Z");
       expect(fsSync.existsSync(backupPath)).toBe(true);
+      expect(result.backupPath.slice(openclawHome.length)).not.toContain(":");
+      expect(renameSpy).toHaveBeenCalledWith(expect.stringContaining(".tmp."), path.join(openclawHome, "openclaw.json"));
+      expect(renameSpy).toHaveBeenCalledWith(expect.stringContaining(".tmp."), path.join(openclawHome, "octoclaw", "router-wizard.json"));
       const backup = JSON.parse(fsSync.readFileSync(backupPath, "utf8")) as {
         models: { providers: { openai: { models: Array<{ id: string }> } } };
       };
       expect(backup.models.providers.openai.models).toEqual([{ id: "gpt-5.5" }]);
       const updatedWizard = JSON.parse(fsSync.readFileSync(path.join(openclawHome, "octoclaw", "router-wizard.json"), "utf8"));
       expect(updatedWizard.models["openai/gpt-5-mini"].state).toBe("shadow_candidate");
+      renameSpy.mockRestore();
     } finally {
       fsSync.rmSync(openclawHome, { recursive: true, force: true });
     }

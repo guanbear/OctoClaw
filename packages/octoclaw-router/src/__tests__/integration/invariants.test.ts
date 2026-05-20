@@ -55,6 +55,9 @@ describe("router invariants RT-I-001..006", () => {
 
   it("RT-I-006 keeps routing data paths local in V1", () => {
     expect(isRouterDataPathLocal("~/.openclaw/octoclaw/cost.sqlite")).toBe(true);
+    expect(isRouterDataPathLocal("/tmp/octoclaw-router/cost.sqlite")).toBe(true);
+    expect(isRouterDataPathLocal("/etc/passwd")).toBe(false);
+    expect(isRouterDataPathLocal("/Users/someone/.ssh/config")).toBe(false);
     expect(isRouterDataPathLocal("https://telemetry.example/upload")).toBe(false);
   });
 });

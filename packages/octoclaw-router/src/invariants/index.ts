@@ -43,5 +43,5 @@ export function hotPathAllowsNetworkCall(target: string): boolean {
 }
 
 export function isRouterDataPathLocal(pathValue: string): boolean {
-  return pathValue.startsWith("~/.openclaw/") || pathValue.startsWith(".openclaw/") || pathValue.startsWith("/tmp/") || pathValue.startsWith("/");
+  return pathValue.startsWith("~/.openclaw/") || pathValue.startsWith(".openclaw/") || pathValue.startsWith("/tmp/");
 }
