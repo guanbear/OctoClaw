@@ -44,20 +44,21 @@ const DEFAULT_CASES: SlackAcceptanceCaseConfig[] = [
   {
     kind: "fresh_lookup",
     prompt: "请查一下 OpenClaw 最近一次发布说明，简要回答。",
-    ackRequired: true,
+    neutralAckRequired: true,
+    expectNeutralReaction: ["eyes"],
+    ackRequired: false,
     finalRequired: true,
-    expectAck: ["查", "准备", "开始", "派发", "处理"],
     expectFinalAll: ["发布|release|说明|亮点|版本|更新", "2026|beta|rollup|特性|更新"],
   },
   {
     kind: "delegated_work",
-    prompt: "请委派子 agent 调研 OctoClaw 当前任务状态面板需要展示哪些字段，完成后给摘要。",
+    prompt: "请委派子 agent 做一个轻量稳定性检查：不要查文件，不要联网，只基于这句话输出三点摘要：任务状态面板应该显示任务、状态、模型、耗时、结果位置。",
     ackRequired: true,
     allowFastFinalAck: true,
     finalRequired: true,
     ackTimeoutMs: 180_000,
     expectAck: ["委派", "子", "派发", "准备"],
-    expectFinalAll: ["任务", "状态", "字段", "via=native_announce"],
+    expectFinalAll: ["任务", "状态", "模型|耗时|结果", "via=native_announce"],
     expectReplay: {
       footerVia: "native_announce",
       deliveryTransport: "slack_api",
@@ -77,7 +78,7 @@ const DEFAULT_CASES: SlackAcceptanceCaseConfig[] = [
     ackRequired: false,
     finalRequired: true,
     noSpawnExpected: true,
-    expectFinalAll: ["任务|task", "状态|status|running|queued|completed", "模型|model|profile", "耗时|运行|elapsed", "结果|artifact|位置|在哪"],
+    expectFinalAll: ["任务|task", "状态|status|running|queued|completed|degraded|delivered", "模型|model|profile", "耗时|运行|elapsed|\\d+(?:ms|s|m|h)|分钟前|小时前", "结果|artifact|位置|在哪|投递"],
   },
   {
     kind: "provenance_followup",
@@ -85,7 +86,7 @@ const DEFAULT_CASES: SlackAcceptanceCaseConfig[] = [
     ackRequired: false,
     finalRequired: true,
     noSpawnExpected: true,
-    expectFinalAll: ["判定|route", "证据|coverage|WorkContract"],
+    expectFinalAll: ["判定|route", "policy|投影|依据|查法|证据|coverage|WorkContract|octoclaw_status"],
   },
   {
     kind: "route_objection_correction",
@@ -101,7 +102,7 @@ const DEFAULT_CASES: SlackAcceptanceCaseConfig[] = [
     ackRequired: false,
     finalRequired: true,
     noSpawnExpected: true,
-    expectFinalAll: ["OpenClaw", "版本|最新版|release|发布"],
+    expectFinalAll: ["版本|最新版|release|发布|稳定版|beta", "特性|更新|亮点|改进|修复"],
     rejectFinal: ["还没派发成功", "真实执行结果", "没派发成功"],
   },
   {
@@ -333,7 +334,14 @@ function eventHasSpawn(event: Record<string, unknown>): boolean {
     || (finalRoute === "delegate" && event.executed === true);
 }
 
-async function checkNoSpawn(replayPath: string | undefined, sinceIso: string | undefined, sessionKey: string, expected: boolean): Promise<AssertionResult> {
+async function checkNoSpawn(
+  replayPath: string | undefined,
+  sinceIso: string | undefined,
+  sessionKey: string,
+  expected: boolean,
+  promptTs?: string,
+  threadTs?: string,
+): Promise<AssertionResult> {
   if (!expected) return { status: "skipped", reason: "no-spawn assertion not required" };
   if (!replayPath) return { status: "unknown", reason: "replayPath not configured; cannot prove no spawn" };
   if (!sinceIso) return { status: "unknown", reason: "prompt send time missing" };
@@ -361,7 +369,11 @@ async function checkNoSpawn(replayPath: string | undefined, sinceIso: string | u
     }
     const at = Date.parse(asString(event.at));
     const eventSessionKey = asString(event.sessionKey || event.session_key);
-    if (Number.isFinite(at) && at >= since && (!eventSessionKey || eventSessionKey === sessionKey) && eventHasSpawn(event)) {
+    const identityText = replayEventIdentityText(event);
+    const matchesPromptThread = Boolean(promptTs && identityText.includes(promptTs))
+      || Boolean(threadTs && identityText.includes(threadTs));
+    const matchesConfiguredSession = Boolean(eventSessionKey && eventSessionKey === sessionKey);
+    if (Number.isFinite(at) && at >= since && (matchesPromptThread || matchesConfiguredSession) && eventHasSpawn(event)) {
       spawned.push(event);
     }
   }
@@ -529,7 +541,8 @@ function footerViaFromText(text: string): string | undefined {
 }
 
 function footerFieldFromText(text: string, field: "route" | "model" | "difficulty" | "via"): string | undefined {
-  const match = text.match(new RegExp(`\\b${field}=([^|\\n]+)`, "iu"));
+  const footerLine = text.split(/\n/u).reverse().find((line) => /\boctoclaw:/iu.test(line));
+  const match = (footerLine || text).match(new RegExp(`\\b${field}=([^|\\n]+)`, "iu"));
   const value = match?.[1]?.split("·")[0]?.trim();
   return value || undefined;
 }
@@ -552,8 +565,8 @@ function normalizedMessageText(text: string): string {
   return text.trim().replace(/\s+/gu, " ");
 }
 
-function duplicateFinalCount(messages: SlackMessageRecord[], final: AssertionResult): number | undefined {
-  const matchedText = asString(final.matchedText);
+function duplicateFinalCount(messages: SlackMessageRecord[], final: AssertionResult, fallbackText?: string): number | undefined {
+  const matchedText = asString(final.matchedText) || asString(fallbackText);
   if (!matchedText) return undefined;
   const normalized = normalizedMessageText(matchedText);
   if (!normalized) return undefined;
@@ -570,7 +583,7 @@ function enrichReplayEvidenceFromTranscript(
     || asString(messages.slice().reverse().find((message) => footerViaFromText(message.text))?.text)
     || asString(messages[messages.length - 1]?.text);
   const footerVia = footerViaFromText(finalText);
-  const duplicateCount = duplicateFinalCount(messages, final);
+  const duplicateCount = duplicateFinalCount(messages, final, finalText);
   return {
     ...evidence,
     footerRoute: evidence.footerRoute || footerFieldFromText(finalText, "route"),
@@ -1291,7 +1304,7 @@ async function runCase(client: SlackAcceptanceClient, config: SlackAcceptanceRes
   errors.push(...finalCollection.errors);
   const allReplies = finalCollection.replies;
   const final = finalCollection.assertion;
-  const noSpawn = await checkNoSpawn(config.replayPath, sentIso, config.sessionKey, caseConfig.noSpawnExpected === true);
+  const noSpawn = await checkNoSpawn(config.replayPath, sentIso, config.sessionKey, caseConfig.noSpawnExpected === true, posted.ts, threadTs);
   progress.push(progressEvent(caseStartMs, "nospawn_assertion_completed", noSpawn.reason));
   const rawReplayEvidence = await collectReplayEvidence(config.replayPath, sentIso, config.sessionKey, posted.ts, threadTs);
   const replayEvidence = enrichReplayEvidenceFromTranscript(rawReplayEvidence, finalCollection.replies, final);

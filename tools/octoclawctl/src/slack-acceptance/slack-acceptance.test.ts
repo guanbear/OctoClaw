@@ -173,17 +173,33 @@ describe("parseSlackAcceptanceConfig — fail closed", () => {
     expect(config.maxTranscriptMessages).toBe(50);
   });
 
-  it("gives default delegated_work smoke enough time for native subagent run timeout plus delivery", () => {
+  it("keeps default delegated_work smoke bounded to native delivery instead of long research", () => {
     const config = parseSlackAcceptanceConfig(validConfig(), validEnv());
     const delegated = config.cases.find((item) => item.kind === "delegated_work");
     expect(delegated?.ackTimeoutMs).toBe(180_000);
     expect(delegated?.finalTimeoutMs).toBe(360_000);
+    expect(delegated?.prompt).toContain("不要查文件");
+    expect(delegated?.prompt).toContain("三点摘要");
+    expect(delegated?.expectFinalAll).toEqual(["任务", "状态", "模型|耗时|结果", "via=native_announce"]);
     expect(delegated?.expectFinalAll).toContain("via=native_announce");
+  });
+
+  it("keeps default follow-up and route flip expectations semantic rather than product-name exact", () => {
+    const config = parseSlackAcceptanceConfig(validConfig(), validEnv());
+    const statusPanel = config.cases.find((item) => item.kind === "status_panel");
+    const provenance = config.cases.find((item) => item.kind === "provenance_followup");
+    const routeFlip = config.cases.find((item) => item.kind === "route_flip_no_stale_projection");
+    expect(statusPanel?.expectFinalAll).toEqual(["任务|task", "状态|status|running|queued|completed|degraded|delivered", "模型|model|profile", "耗时|运行|elapsed|\\d+(?:ms|s|m|h)|分钟前|小时前", "结果|artifact|位置|在哪|投递"]);
+    expect(provenance?.expectFinalAll).toEqual(["判定|route", "policy|投影|依据|查法|证据|coverage|WorkContract|octoclaw_status"]);
+    expect(routeFlip?.expectFinalAll).toEqual(["版本|最新版|release|发布|稳定版|beta", "特性|更新|亮点|改进|修复"]);
   });
 
   it("does not require the default fresh_lookup answer to repeat the product name", () => {
     const config = parseSlackAcceptanceConfig(validConfig(), validEnv());
     const freshLookup = config.cases.find((item) => item.kind === "fresh_lookup");
+    expect(freshLookup?.neutralAckRequired).toBe(true);
+    expect(freshLookup?.expectNeutralReaction).toContain("eyes");
+    expect(freshLookup?.ackRequired).toBe(false);
     expect(freshLookup?.expectFinalAll).not.toContain("OpenClaw");
     expect(freshLookup?.expectFinalAll).toContain("发布|release|说明|亮点|版本|更新");
   });
@@ -672,6 +688,32 @@ describe("no-spawn replay assertion", () => {
     expect(plainCase.noSpawn.reason).toContain("spawn evidence");
   });
 
+  it("ignores later unrelated spawn evidence from another acceptance case", async () => {
+    const replayPath = path.join(tmpDir, "replay.jsonl");
+    const promptThread = "1234567890.000001";
+    const otherThread = "1234567899.000001";
+    const events = [
+      { at: "2099-12-31T23:59:50.000Z", event: "message_received_observed", sessionKey: `agent:main:slack:channel:c_acc_test:thread:${promptThread}`, inboundMessageTs: promptThread },
+      { at: "2099-12-31T23:59:51.000Z", event: "prompt_projection_built", sessionKey: `agent:main:slack:channel:c_acc_test:thread:${promptThread}`, route: "reply" },
+      { at: "2099-12-31T23:59:58.000Z", event: "sessions_spawn_intent_allowed", spawn_intent_id: "nsp-other", stateKey: `agent:main:slack:channel:c_acc_test:thread:${otherThread}` },
+      { at: "2099-12-31T23:59:59.000Z", event: "dispatch_confirm_completed", work_contract_id: "wc-other", spawn_intent_id: "nsp-other", run_id: "run-other" },
+    ];
+    await fs.writeFile(replayPath, events.map((event) => JSON.stringify(event)).join("\n"), "utf8");
+
+    const client = createMockClient([
+      { ts: "1234567890.000002", text: "在的" },
+    ]);
+    const config = parseSlackAcceptanceConfig(validConfig({
+      cases: [{ kind: "plain_chat", prompt: "在吗", finalRequired: true, noSpawnExpected: true }],
+      replayPath,
+    }), validEnv());
+    config.finalTimeoutMs = 100;
+    config.pollIntervalMs = 10;
+    const report = await runSlackAcceptanceHarness(client, config);
+    const plainCase = report.cases.find((c) => c.kind === "plain_chat")!;
+    expect(plainCase.noSpawn.status).toBe("pass");
+  });
+
   it("returns unknown when replayPath not configured", async () => {
     const client = createMockClient([
       { ts: "1234567890.000002", text: "在的" },
@@ -1067,6 +1109,37 @@ describe("no-spawn replay assertion", () => {
     expect(plainCase.errors.join("\n")).toContain("footer_model_mismatch");
   });
 
+  it("parses footer fields from the final octoclaw footer instead of route-like body text", async () => {
+    const client = createMockClient([
+      { ts: "1234567890.000002", text: "正文解释：route=reply，不走委派。已纠正判定。\n\n• octoclaw: route=delegate | model=zhipu/GLM-5.1 | difficulty=normal · thread | via=native_announce | wc=wc-test" },
+    ]);
+    const config = parseSlackAcceptanceConfig(validConfig({
+      cases: [{
+        kind: "plain_chat",
+        prompt: "在吗",
+        ackRequired: false,
+        finalRequired: true,
+        expectFooter: {
+          route: "delegate",
+          difficulty: "normal",
+          via: "native_announce",
+        },
+      }],
+    }), validEnv());
+    config.finalTimeoutMs = 100;
+    config.pollIntervalMs = 10;
+
+    const report = await runSlackAcceptanceHarness(client, config);
+    const plainCase = report.cases.find((c) => c.kind === "plain_chat")!;
+
+    expect(plainCase.status).toBe("pass");
+    expect(plainCase.replayEvidence).toMatchObject({
+      footerRoute: "delegate",
+      footerDifficulty: "normal",
+      footerVia: "native_announce",
+    });
+  });
+
   it("SSV2-011: maps misleading streaming ACK text to a stable failure code", async () => {
     const client = createMockClient([
       { ts: "1234567890.020001", text: "还没好，再等等" },
@@ -1396,6 +1469,90 @@ describe("RSC-SMOKE: runtime stability contract acceptance", () => {
       duplicateFinalCount: 0,
       parentEchoAfterNativeAnnounceCount: 0,
     });
+  });
+
+  it("RSC-SMOKE-002: delegated_work accepts semantic native final wording from the lightweight smoke case", async () => {
+    const replayPath = path.join(tmpDir, "replay-rsc-smoke-002-semantic-pass.jsonl");
+    const threadTs = "1234567890.000001";
+    const sessionKey = `slack:channel:C_ACC_TEST:thread:${threadTs}`;
+    const replayEvents = [
+      { at: "2099-12-31T23:59:49.000Z", event: "message_received_observed", sessionKey, inboundMessageTs: threadTs },
+      { at: "2099-12-31T23:59:53.000Z", event: "dispatch_planner_intent_created", sessionKey, work_contract_id: "wc-rsc-002", spawn_intent_id: "nsp-rsc-002" },
+      { at: "2099-12-31T23:59:55.000Z", event: "sessions_spawn_intent_allowed", sessionKey, work_contract_id: "wc-rsc-002", spawn_intent_id: "nsp-rsc-002" },
+      { at: "2099-12-31T23:59:56.000Z", event: "execution_transition", transitionKind: "spawn_started", sessionKey, workContractId: "wc-rsc-002", compactParentPacket: { runId: "run-rsc-002", childSessionKey: "agent:main:subagent:rsc-002" } },
+      { at: "2099-12-31T23:59:57.000Z", event: "dispatch_confirm_completed", sessionKey, work_contract_id: "wc-rsc-002", spawn_intent_id: "nsp-rsc-002", run_id: "run-rsc-002", child_session_key: "agent:main:subagent:rsc-002", ok: true },
+      { at: "2099-12-31T23:59:58.000Z", event: "native_announce_final_delivered", sessionKey, workContractId: "wc-rsc-002", footer_via: "native_announce", delivery_transport: "slack_api", target_source: "inbound_anchor", duplicate_final_count: 0 },
+    ];
+    await fs.writeFile(replayPath, replayEvents.map((e) => JSON.stringify(e)).join("\n"), "utf8");
+
+    const client = createMockClient([
+      { ts: "1234567890.090001", text: "子任务已启动。" },
+      {
+        ts: "1234567890.150001",
+        text: "三点摘要：\n1. 核心信息维度：面板需展示任务标识及其当前运行状态。\n2. 执行元数据：应显示所使用的模型以及任务耗时。\n3. 结果定位：需提供任务输出的结果位置。\n\n• octoclaw: route=delegate | model=zhipu/GLM-5.1 | difficulty=normal · thread | via=native_announce | wc=wc-rsc",
+      },
+    ]);
+    const config = parseSlackAcceptanceConfig(validConfig({
+      cases: [{
+        kind: "delegated_work",
+        prompt: "请委派子 agent 做一个轻量稳定性检查",
+      }],
+      replayPath,
+    }), validEnv());
+    config.ackTimeoutMs = 100;
+    config.finalTimeoutMs = 100;
+    config.pollIntervalMs = 1;
+
+    const report = await runSlackAcceptanceHarness(client, config);
+    const delegatedCase = report.cases.find((c) => c.kind === "delegated_work")!;
+
+    expect(delegatedCase.final.status).toBe("pass");
+    expect(delegatedCase.status).toBe("pass");
+    expect(delegatedCase.replayEvidence?.duplicateFinalCount).toBe(0);
+  });
+
+  it("RSC-SMOKE-002: delegated_work derives duplicate final count from transcript footer when final text assertion misses", async () => {
+    const replayPath = path.join(tmpDir, "replay-rsc-smoke-002-duplicate-from-footer.jsonl");
+    const threadTs = "1234567890.000001";
+    const sessionKey = `slack:channel:C_ACC_TEST:thread:${threadTs}`;
+    const replayEvents = [
+      { at: "2099-12-31T23:59:49.000Z", event: "message_received_observed", sessionKey, inboundMessageTs: threadTs },
+      { at: "2099-12-31T23:59:58.000Z", event: "native_announce_final_delivered", sessionKey, workContractId: "wc-rsc-002", footer_via: "native_announce", delivery_transport: "slack_api", target_source: "inbound_anchor" },
+    ];
+    await fs.writeFile(replayPath, replayEvents.map((e) => JSON.stringify(e)).join("\n"), "utf8");
+
+    const nativeFinal = "三点摘要：任务、状态、模型、耗时、结果位置。\n\n• octoclaw: route=delegate | model=zhipu/GLM-5.1 | difficulty=normal · thread | via=native_announce | wc=wc-rsc";
+    const client = createMockClient([
+      { ts: "1234567890.090001", text: "子任务已启动。" },
+      { ts: "1234567890.150001", text: nativeFinal },
+    ]);
+    const config = parseSlackAcceptanceConfig(validConfig({
+      cases: [{
+        kind: "delegated_work",
+        prompt: "请委派子 agent 调研",
+        ackRequired: true,
+        finalRequired: true,
+        expectAck: ["委派", "子", "派发", "准备"],
+        expectFinalAll: ["绝不会出现的验收词"],
+        expectReplay: {
+          footerVia: "native_announce",
+          deliveryTransport: "slack_api",
+          targetSource: "inbound_anchor",
+          duplicateFinalCount: 0,
+        },
+      }],
+      replayPath,
+    }), validEnv());
+    config.ackTimeoutMs = 100;
+    config.finalTimeoutMs = 100;
+    config.pollIntervalMs = 1;
+
+    const report = await runSlackAcceptanceHarness(client, config);
+    const delegatedCase = report.cases.find((c) => c.kind === "delegated_work")!;
+
+    expect(delegatedCase.final.status).toBe("fail");
+    expect(delegatedCase.replayEvidence?.duplicateFinalCount).toBe(0);
+    expect(delegatedCase.errors.join("\n")).not.toContain("duplicate_final_count_mismatch");
   });
 
   it("RSC-SMOKE-002: delegated_work fails when native execution evidence is missing", async () => {

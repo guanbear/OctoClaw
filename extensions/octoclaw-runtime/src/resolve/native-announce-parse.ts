@@ -24,10 +24,21 @@ function extractOctoClawWorkerResultPacket(text: string): UnknownRecord {
   }
 }
 
+export function stripOctoClawWorkerResultPackets(text: string): string {
+  return stringValue(text)
+    .replace(/<<<BEGIN_OCTOCLAW_WORKER_RESULT>>>\s*[\s\S]*?\s*<<<END_OCTOCLAW_WORKER_RESULT>>>/gu, "")
+    .replace(/[ \t]+\n/gu, "\n")
+    .replace(/\n{3,}/gu, "\n\n")
+    .trim();
+}
+
 export function extractNativeAnnounceBlocker(completion: NativeAnnounceCompletion): NativeAnnounceBlocker | null {
   const resultText = stringValue(completion.resultText);
   const status = stringValue(completion.status).toLowerCase();
-  const workerResult = extractOctoClawWorkerResultPacket(resultText);
+  const completionWorkerResult = asRecord(completion.workerResult);
+  const workerResult = Object.keys(completionWorkerResult).length > 0
+    ? completionWorkerResult
+    : extractOctoClawWorkerResultPacket(resultText);
   if (
     stringValue(workerResult.schemaVersion || workerResult.schema_version) === "octoclaw.worker_result.v1"
     && stringValue(workerResult.status).toLowerCase() === "blocked"
@@ -89,13 +100,16 @@ export function extractNativeAnnounceCompletion(event: UnknownRecord, prompt: st
     || /completed subagent task is ready/i.test(text)
     || /\[Internal task completion event\]/u.test(text);
   if (!looksCompleted) return null;
-  const resultText = regexGroup(
+  const rawResultText = regexGroup(
     text,
     /<<<BEGIN_UNTRUSTED_CHILD_RESULT>>>\s*([\s\S]*?)\s*<<<END_UNTRUSTED_CHILD_RESULT>>>/u,
   ) || regexGroup(
     text,
     /<prompt-data>\s*([\s\S]*?)\s*<\/prompt-data>/u,
   );
+  const workerResult = extractOctoClawWorkerResultPacket(rawResultText);
+  const resultText = stripOctoClawWorkerResultPackets(rawResultText)
+    || stringValue(workerResult.summary).trim();
   if (!resultText) return null;
   return {
     sourceSessionKey,
@@ -105,6 +119,7 @@ export function extractNativeAnnounceCompletion(event: UnknownRecord, prompt: st
     status,
     resultText,
     resultHash: createHash("sha256").update(resultText).digest("hex").slice(0, 16),
+    ...(Object.keys(workerResult).length > 0 ? { workerResult } : {}),
   };
 }
 
@@ -175,19 +190,25 @@ export function readNativeChildSessionCompletion(childSessionKey: string, runId?
       if (stringValue(message.role).toLowerCase() !== "assistant") continue;
       const stopReason = stringValue(message.stopReason || message.stop_reason).toLowerCase();
       if (["tooluse", "tool_use", "toolcalls", "tool_calls"].includes(stopReason)) continue;
+      if (["error", "failed", "failure", "cancelled", "canceled", "interrupted", "timeout", "timed_out"].includes(stopReason)) continue;
       const text = extractMessageText(message.content);
       if (!text || text.trim().toUpperCase() === "NO_REPLY") continue;
+      if (/\[assistant turn failed before producing content\]/iu.test(text)) continue;
       resultText = text;
     }
     if (resultText) break;
   }
   if (!resultText) return null;
+  const workerResult = extractOctoClawWorkerResultPacket(resultText);
+  const sanitizedResultText = stripOctoClawWorkerResultPackets(resultText);
+  if (!sanitizedResultText) return null;
   return {
     sourceSessionKey,
     sourceSessionId,
     sourceTool: "subagent_announce",
     status: "completed",
-    resultText,
-    resultHash: createHash("sha256").update(resultText).digest("hex").slice(0, 16),
+    resultText: sanitizedResultText,
+    resultHash: createHash("sha256").update(sanitizedResultText).digest("hex").slice(0, 16),
+    ...(Object.keys(workerResult).length > 0 ? { workerResult } : {}),
   };
 }

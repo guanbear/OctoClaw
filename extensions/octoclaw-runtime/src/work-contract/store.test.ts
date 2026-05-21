@@ -260,7 +260,7 @@ describe("work contract task-state store", () => {
   });
 
   it("in enforce mode, load/list use ledger data when task-state is stale", () => {
-    withRuntimeLedgerEnv("enforce", `/tmp/octoclaw-runtime-${process.pid}-stale.sqlite`, () => {
+    withRuntimeLedgerEnv("enforce", uniqueRuntimeLedgerDbPath("stale"), () => {
       const stale = {
         ...buildContract("session-enforce-ledger", "stale task-state contract"),
         updatedAt: "2024-01-01T00:00:00.000Z",
@@ -291,7 +291,7 @@ describe("work contract task-state store", () => {
   });
 
   it("in enforce mode, saveWorkContract succeeds and ledger is readable when projection write fails", () => {
-    withRuntimeLedgerEnv("enforce", `/tmp/octoclaw-runtime-${process.pid}-projection.sqlite`, () => {
+    withRuntimeLedgerEnv("enforce", uniqueRuntimeLedgerDbPath("projection"), () => {
       const contract = buildContract("session-enforce-projection-fails", "ledger survives projection failure");
       mockFs.writeFileSync.mockImplementationOnce(() => {
         throw new Error("projection not writable");
@@ -305,6 +305,10 @@ describe("work contract task-state store", () => {
     });
   });
 });
+
+function uniqueRuntimeLedgerDbPath(label: string): string {
+  return `/tmp/octoclaw-runtime-${process.pid}-${label}-${Date.now()}-${Math.random().toString(16).slice(2)}.sqlite`;
+}
 
 function withRuntimeLedgerEnv(mode: string, dbPath: string, run: () => void): void {
   const originalMode = process.env.OCTOCLAW_RUNTIME_LEDGER;

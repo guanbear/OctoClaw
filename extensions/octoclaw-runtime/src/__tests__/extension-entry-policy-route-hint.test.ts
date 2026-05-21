@@ -1577,6 +1577,10 @@ describe("budgeted_main_then_delegate runtime budget", () => {
       { toolName: "read", params: { path: "package.json" } },
       { sessionKey: multiToolKey, sessionId: "session-must-reply-multi-tool", agentId: "main" },
     ) as { block?: boolean; blockReason?: string } | undefined;
+    const fourthReadResult = await beforeToolCall!(
+      { toolName: "exec", params: { command: "ls -la node_modules | head -5" } },
+      { sessionKey: multiToolKey, sessionId: "session-must-reply-multi-tool", agentId: "main" },
+    ) as { block?: boolean; blockReason?: string } | undefined;
 
     expect(writeResult?.block).toBe(true);
     expect(writeResult?.blockReason).toContain("write_tool_detected");
@@ -1589,6 +1593,8 @@ describe("budgeted_main_then_delegate runtime budget", () => {
     expect(thirdReadResult?.block).toBe(true);
     expect(thirdReadResult?.blockReason).toContain("multi_step_tool_chain");
     expect(thirdReadResult?.blockReason).toContain("did not execute");
+    expect(fourthReadResult?.block).toBe(true);
+    expect(fourthReadResult?.blockReason).toContain("Use octoclaw_dispatch");
     await waitForFireAndForget();
     const events = readReplayEvents();
     expect(events).toContainEqual(expect.objectContaining({

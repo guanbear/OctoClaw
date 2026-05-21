@@ -14,6 +14,7 @@ export interface NativeAnnounceCompletion {
   status: string;
   resultText: string;
   resultHash: string;
+  workerResult?: Record<string, unknown>;
 }
 
 export interface NativeAnnounceBlocker {
