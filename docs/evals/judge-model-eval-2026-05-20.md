@@ -78,6 +78,25 @@ Retest results after prompt alignment:
 | `nvidia/nemotron-3-nano-30b-a3b:free` | 18/36 | 18/36 | 10/36 | 27.8% | 50.0% | 5.6% | 940 ms | 590 ms | 1623 ms | 0 | Fast, but free route reliability/accuracy is poor |
 | `google/gemma-4-26b-a4b-it:free` | 0/36 | 0/36 | 0/36 | 0.0% | 0.0% | 0.0% | n/a | n/a | n/a | 0 | All calls hit OpenRouter free/upstream rate limits |
 
+OpenRouter free-route follow-up:
+
+```text
+Official free-model limits checked 2026-05-21:
+- :free variants: 20 requests/minute.
+- Less than 10 purchased credits: 50 free-model requests/day.
+- At least 10 purchased credits: 1000 free-model requests/day.
+- Failed attempts can still count toward daily quota.
+```
+
+Low-frequency full-suite retry:
+
+| Model | Delay | Completed | Valid JSON | Route | Avg Latency | Notes |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| `nvidia/nemotron-3-nano-30b-a3b:free` | 4 s/request | 2/36 | 1/36 | 1/36 | 1135 ms | After two successful calls, the account hit `free-models-per-day`; remaining 34 calls returned HTTP 429 |
+| `google/gemma-4-26b-a4b-it:free` | 4 s/request | 0/36 | 0/36 | 0/36 | n/a | Same daily free-model quota exhaustion; all 36 calls returned HTTP 429 |
+
+Interpretation: free OpenRouter models are not dependable for active judge benchmarking or production judge routing. Even when a free model is fast on isolated calls, daily quota and provider/upstream rate limits prevent stable full-suite measurement during repeated calibration.
+
 Notable misses:
 
 | Model | Miss pattern |
