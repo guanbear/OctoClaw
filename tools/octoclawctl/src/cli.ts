@@ -3529,7 +3529,28 @@ async function runInstallCommand(parsed: ParsedCliArgs, env: Record<string, stri
       // Readiness is observational
     }
 
-    return `OctoClaw ${parsed.command} completed at ${octoclawRoot}${readinessLines}`;
+    let postDeployStabilityLines = "";
+    if (parsed.command === "deploy" && parsed.restartServices) {
+      const stabilityOutputDir = env.OCTOCLAW_STABILITY_OUTPUT_DIR?.trim() || path.join(openclawHome, "reports");
+      const stability = await runStabilityOrchestration({
+        subcommand: "post-deploy",
+        outputDir: stabilityOutputDir,
+        env,
+        openclawHome,
+      });
+      postDeployStabilityLines = [
+        "",
+        "",
+        `Post-deploy stability: gate=${stability.overallGate}`,
+        `Report: ${stability.reportPath ?? "(missing)"}`,
+        ...(stability.skippedLiveReason ? [`Skipped live: ${stability.skippedLiveReason}`] : []),
+      ].join("\n");
+      if (stability.overallGate === "fail") {
+        throw new Error(`Post-deploy stability failed: ${stability.failures.map((failure) => `${failure.caseId}:${failure.code}`).join(", ")}`);
+      }
+    }
+
+    return `OctoClaw ${parsed.command} completed at ${octoclawRoot}${readinessLines}${postDeployStabilityLines}`;
   } finally {
     restoreEnv();
   }

@@ -1709,6 +1709,49 @@ console.log(JSON.stringify({ choices: [{ message: { content: "pong" } }] }));
     }
   });
 
+  it("deploy --restart writes a post-deploy stability report", async () => {
+    const tmpDir = path.join(os.homedir(), ".octoclawctl-test-tmp", `deploy-post-smoke-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    const repoRoot = path.join(tmpDir, "repo");
+    const openclawHome = path.join(tmpDir, ".openclaw");
+    const extensionRoot = path.join(repoRoot, "extensions", "octoclaw-runtime");
+    const fakeBin = path.join(tmpDir, "bin");
+    const reportsDir = path.join(tmpDir, "reports");
+    try {
+      await fs.mkdir(path.join(extensionRoot, "dist"), { recursive: true });
+      await fs.writeFile(path.join(extensionRoot, "package.json"), JSON.stringify({ name: "@octoclaw/runtime" }), "utf8");
+      await fs.writeFile(path.join(extensionRoot, "openclaw.plugin.json"), JSON.stringify({ id: "octoclaw-runtime", main: "./dist/index.js" }), "utf8");
+      await fs.writeFile(path.join(extensionRoot, "dist", "index.js"), "export {};", "utf8");
+      await fs.mkdir(path.join(repoRoot, ".git"), { recursive: true });
+      await fs.mkdir(openclawHome, { recursive: true });
+      await fs.writeFile(path.join(openclawHome, "openclaw.json"), JSON.stringify({}), "utf8");
+      await fs.mkdir(fakeBin, { recursive: true });
+      await fs.writeFile(path.join(fakeBin, "openclaw"), "#!/bin/sh\necho \"$@\" >> \"$OCTOCLAW_FAKE_LOG\"\nif [ \"$1\" = \"--version\" ]; then echo 2026.5.12; fi\nexit 0\n", "utf8");
+      await fs.writeFile(path.join(fakeBin, "git"), "#!/bin/sh\nif [ \"$1 $2\" = \"rev-parse HEAD\" ]; then echo test-commit; exit 0; fi\nif [ \"$1 $2\" = \"branch --show-current\" ]; then echo test-branch; exit 0; fi\nexit 0\n", "utf8");
+      await fs.writeFile(path.join(fakeBin, "rsync"), "#!/bin/bash\ndest=\"${@: -1}\"\nsrc=\"${@: -2:1}\"\nmkdir -p \"$dest\"\ncp -R \"$src\". \"$dest\"\n", "utf8");
+      await fs.writeFile(path.join(fakeBin, "ln"), "#!/bin/sh\n/bin/ln \"$@\"\n", "utf8");
+      await runTestCommand("chmod", ["755", path.join(fakeBin, "openclaw"), path.join(fakeBin, "git"), path.join(fakeBin, "rsync"), path.join(fakeBin, "ln")]);
+
+      const capture = createIo();
+      const exitCode = await main(
+        ["deploy", "--octoclaw-root", repoRoot, "--openclaw-home", openclawHome, "--skip-build", "--restart"],
+        {
+          PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
+          OCTOCLAW_FAKE_LOG: path.join(tmpDir, "openclaw.log"),
+          OCTOCLAW_STABILITY_OUTPUT_DIR: reportsDir,
+        },
+        capture.io,
+      );
+
+      expect(exitCode).toBe(0);
+      expect(capture.stdout[0]).toContain("Post-deploy stability:");
+      const artifactDir = path.join(reportsDir, "stability-smoke-v2");
+      const entries = await fs.readdir(artifactDir, { withFileTypes: true });
+      expect(entries.some((entry) => entry.name.endsWith("-stability-report.json"))).toBe(true);
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   it("uninstall removes deployed packages, extensions, and OpenClaw plugin entry", async () => {
     const tmpDir = path.join(os.homedir(), ".octoclawctl-test-tmp", `uninstall-${Date.now()}-${Math.random().toString(36).slice(2)}`);
     const openclawHome = path.join(tmpDir, ".openclaw");

@@ -32,6 +32,8 @@ describe("stability smoke v2 catalog", () => {
       "delegate_core.native_final",
       "footer_truth.current_model",
       "status_core.read_only",
+      "provider.post_deploy_fallback",
+      "restart.post_deploy_recovery",
     ]);
     expect(pack.cases.every((item) => item.severity === "blocker" || item.severity === "major")).toBe(true);
   });

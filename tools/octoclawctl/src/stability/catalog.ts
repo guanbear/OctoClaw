@@ -46,6 +46,17 @@ const POST_DEPLOY_CASES: StabilityCase[] = [
     maxRuntimeMs: 90_000,
     expect: { command: "openclaw gateway status", readOnly: true },
   },
+  providerCase("provider.post_deploy_fallback", "major", ["provider", "fallback", "post-deploy"], {
+    fixtureKind: "provider_status",
+    providerProbe: "synthetic",
+    statusCodes: [402, 429],
+    fallbackAvailable: true,
+    failureCode: "provider_bare_error",
+  }),
+  syntheticCase("restart.post_deploy_recovery", "major", ["restart", "gateway", "post-deploy"], {
+    fixtureKind: "restart_shutdown",
+    restartWindowRecovery: true,
+  }),
 ];
 
 const NIGHTLY_EXTRA_CASES: StabilityCase[] = [

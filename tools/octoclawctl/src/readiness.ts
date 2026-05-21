@@ -4,6 +4,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { readConfig } from "./config.js";
 
+declare const process: { env: Record<string, string | undefined> };
+
 export const MIN_OPENCLAW_VERSION = "2026.5.12";
 
 export type ReadinessStatus = "pass" | "warn" | "fail";
@@ -143,7 +145,14 @@ async function checkImChannel(openclawHome: string, channel: "slack" | "feishu")
   const id = `im.${channel}` as OctoclawReadinessCheck["id"];
   try {
     const config = await readConfig(openclawHome);
+    const nativeChannelConfig = await readOpenClawChannelConfig(openclawHome, channel);
+    if (nativeChannelConfig && hasImCredentials(channel, nativeChannelConfig)) {
+      return { id, status: "pass", summary: `${channel} credentials configured` };
+    }
     const channels = config.pluginConfig.channels;
+    if (hasImCredentialsInEnvironment(channel)) {
+      return { id, status: "pass", summary: `${channel} credentials configured via environment` };
+    }
     if (!isRecord(channels) || !isRecord(channels[channel])) {
       return {
         id,
@@ -169,6 +178,19 @@ async function checkImChannel(openclawHome: string, channel: "slack" | "feishu")
       summary: errorMessage(error),
       remediation: `Check ${channel} configuration`,
     };
+  }
+}
+
+async function readOpenClawChannelConfig(openclawHome: string, channel: "slack" | "feishu"): Promise<Record<string, unknown> | undefined> {
+  try {
+    const raw = await fs.readFile(path.join(openclawHome, "openclaw.json"), "utf8");
+    const parsed = JSON.parse(raw) as unknown;
+    if (!isRecord(parsed) || !isRecord(parsed.channels) || !isRecord(parsed.channels[channel])) {
+      return undefined;
+    }
+    return parsed.channels[channel];
+  } catch {
+    return undefined;
   }
 }
 
@@ -207,6 +229,21 @@ function hasImCredentials(channel: "slack" | "feishu", channelConfig: Record<str
   return Object.entries(channelConfig).some(
     ([key, value]) => key.toLowerCase().includes("token") && typeof value === "string" && value.trim().length > 0,
   );
+}
+
+function hasImCredentialsInEnvironment(channel: "slack" | "feishu"): boolean {
+  if (channel === "slack") {
+    return [
+      "SLACK_BOT_TOKEN",
+      "OCTOCLAW_SLACK_BOT_TOKEN",
+      "OCTOCLAW_SLACK_ACCEPTANCE_BOT_TOKEN",
+    ].some((key) => Boolean(process.env[key]?.trim()));
+  }
+  return [
+    ["FEISHU_APP_ID", "FEISHU_APP_SECRET"],
+    ["LARK_APP_ID", "LARK_APP_SECRET"],
+    ["OCTOCLAW_FEISHU_APP_ID", "OCTOCLAW_FEISHU_APP_SECRET"],
+  ].some(([appIdKey, appSecretKey]) => Boolean(process.env[appIdKey]?.trim() && process.env[appSecretKey]?.trim()));
 }
 
 function imRemediation(channel: "slack" | "feishu"): string {
