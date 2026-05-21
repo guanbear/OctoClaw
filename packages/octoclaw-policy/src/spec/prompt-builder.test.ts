@@ -14,6 +14,8 @@ describe("local judge prompt", () => {
     expect(prompt).toContain("role, workType, scope, tool_need_hint, duration_hint");
     expect(prompt).toContain("complexity is simple, normal, complex, or deep");
     expect(prompt).toContain("Runtime maps route and runtime facts");
+    expect(prompt).toContain("One lightweight read-only lookup or local status check can remain route=reply");
+    expect(prompt).toContain("Fresh version/latest/status/local-machine/release lookup is not delegate by itself");
     expect(prompt).toContain("Explicit requests to delegate");
     expect(prompt).toContain("请委派一个子任务查询当前运行状态");
     expect(prompt).toContain("must_reply");
@@ -23,8 +25,12 @@ describe("local judge prompt", () => {
     expect(prompt).toContain("code/file mutation");
     expect(prompt).toContain("tests/builds");
     expect(prompt).toContain("review/validation");
+    expect(prompt).toContain("Check local Python version / Redis port / OctoClaw status");
+    expect(prompt).toContain("Check repo status once -> reply");
     expect(prompt).toContain("Bare opencode/glm/model/tool names");
     expect(prompt).toContain("never spawn only to inspect provenance/status");
+    expect(prompt).not.toContain("Which version/latest/release changed? fresh environment or external lookup -> delegate");
+    expect(prompt).not.toContain("command execution, tests/builds");
     expect(prompt).not.toContain("## JSON schema");
     expect(prompt).not.toContain("90-120");
     expect(prompt).not.toContain(">90");

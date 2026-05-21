@@ -37,6 +37,65 @@ The current judge prompt asks only for:
 
 The 10-case suite covers conceptual replies, ambiguous scope, code/test delegation, local model investigation, fresh research, config review, status/provenance follow-ups, and current-config reads.
 
+## 2026-05-21 Prompt Alignment Retest
+
+Change under test:
+
+```text
+packages/octoclaw-policy/src/spec/prompt-builder.ts
+```
+
+The local judge prompt was aligned with the current SR-P1 runtime semantics:
+
+```text
+lightweight read-only lookup/status check -> route=reply
+runtime may execute it on main_fast_path or budgeted_main_then_delegate
+delegate only for explicit delegation, write/mutation, tests/builds, review/validation, multi-step probing, long commands, or clearly long-running work
+```
+
+The bilingual harness lives outside the repo at:
+
+```text
+/Users/guanbear/models/judge-evals/scripts/eval-octoclaw-simplified-bilingual.mjs
+```
+
+It uses 18 Chinese cases plus direct English translations. The gold labels follow the aligned rule: local status, one-step version/weather lookup, simple script generation, Q&A, thanks, and clarify-like health checks are `reply`; log investigation, refactor/edit work, and run-tests-then-fix are `delegate`.
+
+Retest results after prompt alignment:
+
+| Model | Completed | Valid JSON | Route | Overall | ZH | EN | Avg Latency | Min | Max | >2 s | Notes |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| `gpt-5.5` | 35/36 | 35/36 | 35/36 | 97.2% | 94.4% | 100% | 5130 ms | 1716 ms | 12136 ms | 31 | Best reference accuracy, too slow for hot path; one aborted call |
+| `gpt-5.4-mini` | 35/36 | 35/36 | 35/36 | 97.2% | 94.4% | 100% | 4496 ms | 2069 ms | 11066 ms | 35 | Accurate reference/shadow candidate, too slow for hot path |
+| `glm-4.5-air` | 36/36 | 36/36 | 34/36 | 94.4% | 94.4% | 94.4% | 1225 ms | 717 ms | 2834 ms | 2 | Best speed/accuracy remote balance in this retest |
+| `xiaomi/mimo-v2-flash` | 36/36 | 36/36 | 34/36 | 94.4% | 94.4% | 94.4% | 3063 ms | 624 ms | 10274 ms | 23 | Accurate, but OpenRouter tail latency remains high |
+| `qwen3-judge:0.6b-q4km` | 36/36 | 36/36 | 30/36 | 83.3% | 83.3% | 83.3% | 361 ms | 264 ms | 1680 ms | 0 | Fastest stable local candidate; misses hard-delegate edit/test/log cases |
+| `qwen35-judge:0.8b-q4km` | 36/36 | 36/36 | 30/36 | 83.3% | 83.3% | 83.3% | 1268 ms | 1067 ms | 2605 ms | 4 | Same accuracy as Qwen3 0.6B, slower |
+| `google/gemma-4-26b-a4b-it` | 36/36 | 36/36 | 30/36 | 83.3% | 83.3% | 83.3% | 1209 ms | 510 ms | 6232 ms | 2 | Paid route only; free route was rate-limited |
+| `google/gemma-4-31b-it` | 36/36 | 35/36 | 31/36 | 86.1% | 88.9% | 83.3% | 4014 ms | 912 ms | 24672 ms | 18 | Slightly more accurate than 26B, much worse tail latency |
+| `qwen/qwen3.6-flash` | 34/36 | 34/36 | 30/36 | 83.3% | 83.3% | 83.3% | 4124 ms | 1546 ms | 16226 ms | 28 | Accurate enough, but slow and had two incomplete calls |
+| `deepseek/deepseek-v4-flash` | 36/36 | 25/36 | 23/36 | 63.9% | 72.2% | 55.6% | 2463 ms | 564 ms | 6354 ms | 25 | JSON instability makes it unsuitable |
+| `nvidia/nemotron-3-nano-30b-a3b:free` | 18/36 | 18/36 | 10/36 | 27.8% | 50.0% | 5.6% | 940 ms | 590 ms | 1623 ms | 0 | Fast, but free route reliability/accuracy is poor |
+| `google/gemma-4-26b-a4b-it:free` | 0/36 | 0/36 | 0/36 | 0.0% | 0.0% | 0.0% | n/a | n/a | n/a | 0 | All calls hit OpenRouter free/upstream rate limits |
+
+Notable misses:
+
+| Model | Miss pattern |
+| --- | --- |
+| `qwen3-judge:0.6b-q4km` | Misclassifies log inspection, refactor/edit work, and run-tests-then-fix as `reply` in both Chinese and English |
+| `glm-4.5-air` | Misclassifies simple script generation as `delegate` in both Chinese and English |
+| `xiaomi/mimo-v2-flash` | Same simple-script over-delegation as GLM |
+| `google/gemma-4-26b-a4b-it` | Over-delegates simple script generation, one-step React 19 lookup, and v2/v3 API comparison |
+| `gpt-5.5` / `gpt-5.4-mini` | One Chinese Redis-port case aborted through cli-proxy; completed calls all matched |
+
+Interpretation:
+
+- The prompt alignment materially improved `qwen3-judge:0.6b-q4km`: it is now fast and usable again under the lightweight-read-only rule.
+- `glm-4.5-air` is the best remote speed/accuracy tradeoff in this retest, but it remains an external dependency.
+- `gpt-5.5` and `gpt-5.4-mini` are good reference adjudicators, not hot-path judges.
+- Paid `google/gemma-4-26b-a4b-it` is usable but no better than local Qwen3 0.6B on this suite.
+- Free OpenRouter models remain unsuitable for dependable judge routing; `gemma-4-26b-a4b-it:free` was fully rate-limited in this run.
+
 ## OpenRouter
 
 Endpoint:
@@ -151,12 +210,11 @@ Keep `qwen3-judge:0.6b-q4km` as the hot-path local judge.
 Potential remote/shadow candidates:
 
 ```text
-1. glm-4.5-air with thinking disabled
-2. nvidia/nemotron-3-nano-30b-a3b:free through OpenRouter, only as a free fast shadow comparator
-3. xiaomi/mimo-v2-flash through OpenRouter
-4. google/gemma-4-26b-a4b-it through OpenRouter, only as a slower accurate shadow candidate
+1. glm-4.5-air with thinking disabled, best remote speed/accuracy balance in the 2026-05-21 retest
+2. xiaomi/mimo-v2-flash through OpenRouter, accurate but with high tail latency
+3. gpt-5.4-mini / gpt-5.5 as accurate but slower reference adjudicators
+4. google/gemma-4-26b-a4b-it through OpenRouter, paid route only and no better than local Qwen3 on the aligned suite
 5. qwen/qwen3.6-flash through OpenRouter, only if latency is acceptable
-6. gpt-5.4-mini as accurate but slower remote adjudicator
 ```
 
 Do not currently use:
@@ -165,6 +223,9 @@ Do not currently use:
 google/gemini-*flash* via OpenRouter
 stepfun/step-3.5-flash
 deepseek/deepseek-v4-flash:free
+deepseek/deepseek-v4-flash for active judge due JSON instability in the aligned bilingual retest
+nvidia/nemotron-3-nano-30b-a3b:free for active judge despite good latency
+google/gemma-4-26b-a4b-it:free under current free quota/rate-limit state
 baidu/cobuddy:free under current free quota state
 baidu/ernie-4.5-21b-a3b through OpenRouter for structured JSON judge
 gpt-5.4-nano through Codex/OAuth/OmniRoute
