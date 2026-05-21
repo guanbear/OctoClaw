@@ -1944,6 +1944,7 @@ describe("guardOutboundMessageForPolicyState", () => {
     const childKey = "agent:main:subagent:aac50cff-6001-416c-a8c4-70e8e4414827";
     const childSessionId = "a3695c88-203d-4645-ae57-0974be569434";
     const runId = "c7e5e391-ac76-4d09-a4e1-affe56fa06b1";
+    fsSync.writeFileSync(path.join(tempWorkspace, "openclaw.json"), JSON.stringify({ agents: {} }));
     const sessionsDir = path.join(tempWorkspace, "agents", "main", "sessions");
     fsSync.mkdirSync(sessionsDir, { recursive: true });
     fsSync.writeFileSync(path.join(sessionsDir, "sessions.json"), JSON.stringify({

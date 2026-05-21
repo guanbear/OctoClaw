@@ -131,6 +131,8 @@ function splitPlannerTaskAtRuntimePacket(value: string): { prefix: string; suffi
 }
 
 function hasRecoverablePlannerTaskDrift(expectedTask: string, actualTask: string): boolean {
+  if (hasRecoverableOmittedRuntimePacketDrift(expectedTask, actualTask)) return true;
+
   const expectedParts = splitPlannerTaskAtRuntimePacket(expectedTask);
   const actualParts = splitPlannerTaskAtRuntimePacket(actualTask);
   if (!expectedParts || !actualParts) return false;
@@ -145,6 +147,43 @@ function hasRecoverablePlannerTaskDrift(expectedTask: string, actualTask: string
   const completedTail = actualPrefix.slice(expectedPrefix.length);
   if (completedTail.length === 0 || completedTail.length > 256) return false;
   return !/```|## Runtime Context Packet|Operational rules:|Rules:|Task:|workContractId:|delegateTaskId:|attemptId:/iu.test(completedTail);
+}
+
+function plannerHeaderField(value: string, field: "workContractId" | "delegateTaskId" | "attemptId"): string {
+  const match = value.match(new RegExp(`^${field}:\\s*(.+)$`, "imu"));
+  return asString(match?.[1]);
+}
+
+function normalizePlannerTaskForComparison(value: string): string {
+  return value.replace(/\r\n/gu, "\n").replace(/\n{3,}/gu, "\n\n").trim();
+}
+
+function extractTerminalPlannerTask(value: string): string {
+  const marker = "\nTask:\n";
+  const index = value.lastIndexOf(marker);
+  return index >= 0 ? normalizePlannerTaskForComparison(value.slice(index + marker.length)) : "";
+}
+
+function hasRecoverableOmittedRuntimePacketDrift(expectedTask: string, actualTask: string): boolean {
+  if (!expectedTask.startsWith("[OctoClaw delegated work]")) return false;
+  if (!actualTask.startsWith("[OctoClaw delegated work]")) return false;
+  if (!expectedTask.includes("\n## Runtime Context Packet\n")) return false;
+  if (actualTask.includes("## Runtime Context Packet") || actualTask.includes("```")) return false;
+
+  const expectedWorkContractId = plannerHeaderField(expectedTask, "workContractId");
+  const actualWorkContractId = plannerHeaderField(actualTask, "workContractId");
+  const expectedDelegateTaskId = plannerHeaderField(expectedTask, "delegateTaskId");
+  const actualDelegateTaskId = plannerHeaderField(actualTask, "delegateTaskId");
+  const expectedAttemptId = plannerHeaderField(expectedTask, "attemptId");
+  const actualAttemptId = plannerHeaderField(actualTask, "attemptId");
+  if (!expectedWorkContractId || expectedWorkContractId !== actualWorkContractId) return false;
+  if (!expectedDelegateTaskId || expectedDelegateTaskId !== actualDelegateTaskId) return false;
+  if (expectedAttemptId && expectedAttemptId !== actualAttemptId) return false;
+
+  const terminalTask = extractTerminalPlannerTask(expectedTask);
+  if (!terminalTask) return false;
+  const actualNormalized = normalizePlannerTaskForComparison(actualTask);
+  return actualNormalized.endsWith(terminalTask) || actualNormalized.includes(`Expected deliverable:\n${terminalTask}`);
 }
 
 function hasRecoverablePlannerArgsDrift(expected: SessionsSpawnArgs, actual: SessionsSpawnArgs, expectedHash: string): boolean {
