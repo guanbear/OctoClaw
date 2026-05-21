@@ -125,6 +125,17 @@ export function prepareAckTrackingForMessageTurn(stateKey: string, messageTurnId
       textAck0Sent: false,
       tier1Sent: false,
       tier2Sent: false,
+      formalReplyVisible: false,
+      formal_reply_visible: false,
+      delivered: false,
+      deliveryStatus: "",
+      delivery_status: "",
+      finalResponseStreaming: false,
+      final_response_streaming: false,
+      firstTokenSeen: false,
+      first_token_seen: false,
+      mainModelFirstTokenSeen: false,
+      mainModelStartedOutput: false,
     } : {}),
   });
 }

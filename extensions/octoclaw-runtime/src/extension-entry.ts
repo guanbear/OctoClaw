@@ -129,6 +129,22 @@ const ROUTER_WIZARD_SLACK_INTERACTIVE_ACTION_IDS = [
   "step:6:answer:skip",
 ];
 
+function routerWizardSlackInteractiveNamespace(actionId: string): string {
+  const separatorIndex = actionId.indexOf(":");
+  return separatorIndex >= 0 ? actionId.slice(0, separatorIndex) : actionId;
+}
+
+function resolveRouterWizardSlackActionId(interaction: UnknownRecord, namespace: string): string {
+  const explicit = stringValue(interaction.actionId || interaction.action_id);
+  if (explicit) return explicit;
+  const data = stringValue(interaction.data);
+  if (namespace === "step") {
+    const stepMatch = data.match(/^step:\d+:answer:[^:]+/u);
+    if (stepMatch) return stepMatch[0];
+  }
+  return namespace;
+}
+
 let watchdogInterval: ReturnType<typeof setInterval> | null = null;
 let taskStateRetentionInterval: ReturnType<typeof setInterval> | null = null;
 const recentCompactionNotices = new Map<string, number>();
@@ -524,18 +540,23 @@ function slackWizardSessionKeyFromInteraction(ctx: UnknownRecord): string {
 
 function registerRouterWizardSlackInteractiveHandlers(pi: PluginInterface): void {
   if (typeof pi.registerInteractiveHandler !== "function") return;
+  const registeredNamespaces = new Set<string>();
   for (const actionId of ROUTER_WIZARD_SLACK_INTERACTIVE_ACTION_IDS) {
+    const namespace = routerWizardSlackInteractiveNamespace(actionId);
+    if (!namespace || registeredNamespaces.has(namespace)) continue;
+    registeredNamespaces.add(namespace);
     pi.registerInteractiveHandler({
       channel: "slack",
-      namespace: actionId,
+      namespace,
       handler: async (ctx: UnknownRecord) => {
         const interaction = asRecord(ctx.interaction);
         const sessionKey = slackWizardSessionKeyFromInteraction(ctx);
         const replyToMessageId = stringValue(ctx.threadId || interaction.threadTs || interaction.messageTs);
         const value = stringValue(interaction.value || asRecord(interaction).payload);
+        const resolvedActionId = resolveRouterWizardSlackActionId(interaction, namespace);
         const result = await handleRouterWizardAction({
           event: {
-            actions: [{ action_id: actionId, value }],
+            actions: [{ action_id: resolvedActionId, value }],
             interaction,
           },
           sessionKey,

@@ -713,6 +713,7 @@ describe("router wizard Slack onboarding", () => {
 
   it("registers Slack interactive handlers that start the question wizard", async () => {
     const interactiveHandlers = new Map<string, (ctx: Record<string, unknown>) => Promise<{ handled?: boolean } | void>>();
+    const registeredNamespaces: string[] = [];
     const sends: IMSendParams[] = [];
     const adapter: IMAdapter = {
       channel: "slack",
@@ -732,10 +733,15 @@ describe("router wizard Slack onboarding", () => {
       registerTool: () => {},
       registerCommand: () => {},
       registerInteractiveHandler: (registration) => {
-        interactiveHandlers.set(String(registration.namespace), registration.handler as (ctx: Record<string, unknown>) => Promise<{ handled?: boolean } | void>);
+        const namespace = String(registration.namespace);
+        registeredNamespaces.push(namespace);
+        interactiveHandlers.set(namespace, registration.handler as (ctx: Record<string, unknown>) => Promise<{ handled?: boolean } | void>);
       },
       logger: {},
     });
+
+    expect(registeredNamespaces.every((namespace) => /^[A-Za-z0-9._-]+$/.test(namespace))).toBe(true);
+    expect(interactiveHandlers.has("step")).toBe(true);
 
     const handler = interactiveHandlers.get("octoclaw_router_wizard_start_questions");
     expect(handler).toBeTruthy();
@@ -762,6 +768,29 @@ describe("router wizard Slack onboarding", () => {
     expect(state.active).toMatchObject({
       step: "model_scan",
       sessionKey: "agent:main:slack:default:direct:u123abc:thread:1777770000.000001",
+    });
+
+    sends.length = 0;
+    const stepHandler = interactiveHandlers.get("step");
+    expect(stepHandler).toBeTruthy();
+    const stepResult = await stepHandler!({
+      accountId: "default",
+      conversationId: "D0AR3GTPYQL",
+      senderId: "U123ABC",
+      threadId: "1777770000.000001",
+      interaction: {
+        actionId: "step:1:answer:start",
+        value: "start",
+        messageTs: "1777770001.000002",
+        threadTs: "1777770000.000001",
+      },
+    });
+
+    expect(stepResult).toMatchObject({ handled: true });
+    expect(sends.at(-1)).toMatchObject({
+      message: expect.stringContaining("Plan 类型"),
+      replyToMessageId: "1777770000.000001",
+      deliveryKind: "router_wizard_onboarding",
     });
   }, 10_000);
 

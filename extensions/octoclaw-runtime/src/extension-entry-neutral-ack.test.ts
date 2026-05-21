@@ -141,6 +141,74 @@ describe("neutral Slack ACK hook dedupe", () => {
     expect(neutralAckEvents.some((entry) => entry.replyToMessageId === "1777770000.000002" && entry.reason === "reaction_ack_already_sent")).toBe(false);
   });
 
+  it("does not suppress a new inbound Slack message because a previous message had a visible formal reply", async () => {
+    const handlers = new Map<string, Function>();
+    const reactions: IMReactParams[] = [];
+    const adapter: IMAdapter = {
+      channel: "slack",
+      capabilityLevel: "L2",
+      canHandle: (sessionKey) => sessionKey.includes("u0ackformal"),
+      resolveTarget: () => ({ channel: "slack", target: "user:u0ackformal" }),
+      send: async () => ({ sent: true, delivered: true, messageId: "1777770001.000011" }),
+      react: async (params) => {
+        reactions.push(params);
+        return { ok: true };
+      },
+    };
+    registerIMAdapter(adapter);
+    plugin.register({
+      pluginConfig: { ackReactionEmoji: "eyes" },
+      on: (event, handler) => handlers.set(event, handler),
+      registerTool: () => {},
+      registerCommand: () => {},
+      logger: {},
+    });
+
+    const messageReceived = handlers.get("message_received");
+    expect(messageReceived).toBeTruthy();
+    const stateKey = "agent:main:slack:default:direct:u0ackformal";
+    updateAckTrackingState(stateKey, {
+      ackMessageTurnId: `${stateKey}:1777770000.000010`,
+      ack_message_turn_id: `${stateKey}:1777770000.000010`,
+      formal_reply_visible: true,
+      formalReplyVisible: true,
+      delivered: true,
+      deliveryStatus: "delivered",
+      delivery_status: "delivered",
+      finalResponseStreaming: true,
+      final_response_streaming: true,
+      firstTokenSeen: true,
+      first_token_seen: true,
+    });
+
+    messageReceived!(
+      {
+        content: "为啥没回复",
+        metadata: {
+          messageId: "1777770000.000011",
+          originatingChannel: "slack",
+          originatingTo: "user:U0ACKFORMAL",
+        },
+      },
+      {
+        channelId: "slack",
+        conversationId: "user:U0ACKFORMAL",
+      },
+    );
+    await waitForFireAndForget();
+
+    expect(reactions).toHaveLength(1);
+    expect(reactions[0]).toMatchObject({
+      messageId: "1777770000.000011",
+      emoji: "eyes",
+    });
+    const neutralAckEvents = readReplayEvents().filter((entry) => entry.event === "neutral_inbound_ack");
+    expect(neutralAckEvents.some((entry) => entry.sent === true && entry.replyToMessageId === "1777770000.000011")).toBe(true);
+    expect(neutralAckEvents.some((entry) => entry.replyToMessageId === "1777770000.000011" && entry.reason === "formal_reply_visible")).toBe(false);
+    expect(neutralAckEvents.some((entry) => entry.replyToMessageId === "1777770000.000011" && entry.reason === "reply_delivered")).toBe(false);
+    expect(neutralAckEvents.some((entry) => entry.replyToMessageId === "1777770000.000011" && entry.reason === "reply_streaming")).toBe(false);
+  });
+
   it("uses the inbound Slack anchor and sends only one neutral ACK across duplicate hooks", async () => {
     const handlers = new Map<string, Function>();
     const reactions: IMReactParams[] = [];

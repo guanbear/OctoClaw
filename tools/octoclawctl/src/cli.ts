@@ -10,7 +10,7 @@ import { generateNightlyReport, filterNightlyReplayEvents, renderMarkdownReport,
 import { loadSlackAcceptanceConfig, runSlackAcceptanceHarness, renderSlackAcceptanceMarkdown } from "./slack-acceptance/index.js";
 import { normalizeCalibrationInputFile, runCalibrationGate, renderCalibrationMarkdown } from "./calibration/index.js";
 import { parseNightlyEvalConfig, runNightlyEval, sanitizeAggregateReport, renderNightlyEvalMarkdown, renderNightlyEvalSlackSummary, generateLaunchAgentPlist, defaultLabel, defaultPlistPath, validateScheduleHour, readStoredBaseline, writeStoredBaseline, clearStoredBaseline } from "./nightly-eval/index.js";
-import { runStabilityOrchestration, runStabilityReviewLatest, runStabilityFixDraft, parseCadence } from "./stability/runner.js";
+import { runStabilityOrchestration, runStabilityReviewLatest, runStabilityFixDraft, parseCadence, hasStabilitySlackEnv } from "./stability/runner.js";
 import { SlackWebApiAcceptanceClient } from "./slack-acceptance/index.js";
 import { disablePlugin, enablePlugin, getConfigValue, restartAll, setConfigValue, showStatus } from "./manage.js";
 import { buildWorkspace, cloneOrUpdate, DEFAULT_REF, DEFAULT_REPO_URL, deployExtension, deployPackages, setupSymlinks, syncOctoClawCoreRules, syncOpenClawPluginEntry, syncSlackDeliveryHookCompatibility, uninstallDeployment, validateLoad, writeSourceManifest } from "./install.js";
@@ -3532,9 +3532,17 @@ async function runInstallCommand(parsed: ParsedCliArgs, env: Record<string, stri
     let postDeployStabilityLines = "";
     if (parsed.command === "deploy" && parsed.restartServices) {
       const stabilityOutputDir = env.OCTOCLAW_STABILITY_OUTPUT_DIR?.trim() || path.join(openclawHome, "reports");
+      const stabilityConfig = await resolvePostDeployStabilityConfig(parsed, openclawHome);
+      const liveSlackReport = stabilityConfig
+        && env.OCTOCLAW_POST_DEPLOY_LIVE_SMOKE === "1"
+        && await hasStabilitySlackEnv(env, stabilityConfig)
+        ? await runStabilityLiveSlackPack(stabilityConfig, env)
+        : undefined;
       const stability = await runStabilityOrchestration({
         subcommand: "post-deploy",
         outputDir: stabilityOutputDir,
+        config: stabilityConfig,
+        liveSlackReport,
         env,
         openclawHome,
       });
@@ -3554,6 +3562,20 @@ async function runInstallCommand(parsed: ParsedCliArgs, env: Record<string, stri
   } finally {
     restoreEnv();
   }
+}
+
+async function resolvePostDeployStabilityConfig(parsed: ParsedCliArgs, openclawHome: string): Promise<string | undefined> {
+  const candidates = [
+    parsed.config,
+    path.join(openclawHome, "octoclaw-slack-acceptance-config.json"),
+  ].filter((value): value is string => Boolean(value?.trim()));
+  for (const candidate of candidates) {
+    if (fsSync.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+  // Missing acceptance config just means post-deploy runs non-live lanes.
+  return undefined;
 }
 
 function applyProcessEnv(env: Record<string, string | undefined>): () => void {
