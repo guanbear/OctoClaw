@@ -112,6 +112,10 @@ const FAILED_STATES = new Set(["failed", "error", "cancelled", "canceled", "bloc
 const NON_DELEGATED_ROUTES = new Set(["reply", "direct"]);
 const FALLBACK_MESSAGE = "No active OctoClaw runtime detected. Ensure the extension is installed and a task has been created.";
 const DEFAULT_REPLAY_SAMPLE_LIMIT = 1000;
+const ROUTER_CAPABILITY_REFRESH_CRON_NAME = "OctoClaw AutoRouter capability refresh";
+const ROUTER_MODEL_INTEL_SNAPSHOT_FILENAME = "model-intel-snapshot.json";
+const ROUTER_CAPABILITY_FULL_CATALOG_FILENAME = "capability-catalog-full.json";
+const ROUTER_MODEL_INTEL_SLIM_LIMIT = 800;
 
 interface ParsedCliArgs {
   command?: CliCommand;
@@ -1459,6 +1463,12 @@ export function parseCliArgs(argv: string[]): ParsedCliArgs {
     }
   }
 
+  if (command === "router" && positionals[1] === "capability" && positionals[2] === "install-schedule") {
+    if (scheduleHour !== undefined && (!Number.isFinite(scheduleHour) || scheduleHour < 0 || scheduleHour > 23)) {
+      throw new Error("Invalid --schedule-hour: must be 0-23");
+    }
+  }
+
   if (command === "stability") {
     if (!stabilitySubcommand) {
       throw new Error("stability requires a subcommand: post-deploy, nightly, full, review-latest, fix-draft");
@@ -1578,6 +1588,7 @@ export function printUsage(): string {
     "  octoclawctl router capability snapshot show [--input <snapshot.json>] [--format text|json]",
     "  octoclawctl router capability lookup <model> [--input <snapshot.json>] [--format text|json]",
     "  octoclawctl router capability probe <model> [--input <snapshot.json>] [--format text|json]",
+    "  octoclawctl router capability install-schedule [--schedule-hour 4] [--openclaw-home DIR] [--format text|json]",
     "  octoclawctl router model-intel refresh [--output-dir <dir>] [--openclaw-home <dir>] [--format json]",
     "  octoclawctl router health aggregate|list|show <model>|suggest-fallbacks [--format text|json]",
     "  octoclawctl router model-config analyze [--input <snapshot.json>] [--output-dir <dir>] [--format json]",
@@ -2102,6 +2113,16 @@ async function runOpenClawJsonCommand(args: string[], env: Record<string, string
   return parseFirstJsonRecord(result.stdout);
 }
 
+async function runOpenClawCommand(args: string[], env: Record<string, string | undefined>): Promise<{ stdout: string; stderr: string }> {
+  const binaryPath = resolveOpenClawBinary(env);
+  const result = await spawnAndCollect(binaryPath, args, { env: { ...process.env, ...env } });
+  if (result.code !== 0) {
+    const detail = result.stderr || result.stdout || `exit ${result.code}`;
+    throw new Error(`openclaw ${args.join(" ")} failed: ${detail}`);
+  }
+  return { stdout: result.stdout, stderr: result.stderr };
+}
+
 function openClawHomeEnv(openclawHome: string, env: Record<string, string | undefined>): Record<string, string | undefined> {
   return {
     ...env,
@@ -2140,6 +2161,89 @@ function resolveCapabilitySnapshotPath(parsed: ParsedCliArgs, openclawHome: stri
 
 async function readModelIntelSnapshot(filePath: string): Promise<ModelIntelSnapshot> {
   return assertModelIntelSnapshot(await readJsonFile(filePath), filePath);
+}
+
+async function readOptionalModelIntelSnapshot(filePath: string): Promise<ModelIntelSnapshot | undefined> {
+  const value = await readJsonFile(filePath);
+  if (!isRecord(value) || value.schemaVersion !== "octoclaw.router_lite.model_intel_snapshot/v1" || !Array.isArray(value.models)) {
+    return undefined;
+  }
+  return value as unknown as ModelIntelSnapshot;
+}
+
+function sourceSet(model: ModelIntelSnapshot["models"][number]): Set<string> {
+  return new Set([
+    ...(model.sources ?? []),
+    ...(model.marketPrice.sources ?? []),
+    ...(model.capability.sources ?? []),
+    ...(model.health.sources ?? []),
+    ...(model.plan.sources ?? []),
+  ]);
+}
+
+function hasAnySource(model: ModelIntelSnapshot["models"][number], sources: string[]): boolean {
+  const set = sourceSet(model);
+  return sources.some((source) => set.has(source));
+}
+
+function isNativeOrUserModel(model: ModelIntelSnapshot["models"][number], nativeFallbacks: Set<string>): boolean {
+  if (model.configured === true || model.proposalOnly === false) return true;
+  if (nativeFallbacks.has(model.modelKey)) return true;
+  if (model.tags.some((tag) => tag === "configured" || tag === "default" || tag.startsWith("fallback"))) return true;
+  return hasAnySource(model, [
+    "openclaw_config",
+    "openclaw_models_list",
+    "legacy_model_catalog",
+    "provider_alias:openai",
+    "operator_override",
+  ]);
+}
+
+function isCommonPublicRouterCandidate(model: ModelIntelSnapshot["models"][number]): boolean {
+  if (hasAnySource(model, ["packaged_leaderboard", "pinchbench", "aider", "bfcl", "swe_bench"])) return true;
+  const provider = model.provider.toLowerCase();
+  const text = `${model.modelKey} ${model.name ?? ""}`.toLowerCase();
+  if (provider === "openai" || text.includes("openai/gpt-") || text.includes("/gpt-")) return true;
+  if (provider === "anthropic" || text.includes("anthropic/claude") || text.includes("claude-")) return true;
+  if (provider === "google" || provider === "gemini" || text.includes("google/gemini") || text.includes("gemini-")) return true;
+  if (provider === "deepseek" || text.includes("deepseek/")) return true;
+  if (provider === "qwen" || text.includes("qwen/") || text.includes("qwen-")) return true;
+  if (provider === "zhipu" || provider === "zai" || text.includes("glm-")) return true;
+  if (provider === "xai" || text.includes("grok-")) return true;
+  if (provider === "mistral" || text.includes("mistral")) return true;
+  if (provider === "moonshot" || text.includes("kimi")) return true;
+  return false;
+}
+
+function modelSlimRank(model: ModelIntelSnapshot["models"][number]): number {
+  const tier = model.capability.codingTier;
+  const confidence = model.capability.confidence;
+  return (
+    (hasAnySource(model, ["packaged_leaderboard"]) ? 100 : 0)
+    + (tier === "frontier" ? 80 : tier === "strong" ? 60 : tier === "standard" ? 40 : tier === "mini" ? 20 : 0)
+    + (confidence === "high" ? 12 : confidence === "medium" ? 8 : confidence === "low" ? 4 : 0)
+    + (model.marketPrice.blendedUsdPerMTok !== undefined ? 2 : 0)
+  );
+}
+
+function slimModelIntelSnapshot(snapshot: ModelIntelSnapshot, maxModels = ROUTER_MODEL_INTEL_SLIM_LIMIT): ModelIntelSnapshot {
+  const nativeFallbacks = new Set(snapshot.nativeFallbackOrder ?? []);
+  const always = snapshot.models.filter((model) => isNativeOrUserModel(model, nativeFallbacks));
+  const alwaysKeys = new Set(always.map((model) => model.modelKey));
+  const common = snapshot.models
+    .filter((model) => !alwaysKeys.has(model.modelKey) && isCommonPublicRouterCandidate(model))
+    .sort((a, b) => modelSlimRank(b) - modelSlimRank(a) || a.modelKey.localeCompare(b.modelKey));
+  const remainingSlots = Math.max(0, maxModels - always.length);
+  const models = [...always, ...common.slice(0, remainingSlots)]
+    .sort((a, b) => a.modelKey.localeCompare(b.modelKey));
+  return {
+    ...snapshot,
+    models,
+    sourceStatus: [
+      ...snapshot.sourceStatus,
+      { source: "octoclaw_router_slim_snapshot", status: "ok" as const, detail: `models=${models.length}/${snapshot.models.length}` },
+    ],
+  };
 }
 
 function injectedCapabilitySourceJson(env: Record<string, string | undefined>, key: "openrouter" | "modelsDev" | "litellm"): ((url: string) => Promise<unknown>) | undefined {
@@ -2193,9 +2297,14 @@ function formatCapabilityShow(snapshot: ModelIntelSnapshot, modelKey: string, fo
 
 function formatCapabilitySnapshotShow(snapshot: ModelIntelSnapshot, format: "json" | "text"): string {
   const sourceStatus = snapshot.sourceStatus.map((source) => `${source.source}:${source.status}`);
+  const generatedAtMs = Date.parse(snapshot.generatedAt);
+  const snapshotAgeDays = Number.isNaN(generatedAtMs) ? undefined : Math.max(0, Math.floor((Date.now() - generatedAtMs) / (1000 * 60 * 60 * 24)));
+  const stale = snapshotAgeDays === undefined || snapshotAgeDays >= 7;
   const payload = {
     snapshotId: snapshot.snapshotId,
     generatedAt: snapshot.generatedAt,
+    snapshotAgeDays,
+    stale,
     models: snapshot.models.length,
     sourceStatus: snapshot.sourceStatus,
   };
@@ -2203,8 +2312,111 @@ function formatCapabilitySnapshotShow(snapshot: ModelIntelSnapshot, format: "jso
   return [
     `Capability snapshot: ${snapshot.snapshotId}`,
     `generatedAt=${snapshot.generatedAt}`,
+    `stale=${stale}${snapshotAgeDays === undefined ? " age=unknown" : ` ageDays=${snapshotAgeDays}`}`,
     `models=${snapshot.models.length}`,
     `sources=${sourceStatus.join(", ") || "(none)"}`,
+  ].join("\n");
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+function routerCapabilityRefreshCommands(openclawHome: string, outputDir: string): { capabilityRefresh: string; modelIntelRefresh: string } {
+  const nodePath = resolvePath(resolveStableNodePath(process.argv[0] ?? "node"));
+  const cliPath = resolvePath(process.argv[1] ?? "octoclawctl");
+  const cli = `${shellQuote(nodePath)} ${shellQuote(cliPath)}`;
+  return {
+    capabilityRefresh: `${cli} router capability refresh --output-dir ${shellQuote(outputDir)} --format json`,
+    modelIntelRefresh: `${cli} router model-intel refresh --output-dir ${shellQuote(outputDir)} --openclaw-home ${shellQuote(openclawHome)} --format json`,
+  };
+}
+
+function buildRouterCapabilityScheduleMessage(openclawHome: string, outputDir: string): string {
+  const commands = routerCapabilityRefreshCommands(openclawHome, outputDir);
+  return [
+    "你是 OpenClaw cron 的轻量调度壳。只刷新 OctoClaw AutoRouter 本地能力数据，不要修改模型配置，不要投递 IM。",
+    "",
+    "请在本机按顺序执行下面两条命令：",
+    commands.capabilityRefresh,
+    commands.modelIntelRefresh,
+    "",
+    "要求：",
+    "- 只运行上面两条命令。",
+    "- 如果第一条失败，不要运行第二条，最终内部摘要说明失败命令和关键 stderr。",
+    "- 如果两条都成功，最终内部摘要只写 slim snapshot 路径、full catalog 路径、模型数量和 Health 行。",
+    "- 不要泄露 token、API key、完整 openclaw.json 或完整日志。",
+  ].join("\n");
+}
+
+function cronJobsFromList(value: JsonRecord | undefined): JsonRecord[] {
+  const jobs = asRecord(value).jobs;
+  return Array.isArray(jobs) ? jobs.map((job) => asRecord(job)) : [];
+}
+
+function findRouterCapabilityRefreshCronJob(value: JsonRecord | undefined): JsonRecord | undefined {
+  return cronJobsFromList(value).find((job) => asString(job.name) === ROUTER_CAPABILITY_REFRESH_CRON_NAME);
+}
+
+async function runRouterCapabilityInstallSchedule(input: {
+  openclawHome: string;
+  outputDir: string;
+  env: Record<string, string | undefined>;
+  scheduleHour?: number;
+  format: "json" | "text";
+}): Promise<string> {
+  const hour = input.scheduleHour ?? 4;
+  validateScheduleHour(hour);
+  const cron = `0 ${hour} * * *`;
+  const commandEnv = openClawHomeEnv(input.openclawHome, input.env);
+  const existingList = await runOpenClawJsonCommand(["cron", "list", "--json"], commandEnv);
+  const existing = findRouterCapabilityRefreshCronJob(existingList);
+  const message = buildRouterCapabilityScheduleMessage(input.openclawHome, input.outputDir);
+  const description = "Managed by OctoClaw: refresh AutoRouter capability/model-intel snapshots. No IM delivery; no model config mutation.";
+  const commonArgs = [
+    "--name",
+    ROUTER_CAPABILITY_REFRESH_CRON_NAME,
+    "--cron",
+    cron,
+    "--tz",
+    "Asia/Shanghai",
+    "--session",
+    "isolated",
+    "--wake",
+    "now",
+    "--light-context",
+    "--tools",
+    "exec",
+    "--timeout-seconds",
+    "900",
+    "--no-deliver",
+    "--description",
+    description,
+    "--message",
+    message,
+  ];
+  const existingId = asString(existing?.id);
+  const action = existingId ? "updated" : "created";
+  const args = existingId
+    ? ["cron", "edit", existingId, "--enable", ...commonArgs]
+    : ["cron", "add", ...commonArgs];
+  const result = await runOpenClawCommand(args, commandEnv);
+  const response = parseFirstJsonRecord(result.stdout);
+  const jobId = asString(asRecord(response).id) || existingId || undefined;
+  const payload = {
+    action,
+    jobId,
+    name: ROUTER_CAPABILITY_REFRESH_CRON_NAME,
+    cron,
+    tz: "Asia/Shanghai",
+    outputDir: input.outputDir,
+  };
+  if (input.format === "json") return JSON.stringify(payload, null, 2);
+  return [
+    `Router capability refresh schedule ${action}: ${ROUTER_CAPABILITY_REFRESH_CRON_NAME}`,
+    `jobId=${jobId ?? "unknown"}`,
+    `cron=${cron} tz=Asia/Shanghai`,
+    `outputDir=${input.outputDir}`,
   ].join("\n");
 }
 
@@ -2215,6 +2427,22 @@ function formatCapabilityLookup(snapshot: ModelIntelSnapshot, modelKey: string, 
     ? { model: model.modelKey, ok: model.available !== "no", reason: model.available === "no" ? "known_unavailable" : "known_available", sources: model.sources }
     : { model: modelKey, ok: false, reason: "unknown_model", sources: [] };
   return format === "json" ? JSON.stringify(result, null, 2) : `Capability lookup ${result.model}: ${result.ok ? "ok" : "failed"} (${result.reason})`;
+}
+
+function combineModelIntelSnapshots(base: ModelIntelSnapshot, overlay: ModelIntelSnapshot | undefined): ModelIntelSnapshot {
+  if (!overlay) return base;
+  return {
+    ...base,
+    snapshotId: overlay.snapshotId || base.snapshotId,
+    generatedAt: overlay.generatedAt || base.generatedAt,
+    sourceStatus: [...base.sourceStatus, ...overlay.sourceStatus],
+    models: [...base.models, ...overlay.models],
+  };
+}
+
+async function writeModelIntelSnapshot(filePath: string, snapshot: ModelIntelSnapshot): Promise<void> {
+  await ensureDir(path.dirname(filePath));
+  await fs.writeFile(filePath, `${JSON.stringify(snapshot, null, 2)}\n`, "utf8");
 }
 
 async function runCapabilityProbe(input: {
@@ -2967,7 +3195,8 @@ async function runRouterLiteCommand(parsed: ParsedCliArgs, env: Record<string, s
   if (area === "capability" && action === "refresh") {
     const router = await loadRouter();
     const capabilityOutputDir = resolvePath(parsed.outputDir ?? path.join(openclawHome, "octoclaw", "router-lite"));
-    const snapshotPath = path.join(capabilityOutputDir, "model-intel-snapshot.json");
+    const snapshotPath = path.join(capabilityOutputDir, ROUTER_MODEL_INTEL_SNAPSHOT_FILENAME);
+    const fullCatalogPath = path.join(capabilityOutputDir, ROUTER_CAPABILITY_FULL_CATALOG_FILENAME);
     const snapshot = await router.refreshCapability({
       sources: [
         router.createPackagedLeaderboardCapabilitySource(),
@@ -2976,14 +3205,15 @@ async function runRouterLiteCommand(parsed: ParsedCliArgs, env: Record<string, s
         router.createLiteLLMCapabilitySource({ fetchJson: injectedCapabilitySourceJson(env, "litellm") }),
       ],
       writeSnapshot: async (value) => {
-        await ensureDir(path.dirname(snapshotPath));
-        await fs.writeFile(snapshotPath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+        await writeModelIntelSnapshot(fullCatalogPath, value);
+        await writeModelIntelSnapshot(snapshotPath, value);
       },
     });
     const counts = countModels(snapshot);
     if (wantsJson) {
       return JSON.stringify({
         snapshotPath,
+        fullCatalogPath,
         snapshotId: snapshot.snapshotId,
         generatedAt: snapshot.generatedAt,
         models: snapshot.models.length,
@@ -2996,6 +3226,16 @@ async function runRouterLiteCommand(parsed: ParsedCliArgs, env: Record<string, s
       `models=${snapshot.models.length} configured=${counts.configured} proposalOnly=${counts.proposalOnly}`,
       `sources=${snapshot.sourceStatus.map((source) => `${source.source}:${source.status}`).join(", ")}`,
     ].join("\n");
+  }
+
+  if (area === "capability" && action === "install-schedule") {
+    return runRouterCapabilityInstallSchedule({
+      openclawHome,
+      outputDir,
+      env,
+      scheduleHour: parsed.scheduleHour,
+      format: wantsJson ? "json" : "text",
+    });
   }
 
   if (area === "capability" && action === "snapshot" && parsed.extraArgs[2] === "show") {
@@ -3026,6 +3266,10 @@ async function runRouterLiteCommand(parsed: ParsedCliArgs, env: Record<string, s
 
   if (area === "model-intel" && action === "refresh") {
     const commandEnv = openClawHomeEnv(openclawHome, env);
+    const snapshotPath = path.join(outputDir, ROUTER_MODEL_INTEL_SNAPSHOT_FILENAME);
+    const fullCatalogPath = path.join(outputDir, ROUTER_CAPABILITY_FULL_CATALOG_FILENAME);
+    const refreshedCapabilitySnapshot = await readOptionalModelIntelSnapshot(fullCatalogPath)
+      ?? await readOptionalModelIntelSnapshot(snapshotPath);
     const openClawModelsList = await runOpenClawJsonCommand(["models", "list", "--json"], commandEnv);
     const nativeFallbackOrder = await runOpenClawJsonCommand(["models", "fallbacks", "list", "--json"], commandEnv);
     const usageStatus = await runOpenClawJsonCommand(["status", "--usage", "--json"], commandEnv);
@@ -3034,31 +3278,35 @@ async function runRouterLiteCommand(parsed: ParsedCliArgs, env: Record<string, s
     const legacyCatalog = await readJsonFile(path.join(openclawHome, "workspace", "tmp", "octopus", "model-catalog.json"));
     const routerLite = await loadPolicyRouterLite();
     const router = await loadRouter();
+    const packagedSnapshot = router.loadPackagedModelIntelSnapshot();
     const healthSnapshot = await router.createHealthEventSink({
       jsonlPath: path.join(openclawHome, "octoclaw", "router-lite", "model-health.jsonl"),
       snapshotPath: path.join(openclawHome, "octoclaw", "router-lite", "model-health-snapshot.json"),
     }).aggregate(Date.now()).catch(() => undefined);
-    const snapshot = routerLite.buildModelIntelSnapshot({
+    const fullSnapshot = routerLite.buildModelIntelSnapshot({
       openClawModelsList,
       openClawConfig,
       legacyCatalog,
-      packagedSnapshot: router.loadPackagedModelIntelSnapshot(),
+      packagedSnapshot: combineModelIntelSnapshots(packagedSnapshot, refreshedCapabilitySnapshot),
       usageStatus,
       usageCost,
       healthSnapshot,
       nativeFallbackOrder,
     });
-    const snapshotPath = path.join(outputDir, "model-intel-snapshot.json");
+    const snapshot = slimModelIntelSnapshot(fullSnapshot);
     await ensureDir(outputDir);
-    await fs.writeFile(snapshotPath, `${JSON.stringify(snapshot, null, 2)}\n`, "utf8");
+    await writeModelIntelSnapshot(fullCatalogPath, fullSnapshot);
+    await writeModelIntelSnapshot(snapshotPath, snapshot);
     const counts = countModels(snapshot);
     const healthCounts = countHealthModels(healthSnapshot);
     if (wantsJson) {
       return JSON.stringify({
         snapshotPath,
+        fullCatalogPath,
         snapshotId: snapshot.snapshotId,
         generatedAt: snapshot.generatedAt,
         models: snapshot.models.length,
+        fullCatalogModels: fullSnapshot.models.length,
         ...counts,
         health: healthCounts,
         sourceStatus: snapshot.sourceStatus,
@@ -3066,8 +3314,9 @@ async function runRouterLiteCommand(parsed: ParsedCliArgs, env: Record<string, s
     }
     return [
       `Model intel snapshot written: ${snapshotPath}`,
+      `Full capability catalog written: ${fullCatalogPath}`,
       `snapshotId=${snapshot.snapshotId}`,
-      `models=${snapshot.models.length} configured=${counts.configured} proposalOnly=${counts.proposalOnly}`,
+      `models=${snapshot.models.length} fullCatalogModels=${fullSnapshot.models.length} configured=${counts.configured} proposalOnly=${counts.proposalOnly}`,
       `Health: ${healthCounts.models} models, ${healthCounts.cooldown} in cooldown`,
       `sources=${snapshot.sourceStatus.map((source) => `${source.source}:${source.status}`).join(", ")}`,
     ].join("\n");
@@ -3132,7 +3381,7 @@ async function runRouterLiteCommand(parsed: ParsedCliArgs, env: Record<string, s
     return lines.join("\n");
   }
 
-  throw new Error("router command expects: router wizard | router capability refresh/list/show/snapshot show/lookup/probe | router model-intel refresh | router model-config analyze | router shadow-report | router decisions | router promotion review/nightly-review | router cost report | router score override/reset | router model mark/ban/list-overrides");
+  throw new Error("router command expects: router wizard | router capability refresh/list/show/snapshot show/lookup/probe/install-schedule | router model-intel refresh | router model-config analyze | router shadow-report | router decisions | router promotion review/nightly-review | router cost report | router score override/reset | router model mark/ban/list-overrides");
 }
 
 async function runCommandFromSnapshot(parsed: ParsedCliArgs, env: Record<string, string | undefined>): Promise<string> {

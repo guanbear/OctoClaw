@@ -70,6 +70,26 @@ octoclawctl router capability show openai/gpt-5-mini
 octoclawctl router capability probe openai/gpt-5-mini
 ```
 
+Install or update the OpenClaw cron job that keeps router capability data fresh:
+
+```bash
+octoclawctl router capability install-schedule --schedule-hour 4
+```
+
+This creates one managed OpenClaw cron job named `OctoClaw AutoRouter capability refresh`. The job runs a lightweight isolated agent with only `exec` enabled, does not deliver IM messages, and executes:
+
+```bash
+octoclawctl router capability refresh --output-dir ~/.openclaw/workspace/tmp/octopus/router-lite --format json
+octoclawctl router model-intel refresh --output-dir ~/.openclaw/workspace/tmp/octopus/router-lite --openclaw-home ~/.openclaw --format json
+```
+
+Running the install command again updates the existing managed job instead of creating duplicates. Routing still reads local snapshots only; external model catalogs and leaderboard sources are contacted only by the scheduled refresh.
+
+The refresh keeps two local files:
+
+- `model-intel-snapshot.json` is the slim routing snapshot. It keeps configured/default/fallback models, same-provider candidates, and common public candidates.
+- `capability-catalog-full.json` is the full discovery catalog. Long-tail providers stay here so the wizard and CLI can still find cold or uncommon models without putting thousands of models on the routing hot path.
+
 Maintainers can regenerate the packaged leaderboard seed from external sources:
 
 ```bash

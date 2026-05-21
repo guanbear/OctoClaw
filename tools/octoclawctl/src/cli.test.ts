@@ -709,6 +709,38 @@ describe("octoclawctl cli", () => {
         "fi",
       ].join("\n"), "utf8");
       await runTestCommand("chmod", ["755", fakeOpenClaw]);
+      await fs.mkdir(outputDir, { recursive: true });
+      await fs.writeFile(path.join(outputDir, "model-intel-snapshot.json"), JSON.stringify({
+        schemaVersion: "octoclaw.router_lite.model_intel_snapshot/v1",
+        snapshotId: "external-capability-cache",
+        generatedAt: "2026-05-21T00:00:00.000Z",
+        sourceStatus: [{ source: "openrouter", status: "ok" }],
+        models: [{
+          provider: "newprovider",
+          model: "new-model-2026",
+          modelKey: "newprovider/new-model-2026",
+          configured: false,
+          available: "yes",
+          proposalOnly: true,
+          tags: [],
+          marketPrice: { blendedUsdPerMTok: 0.5, confidence: "medium", sources: ["openrouter"] },
+          capability: {
+            input: ["text"],
+            toolUse: "yes",
+            structuredOutput: "yes",
+            reasoning: "unknown",
+            promptCache: "unknown",
+            codingTier: "mini",
+            confidence: "medium",
+            evidence: ["declared"],
+            sources: ["openrouter"],
+          },
+          health: { available: "yes", cooldown: false, quotaPressure: "unknown", sources: [] },
+          plan: { type: "unknown", quotaPressure: "unknown", effectiveCostBand: "low", sources: [] },
+          freshness: "2026-05-21T00:00:00.000Z",
+          sources: ["openrouter"],
+        }],
+      }), "utf8");
 
       const env = { PATH: `${fakeBin}:${process.env.PATH ?? ""}` };
       const refreshCapture = createIo();
@@ -731,11 +763,14 @@ describe("octoclawctl cli", () => {
       expect(refreshSummary.models).toBeGreaterThanOrEqual(5);
 
       const snapshot = JSON.parse(await fs.readFile(path.join(outputDir, "model-intel-snapshot.json"), "utf8"));
+      const fullCatalog = JSON.parse(await fs.readFile(path.join(outputDir, "capability-catalog-full.json"), "utf8"));
       expect(snapshot.models.map((model: { modelKey: string }) => model.modelKey)).toEqual(expect.arrayContaining([
         "cliproxyapi/gpt-5.5",
         "cliproxyapi/gpt-5.5-mini",
         "openai/gpt-5-mini",
       ]));
+      expect(snapshot.models.map((model: { modelKey: string }) => model.modelKey)).not.toContain("newprovider/new-model-2026");
+      expect(fullCatalog.models.map((model: { modelKey: string }) => model.modelKey)).toContain("newprovider/new-model-2026");
       expect(snapshot.sourceStatus).toContainEqual({ source: "packaged_model_intel", status: "ok" });
       expect(snapshot.sourceStatus).toContainEqual({ source: "router_health_snapshot", status: "ok" });
       expect(snapshot.sourceStatus).toContainEqual({ source: "openclaw_native_fallbacks", status: "ok" });
@@ -769,6 +804,112 @@ describe("octoclawctl cli", () => {
           candidateModel: "cliproxyapi/gpt-5.5-mini",
         }),
       ]));
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("router model-intel refresh keeps a full catalog while slimming the routing snapshot", async () => {
+    const tmpDir = path.join(os.homedir(), ".octoclawctl-test-tmp", `router-slim-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    const openclawHome = path.join(tmpDir, ".openclaw");
+    const fakeBin = path.join(tmpDir, "bin");
+    const outputDir = path.join(tmpDir, "router-lite");
+    const fakeOpenClaw = path.join(fakeBin, "openclaw");
+    const model = (modelKey: string, sources: string[], configured = false) => {
+      const slash = modelKey.indexOf("/");
+      return {
+        provider: slash > 0 ? modelKey.slice(0, slash) : "unknown",
+        model: slash > 0 ? modelKey.slice(slash + 1) : modelKey,
+        modelKey,
+        configured,
+        available: "yes",
+        proposalOnly: !configured,
+        tags: configured ? ["configured"] : [],
+        marketPrice: { blendedUsdPerMTok: 0.5, confidence: "medium", sources },
+        capability: {
+          input: ["text"],
+          toolUse: "yes",
+          structuredOutput: "yes",
+          reasoning: "unknown",
+          promptCache: "unknown",
+          codingTier: "mini",
+          confidence: "medium",
+          evidence: ["declared"],
+          sources,
+        },
+        health: { available: "yes", cooldown: false, quotaPressure: "unknown", sources: [] },
+        plan: { type: "unknown", quotaPressure: "unknown", effectiveCostBand: "low", sources: [] },
+        freshness: "2026-05-21T00:00:00.000Z",
+        sources,
+      };
+    };
+    try {
+      await fs.mkdir(fakeBin, { recursive: true });
+      await fs.mkdir(path.join(openclawHome, "workspace", "tmp", "octopus"), { recursive: true });
+      await fs.writeFile(path.join(openclawHome, "openclaw.json"), JSON.stringify({
+        models: {
+          providers: {
+            rareproxy: {
+              models: [{ id: "cold-model-x", input: ["text"] }],
+            },
+          },
+        },
+      }), "utf8");
+      await fs.writeFile(path.join(openclawHome, "workspace", "tmp", "octopus", "model-catalog.json"), JSON.stringify({ models: [] }), "utf8");
+      await fs.writeFile(fakeOpenClaw, [
+        "#!/bin/sh",
+        "if [ \"$*\" = \"models list --json\" ]; then",
+        "  echo '{\"models\":[{\"key\":\"rareproxy/cold-model-x\",\"input\":[\"text\"],\"available\":true,\"tags\":[\"configured\"]}]}'",
+        "elif [ \"$*\" = \"models fallbacks list --json\" ]; then",
+        "  echo '{\"fallbacks\":[\"rareproxy/cold-model-x\"]}'",
+        "elif [ \"$*\" = \"status --usage --json\" ]; then",
+        "  echo '{\"usage\":{}}'",
+        "elif [ \"$*\" = \"gateway usage-cost --days 3 --json\" ]; then",
+        "  echo '{\"cost\":{}}'",
+        "else",
+        "  echo '{}'",
+        "fi",
+      ].join("\n"), "utf8");
+      await runTestCommand("chmod", ["755", fakeOpenClaw]);
+      await fs.mkdir(outputDir, { recursive: true });
+      await fs.writeFile(path.join(outputDir, "model-intel-snapshot.json"), JSON.stringify({
+        schemaVersion: "octoclaw.router_lite.model_intel_snapshot/v1",
+        snapshotId: "external-capability-cache",
+        generatedAt: "2026-05-21T00:00:00.000Z",
+        sourceStatus: [{ source: "openrouter", status: "ok" }],
+        models: [
+          model("openai/gpt-5-mini", ["openrouter", "models.dev"]),
+          model("openrouter/openai/gpt-5.4-mini", ["openrouter", "models.dev"]),
+          model("nano-gpt/obscure-experiment-999", ["models.dev"]),
+          model("rareproxy/cold-model-x", ["models.dev"], true),
+        ],
+      }), "utf8");
+
+      const capture = createIo();
+      const exitCode = await main([
+        "router",
+        "model-intel",
+        "refresh",
+        "--openclaw-home",
+        openclawHome,
+        "--output-dir",
+        outputDir,
+        "--format",
+        "json",
+      ], { PATH: `${fakeBin}:${process.env.PATH ?? ""}` }, capture.io);
+
+      expect(exitCode).toBe(0);
+      const summary = JSON.parse(capture.stdout[0] ?? "{}");
+      expect(summary.fullCatalogModels).toBeGreaterThan(summary.models);
+      const fullCatalog = JSON.parse(await fs.readFile(path.join(outputDir, "capability-catalog-full.json"), "utf8"));
+      const slimSnapshot = JSON.parse(await fs.readFile(path.join(outputDir, "model-intel-snapshot.json"), "utf8"));
+      expect(fullCatalog.models.map((item: { modelKey: string }) => item.modelKey)).toContain("nano-gpt/obscure-experiment-999");
+      expect(slimSnapshot.models.map((item: { modelKey: string }) => item.modelKey)).toEqual(expect.arrayContaining([
+        "openai/gpt-5-mini",
+        "openrouter/openai/gpt-5.4-mini",
+        "rareproxy/cold-model-x",
+      ]));
+      expect(slimSnapshot.models.map((item: { modelKey: string }) => item.modelKey)).not.toContain("nano-gpt/obscure-experiment-999");
     } finally {
       await fs.rm(tmpDir, { recursive: true, force: true });
     }
@@ -1183,6 +1324,108 @@ console.log(JSON.stringify({ choices: [{ message: { content: "pong" } }] }));
       expect(capture.stdout[0]).toContain("Capability snapshot: snapshot-meta-test");
       expect(capture.stdout[0]).toContain("models=1");
       expect(capture.stdout[0]).toContain("openrouter:error");
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("router capability install-schedule creates an OpenClaw cron refresh job", async () => {
+    const tempDir = path.join(os.homedir(), ".octoclawctl-test-tmp", `router-capability-schedule-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    const openclawHome = path.join(tempDir, "home");
+    const fakeOpenClaw = path.join(tempDir, "openclaw");
+    const callsPath = path.join(tempDir, "calls.jsonl");
+    try {
+      await fs.mkdir(tempDir, { recursive: true });
+      await fs.writeFile(fakeOpenClaw, [
+        "#!/usr/bin/env node",
+        "const fs = require('node:fs');",
+        "const callsPath = process.env.TEST_OPENCLAW_CALLS;",
+        "fs.appendFileSync(callsPath, JSON.stringify({ args: process.argv.slice(2), env: { OPENCLAW_HOME: process.env.OPENCLAW_HOME } }) + '\\n');",
+        "if (process.argv.slice(2).join(' ') === 'cron list --json') { console.log(JSON.stringify({ jobs: [] })); process.exit(0); }",
+        "if (process.argv[2] === 'cron' && process.argv[3] === 'add') { console.log(JSON.stringify({ id: 'job-new' })); process.exit(0); }",
+        "console.error('unexpected args ' + process.argv.slice(2).join(' '));",
+        "process.exit(2);",
+      ].join("\n"), "utf8");
+      await runTestCommand("chmod", ["755", fakeOpenClaw]);
+
+      const capture = createIo();
+      const exitCode = await main([
+        "router",
+        "capability",
+        "install-schedule",
+        "--openclaw-home",
+        openclawHome,
+        "--schedule-hour",
+        "4",
+        "--format",
+        "json",
+      ], { OPENCLAW_BIN: fakeOpenClaw, TEST_OPENCLAW_CALLS: callsPath }, capture.io);
+
+      expect(exitCode).toBe(0);
+      expect(JSON.parse(capture.stdout[0] ?? "{}")).toMatchObject({
+        action: "created",
+        jobId: "job-new",
+        cron: "0 4 * * *",
+      });
+      const calls = (await fs.readFile(callsPath, "utf8")).trim().split("\n").map((line) => JSON.parse(line));
+      expect(calls[0]).toMatchObject({ args: ["cron", "list", "--json"], env: { OPENCLAW_HOME: openclawHome } });
+      expect(calls[1].args).toEqual(expect.arrayContaining([
+        "cron",
+        "add",
+        "--name",
+        "OctoClaw AutoRouter capability refresh",
+        "--cron",
+        "0 4 * * *",
+        "--tools",
+        "exec",
+        "--no-deliver",
+      ]));
+      expect(calls[1].args.join("\n")).toContain("router capability refresh");
+      expect(calls[1].args.join("\n")).toContain("router model-intel refresh");
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("router capability install-schedule updates the existing managed cron job", async () => {
+    const tempDir = path.join(os.homedir(), ".octoclawctl-test-tmp", `router-capability-schedule-update-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    const openclawHome = path.join(tempDir, "home");
+    const fakeOpenClaw = path.join(tempDir, "openclaw");
+    const callsPath = path.join(tempDir, "calls.jsonl");
+    try {
+      await fs.mkdir(tempDir, { recursive: true });
+      await fs.writeFile(fakeOpenClaw, [
+        "#!/usr/bin/env node",
+        "const fs = require('node:fs');",
+        "const callsPath = process.env.TEST_OPENCLAW_CALLS;",
+        "fs.appendFileSync(callsPath, JSON.stringify({ args: process.argv.slice(2) }) + '\\n');",
+        "if (process.argv.slice(2).join(' ') === 'cron list --json') { console.log(JSON.stringify({ jobs: [{ id: 'job-existing', name: 'OctoClaw AutoRouter capability refresh' }] })); process.exit(0); }",
+        "if (process.argv[2] === 'cron' && process.argv[3] === 'edit' && process.argv[4] === 'job-existing') { console.log(JSON.stringify({ id: 'job-existing' })); process.exit(0); }",
+        "console.error('unexpected args ' + process.argv.slice(2).join(' '));",
+        "process.exit(2);",
+      ].join("\n"), "utf8");
+      await runTestCommand("chmod", ["755", fakeOpenClaw]);
+
+      const capture = createIo();
+      const exitCode = await main([
+        "router",
+        "capability",
+        "install-schedule",
+        "--openclaw-home",
+        openclawHome,
+        "--schedule-hour=5",
+        "--format=json",
+      ], { OPENCLAW_BIN: fakeOpenClaw, TEST_OPENCLAW_CALLS: callsPath }, capture.io);
+
+      expect(exitCode).toBe(0);
+      expect(JSON.parse(capture.stdout[0] ?? "{}")).toMatchObject({
+        action: "updated",
+        jobId: "job-existing",
+        cron: "0 5 * * *",
+      });
+      const calls = (await fs.readFile(callsPath, "utf8")).trim().split("\n").map((line) => JSON.parse(line));
+      expect(calls[1].args.slice(0, 3)).toEqual(["cron", "edit", "job-existing"]);
+      expect(calls[1].args).toEqual(expect.arrayContaining(["--enable", "--cron", "0 5 * * *"]));
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true });
     }
