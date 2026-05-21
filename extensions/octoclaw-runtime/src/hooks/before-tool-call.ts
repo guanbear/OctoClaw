@@ -22,6 +22,7 @@ import {
 import { recordAckReplay, recordPolicyReplay } from "../replay/replay.js";
 import { policyState, type PolicyStateEntry } from "../state/policy-state.js";
 import { evaluateNativeSessionsSendGate, evaluateNativeSpawnGate } from "../delegate/native-spawn-gate.js";
+import { nativeSpawnIntentStore } from "../delegate/native-spawn-intent-store.js";
 import { isPlannerAllowedForSession, resolveSpawnBackend, resolveSpeculativePreloadEnabled } from "../config/index.js";
 import {
   buildBudgetedMainState,
@@ -198,7 +199,8 @@ export function makeBeforeToolCallHook(deps: BeforeToolCallDeps) {
     const speculativeDispatchGuardEnabled = toolName === "octoclaw_dispatch"
       && resolveSpawnBackend() === "planner"
       && resolveSpeculativePreloadEnabled(deps.currentPluginConfig());
-    if (!hookConfig.enabled && toolName !== "sessions_spawn" && toolName !== "sessions_send" && !speculativeDispatchGuardEnabled) return;
+    const nativeSessionTool = toolName === "sessions_spawn" || toolName === "sessions_send" || toolName === "sessions_yield";
+    if (!hookConfig.enabled && !nativeSessionTool && !speculativeDispatchGuardEnabled) return;
 
     const routeHintTool = stringValue(hookConfig.route_hint_tool || "octoclaw_route_hint");
     const routeHintIsRequired = routeHintRequired(decision) || Boolean(hookConfig.route_hint_required);
@@ -440,6 +442,54 @@ export function makeBeforeToolCallHook(deps: BeforeToolCallDeps) {
           work_contract_id: gate.intent.workContractId,
         }, deps.pi.logger).catch(() => {});
         return;
+      }
+    }
+    if (toolName === "sessions_yield") {
+      const sessionKeys = [
+        stateKey,
+        stringValue(ctx.sessionKey),
+        stringValue(ctx.canonicalSessionKey),
+        stringValue(asRecord(decision.request).session_key),
+        ...resolvePolicyStateKeys(ctx),
+      ];
+      const plannerGateEnabled = resolveSpawnBackend() === "planner"
+        && sessionKeys.some((sessionKey) => isPlannerAllowedForSession(sessionKey));
+      if (plannerGateEnabled) {
+        const keys = Array.from(new Set(sessionKeys.map((value) => stringValue(value)).filter(Boolean)));
+        let pendingIntent: ReturnType<typeof nativeSpawnIntentStore.findPendingForSession> | null = null;
+        for (const key of keys) {
+          try {
+            pendingIntent = nativeSpawnIntentStore.findPendingForSession(key, { dispatchMode: "new_spawn" })
+              ?? nativeSpawnIntentStore.findPendingForSession(key, { dispatchMode: "send_to_speculative" });
+          } catch {
+            pendingIntent = null;
+          }
+          if (pendingIntent) break;
+        }
+        if (pendingIntent) {
+          updatePolicyState(stateKey, (current) => ({
+            ...current,
+            blockedTools: [...(Array.isArray(current.blockedTools) ? current.blockedTools.slice(-7) : []), toolName].filter(Boolean),
+          }));
+          const nextTool = pendingIntent.dispatchMode === "send_to_speculative" ? "sessions_send" : "sessions_spawn";
+          void recordPolicyReplay("sessions_yield_blocked_pending_native_spawn", {
+            sessionKey: stateKey || pendingIntent.sessionKey || "",
+            sessionId: stringValue(ctx.sessionId),
+            route: stringValue(asRecord(decision.route_decision).route),
+            toolName,
+            spawn_intent_id: pendingIntent.spawnIntentId,
+            work_contract_id: pendingIntent.workContractId,
+            dispatch_mode: pendingIntent.dispatchMode || "new_spawn",
+          }, deps.pi.logger, decision).catch(() => {});
+          return {
+            block: true,
+            blockReason: [
+              "OctoClaw blocked sessions_yield because a native spawn intent is pending but the child session has not started.",
+              `Call ${nextTool} exactly with the args from the latest octoclaw_dispatch result before waiting.`,
+              "Do not wait for a child that has not started.",
+            ].join(" "),
+          };
+        }
       }
     }
     if (toolName === "sessions_send") {

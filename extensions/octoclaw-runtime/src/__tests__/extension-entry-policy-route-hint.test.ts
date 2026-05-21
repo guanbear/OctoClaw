@@ -2418,6 +2418,56 @@ describe("speculative preload planner path", () => {
     }));
     policyState.clearState(key);
   });
+
+  it("blocks sessions_yield while a native spawn intent is still waiting for sessions_spawn", async () => {
+    process.env.OCTOCLAW_SPAWN_BACKEND = "planner";
+    const handlers = new Map<string, Function>();
+    plugin.register({
+      on: (event, handler) => handlers.set(event, handler),
+      registerTool: () => {},
+      registerCommand: () => {},
+      logger: {},
+    });
+
+    const key = "agent:main:slack:channel:c0as4dappu3:thread:t-native-yield-before-spawn";
+    const intent = nativeSpawnIntentStore.create({
+      workContractId: "wc-native-yield-before-spawn",
+      sessionKey: key,
+      sessionsSpawnArgs: {
+        task: "Investigate the project and compare it with praxisbase.",
+        label: "octoclaw-native-yield-before-spawn",
+        agentId: "main",
+      },
+      dispatchMode: "new_spawn",
+      ttlMs: 60_000,
+    });
+    policyState.setState(key, {
+      decision: budgetedMainDecision("delegate"),
+      routeHintSubmitted: true,
+      spawnIntentId: intent.spawnIntentId,
+      workContractId: intent.workContractId,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    });
+
+    const beforeToolCall = handlers.get("before_tool_call");
+    expect(beforeToolCall).toBeTruthy();
+    const result = await beforeToolCall!(
+      { toolName: "sessions_yield", params: { message: "还没好，再等等" } },
+      { sessionKey: key, sessionId: "session-native-yield-before-spawn", agentId: "main" },
+    ) as { block?: boolean; blockReason?: string } | undefined;
+
+    expect(result?.block).toBe(true);
+    expect(result?.blockReason).toContain("sessions_spawn");
+    expect(nativeSpawnIntentStore.get(intent.spawnIntentId)?.status).toBe("planned");
+    await waitForFireAndForget();
+    expect(readReplayEvents()).toContainEqual(expect.objectContaining({
+      event: "sessions_yield_blocked_pending_native_spawn",
+      spawn_intent_id: intent.spawnIntentId,
+      work_contract_id: intent.workContractId,
+    }));
+    policyState.clearState(key);
+  });
 });
 
 describe("before_tool_call route hint guard", () => {
