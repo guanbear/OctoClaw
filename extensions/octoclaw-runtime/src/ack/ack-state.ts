@@ -121,6 +121,7 @@ export function prepareAckTrackingForMessageTurn(stateKey: string, messageTurnId
       reactionAckAttempted: false,
       reaction_ack_attempted: false,
       reactionAckSent: false,
+      reaction_ack_sent: false,
       textAck0Sent: false,
       tier1Sent: false,
       tier2Sent: false,

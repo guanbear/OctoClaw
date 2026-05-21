@@ -2,7 +2,7 @@ import fsSync from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { resetNeutralInboundAckDedupeForTests } from "./ack/ack-guard.js";
+import { resetNeutralInboundAckDedupeForTests, updateAckTrackingState } from "./ack/ack-guard.js";
 import { nativeSpawnIntentStore } from "./delegate/native-spawn-intent-store.js";
 import type { IMAdapter, IMReactParams, IMSendParams } from "./im/adapter.js";
 import { registerIMAdapter } from "./im/index.js";
@@ -82,6 +82,65 @@ afterEach(() => {
 });
 
 describe("neutral Slack ACK hook dedupe", () => {
+  it("does not suppress a new inbound Slack message because a previous message sent a reaction ACK", async () => {
+    const handlers = new Map<string, Function>();
+    const reactions: IMReactParams[] = [];
+    const adapter: IMAdapter = {
+      channel: "slack",
+      capabilityLevel: "L2",
+      canHandle: (sessionKey) => sessionKey.includes("u0ackfresh"),
+      resolveTarget: () => ({ channel: "slack", target: "user:u0ackfresh" }),
+      send: async () => ({ sent: true, delivered: true, messageId: "1777770001.000010" }),
+      react: async (params) => {
+        reactions.push(params);
+        return { ok: true };
+      },
+    };
+    registerIMAdapter(adapter);
+    plugin.register({
+      pluginConfig: { ackReactionEmoji: "eyes" },
+      on: (event, handler) => handlers.set(event, handler),
+      registerTool: () => {},
+      registerCommand: () => {},
+      logger: {},
+    });
+
+    const messageReceived = handlers.get("message_received");
+    expect(messageReceived).toBeTruthy();
+    const stateKey = "agent:main:slack:default:direct:u0ackfresh";
+    updateAckTrackingState(stateKey, {
+      ackMessageTurnId: `${stateKey}:1777770000.000001`,
+      ack_message_turn_id: `${stateKey}:1777770000.000001`,
+      reactionAckSent: true,
+      reaction_ack_sent: true,
+    });
+
+    messageReceived!(
+      {
+        content: "新的消息",
+        metadata: {
+          messageId: "1777770000.000002",
+          originatingChannel: "slack",
+          originatingTo: "user:U0ACKFRESH",
+        },
+      },
+      {
+        channelId: "slack",
+        conversationId: "user:U0ACKFRESH",
+      },
+    );
+    await waitForFireAndForget();
+
+    expect(reactions).toHaveLength(1);
+    expect(reactions[0]).toMatchObject({
+      messageId: "1777770000.000002",
+      emoji: "eyes",
+    });
+    const neutralAckEvents = readReplayEvents().filter((entry) => entry.event === "neutral_inbound_ack");
+    expect(neutralAckEvents.some((entry) => entry.sent === true && entry.replyToMessageId === "1777770000.000002")).toBe(true);
+    expect(neutralAckEvents.some((entry) => entry.replyToMessageId === "1777770000.000002" && entry.reason === "reaction_ack_already_sent")).toBe(false);
+  });
+
   it("uses the inbound Slack anchor and sends only one neutral ACK across duplicate hooks", async () => {
     const handlers = new Map<string, Function>();
     const reactions: IMReactParams[] = [];

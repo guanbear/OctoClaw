@@ -6,6 +6,7 @@ import {
   watchdogTick,
   WATCHDOG_INTERVAL_MS,
 } from "./ack/ack-guard.js";
+import { prepareAckTrackingForMessageTurn } from "./ack/ack-state.js";
 import {
   pendingNeutralInboundAckTimers,
   pendingNeutralInboundAckTextFallbackTimers,
@@ -742,6 +743,7 @@ export const plugin = {
         fallbackUsed = Boolean(inboundMessageTs);
       }
       const effectiveStateKey = stateKey || sessionKey;
+      prepareAckTrackingForMessageTurn(effectiveStateKey, `${effectiveStateKey}:${inboundMessageTs}`);
       const effectiveState = {
         ...buildReactionAckState(sessionKey),
         ...existingState,

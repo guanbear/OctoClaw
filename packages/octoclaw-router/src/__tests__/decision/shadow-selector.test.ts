@@ -3,11 +3,13 @@ import { describe, expect, it } from "vitest";
 import type { ModelIntelLite, ModelIntelSnapshot, RouterLiteRequest, ScenarioAbilityLite } from "../../decision/contracts.js";
 import { selectShadowRecommendation } from "../../decision/shadow-selector.js";
 
+const FRESH_TEST_TIMESTAMP = new Date().toISOString();
+
 function scenarioAbility(): ScenarioAbilityLite {
   const score = {
     tier: "B" as const,
     confidence: "high" as const,
-    sources: [{ source: "operator_override" as const, fetchedAt: "2026-05-14T00:00:00.000Z" }],
+    sources: [{ source: "operator_override" as const, fetchedAt: FRESH_TEST_TIMESTAMP }],
   };
   return {
     codingWorker: score,
@@ -60,7 +62,7 @@ function model(modelKey: string, price: number, overrides: Partial<ModelIntelLit
       sources: ["test"],
     },
     scenarioAbility: scenarioAbility(),
-    freshness: "2026-05-14T00:00:00.000Z",
+    freshness: FRESH_TEST_TIMESTAMP,
     sources: ["test"],
     ...overrides,
   };

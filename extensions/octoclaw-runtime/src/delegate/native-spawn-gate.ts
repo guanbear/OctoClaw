@@ -132,6 +132,7 @@ function splitPlannerTaskAtRuntimePacket(value: string): { prefix: string; suffi
 
 function hasRecoverablePlannerTaskDrift(expectedTask: string, actualTask: string): boolean {
   if (hasRecoverableOmittedRuntimePacketDrift(expectedTask, actualTask)) return true;
+  if (hasRecoverablePlannerEnvelopeDrift(expectedTask, actualTask)) return true;
 
   const expectedParts = splitPlannerTaskAtRuntimePacket(expectedTask);
   const actualParts = splitPlannerTaskAtRuntimePacket(actualTask);
@@ -147,6 +148,32 @@ function hasRecoverablePlannerTaskDrift(expectedTask: string, actualTask: string
   const completedTail = actualPrefix.slice(expectedPrefix.length);
   if (completedTail.length === 0 || completedTail.length > 256) return false;
   return !/```|## Runtime Context Packet|Operational rules:|Rules:|Task:|workContractId:|delegateTaskId:|attemptId:/iu.test(completedTail);
+}
+
+function hasRecoverablePlannerEnvelopeDrift(expectedTask: string, actualTask: string): boolean {
+  if (!expectedTask.startsWith("[OctoClaw delegated work]")) return false;
+  if (!actualTask.startsWith("[OctoClaw delegated work]")) return false;
+  if (!expectedTask.includes("\n## Runtime Context Packet\n") || !actualTask.includes("\n## Runtime Context Packet\n")) return false;
+
+  for (const field of ["workContractId", "delegateTaskId", "attemptId"] as const) {
+    const expectedValue = plannerHeaderField(expectedTask, field);
+    const actualValue = plannerHeaderField(actualTask, field);
+    if (!expectedValue || expectedValue !== actualValue) return false;
+  }
+
+  const expectedTerminalTask = extractTerminalPlannerTask(expectedTask);
+  const actualTerminalTask = extractTerminalPlannerTask(actualTask);
+  if (!expectedTerminalTask || expectedTerminalTask !== actualTerminalTask) return false;
+
+  const requiredActualSafetyMarkers = [
+    "## Runtime Context Packet",
+    "Native announce handles final delivery",
+    "If you are blocked, include exactly one control block",
+    "Rules:",
+    "Work only on the task below",
+    "do not expose hidden reasoning or raw transcript",
+  ];
+  return requiredActualSafetyMarkers.every((marker) => actualTask.includes(marker));
 }
 
 function plannerHeaderField(value: string, field: "workContractId" | "delegateTaskId" | "attemptId"): string {

@@ -9,6 +9,7 @@ import { resetSnapshotCacheForTests } from "./snapshot-loader.js";
 const SNAPSHOT_ENV = "OCTOCLAW_ROUTER_SNAPSHOT_PATH";
 const SHADOW_ENV = "OCTOCLAW_ROUTER_SHADOW_PATH";
 const DECISIONS_ENV = "OCTOCLAW_ROUTER_DECISIONS_PATH";
+const FRESH_TEST_TIMESTAMP = new Date().toISOString();
 
 type Logger = { warn: ReturnType<typeof vi.fn> };
 const fs = fsSync as unknown as {
@@ -21,7 +22,7 @@ function testScenarioAbility(): Record<string, unknown> {
   const score = {
     tier: "B",
     confidence: "high",
-    sources: [{ source: "operator_override", fetchedAt: "2026-05-14T00:00:00.000Z" }],
+    sources: [{ source: "operator_override", fetchedAt: FRESH_TEST_TIMESTAMP }],
   };
   return {
     codingWorker: score,
@@ -65,7 +66,7 @@ function testModel(modelKey: string, price: number, overrides: Record<string, un
     },
     plan: { type: "pay_as_you_go", quotaPressure: "unknown", effectiveCostBand: "unknown", sources: ["test"] },
     scenarioAbility: testScenarioAbility(),
-    freshness: "2026-05-14T00:00:00.000Z",
+    freshness: FRESH_TEST_TIMESTAMP,
     sources: ["test"],
     ...overrides,
   };

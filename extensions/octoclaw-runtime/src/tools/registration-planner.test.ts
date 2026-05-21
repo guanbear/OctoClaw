@@ -1292,6 +1292,66 @@ describe("octoclaw_dispatch planner backend", () => {
     expect(accepted.childRunId).toBe("child-from-json");
   });
 
+  it("recovers childSessionKey from native run projection when dispatch_confirm omits it", async () => {
+    const contract = seedWorkContract("session-planner-confirm-native-projection");
+    const sessionsSpawnArgs = {
+      task: "Confirm should recover childSessionKey from native run truth.",
+      runtime: "subagent" as const,
+      mode: "run" as const,
+      cleanup: "keep" as const,
+      sandbox: "inherit" as const,
+      context: "isolated" as const,
+      lightContext: true,
+    };
+    const intent = nativeSpawnIntentStore.create({
+      workContractId: contract.workContractId,
+      sessionKey: contract.sessionKey,
+      sessionsSpawnArgs,
+      ttlMs: 60_000,
+    });
+    const started = nativeSpawnIntentStore.transitionToSpawnCallStarted({
+      spawnIntentId: intent.spawnIntentId,
+      sessionKey: contract.sessionKey,
+      sessionsSpawnArgs,
+    });
+    expect(started.ok).toBe(true);
+
+    const response = await confirmTool().execute({
+      spawnIntentId: intent.spawnIntentId,
+      workContractId: contract.workContractId,
+      sessionsSpawnStatus: "accepted",
+      runId: "run-native-projection",
+    }, {
+      sessionKey: contract.sessionKey,
+      sessionId: "session-planner-confirm-native-projection",
+      cwd: tempWorkspace,
+      runtime: {
+        tasks: {
+          runs: {
+            fromToolContext() {
+              return {
+                resolve(id: string) {
+                  return {
+                    runId: id,
+                    status: "running",
+                    childSessionKey: "agent:main:subagent:native-projection-child",
+                  };
+                },
+              };
+            },
+          },
+        },
+      },
+    });
+
+    const body = JSON.parse(String(response.text));
+    expect(body.ok).toBe(true);
+    expect(body.childSessionKey).toBe("agent:main:subagent:native-projection-child");
+    const updated = loadWorkContract(contract.workContractId);
+    expect(updated?.nativeSpawnRefs?.childSessionKey).toBe("agent:main:subagent:native-projection-child");
+    expect(updated?.delegate?.nativeBinding?.childSessionKey).toBe("agent:main:subagent:native-projection-child");
+  });
+
   it("records dispatch_confirm_completed replay even when tool ctx has no policy decision", async () => {
     const contract = seedWorkContract();
     const sessionsSpawnArgs = {

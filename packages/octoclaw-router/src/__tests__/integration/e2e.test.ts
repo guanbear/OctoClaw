@@ -13,6 +13,8 @@ import { selectShadowRecommendation } from "../../decision/shadow-selector.js";
 import { buildPromotionState } from "../../promotion/index.js";
 import { createWizardConfig } from "../../wizard/index.js";
 
+const FRESH_TEST_TIMESTAMP = new Date().toISOString();
+
 const fs = fsSync as unknown as {
   mkdtempSync(prefix: string): string;
   rmSync(pathname: string, options?: { recursive?: boolean; force?: boolean }): void;
@@ -23,7 +25,7 @@ function scenarioAbility(): ScenarioAbilityLite {
   const score = {
     tier: "B" as const,
     confidence: "high" as const,
-    sources: [{ source: "operator_override" as const, fetchedAt: "2026-05-14T00:00:00.000Z" }],
+    sources: [{ source: "operator_override" as const, fetchedAt: FRESH_TEST_TIMESTAMP }],
   };
   return {
     codingWorker: score,
@@ -72,7 +74,7 @@ function model(modelKey: string, price: number, planIncluded = false): ModelInte
       sources: ["test"],
     },
     scenarioAbility: scenarioAbility(),
-    freshness: "2026-05-14T00:00:00.000Z",
+    freshness: FRESH_TEST_TIMESTAMP,
     sources: ["test"],
   };
 }

@@ -28,6 +28,7 @@ import {
   recordPolicyReplay,
 } from "../replay/replay.js";
 import { policyState } from "../state/policy-state.js";
+import { projectNativeStatus } from "../state/native-status-projector.js";
 import {
   authoritativeDecisionRoute,
   canonicalizeDecisionForPolicyState,
@@ -43,6 +44,7 @@ import {
 } from "../delegate/speculative-preload.js";
 import { hasBudgetedMainEscalationEvidence } from "../budgeted-main.js";
 import { detectIMType } from "../im-status-renderer.js";
+import { sendIMMessage } from "../im/send.js";
 import { openRuntimeLedger } from "../runtime-ledger/index.js";
 import {
   type UnknownRecord,
@@ -501,6 +503,72 @@ export function statusToolResponse(
       } : {}),
     },
   };
+}
+
+export interface StatusPanelDirectDeliveryInput {
+  rawOutput: string;
+  format?: string;
+  imType?: string;
+  sessionKey: string;
+  replyToMessageId?: string;
+  cwd?: string;
+  interactiveBlocks?: Array<Record<string, unknown>>;
+}
+
+export interface StatusPanelDirectDeliveryResult {
+  delivered: boolean;
+  fallbackResponse: Record<string, unknown>;
+  skipped?: string;
+  error?: string;
+  messageId?: string;
+  threadTs?: string;
+  transport?: string;
+  targetSource?: string;
+}
+
+export async function deliverStatusPanelToIM(input: StatusPanelDirectDeliveryInput): Promise<StatusPanelDirectDeliveryResult> {
+  const imType = asString(input.imType, "plain");
+  const sessionKey = asString(input.sessionKey);
+  const fallbackResponse = statusToolResponse(
+    input.rawOutput,
+    asString(input.format, "anchors"),
+    imType,
+    input.interactiveBlocks,
+  );
+  if (!sessionKey || imType === "plain") {
+    return { delivered: false, skipped: "non_im_session", fallbackResponse };
+  }
+
+  const replyToMessageId = asString(input.replyToMessageId);
+  try {
+    const result = await sendIMMessage({
+      sessionKey,
+      message: input.rawOutput,
+      interactiveBlocks: input.interactiveBlocks,
+      replyToMessageId: replyToMessageId || undefined,
+      timeoutMs: 5000,
+      cwd: input.cwd,
+      suppressProjectionFooter: true,
+      deliveryKind: "status_reply",
+      deliveryTargetSource: replyToMessageId ? "inbound_anchor" : "session_fallback",
+      footerMode: "off",
+    });
+    return {
+      delivered: result.sent === true,
+      fallbackResponse,
+      error: result.error,
+      messageId: result.messageId,
+      threadTs: result.threadTs,
+      transport: result.transport,
+      targetSource: result.targetSource,
+    };
+  } catch (error) {
+    return {
+      delivered: false,
+      fallbackResponse,
+      error: String(error),
+    };
+  }
 }
 
 
@@ -1171,12 +1239,23 @@ export function getToolRegistrations(options: ToolRegistrationOptions = {}): Too
         const status = asString(params.sessionsSpawnStatus || resultJson.status);
         const runId = asString(params.runId);
         const childRunId = asString(params.childRunId || resultJson.childRunId || resultJson.child_run_id || runId);
-        const childSessionKey = asString(params.childSessionKey || resultJson.childSessionKey || resultJson.child_session_key);
         const { key: stateKey, state } = resolveToolPolicyContext(ctx, "");
         const decision = asRecord(state?.decision);
         const replayDecision = Object.keys(decision).length > 0 ? decision : null;
         const sessionKey = asString(asRecord(decision.request).session_key)
           || asString(ctx.sessionKey || ctx.canonicalSessionKey || stateKey);
+        const explicitChildSessionKey = asString(params.childSessionKey || resultJson.childSessionKey || resultJson.child_session_key);
+        let childSessionKey = explicitChildSessionKey;
+        if (!childSessionKey && status.toLowerCase() === "accepted" && runId) {
+          const nativeProjection = await projectNativeStatus({
+            ctx,
+            sessionKey,
+            workContractId: asString(params.workContractId),
+            openclawRunId: runId,
+            allowFindLatest: false,
+          });
+          childSessionKey = asString(nativeProjection.childSessionKey);
+        }
         const confirmed = await confirmNativeSpawn({
           spawnIntentId: asString(params.spawnIntentId),
           workContractId: asString(params.workContractId),
@@ -1312,14 +1391,50 @@ export function getToolRegistrations(options: ToolRegistrationOptions = {}): Too
       execute: async (params, _rawCtx) => {
         const format = asString(params.format, "anchors");
         const ctx = _rawCtx ?? {};
+        const { key: stateKey, state } = resolveToolPolicyContext(ctx, "");
+        const decision = asRecord(state?.decision);
         // Detect IM type from multiple ctx fields — OpenClaw may use different key names
         const sessionKey = asString(
-          ctx.sessionKey || ctx.canonicalSessionKey || ctx.agentId ||
+          ctx.sessionKey || ctx.canonicalSessionKey || asRecord(decision.request).session_key || ctx.agentId ||
           ctx.session_key || ctx.canonical_session_key,
         );
         const imType = sessionKey ? detectIMType(sessionKey) : "plain";
         checkActiveTaskRecovery();
         const output = await buildNativeStatusPanelOutput(format, imType, ctx);
+        const directDelivery = await deliverStatusPanelToIM({
+          rawOutput: output.text,
+          format,
+          imType,
+          sessionKey,
+          replyToMessageId: dispatchReplyToMessageId({}, state, ctx) || undefined,
+          cwd: ctxCwd(ctx),
+          interactiveBlocks: output.interactiveBlocks,
+        });
+        if (sessionKey && imType !== "plain") {
+          await recordPolicyReplay("status_panel_direct_delivery", {
+            sessionKey,
+            stateKey,
+            sessionId: asString(ctx.sessionId),
+            imType,
+            replyToMessageId: dispatchReplyToMessageId({}, state, ctx),
+            sent: directDelivery.delivered,
+            error: asString(directDelivery.error),
+            transport: asString(directDelivery.transport),
+            targetSource: asString(directDelivery.targetSource),
+            skipped: asString(directDelivery.skipped),
+          }, toolLogger(ctx), null);
+        }
+        if (directDelivery.delivered) {
+          return toolResponse("OctoClaw status panel was delivered directly to the current IM thread. Do not repeat the full panel.", {
+            format,
+            source: "native_runtime",
+            direct_delivered: true,
+            message_id: directDelivery.messageId || null,
+            thread_ts: directDelivery.threadTs || null,
+            transport: directDelivery.transport || null,
+            target_source: directDelivery.targetSource || null,
+          });
+        }
         return statusToolResponse(output.text, format, imType, output.interactiveBlocks);
       },
     },

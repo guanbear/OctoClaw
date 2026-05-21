@@ -1259,3 +1259,196 @@ describe("timeout and progress diagnostics", () => {
     expect(report.cases[0].progress?.some((event) => event.event === "final_fetch_failed")).toBe(true);
   });
 });
+
+
+describe("RSC-SMOKE: runtime stability contract acceptance", () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    const base = path.join("/tmp", "octoclaw-rsc-smoke-test");
+    tmpDir = path.join(base, `test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    await fs.mkdir(tmpDir, { recursive: true });
+  });
+
+  afterEach(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("RSC-SMOKE-001: status_panel passes when transcript contains visible panel text", async () => {
+    const replayPath = path.join(tmpDir, "replay-rsc-smoke-001-pass.jsonl");
+    const threadTs = "1234567890.000001";
+    const sessionKey = `slack:channel:C_ACC_TEST:thread:${threadTs}`;
+    const replayEvents = [
+      { at: "2099-12-31T23:59:49.000Z", event: "message_received_observed", sessionKey, inboundMessageTs: threadTs },
+      { at: "2099-12-31T23:59:50.000Z", event: "policy_resolved", sessionKey, route: "reply" },
+    ];
+    await fs.writeFile(replayPath, replayEvents.map((e) => JSON.stringify(e)).join("\n"), "utf8");
+
+    const client = createMockClient([
+      {
+        ts: "1234567890.000002",
+        text: "📋 任务状态面板\n\n任务 T-001: status=running | 模型=zhipu/GLM-5.1 | 耗时=45s | 结果=src/output.md\n任务 T-002: status=completed | 模型=zai/glm-4.7 | 耗时=120s | 结果=docs/report.md",
+      },
+    ]);
+    const config = parseSlackAcceptanceConfig(validConfig({
+      cases: [{
+        kind: "status_panel",
+        prompt: "显示任务状态面板",
+        ackRequired: false,
+        finalRequired: true,
+        noSpawnExpected: true,
+        expectFinalAll: ["任务|task", "状态|status|running|queued|completed", "模型|model|profile", "耗时|运行|elapsed", "结果|artifact|位置|在哪"],
+      }],
+      replayPath,
+    }), validEnv());
+    config.finalTimeoutMs = 100;
+    config.pollIntervalMs = 10;
+
+    const report = await runSlackAcceptanceHarness(client, config);
+    const statusCase = report.cases.find((c) => c.kind === "status_panel")!;
+
+    expect(statusCase.final.status).toBe("pass");
+    expect(statusCase.noSpawn.status).toBe("pass");
+    expect(statusCase.status).toBe("pass");
+  });
+
+  it("RSC-SMOKE-001: status_panel fails when transcript lacks visible panel text", async () => {
+    const client = createMockClient([
+      { ts: "1234567890.000002", text: "好的，状态面板已发送。" },
+    ]);
+    const config = parseSlackAcceptanceConfig(validConfig({
+      cases: [{
+        kind: "status_panel",
+        prompt: "显示任务状态面板",
+        ackRequired: false,
+        finalRequired: true,
+        noSpawnExpected: true,
+        expectFinalAll: ["任务|task", "状态|status|running|queued|completed", "模型|model|profile", "耗时|运行|elapsed", "结果|artifact|位置|在哪"],
+      }],
+    }), validEnv());
+    config.finalTimeoutMs = 100;
+    config.pollIntervalMs = 10;
+
+    const report = await runSlackAcceptanceHarness(client, config);
+    const statusCase = report.cases.find((c) => c.kind === "status_panel")!;
+
+    expect(statusCase.final.status).toBe("fail");
+    expect(statusCase.status).toBe("fail");
+    expect(statusCase.final.reason).toContain("missing");
+  });
+
+  it("RSC-SMOKE-002: delegated_work passes with full native execution evidence chain", async () => {
+    const replayPath = path.join(tmpDir, "replay-rsc-smoke-002-pass.jsonl");
+    const threadTs = "1234567890.000001";
+    const sessionKey = `slack:channel:C_ACC_TEST:thread:${threadTs}`;
+    const replayEvents = [
+      { at: "2099-12-31T23:59:49.000Z", event: "message_received_observed", sessionKey, inboundMessageTs: threadTs },
+      { at: "2099-12-31T23:59:53.000Z", event: "dispatch_planner_intent_created", sessionKey, work_contract_id: "wc-rsc-002", spawn_intent_id: "nsp-rsc-002" },
+      { at: "2099-12-31T23:59:55.000Z", event: "sessions_spawn_intent_allowed", sessionKey, work_contract_id: "wc-rsc-002", spawn_intent_id: "nsp-rsc-002" },
+      { at: "2099-12-31T23:59:56.000Z", event: "execution_transition", transitionKind: "spawn_started", sessionKey, workContractId: "wc-rsc-002", compactParentPacket: { runId: "run-rsc-002", childSessionKey: "agent:main:subagent:rsc-002" } },
+      { at: "2099-12-31T23:59:57.000Z", event: "dispatch_confirm_completed", sessionKey, work_contract_id: "wc-rsc-002", spawn_intent_id: "nsp-rsc-002", run_id: "run-rsc-002", child_session_key: "agent:main:subagent:rsc-002", ok: true },
+      { at: "2099-12-31T23:59:58.000Z", event: "native_announce_final_delivered", sessionKey, workContractId: "wc-rsc-002", footer_via: "native_announce", delivery_transport: "slack_api", target_source: "inbound_anchor", duplicate_final_count: 0 },
+    ];
+    await fs.writeFile(replayPath, replayEvents.map((e) => JSON.stringify(e)).join("\n"), "utf8");
+
+    const client = createMockClient([
+      { ts: "1234567890.090001", text: "子任务已派发，准备调研。" },
+      { ts: "1234567890.150001", text: "任务状态字段摘要：面板需要 task、status、model、elapsed、result 字段。\n\n• route=delegate | via=native_announce" },
+    ]);
+    const config = parseSlackAcceptanceConfig(validConfig({
+      cases: [{
+        kind: "delegated_work",
+        prompt: "请委派子 agent 调研",
+        ackRequired: true,
+        finalRequired: true,
+        expectAck: ["委派", "子", "派发", "准备"],
+        expectFinalAll: ["任务", "状态", "字段", "via=native_announce"],
+        expectReplay: {
+          footerVia: "native_announce",
+          deliveryTransport: "slack_api",
+          targetSource: "inbound_anchor",
+          duplicateFinalCount: 0,
+          parentEchoAfterNativeAnnounceCount: 0,
+          requireWorkContract: true,
+          requireSpawnIntent: true,
+          requireRunId: true,
+          requireChildSession: true,
+        },
+      }],
+      replayPath,
+    }), validEnv());
+    config.ackTimeoutMs = 100;
+    config.finalTimeoutMs = 100;
+    config.pollIntervalMs = 1;
+
+    const report = await runSlackAcceptanceHarness(client, config);
+    const delegatedCase = report.cases.find((c) => c.kind === "delegated_work")!;
+
+    expect(delegatedCase.status).toBe("pass");
+    expect(delegatedCase.replayEvidence).toMatchObject({
+      workContractId: "wc-rsc-002",
+      spawnIntentId: "nsp-rsc-002",
+      runId: "run-rsc-002",
+      childSessionKey: "agent:main:subagent:rsc-002",
+      footerVia: "native_announce",
+      deliveryTransport: "slack_api",
+      targetSource: "inbound_anchor",
+      duplicateFinalCount: 0,
+      parentEchoAfterNativeAnnounceCount: 0,
+    });
+  });
+
+  it("RSC-SMOKE-002: delegated_work fails when native execution evidence is missing", async () => {
+    const replayPath = path.join(tmpDir, "replay-rsc-smoke-002-fail.jsonl");
+    const threadTs = "1234567890.000001";
+    const sessionKey = `slack:channel:C_ACC_TEST:thread:${threadTs}`;
+    const replayEvents = [
+      { at: "2099-12-31T23:59:49.000Z", event: "message_received_observed", sessionKey, inboundMessageTs: threadTs },
+      { at: "2099-12-31T23:59:50.000Z", event: "policy_resolved", sessionKey, route: "delegate" },
+    ];
+    await fs.writeFile(replayPath, replayEvents.map((e) => JSON.stringify(e)).join("\n"), "utf8");
+
+    const client = createMockClient([
+      { ts: "1234567890.090001", text: "子任务已派发，准备调研。" },
+      { ts: "1234567890.150001", text: "任务状态字段摘要：面板需要 task、status、model、elapsed、result 字段。\n\n• route=delegate | via=native_announce" },
+    ]);
+    const config = parseSlackAcceptanceConfig(validConfig({
+      cases: [{
+        kind: "delegated_work",
+        prompt: "请委派子 agent 调研",
+        ackRequired: true,
+        finalRequired: true,
+        expectAck: ["委派", "子", "派发", "准备"],
+        expectFinalAll: ["任务", "状态", "字段", "via=native_announce"],
+        expectReplay: {
+          footerVia: "native_announce",
+          deliveryTransport: "slack_api",
+          targetSource: "inbound_anchor",
+          duplicateFinalCount: 0,
+          parentEchoAfterNativeAnnounceCount: 0,
+          requireWorkContract: true,
+          requireSpawnIntent: true,
+          requireRunId: true,
+          requireChildSession: true,
+        },
+      }],
+      replayPath,
+    }), validEnv());
+    config.ackTimeoutMs = 100;
+    config.finalTimeoutMs = 100;
+    config.pollIntervalMs = 1;
+
+    const report = await runSlackAcceptanceHarness(client, config);
+    const delegatedCase = report.cases.find((c) => c.kind === "delegated_work")!;
+
+    expect(delegatedCase.status).toBe("fail");
+    const errors = delegatedCase.errors.join("\n");
+    expect(errors).toContain("replay_work_contract_missing");
+    expect(errors).toContain("replay_spawn_intent_missing");
+    expect(errors).toContain("replay_run_id_missing");
+    expect(errors).toContain("replay_child_session_missing");
+    expect(errors).toContain("replay_delivery_transport_mismatch");
+    expect(errors).toContain("replay_target_source_mismatch");
+    expect(errors).toContain("delegate_footer_without_spawn");
+  });
+});
