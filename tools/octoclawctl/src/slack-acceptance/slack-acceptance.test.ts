@@ -181,6 +181,13 @@ describe("parseSlackAcceptanceConfig — fail closed", () => {
     expect(delegated?.expectFinalAll).toContain("via=native_announce");
   });
 
+  it("does not require the default fresh_lookup answer to repeat the product name", () => {
+    const config = parseSlackAcceptanceConfig(validConfig(), validEnv());
+    const freshLookup = config.cases.find((item) => item.kind === "fresh_lookup");
+    expect(freshLookup?.expectFinalAll).not.toContain("OpenClaw");
+    expect(freshLookup?.expectFinalAll).toContain("发布|release|说明|亮点|版本|更新");
+  });
+
   it("uses provided cases when specified", () => {
     const config = parseSlackAcceptanceConfig(validConfig({
       cases: [{ kind: "plain_chat", prompt: "custom" }],

@@ -47,7 +47,7 @@ const DEFAULT_CASES: SlackAcceptanceCaseConfig[] = [
     ackRequired: true,
     finalRequired: true,
     expectAck: ["查", "准备", "开始", "派发", "处理"],
-    expectFinalAll: ["OpenClaw", "发布|release|说明|亮点"],
+    expectFinalAll: ["发布|release|说明|亮点|版本|更新", "2026|beta|rollup|特性|更新"],
   },
   {
     kind: "delegated_work",

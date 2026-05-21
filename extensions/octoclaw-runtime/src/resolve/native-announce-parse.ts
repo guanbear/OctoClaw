@@ -82,6 +82,9 @@ export function extractNativeAnnounceCompletion(event: UnknownRecord, prompt: st
     || stringValue(provenance.sourceSessionKey || provenance.source_session_key);
   if (!sourceSessionKey) return null;
   const status = regexGroup(text, /\bstatus:\s*([^\n]+)/iu);
+  if (/\b(?:timed\s*out|timeout|failed|aborted|interrupted|cancelled|canceled)\b/iu.test(status)) {
+    return null;
+  }
   const looksCompleted = /completed|success|succeed/i.test(status)
     || /completed subagent task is ready/i.test(text)
     || /\[Internal task completion event\]/u.test(text);
