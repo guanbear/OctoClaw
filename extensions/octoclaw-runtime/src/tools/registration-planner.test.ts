@@ -277,6 +277,45 @@ describe("octoclaw_dispatch planner backend", () => {
     });
   });
 
+  it("reuses a pending native planner intent when dispatch is repeated before sessions_spawn", async () => {
+    process.env.OCTOCLAW_SPAWN_BACKEND = "planner";
+    process.env.OCTOCLAW_RUNTIME_LEDGER = "enforce";
+    const contract = seedWorkContract("session-planner-duplicate-dispatch");
+    const params = {
+      task: contract.userAsk,
+      workContractId: contract.workContractId,
+      policyJson: JSON.stringify(delegateDecision(contract)),
+      timeoutSeconds: 900,
+    };
+    const ctx = {
+      sessionKey: contract.sessionKey,
+      sessionId: "session-planner-duplicate-dispatch",
+      cwd: tempWorkspace,
+    };
+
+    const first = JSON.parse(String((await dispatchTool().execute(params, ctx)).text));
+    const second = JSON.parse(String((await dispatchTool().execute(params, ctx)).text));
+
+    expect(first.ok).toBe(true);
+    expect(second.ok).toBe(true);
+    expect(second.status).toBe("requires_native_spawn");
+    expect(second.spawnIntentId).toBe(first.spawnIntentId);
+    expect(second.sessionsSpawnArgs).toEqual(first.sessionsSpawnArgs);
+    expect(nativeSpawnIntentStore.get(first.spawnIntentId)?.status).toBe("planned");
+    expect(countRows("native_spawn_intents", "work_contract_id = ?", [contract.workContractId])).toBe(1);
+    const events = readReplayEvents();
+    expect(events).toContainEqual(expect.objectContaining({
+      event: "dispatch_planner_intent_reused",
+      work_contract_id: contract.workContractId,
+      spawn_intent_id: first.spawnIntentId,
+      reason: "pending_intent_reused",
+    }));
+    expect(events).not.toContainEqual(expect.objectContaining({
+      event: "dispatch_planner_ticket_rejected",
+      work_contract_id: contract.workContractId,
+    }));
+  });
+
   it("preserves judge complexity_band for planner native final footers", async () => {
     process.env.OCTOCLAW_SPAWN_BACKEND = "planner";
     process.env.OCTOCLAW_RUNTIME_LEDGER = "enforce";

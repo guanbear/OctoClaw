@@ -1009,6 +1009,61 @@ export async function executeOctoclawDispatch(params: Record<string, unknown>, _
               : null;
             const dispatchMode = useSpeculativeSend ? "send_to_speculative" as const : "new_spawn" as const;
             const nativeIntentArgs = (sessionsSendArgs || sessionsSpawnArgs) as { task: string; [key: string]: unknown };
+            const existingPendingIntent = nativeSpawnIntentStore.findPendingForWorkContract(workContractId, { dispatchMode });
+            if (existingPendingIntent) {
+              const nextState = {
+                ...(state ?? {}),
+                prompt: asString(params.task),
+                decision: cachedDecision,
+                delegated: false,
+                dispatchRoute: "delegate",
+                dispatchStatus: "requires_native_spawn",
+                dispatchExecuted: false,
+                spawnExecuted: false,
+                spawnIntentId: existingPendingIntent.spawnIntentId,
+                workContractId,
+                dispatchMode,
+                dispatch_mode: dispatchMode,
+                complexityBand: complexityBand || undefined,
+                complexity_band: complexityBand || undefined,
+                updatedAt: Date.now(),
+              };
+              setPolicyStateForContext(ctx, nextState, managedSessionKey || stateKey);
+              if (stateKey && managedSessionKey && stateKey !== managedSessionKey) {
+                setPolicyStateForContext(ctx, nextState, stateKey);
+              }
+              await recordPolicyReplay("dispatch_planner_intent_reused", {
+                sessionKey: managedSessionKey || stateKey || asString(params.sessionKey),
+                sessionId: asString(ctx.sessionId),
+                route: resolvedRoute,
+                work_contract_id: workContractId,
+                delegate_task_id: existingPendingIntent.delegateTaskId || delegateTaskId,
+                attempt_id: existingPendingIntent.attemptId || attemptId,
+                spawn_intent_id: existingPendingIntent.spawnIntentId,
+                canonical_args_hash: existingPendingIntent.canonicalArgsHash,
+                expires_at: existingPendingIntent.expiresAt,
+                dispatch_mode: dispatchMode,
+                dispatch_executed: false,
+                spawn_executed: false,
+                materialized: false,
+                reason: "pending_intent_reused",
+                elapsedMs: Date.now() - dispatchToolStartedAt,
+              }, toolLogger(ctx), null);
+              return plannerDispatchResponse({
+                spawnIntentId: existingPendingIntent.spawnIntentId,
+                workContractId,
+                delegateTaskId: asString(existingPendingIntent.delegateTaskId) || delegateTaskId,
+                attemptId: asString(existingPendingIntent.attemptId) || attemptId,
+                sessionsSpawnArgs: existingPendingIntent.sessionsSpawnArgs,
+                sessionsSendArgs: dispatchMode === "send_to_speculative" ? existingPendingIntent.sessionsSpawnArgs : undefined,
+                dispatchMode,
+                speculativeSessionLabel: useSpeculativeSend ? speculative?.label : undefined,
+                canonicalArgsHash: existingPendingIntent.canonicalArgsHash,
+                expiresAt: existingPendingIntent.expiresAt,
+                workerPool: asString(asRecord(cachedDecision.route_decision).worker_pool),
+                model: selectedModel || asString(metadata.model),
+              });
+            }
             let intent: ReturnType<typeof nativeSpawnIntentStore.create>;
             try {
               intent = nativeSpawnIntentStore.create({

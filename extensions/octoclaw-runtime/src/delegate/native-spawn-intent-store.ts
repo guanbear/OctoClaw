@@ -320,6 +320,28 @@ function findPendingInMemory(
   return latest ? cloneIntent(latest) : null;
 }
 
+function findPendingForWorkContractInMemory(
+  memory: Map<string, NativeSpawnIntent>,
+  workContractId: string,
+  nowMs: number,
+  dispatchMode?: NativeSpawnIntent["dispatchMode"],
+): NativeSpawnIntent | null {
+  let latest: NativeSpawnIntent | null = null;
+  for (const intent of memory.values()) {
+    const normalized = normalizeIntent(intent);
+    if (normalized.workContractId !== workContractId) continue;
+    if (dispatchMode && normalized.dispatchMode !== dispatchMode) continue;
+    if (normalized.status !== "planned") continue;
+    if (parseTime(normalized.expiresAt) <= nowMs) {
+      const expired = { ...normalized, status: "expired" as const, updatedAt: new Date(nowMs).toISOString() };
+      memory.set(expired.spawnIntentId, normalizeIntent(expired));
+      continue;
+    }
+    if (!latest || parseTime(normalized.updatedAt) >= parseTime(latest.updatedAt)) latest = normalized;
+  }
+  return latest ? cloneIntent(latest) : null;
+}
+
 function findStatusMatchingInMemory(
   memory: Map<string, NativeSpawnIntent>,
   sessionKey: string,
@@ -388,6 +410,40 @@ export class NativeSpawnIntentStore {
 
   findPendingForSession(sessionKey: string, opts?: FindPendingOptions | number): NativeSpawnIntent | null {
     return this.findPendingMatchingForSession(sessionKey, opts);
+  }
+
+  findPendingForWorkContract(workContractId: string, opts?: FindPendingOptions | number): NativeSpawnIntent | null {
+    const id = asString(workContractId);
+    if (!id) return null;
+    const options = typeof opts === "number" ? { now: opts } : opts;
+    const now = normalizeNow(options?.now);
+    const nowMs = now.getTime();
+    const runtimeOptions = this.options(options);
+    const opened = openDb(runtimeOptions);
+    if (!opened.db) {
+      failIfPersistentUnavailable(opened);
+      return findPendingForWorkContractInMemory(this.memory, id, nowMs, options?.dispatchMode);
+    }
+    try {
+      const rows = withSqliteBusyRetry(() => opened.db!.prepare(
+        `SELECT intent_json FROM native_spawn_intents
+         WHERE work_contract_id = ? AND status = 'planned'
+         ORDER BY updated_at DESC, created_at DESC`,
+      ).all(id));
+      for (const row of rows) {
+        const intent = parseIntent(row);
+        if (!intent) continue;
+        if (options?.dispatchMode && intent.dispatchMode !== options.dispatchMode) continue;
+        if (parseTime(intent.expiresAt) <= nowMs) {
+          upsertDbIntent(opened.db, { ...intent, status: "expired", updatedAt: now.toISOString() });
+          continue;
+        }
+        return intent;
+      }
+      return null;
+    } finally {
+      closeDb(opened);
+    }
   }
 
   findPendingMatchingForSession(sessionKey: string, opts?: FindPendingMatchingOptions | number): NativeSpawnIntent | null {
