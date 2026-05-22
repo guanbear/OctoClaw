@@ -118,6 +118,13 @@ function cheapestMeetingFloor(models: SnapshotModel[], floor: CodingTier): strin
   return eligible[0].modelKey;
 }
 
+function nativeModelMeetingFloor(models: SnapshotModel[], modelKey: string, floor: CodingTier): string | undefined {
+  const model = models.find((candidate) => candidate.modelKey.toLowerCase() === modelKey.toLowerCase()
+    && isSelectable(candidate)
+    && meetsFloor(candidate, floor));
+  return model?.modelKey;
+}
+
 function parseSnapshotModels(raw: string): SnapshotModel[] | undefined {
   const parsed = JSON.parse(raw) as { models?: SnapshotModel[] };
   return Array.isArray(parsed.models) ? parsed.models : undefined;
@@ -148,7 +155,8 @@ function readSnapshotModels(): SnapshotModel[] | undefined {
 function applySnapshotTierSelection(map: ResolvedModelMap, snapshotModels: SnapshotModel[]): ResolvedModelMap {
   const simple = cheapestMeetingFloor(snapshotModels, "mini");
   const normal = cheapestMeetingFloor(snapshotModels, "standard");
-  const complex = cheapestMeetingFloor(snapshotModels, "strong");
+  const complex = nativeModelMeetingFloor(snapshotModels, map.complexity.complex, "strong")
+    ?? cheapestMeetingFloor(snapshotModels, "strong");
   const deep = cheapestMeetingFloor(snapshotModels, "frontier");
 
   return {

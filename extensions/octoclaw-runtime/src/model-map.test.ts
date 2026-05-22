@@ -58,7 +58,7 @@ describe("model map", () => {
       complexity: {
         simple: "zai/glm-4.7",
         normal: "zai/glm-4.7",
-        complex: "zai/glm-4.7",
+        complex: "zhipu/GLM-5.1",
         deep: "cliproxyapi/gpt-5.5",
       },
     });
@@ -123,7 +123,28 @@ describe("model map", () => {
       complexity: {
         simple: "zai/glm-4.7",
         normal: "zai/glm-4.7",
-        complex: "zai/glm-4.7",
+        complex: "zhipu/GLM-5.1",
+      },
+    });
+  });
+
+  it("uses the configured native complex model when a proposal-only casing duplicate appears first", async () => {
+    process.env.OCTOCLAW_ROUTER_SNAPSHOT_JSON = JSON.stringify({
+      schemaVersion: "octoclaw.router_lite.model_intel_snapshot/v1",
+      snapshotId: "test-duplicate-casing",
+      generatedAt: "2026-05-22T00:00:00.000Z",
+      sourceStatus: [],
+      models: [
+        { ...modelIntel("zhipu/glm-5.1", "strong", 1.505), configured: false, proposalOnly: true },
+        modelIntel("zhipu/GLM-5.1", "strong", 0, ["openclaw_config"]),
+        modelIntel("zai/glm-4.7", "strong", 1, ["models.dev", "litellm"]),
+      ],
+    });
+
+    await expect(buildModelMap()).resolves.toMatchObject({
+      complexity: {
+        simple: "zai/glm-4.7",
+        complex: "zhipu/GLM-5.1",
       },
     });
   });
