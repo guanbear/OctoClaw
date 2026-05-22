@@ -230,7 +230,7 @@ function parseScenarioData(scenarioData: unknown): Map<string, ScenarioAbilityLi
     if (isRecord(value)) {
       const hasScenarioField = scenarioAbilityKeys().some((field) => isRecord(asRecord(value)[field]));
       if (hasScenarioField) {
-        result.set(key, value as unknown as ScenarioAbilityLite);
+        result.set(key.toLowerCase(), value as unknown as ScenarioAbilityLite);
       }
     }
   }
@@ -914,9 +914,15 @@ export function buildModelIntelFactsPlane(input: BuildModelIntelFactsPlaneInput)
   const merged = new Map<string, ModelIntelLite>();
   for (const partial of partials) {
     const enrichedPartial = { ...partial, freshness: partial.freshness ?? generatedAt };
-    merged.set(partial.modelKey, mergeModel(merged.get(partial.modelKey), {
+    const lowerKey = partial.modelKey.toLowerCase();
+    const existing = merged.get(lowerKey);
+    const existingIsConfigured = existing && (existing.configured || existing.tags.includes("configured"));
+    const incomingIsConfigured = partial.configured === true || (partial.tags ?? []).includes("configured");
+    const modelKeyToUse = existingIsConfigured ? existing.modelKey : incomingIsConfigured ? partial.modelKey : (existing?.modelKey ?? partial.modelKey);
+    merged.set(lowerKey, mergeModel(existing, {
       ...enrichedPartial,
-      scenarioAbility: partial.scenarioAbility ?? (scenarioData.size > 0 ? scenarioData.get(partial.modelKey) : undefined) ?? inferScenarioAbility(enrichedPartial, generatedAt),
+      modelKey: modelKeyToUse,
+      scenarioAbility: partial.scenarioAbility ?? (scenarioData.size > 0 ? scenarioData.get(lowerKey) : undefined) ?? inferScenarioAbility(enrichedPartial, generatedAt),
     }));
   }
   const normalizedModels = Array.from(merged.values()).map((model) => ({
@@ -929,7 +935,7 @@ export function buildModelIntelFactsPlane(input: BuildModelIntelFactsPlaneInput)
       ...model.capability,
       confidence: model.capability.evidence.includes("declared") ? maxConfidence([model.capability.confidence, "medium"], "low") : model.capability.confidence,
     },
-    scenarioAbility: model.scenarioAbility ?? (scenarioData.size > 0 ? scenarioData.get(model.modelKey) : undefined) ?? inferScenarioAbility(model, model.freshness ?? generatedAt),
+    scenarioAbility: model.scenarioAbility ?? (scenarioData.size > 0 ? scenarioData.get(model.modelKey.toLowerCase()) : undefined) ?? inferScenarioAbility(model, model.freshness ?? generatedAt),
     freshness: mostRecentTimestamp(model.freshness, generatedAt) ?? generatedAt,
   }));
   const models = addPriceRatios(addHealthSnapshotSignals(

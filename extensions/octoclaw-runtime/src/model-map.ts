@@ -14,12 +14,14 @@
 
 import { runCommand, resolveWorkspaceRoot } from "./resolve/env.js";
 import fsSync from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { atomicWriteJsonSync } from "./util/atomic-write.js";
 
 export interface ModelBandMap {
   simple: string;
   normal: string;
+  complex: string;
   deep: string;
 }
 
@@ -41,6 +43,7 @@ const FALLBACK_DEFAULTS: ResolvedModelMap = {
   complexity: {
     simple: "minimax-portal/MiniMax-M2.7-highspeed",
     normal: "zhipu/GLM-5.1",
+    complex: "zhipu/GLM-5.1",
     deep: "cliproxyapi/gpt-5.5",
   },
   budget: {
@@ -64,17 +67,107 @@ interface OpenClawModel {
   tags?: string[];
 }
 
+type CodingTier = "mini" | "standard" | "strong" | "frontier" | "unknown";
+
+const TIER_FLOOR: Record<string, number> = { mini: 1, standard: 2, strong: 3, frontier: 4, unknown: 0 };
+
+interface SnapshotModel {
+  modelKey: string;
+  configured?: boolean;
+  available?: string | boolean;
+  proposalOnly?: boolean;
+  health?: { available?: string | boolean; cooldown?: boolean };
+  capability?: { codingTier?: CodingTier };
+  marketPrice?: { blendedUsdPerMTok?: number };
+}
+
+function meetsFloor(model: SnapshotModel, floor: CodingTier): boolean {
+  const tier = model.capability?.codingTier ?? "unknown";
+  return TIER_FLOOR[tier] >= TIER_FLOOR[floor];
+}
+
+function isSelectable(model: SnapshotModel): boolean {
+  if (model.proposalOnly) return false;
+  if (model.configured !== true) return false;
+  const health = model.health;
+  if (health?.cooldown) return false;
+  const avail = health?.available ?? model.available;
+  if (avail === "no" || avail === false) return false;
+  return true;
+}
+
+function cheapestInTier(models: SnapshotModel[], tier: CodingTier): string | undefined {
+  const eligible = models.filter((m) => isSelectable(m) && (m.capability?.codingTier ?? "unknown") === tier);
+  if (eligible.length === 0) return undefined;
+  eligible.sort((a, b) => (a.marketPrice?.blendedUsdPerMTok ?? Infinity) - (b.marketPrice?.blendedUsdPerMTok ?? Infinity));
+  return eligible[0].modelKey;
+}
+
+function cheapestMeetingFloor(models: SnapshotModel[], floor: CodingTier): string | undefined {
+  const eligible = models.filter((m) => isSelectable(m) && meetsFloor(m, floor));
+  if (eligible.length === 0) return undefined;
+  eligible.sort((a, b) => (a.marketPrice?.blendedUsdPerMTok ?? Infinity) - (b.marketPrice?.blendedUsdPerMTok ?? Infinity));
+  return eligible[0].modelKey;
+}
+
+function cheapestForTier(models: SnapshotModel[], tier: CodingTier): string | undefined {
+  return cheapestInTier(models, tier) ?? cheapestMeetingFloor(models, tier);
+}
+
+function parseSnapshotModels(raw: string): SnapshotModel[] | undefined {
+  const parsed = JSON.parse(raw) as { models?: SnapshotModel[] };
+  return Array.isArray(parsed.models) ? parsed.models : undefined;
+}
+
+function defaultSnapshotPath(): string {
+  return path.join(os.homedir(), ".openclaw", "workspace", "tmp", "octopus", "router-lite", "model-intel-snapshot.json");
+}
+
+function readSnapshotModels(): SnapshotModel[] | undefined {
+  const raw = process.env.OCTOCLAW_ROUTER_SNAPSHOT_JSON;
+  if (raw) {
+    try {
+      return parseSnapshotModels(raw);
+    } catch {
+      return undefined;
+    }
+  }
+
+  const snapshotPath = process.env.OCTOCLAW_ROUTER_SNAPSHOT_PATH?.trim() || defaultSnapshotPath();
+  try {
+    return parseSnapshotModels(fsSync.readFileSync(snapshotPath, "utf-8"));
+  } catch {
+    return undefined;
+  }
+}
+
+function applySnapshotTierSelection(map: ResolvedModelMap, snapshotModels: SnapshotModel[]): ResolvedModelMap {
+  const simple = cheapestForTier(snapshotModels, "mini");
+  const complex = cheapestForTier(snapshotModels, "strong");
+  const deep = cheapestForTier(snapshotModels, "frontier");
+
+  const normalExact = cheapestInTier(snapshotModels, "standard");
+
+  return {
+    ...map,
+    complexity: {
+      simple: simple ?? map.complexity.simple,
+      normal: normalExact ?? map.complexity.normal,
+      complex: complex ?? map.complexity.complex,
+      deep: deep ?? map.complexity.deep,
+    },
+  };
+}
+
 function mapFromOpenClawModels(models: OpenClawModel[]): ResolvedModelMap {
   const available = models.filter((m) => m.available !== false);
 
-  // Extract by tag
   const defaultModel  = available.find((m) => m.tags?.includes("default"))?.key;
   const fallback1     = available.find((m) => m.tags?.includes("fallback#1"))?.key;
   const fallback2     = available.find((m) => m.tags?.includes("fallback#2"))?.key;
   const fallback3     = available.find((m) => m.tags?.includes("fallback#3"))?.key;
   const localModel    = available.find((m) => m.local === true)?.key;
 
-  // cheap = highest-numbered fallback, then local model
   const cheap = fallback3 ?? fallback2 ?? localModel ?? fallback1 ?? defaultModel ?? "";
   const balanced = fallback1 ?? defaultModel ?? cheap;
   const capable = defaultModel ?? fallback1 ?? balanced;
@@ -83,6 +176,7 @@ function mapFromOpenClawModels(models: OpenClawModel[]): ResolvedModelMap {
     complexity: {
       simple: cheap,
       normal: balanced,
+      complex: fallback1 ?? balanced,
       deep: capable,
     },
     budget: {
@@ -102,6 +196,7 @@ function applyUserOverrides(map: ResolvedModelMap, overrides: Record<string, str
     complexity: {
       simple: overrides["simple"] ?? map.complexity.simple,
       normal: overrides["normal"] ?? map.complexity.normal,
+      complex: overrides["complex"] ?? map.complexity.complex,
       deep:   overrides["deep"]   ?? map.complexity.deep,
     },
     budget: {
@@ -139,7 +234,11 @@ export async function buildModelMap(): Promise<ResolvedModelMap> {
     if (models.length === 0) {
       return applyUserOverrides(FALLBACK_DEFAULTS, readUserOverrides());
     }
-    const map = mapFromOpenClawModels(models);
+    let map = mapFromOpenClawModels(models);
+    const snapshotModels = readSnapshotModels();
+    if (snapshotModels && snapshotModels.length > 0) {
+      map = applySnapshotTierSelection(map, snapshotModels);
+    }
     return applyUserOverrides(map, readUserOverrides());
   } catch {
     return applyUserOverrides(FALLBACK_DEFAULTS, readUserOverrides());

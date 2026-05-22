@@ -104,6 +104,13 @@ describe("model intelligence and shadow reporting", () => {
             sources: [{ source: "local_replay", sampleCount: 42, fetchedAt: "2026-05-14T00:00:00.000Z" }],
           },
         },
+        "zhipu/GLM-5.1": {
+          codingWorker: {
+            tier: "A",
+            confidence: "high",
+            sources: [{ source: "aider", sampleCount: 9, fetchedAt: "2026-05-14T00:00:00.000Z" }],
+          },
+        },
       },
     });
 
@@ -153,6 +160,11 @@ describe("model intelligence and shadow reporting", () => {
       proposalOnly: true,
       capability: { codingTier: "mini" },
       marketPrice: { ratioBaselineModel: "zhipu/glm-5.1", ratioToBaseline: 0.20000000000000004 },
+    });
+    expect(snapshot.models.find((model) => model.modelKey === "zhipu/glm-5.1")).toMatchObject({
+      scenarioAbility: {
+        codingWorker: { tier: "A", confidence: "high" },
+      },
     });
   });
 
@@ -292,6 +304,60 @@ describe("model intelligence and shadow reporting", () => {
     expect(snapshot.models.find((model) => model.modelKey === "cliproxyapi/gpt-5.5")).toMatchObject({
       configured: true,
       proposalOnly: false,
+    });
+  });
+
+  it("merges OpenClaw configured models with packaged evidence case-insensitively", () => {
+    const snapshot = buildModelIntelSnapshot({
+      generatedAt: "2026-05-22T00:00:00.000Z",
+      openClawModelsList: {
+        models: [
+          { key: "zhipu/GLM-5.1", available: true, tags: ["default", "fallback#1", "configured"] },
+        ],
+      },
+      packagedSnapshot: {
+        schemaVersion: "octoclaw.router_lite.model_intel_snapshot/v1",
+        snapshotId: "packaged",
+        generatedAt: "2026-05-21T00:00:00.000Z",
+        sourceStatus: [],
+        models: [
+          {
+            provider: "zhipu",
+            model: "glm-5.1",
+            modelKey: "zhipu/glm-5.1",
+            configured: false,
+            available: "yes",
+            proposalOnly: true,
+            tags: [],
+            marketPrice: { blendedUsdPerMTok: 1.505, confidence: "medium", sources: ["packaged_leaderboard"] },
+            capability: {
+              input: ["text"],
+              toolUse: "yes",
+              structuredOutput: "yes",
+              reasoning: "yes",
+              promptCache: "unknown",
+              codingTier: "strong",
+              confidence: "medium",
+              evidence: ["declared"],
+              sources: ["packaged_leaderboard"],
+            },
+            health: { available: "yes", cooldown: false, quotaPressure: "unknown", sources: [] },
+            plan: { type: "unknown", quotaPressure: "unknown", effectiveCostBand: "unknown", sources: [] },
+            sources: ["packaged_leaderboard"],
+          },
+        ],
+      },
+    });
+
+    const zhipuModels = snapshot.models.filter((model) => model.modelKey.toLowerCase() === "zhipu/glm-5.1");
+    expect(zhipuModels).toHaveLength(1);
+    expect(zhipuModels[0]).toMatchObject({
+      modelKey: "zhipu/GLM-5.1",
+      configured: true,
+      proposalOnly: false,
+      tags: expect.arrayContaining(["default", "fallback#1", "configured"]),
+      capability: { codingTier: "strong", sources: expect.arrayContaining(["packaged_leaderboard"]) },
+      marketPrice: { blendedUsdPerMTok: 1.505 },
     });
   });
 
