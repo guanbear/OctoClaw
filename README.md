@@ -12,8 +12,9 @@ English | [简体中文](./README.zh-CN.md)
 [![npm](https://img.shields.io/npm/v/@octoclaw/cli?label=%40octoclaw%2Fcli)](https://www.npmjs.com/package/@octoclaw/cli)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-> Your OpenClaw main agent shouldn't have to do everything itself.
-> Delegate heavy, slow, or uncertain work to cheap sub-agents in the background — automatically.
+> Auto-delegation, status truth, and cost-aware model routing for OpenClaw agents.
+>
+> OctoClaw keeps the main agent responsive by moving slow or uncertain work into native OpenClaw sub-agents, then reports durable task truth back to Slack, Feishu, WeChat, and the CLI.
 
 ---
 
@@ -46,6 +47,22 @@ OctoClaw fixes those four things.
 - 🔁 **Recoverable tasks** — delegation tickets, retry attempts, amendment protocol (`steer_child` / `queue_after` / `cancel_and_respawn`)
 - 💬 **IM out of the box** — Slack (streaming + thread), Feishu (thread), WeChat (plain text), with explicit degradation per tier
 - 🔧 **One CLI for everything ops** — `octoclawctl` handles install, deploy, status, nightly review, calibration gates
+
+## Release status
+
+OctoClaw is approaching the `0.6.x` release line.
+
+| Surface | Status | Notes |
+|---|---:|---|
+| OpenClaw runtime plugin | ✅ release candidate | Built against OpenClaw `2026.5.12` native TaskFlow and Slack plugin contracts |
+| Slack | ✅ live-smoked | Streaming, ACK, footer truth, native final delivery, and parallel child status are covered by `stability full` |
+| Auto Router | ✅ gated live for delegated lanes | Uses local config, model pricing/capability snapshots, health cooldowns, and local promotion evidence |
+| Feishu | ⚠️ adapter ready; target smoke required | Card/status/onboarding paths exist, but release migration should smoke on the Feishu-only target machine |
+| WeChat / Telegram / Discord | ⚠️ adapter tiers | Plain/rich delivery contracts are present; not all channels have live acceptance harnesses |
+
+- Release checklist: [`docs/release-checklist.md`](./docs/release-checklist.md)
+- Release notes draft: [`docs/release-notes-v0.6.0.md`](./docs/release-notes-v0.6.0.md)
+- Migration and Feishu-only runbook: [`docs/octoclaw-migration-onboarding-feishu-guide.md`](./docs/octoclaw-migration-onboarding-feishu-guide.md)
 
 ---
 
@@ -115,6 +132,16 @@ On Slack (native streaming), progress tiers are automatically skipped because th
 
 ## Quick start
 
+Prerequisites:
+
+- OpenClaw `>= 2026.5.12`
+- Node.js `>= 22`
+- `pnpm` for source installs
+- At least one IM channel: Slack or Feishu for production use
+- A judge model: local Qwen3 0.6B through Ollama, or a remote OpenAI-compatible model such as `gpt-5.4-mini`
+
+From source:
+
 ```bash
 pnpm install
 pnpm build
@@ -126,12 +153,23 @@ node tools/octoclawctl/dist/cli.js enable
 node tools/octoclawctl/dist/cli.js status
 ```
 
+When using a released CLI package:
+
+```bash
+npm install -g @octoclaw/cli
+octoclawctl init
+octoclawctl install
+octoclawctl deploy
+octoclawctl doctor
+```
+
 Migrating to a new machine, running without a local judge, or installing into a Feishu-only environment: follow [`docs/octoclaw-migration-onboarding-feishu-guide.md`](./docs/octoclaw-migration-onboarding-feishu-guide.md). The intended flow is AI-runbook first, thin wizard only for secrets and explicit config choices.
 
 Once `octoclawctl` is on your PATH:
 
 ```bash
 octoclawctl status                       # current projection
+octoclawctl doctor                       # release readiness
 octoclawctl details --task-id <id>       # per-task detail
 octoclawctl queue                        # running / queued
 octoclawctl timeline --task-id <id>      # step-by-step trace
@@ -214,10 +252,9 @@ docs/archive                      historical plans and evidence
 
 ## Roadmap
 
-- **N1 (in progress)** — runtime gate convergence, timeout watchdog + canonical statuses, retry / amendment protocol
-- **N2** — IM capability matrix productization; Slack / Feishu / WeChat acceptance fixtures
-- **N3** — Auto Router from shadow to gated live (delegated lanes only; main agent unchanged by default)
-- **N4** — release + open-source polish: quickstart, release gates, operator runbook
+- **0.6.x release candidate** — native TaskFlow truth, Slack stability smoke, Auto Router delegated-lane live mode, AI-first migration runbook
+- **Next** — Feishu-only target smoke, packaged install rehearsal, release tag, and channel-specific acceptance expansion
+- **Later** — broader IM live harnesses, richer status surfaces, and data-backed multi-agent topologies only where measured wins justify the overhead
 
 Full architecture baseline: [`docs/octoclaw-ts-rebuild-design-v2.md`](./docs/octoclaw-ts-rebuild-design-v2.md).
 Detailed module map: [`docs/octoclaw-architecture-map-2026-05-09.md`](./docs/octoclaw-architecture-map-2026-05-09.md).
