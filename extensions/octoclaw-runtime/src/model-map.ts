@@ -77,13 +77,29 @@ interface SnapshotModel {
   available?: string | boolean;
   proposalOnly?: boolean;
   health?: { available?: string | boolean; cooldown?: boolean };
-  capability?: { codingTier?: CodingTier };
+  capability?: { codingTier?: CodingTier; capabilityScore?: { score?: number; confidence?: string } };
   marketPrice?: { blendedUsdPerMTok?: number };
 }
 
 function meetsFloor(model: SnapshotModel, floor: CodingTier): boolean {
-  const tier = model.capability?.codingTier ?? "unknown";
+  const tier = effectiveTier(model);
   return TIER_FLOOR[tier] >= TIER_FLOOR[floor];
+}
+
+function tierFromScore(score: number | undefined): CodingTier | undefined {
+  if (score === undefined || !Number.isFinite(score)) return undefined;
+  if (score >= 90) return "frontier";
+  if (score >= 75) return "strong";
+  if (score >= 60) return "standard";
+  if (score >= 45) return "mini";
+  return "unknown";
+}
+
+function effectiveTier(model: SnapshotModel): CodingTier {
+  const scoreTier = tierFromScore(model.capability?.capabilityScore?.score);
+  const rawTier = model.capability?.codingTier ?? "unknown";
+  if (!scoreTier) return rawTier;
+  return TIER_FLOOR[scoreTier] > TIER_FLOOR[rawTier] ? scoreTier : rawTier;
 }
 
 function isSelectable(model: SnapshotModel): boolean {
@@ -105,8 +121,8 @@ function compareForCost(a: SnapshotModel, b: SnapshotModel): number {
   const priceA = priceSortKey(a.marketPrice?.blendedUsdPerMTok);
   const priceB = priceSortKey(b.marketPrice?.blendedUsdPerMTok);
   if (priceA !== priceB) return priceA - priceB;
-  const tierA = TIER_FLOOR[a.capability?.codingTier ?? "unknown"];
-  const tierB = TIER_FLOOR[b.capability?.codingTier ?? "unknown"];
+  const tierA = TIER_FLOOR[effectiveTier(a)];
+  const tierB = TIER_FLOOR[effectiveTier(b)];
   if (tierA !== tierB) return tierB - tierA;
   return (a.modelKey ?? "").localeCompare(b.modelKey ?? "");
 }

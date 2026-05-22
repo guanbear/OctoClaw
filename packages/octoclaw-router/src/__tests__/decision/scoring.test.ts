@@ -4,6 +4,7 @@ import type { ModelIntelLite, RouterLiteRequest } from "../../decision/contracts
 import {
   BALANCED_WEIGHTS,
   buildRecommendation,
+  capabilityScoreFor,
   costScoreFor,
   scoreModel,
   type ScoringContext,
@@ -68,6 +69,22 @@ function context(complexity: RouterLiteRequest["judge"]["complexity"], allModels
 }
 
 describe("scoring engine RT-S-001..010", () => {
+  it("CSC-003 uses unified capability score before tier priors", () => {
+    const subject = model("openai/gpt-5.4-mini", "mini", {
+      capability: {
+        ...model("openai/gpt-5.4-mini", "mini").capability,
+        capabilityScore: {
+          score: 86,
+          confidence: "high",
+          contributions: [],
+          reasonCodes: ["test_score"],
+        },
+      },
+    });
+
+    expect(capabilityScoreFor(subject, "complex")).toBe(86);
+  });
+
   it("RT-S-001 recommends frontier model for deep complexity", () => {
     const models = [
       model("openai/gpt-5.5", "frontier"),

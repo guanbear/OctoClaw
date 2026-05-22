@@ -5,6 +5,7 @@ import type {
   RouterLiteCapabilityEvidence,
   RouterLiteCodingTier,
   RouterLiteConfidence,
+  RouterLiteFusedScore,
   RouterLiteEffectiveCostBand,
   RouterLiteHealth,
   RouterLitePlan,
@@ -309,6 +310,8 @@ function mergeCapability(base: RouterLiteCapability, incoming?: Partial<RouterLi
     confidence: maxConfidence([base.confidence, incoming.confidence], "unknown"),
     evidence: unique([...(base.evidence ?? []), ...(incoming.evidence ?? [])]) as RouterLiteCapabilityEvidence[],
     sources: unique([...base.sources, ...(incoming.sources ?? [])]),
+    scoreByScenario: incoming.scoreByScenario ?? base.scoreByScenario,
+    capabilityScore: incoming.capabilityScore ?? base.capabilityScore,
   };
 }
 
@@ -895,6 +898,75 @@ function addPriceRatios(models: ModelIntelLite[], baselineModel = "glm-5.1"): Mo
   });
 }
 
+const TIER_PRIOR_SCORE: Record<RouterLiteCodingTier, number> = {
+  frontier: 92,
+  strong: 78,
+  standard: 64,
+  mini: 50,
+  unknown: 35,
+};
+
+const TIER_LEVEL: Record<RouterLiteCodingTier, number> = {
+  frontier: 4,
+  strong: 3,
+  standard: 2,
+  mini: 1,
+  unknown: 0,
+};
+
+function tierFromCapabilityScore(score: number): RouterLiteCodingTier {
+  if (score >= 90) return "frontier";
+  if (score >= 75) return "strong";
+  if (score >= 60) return "standard";
+  if (score >= 45) return "mini";
+  return "unknown";
+}
+
+function maxTier(left: RouterLiteCodingTier, right: RouterLiteCodingTier): RouterLiteCodingTier {
+  return TIER_LEVEL[right] > TIER_LEVEL[left] ? right : left;
+}
+
+function deriveCapabilityScore(capability: RouterLiteCapability): RouterLiteFusedScore {
+  const scenarioScores = [
+    { scenario: "coding_worker", weight: 0.55, score: capability.scoreByScenario?.coding_worker },
+    { scenario: "agentic", weight: 0.25, score: capability.scoreByScenario?.agentic },
+    { scenario: "research", weight: 0.10, score: capability.scoreByScenario?.research },
+  ].filter((entry) => entry.score && entry.score.confidence !== "unknown" && Number.isFinite(entry.score.score));
+
+  if (scenarioScores.length > 0) {
+    const totalWeight = scenarioScores.reduce((sum, entry) => sum + entry.weight, 0);
+    const score = scenarioScores.reduce((sum, entry) => sum + entry.score!.score * (entry.weight / totalWeight), 0);
+    const confidences = scenarioScores.map((entry) => entry.score!.confidence);
+    return {
+      score: Math.round(score * 100) / 100,
+      confidence: maxConfidence(confidences, "low"),
+      contributions: scenarioScores.flatMap((entry) => entry.score!.contributions),
+      reasonCodes: [
+        ...scenarioScores.map((entry) => `score_source:${entry.scenario}`),
+        ...unique(scenarioScores.flatMap((entry) => entry.score!.reasonCodes)),
+      ],
+    };
+  }
+
+  const tier = capability.codingTier ?? "unknown";
+  return {
+    score: TIER_PRIOR_SCORE[tier] ?? TIER_PRIOR_SCORE.unknown,
+    confidence: "low",
+    contributions: [],
+    reasonCodes: [`score_source:tier_prior`, `tier_prior:${tier}`],
+  };
+}
+
+function calibrateCapability(capability: RouterLiteCapability): RouterLiteCapability {
+  const capabilityScore = capability.capabilityScore ?? deriveCapabilityScore(capability);
+  const scoreTier = tierFromCapabilityScore(capabilityScore.score);
+  return {
+    ...capability,
+    codingTier: maxTier(capability.codingTier, scoreTier),
+    capabilityScore,
+  };
+}
+
 export function buildModelIntelFactsPlane(input: BuildModelIntelFactsPlaneInput): ModelIntelFactsPlane {
   const generatedAt = input.generatedAt ?? new Date().toISOString();
   const scenarioData = parseScenarioData(input.scenarioData);
@@ -937,6 +1009,9 @@ export function buildModelIntelFactsPlane(input: BuildModelIntelFactsPlaneInput)
     },
     scenarioAbility: model.scenarioAbility ?? (scenarioData.size > 0 ? scenarioData.get(model.modelKey.toLowerCase()) : undefined) ?? inferScenarioAbility(model, model.freshness ?? generatedAt),
     freshness: mostRecentTimestamp(model.freshness, generatedAt) ?? generatedAt,
+  })).map((model) => ({
+    ...model,
+    capability: calibrateCapability(model.capability),
   }));
   const models = addPriceRatios(addHealthSnapshotSignals(
     addUsageSignals(normalizedModels, input.usageStatus, input.usageCost),

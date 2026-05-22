@@ -68,6 +68,7 @@ export interface RouterLiteCapability {
   evidence: RouterLiteCapabilityEvidence[];
   sources: string[];
   scoreByScenario?: RouterLiteScoreByScenario;
+  capabilityScore?: RouterLiteFusedScore;
 }
 
 export interface RouterLiteScoredSourceContribution {

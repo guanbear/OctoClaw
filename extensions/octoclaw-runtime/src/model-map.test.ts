@@ -148,9 +148,29 @@ describe("model map", () => {
       },
     });
   });
+
+  it("CSC-003 lets a score-calibrated mini-named model pass the complex floor", async () => {
+    process.env.OCTOCLAW_ROUTER_SNAPSHOT_JSON = JSON.stringify({
+      schemaVersion: "octoclaw.router_lite.model_intel_snapshot/v1",
+      snapshotId: "test-score-calibration",
+      generatedAt: "2026-05-22T00:00:00.000Z",
+      sourceStatus: [],
+      models: [
+        modelIntel("cliproxyapi/gpt-5.5", "frontier", 11.25),
+        modelIntel("cliproxyapi/gpt-5.4-mini", "mini", 1.6875, ["test"], 86),
+      ],
+    });
+
+    await expect(buildModelMap()).resolves.toMatchObject({
+      complexity: {
+        complex: "cliproxyapi/gpt-5.4-mini",
+        deep: "cliproxyapi/gpt-5.5",
+      },
+    });
+  });
 });
 
-function modelIntel(modelKey: string, tier: string, price: number, priceSources = ["test"]) {
+function modelIntel(modelKey: string, tier: string, price: number, priceSources = ["test"], score?: number) {
   const [provider, model] = modelKey.split("/");
   return {
     provider,
@@ -171,6 +191,14 @@ function modelIntel(modelKey: string, tier: string, price: number, priceSources 
       confidence: "high",
       evidence: ["declared"],
       sources: ["test"],
+      ...(score === undefined ? {} : {
+        capabilityScore: {
+          score,
+          confidence: "high",
+          contributions: [],
+          reasonCodes: ["test_score"],
+        },
+      }),
     },
     health: { available: "yes", cooldown: false, quotaPressure: "low", sources: ["test"] },
     plan: { type: "pay_as_you_go", quotaPressure: "unknown", effectiveCostBand: "unknown", sources: ["test"] },

@@ -4,6 +4,101 @@ import { buildModelIntelFactsPlane } from "../../decision/model-intel-facts.js";
 import { selectShadowRecommendation } from "../../decision/shadow-selector.js";
 
 describe("ModelIntelFactsPlane", () => {
+  it("CSC-001 calibrates mini-named models to strong when benchmark score is strong", () => {
+    const facts = buildModelIntelFactsPlane({
+      generatedAt: "2026-05-22T00:00:00.000Z",
+      openClawConfig: {
+        models: {
+          providers: {
+            cliproxyapi: {
+              baseUrl: "http://localhost:8317/v1",
+              models: [{ id: "gpt-5.4-mini" }],
+            },
+          },
+        },
+      },
+      packagedSnapshot: {
+        schemaVersion: "octoclaw.router_lite.model_intel_snapshot/v1",
+        snapshotId: "packaged",
+        generatedAt: "2026-05-22T00:00:00.000Z",
+        models: [
+          {
+            provider: "openai",
+            model: "gpt-5.4-mini",
+            modelKey: "openai/gpt-5.4-mini",
+            configured: false,
+            available: "yes",
+            marketPrice: {
+              blendedUsdPerMTok: 1.6875,
+              confidence: "high",
+              sources: ["packaged_leaderboard"],
+            },
+            capability: {
+              input: ["text"],
+              toolUse: "yes",
+              structuredOutput: "yes",
+              reasoning: "yes",
+              promptCache: "unknown",
+              codingTier: "mini",
+              confidence: "high",
+              evidence: ["declared"],
+              sources: ["packaged_leaderboard"],
+              scoreByScenario: {
+                coding_worker: {
+                  score: 86,
+                  confidence: "high",
+                  contributions: [],
+                  reasonCodes: ["test_score"],
+                },
+              },
+            },
+            sources: ["packaged_leaderboard"],
+          },
+        ],
+      },
+    });
+
+    expect(facts.models.find((model) => model.modelKey === "cliproxyapi/gpt-5.4-mini")).toMatchObject({
+      configured: true,
+      proposalOnly: false,
+      capability: {
+        codingTier: "strong",
+        capabilityScore: {
+          score: 86,
+          confidence: "high",
+          reasonCodes: expect.arrayContaining(["score_source:coding_worker"]),
+        },
+        sources: expect.arrayContaining(["openclaw_config", "packaged_leaderboard"]),
+      },
+    });
+  });
+
+  it("CSC-002 keeps conservative prior tiers when benchmark score is missing", () => {
+    const facts = buildModelIntelFactsPlane({
+      generatedAt: "2026-05-22T00:00:00.000Z",
+      openClawConfig: {
+        models: {
+          providers: {
+            zai: {
+              models: [{ id: "glm-4.7" }],
+            },
+          },
+        },
+      },
+    });
+
+    expect(facts.models.find((model) => model.modelKey === "zai/glm-4.7")).toMatchObject({
+      capability: {
+        codingTier: "standard",
+        capabilityScore: {
+          score: 64,
+          confidence: "low",
+          reasonCodes: expect.arrayContaining(["score_source:tier_prior"]),
+        },
+      },
+    });
+  });
+
   it("centralizes configured, proposal, mirrored, and health facts for snapshot assembly", () => {
     const facts = buildModelIntelFactsPlane({
       generatedAt: "2026-05-16T00:00:00.000Z",

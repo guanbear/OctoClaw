@@ -62,6 +62,16 @@ const MIN_TIER_BY_COMPLEXITY = {
   deep: "frontier",
 } as const;
 
+function effectiveCodingTier(model: ModelIntelLite): ModelIntelLite["capability"]["codingTier"] {
+  const score = model.capability.capabilityScore?.score;
+  if (score === undefined) return model.capability.codingTier;
+  if (score >= 90) return "frontier";
+  if (score >= 75) return "strong";
+  if (score >= 60) return "standard";
+  if (score >= 45) return "mini";
+  return "unknown";
+}
+
 export function scoreModel(
   model: ModelIntelLite,
   context: ScoringContext,
@@ -103,9 +113,9 @@ export function buildRecommendation(models: ModelIntelLite[], context: ScoringCo
       const minEligibleLevel = Math.min(
         ...candidates
           .filter((entry) => entry.score > Number.NEGATIVE_INFINITY)
-          .map((entry) => TIER_LEVEL[entry.model.capability.codingTier]),
+          .map((entry) => TIER_LEVEL[effectiveCodingTier(entry.model)]),
       );
-      return TIER_LEVEL[candidate.model.capability.codingTier] === minEligibleLevel;
+      return TIER_LEVEL[effectiveCodingTier(candidate.model)] === minEligibleLevel;
     })
     .sort((left, right) => {
       if (Math.abs(right.score - left.score) > 0.01) return right.score - left.score;
@@ -133,6 +143,10 @@ export function buildRecommendation(models: ModelIntelLite[], context: ScoringCo
 }
 
 export function capabilityScoreFor(model: ModelIntelLite, complexity: Complexity): number {
+  const unified = model.capability.capabilityScore;
+  if (unified !== undefined && unified.confidence !== "unknown") {
+    return unified.score;
+  }
   const scenario = scenarioForComplexity(complexity);
   const fused = model.capability.scoreByScenario?.[scenario];
   if (fused !== undefined && fused.confidence !== "unknown") {
@@ -151,7 +165,7 @@ function scenarioForComplexity(_complexity: Complexity): "coding_worker" {
 }
 
 export function qualityFloorPassesFor(model: ModelIntelLite, complexity: Complexity): boolean {
-  return TIER_LEVEL[model.capability.codingTier] >= TIER_LEVEL[MIN_TIER_BY_COMPLEXITY[complexity]];
+  return TIER_LEVEL[effectiveCodingTier(model)] >= TIER_LEVEL[MIN_TIER_BY_COMPLEXITY[complexity]];
 }
 
 export function costScoreFor(model: ModelIntelLite, context: ScoringContext): number {
@@ -253,8 +267,9 @@ function buildReasonCodes(
   const switchedFromCooldownPeer = rejectedModels.some((entry) => {
     const rejected = allModels.find((candidate) => candidate.modelKey === entry.model);
     return entry.reason === "cooldown_active"
-      && rejected?.provider !== model.provider
-      && rejected?.capability.codingTier === model.capability.codingTier;
+      && rejected !== undefined
+      && rejected.provider !== model.provider
+      && effectiveCodingTier(rejected) === effectiveCodingTier(model);
   });
   if (switchedFromCooldownPeer) reasonCodes.push("switched_provider_for_stability");
   for (const rejected of rejectedModels) {
