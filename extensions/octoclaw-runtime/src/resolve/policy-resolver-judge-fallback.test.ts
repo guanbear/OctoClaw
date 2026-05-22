@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { resolveStatelessPolicyDecision } from "./policy-resolver.js";
+import { resolvePolicyDecisionForContext, resolveStatelessPolicyDecision } from "./policy-resolver.js";
 import { policyState } from "../state/policy-state.js";
 import { buildDelegationTicketDryRun } from "../runtime-ledger/ticket-dry-run.js";
 import { resetCooldownForTests } from "./judge-cooldown.js";
+import { buildPolicyMetadata } from "./session.js";
 
 const localJudgeConfig = {
   enabled: true,
@@ -337,6 +338,8 @@ describe("execution coverage override intent guard", () => {
     "intent-guard-followup-session",
     "intent-guard-timeout-new-task",
     "intent-guard-timeout-followup",
+    "agent:main:slack:default:direct:u0struct",
+    "agent:main:slack:default:direct:u0struct:thread:1779481605.469169",
   ];
 
   beforeEach(() => {
@@ -348,6 +351,68 @@ describe("execution coverage override intent guard", () => {
   afterEach(() => {
     resetCooldownForTests();
     for (const key of testKeys) policyState.clear(key);
+  });
+
+  it("routes thread replies to an in-flight parent message through execution follow-up control", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      judgeResponse("delegate", 0.9),
+    );
+
+    const parentKey = "agent:main:slack:default:direct:u0struct";
+    const threadKey = `${parentKey}:thread:1779481605.469169`;
+    policyState.set(parentKey, {
+      prompt: "在吗 今天天气咋样",
+      decision: { route_decision: { route: "reply" } },
+      canonicalSessionKey: parentKey,
+      ackGuardKey: parentKey,
+      inboundMessageTs: "1779481605.469169",
+      message_id: "1779481605.469169",
+      reactionAckSent: true,
+      formal_reply_visible: false,
+      updatedAt: Date.now() - 20_000,
+    });
+
+    const resolved = await resolvePolicyDecisionForContext(
+      "？？？",
+      {
+        agentId: "main",
+        sessionKey: threadKey,
+        sessionId: "thread-followup-session",
+        trigger: "user",
+      },
+      "/tmp",
+    );
+
+    const decision = resolved?.decision as Record<string, unknown>;
+    const request = decision.request as Record<string, unknown>;
+    const metadata = request.metadata as Record<string, unknown>;
+    const conversationControl = metadata.conversation_control as Record<string, unknown>;
+
+    expect(conversationControl).toMatchObject({
+      source: "pending_thread_parent",
+      intent_class: "execution_followup",
+      route_hint: "reply",
+      require_state_grounding: true,
+    });
+    expect(routeDecisionOf(decision)).toMatchObject({
+      route: "reply",
+    });
+  });
+
+  it("preserves thread binding metadata for agent-prefixed Slack thread keys", () => {
+    const threadKey = "agent:main:slack:default:direct:u0struct:thread:1779481605.469169";
+    const metadata = buildPolicyMetadata({
+      agentId: "main",
+      sessionKey: threadKey,
+      sessionId: "thread-followup-session",
+      trigger: "user",
+    }, { stateKey: threadKey });
+
+    expect(metadata).toMatchObject({
+      session_key: threadKey,
+      session_binding_key: "slack:user:u0struct",
+      session_thread_id: "1779481605.469169",
+    });
   });
 
 

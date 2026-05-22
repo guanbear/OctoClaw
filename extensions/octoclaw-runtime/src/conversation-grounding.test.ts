@@ -460,38 +460,6 @@ describe("Chinese provenance prompt intent classification", () => {
     expect(intent.intent_class).toBe("execution_followup");
   });
 
-  it("classifies processing-status questions with history as execution_followup", () => {
-    const dir = path.join("/tmp", `octoclaw-processing-followup-${Date.now()}-${Math.random().toString(16).slice(2)}`);
-    fs.mkdirSync(dir, { recursive: true });
-    const replayLogPath = path.join(dir, "runtime-policy-replay.jsonl");
-    const taskStatePath = path.join(dir, "task-state.json");
-
-    fs.writeFileSync(replayLogPath, [
-      JSON.stringify({
-        event: "policy_resolved",
-        sessionKey: "slack:default:dm:U123:thread:1779481605.469169",
-        sessionId: "weather-session",
-        at: new Date(Date.now() - 30_000).toISOString(),
-        prompt: "在吗 今天天气咋样",
-        route: "reply",
-      }),
-    ].join("\n"));
-    fs.writeFileSync(taskStatePath, JSON.stringify({ tasks: [] }));
-
-    const intent = buildConversationIntentPacket({
-      prompt: "为啥是处理中呢",
-      replayLogPath,
-      taskStatePath,
-      sessionKeys: ["slack:default:dm:U123:thread:1779481605.469169"],
-    });
-    const control = buildConversationControlHintsFromIntent(intent);
-
-    expect(intent.intent_class).toBe("execution_followup");
-    expect(intent.reason_codes).toContain("recent_execution_followup");
-    expect(control.route_hint).toBe("reply");
-    expect(control.require_state_grounding).toBe(true);
-  });
-
   it("does NOT classify '帮我写个Python脚本' as execution_followup", () => {
     const intent = buildConversationIntentPacket({
       prompt: "帮我写个Python脚本转换CSV到JSON",

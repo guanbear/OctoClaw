@@ -107,6 +107,87 @@ type PolicyContextState = UnknownRecord & {
   updatedAt?: number;
 };
 
+function policyStateEntryIsTerminal(entry: UnknownRecord): boolean {
+  const decision = asRecord(entry.decision);
+  const workContract = asRecord(decision.work_contract);
+  const latestStatus = asRecord(entry.latestStatus);
+  const terminalStatuses = new Set(["completed", "failed", "timed_out", "timeout", "cancelled", "canceled", "blocked", "delivered"]);
+  const statuses = [
+    entry.deliveryStatus,
+    entry.delivery_status,
+    entry.dispatchStatus,
+    entry.dispatch_status,
+    workContract.status,
+    latestStatus.status,
+  ].map((value) => asString(value).toLowerCase()).filter(Boolean);
+  return asBoolean(entry.resultMaterialized)
+    || asBoolean(entry.result_materialized)
+    || asBoolean(entry.formal_reply_visible)
+    || asBoolean(entry.nativeAnnounceDelivered)
+    || asBoolean(entry.native_announce_delivered)
+    || statuses.some((status) => terminalStatuses.has(status));
+}
+
+function messageAnchorOf(entry: UnknownRecord): string {
+  return asString(entry.inboundMessageTs)
+    || asString(entry.message_id)
+    || asString(entry.messageId)
+    || asString(entry.replyToMessageId)
+    || asString(entry.reply_to_id);
+}
+
+function parentSessionKeyFromThreadKey(sessionKey: string, threadId: string): string {
+  const key = asString(sessionKey);
+  const marker = `:thread:${threadId}`;
+  return key.endsWith(marker) ? key.slice(0, -marker.length) : "";
+}
+
+function applyPendingThreadParentControl(metadata: UnknownRecord): UnknownRecord {
+  const threadId = asString(metadata.session_thread_id);
+  if (!threadId) return metadata;
+
+  const parentKey = [
+    parentSessionKeyFromThreadKey(asString(metadata.session_key), threadId),
+    asString(metadata.session_binding_key),
+  ].find((key) => Boolean(key && policyState.get(key)));
+  if (!parentKey) return metadata;
+
+  const parentState = asRecord(policyState.get(parentKey));
+  if (Object.keys(parentState).length === 0) return metadata;
+  if (messageAnchorOf(parentState) !== threadId) return metadata;
+  if (policyStateEntryIsTerminal(parentState)) return metadata;
+
+  const existingControl = asRecord(metadata.conversation_control);
+  return {
+    ...metadata,
+    conversation_control: {
+      ...existingControl,
+      available: true,
+      source: "pending_thread_parent",
+      kind: asString(existingControl.kind) || "execution_followup",
+      intent_class: "execution_followup",
+      route_hint: "reply",
+      lane_hint: "control_observer",
+      protected_lane: "control_observer",
+      require_state_grounding: true,
+      provenance_followup: asBoolean(existingControl.provenance_followup),
+      status_followup: true,
+      pending_parent_session_key: parentKey,
+      pending_parent_message_id: threadId,
+    },
+    intent_packet: {
+      ...asRecord(metadata.intent_packet),
+      available: true,
+      intentClass: "execution_followup",
+      intent_class: "execution_followup",
+      schema_version: asString(asRecord(metadata.intent_packet).schema_version) || "octoclaw.intent_packet/v1",
+      source: "pending_thread_parent",
+      reason_codes: ["pending_thread_parent_inflight"],
+      relation_to_recent_execution: "existing_execution_followup",
+    },
+  };
+}
+
 interface DispatchLikeInput {
   task: unknown;
   command?: string;
@@ -1503,7 +1584,7 @@ export async function resolvePolicyDecisionForContext(
   policyState.prune();
   const stateKey = resolvePolicyStateKey(ctx);
   const existing = policyState.resolveForContext(ctx).state as PolicyContextState | null;
-  const metadata = buildPolicyMetadata(ctx, { stateKey });
+  const metadata = applyPendingThreadParentControl(buildPolicyMetadata(ctx, { stateKey }));
   const existingDelegateTaskContext = asRecord(existing?.delegateTaskContext);
 
   // Inject judge/delegation config from env vars (bypasses plugin config schema validation)
