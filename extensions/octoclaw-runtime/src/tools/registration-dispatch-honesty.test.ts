@@ -13,6 +13,7 @@ import { dispatchReplyToMessageId, getToolRegistrations } from "./registration.j
 import { formatAbsoluteShort, formatTimeAgo } from "./registration-helpers.js";
 import { buildWorkContractFromPolicy, buildWorkDecisionSeal } from "../work-contract/builders.js";
 import { loadWorkContract, saveWorkContract } from "../work-contract/store.js";
+import { nativeSpawnIntentStore } from "../delegate/native-spawn-intent-store.js";
 
 const fs = fsSync as unknown as {
   mkdtempSync(pathname: string): string;
@@ -1850,6 +1851,61 @@ describe("octoclaw_dispatch honesty", () => {
     // Must be a fallback or rejection, never a new spawn
     expect(result.fallback_to_main_reply).toBe(true);
     policyState.clear(stateKey);
+  });
+
+  it("[target-WP-A.5] internal subagent completion event cannot create a new delegated task/spawn", async () => {
+    const stateKey = "agent:main:slack:default:direct:u0al9t5u89z:thread:1779460000.000001";
+    const internalEvent = [
+      "[Inter-session message] sourceSession=agent:main:subagent:abc sourceChannel=webchat sourceTool=<redacted> isUser=false",
+      "子任务完成事件：",
+      "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+      "[Internal task completion event]",
+      "source: subagent",
+      "session_key: agent:main:subagent:abc",
+      "status: timed out",
+      "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+    ].join("\n");
+    const decision = {
+      ...delegateDecision("delegate"),
+      request: { session_key: stateKey },
+      route_decision: {
+        ...delegateDecision("delegate").route_decision,
+        dispatch_required: true,
+        expected_deliverable: "Retry the delegated login script.",
+      },
+      is_new_work: true,
+      expected_deliverable: "Retry the delegated login script.",
+    };
+    const helperInvoker = vi.fn(() => {
+      throw new Error("helper_should_not_run_for_internal_event");
+    }) as unknown as NativeHelperInvoker;
+
+    const result = await executeDispatch({
+      task: internalEvent,
+      forceRoute: "delegate",
+      policyJson: JSON.stringify(decision),
+      metadataJson: JSON.stringify({
+        session_key: stateKey,
+        sourceSession: "agent:main:subagent:abc",
+        isUser: false,
+      }),
+    }, {
+      sessionKey: stateKey,
+      canonicalSessionKey: stateKey,
+      sessionId: "session-wp-a-invariant5-internal-event-test",
+      helperInvoker,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.route).toBe("reply");
+    expect(result.guard).toBe("internal_subagent_completion_event_guard");
+    expect(result.fallback_to_main_reply).toBe(true);
+    expect(result.dispatch_executed).toBe(false);
+    expect(result.spawn_executed).toBe(false);
+    expect(result.materialized).toBe(false);
+    expect(result.error).toBeUndefined();
+    expect(helperInvoker).not.toHaveBeenCalled();
+    expect(nativeSpawnIntentStore.size()).toBe(0);
   });
 
   // ── WP-A invariant 7: explicit invalid WorkContract id fails closed ──

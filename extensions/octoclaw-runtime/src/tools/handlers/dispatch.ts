@@ -233,10 +233,62 @@ function forceNewDelegatedWorkMetadata(metadata: UnknownRecord, task: unknown): 
   };
 }
 
+function isInternalSubagentCompletionEvent(params: UnknownRecord, ctx: UnknownRecord): boolean {
+  const taskText = asString(params.task);
+  const metadata = parseObjectJson(params.metadataJson);
+  const sourceSession = asString(
+    metadata.sourceSession
+    || metadata.source_session
+    || ctx.sourceSession
+    || ctx.source_session,
+  );
+  const hasInternalCompletionMarker = taskText.includes("[Internal task completion event]")
+    && taskText.includes("<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>");
+  const hasSubagentSource = sourceSession.startsWith("agent:main:subagent:")
+    || /sourceSession=agent:main:subagent:/u.test(taskText)
+    || /session_key:\s*agent:main:subagent:/u.test(taskText)
+    || /source:\s*subagent/u.test(taskText);
+  const hasNonUserDeliveryMarker = metadata.isUser === false
+    || metadata.is_user === false
+    || ctx.isUser === false
+    || ctx.is_user === false
+    || /isUser=false/u.test(taskText);
+  return hasInternalCompletionMarker && hasSubagentSource && hasNonUserDeliveryMarker;
+}
+
 export async function executeOctoclawDispatch(params: Record<string, unknown>, _rawCtx: Record<string, unknown>, options: ToolRegistrationOptions = {}): Promise<Record<string, unknown>> {
         const ctx = _rawCtx ?? {};
         const dispatchToolStartedAt = Date.now();
         let { key: stateKey, state } = resolveDispatchPolicyContext(ctx, asString(params.task));
+        if (isInternalSubagentCompletionEvent(asRecord(params), asRecord(ctx))) {
+          const managedSessionKey = resolveDispatchSessionKey(ctx, buildPolicyMetadata(ctx, { stateKey }), { stateKey, state })
+            || asString(params.sessionKey || ctx.sessionKey || ctx.canonicalSessionKey || stateKey);
+          const fallbackBody = {
+            ok: true,
+            route: "reply",
+            dispatch_skipped: true,
+            fallback_to_main_reply: true,
+            reason: "internal_subagent_completion_event",
+            guard: "internal_subagent_completion_event_guard",
+            dispatch_executed: false,
+            spawn_executed: false,
+            materialized: false,
+            result_materialized: false,
+            main_session_action: "summarize_internal_event_or_refresh_status",
+          };
+          await recordPolicyReplay("dispatch_internal_subagent_event_reused_main_reply", {
+            sessionKey: managedSessionKey,
+            sessionId: asString(ctx.sessionId),
+            route: "reply",
+            requested_route: asString(params.forceRoute),
+            dispatch_executed: false,
+            spawn_executed: false,
+            materialized: false,
+            fallback_to_main_reply: true,
+            terminal: false,
+          }, toolLogger(ctx), null).catch(() => undefined);
+          return toolResponse(JSON.stringify(fallbackBody), fallbackBody);
+        }
         let hadCachedDecision = Boolean(params.policyJson || state?.decision);
         let cachedDecision = selectDispatchPolicyDecision(state?.decision, params.policyJson);
         let dispatchWorkContract: WorkContract | null = null;

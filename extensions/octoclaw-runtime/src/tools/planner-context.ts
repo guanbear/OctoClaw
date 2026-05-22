@@ -397,11 +397,9 @@ export function buildPlannerSessionsSpawnArgs(params: {
   const cwd = resolvePlannerNativeCwd(params.cwd);
   const requestedTimeout = Number.isFinite(params.timeoutSeconds)
     ? Math.max(0, Math.floor(params.timeoutSeconds ?? 0))
-    : params.expectedSeconds > 0
-      ? Math.max(60, Math.floor(params.expectedSeconds + 120))
-      : undefined;
+    : undefined;
   const timeout = requestedTimeout === undefined
-    ? PLANNER_NATIVE_RUN_TIMEOUT_FLOOR_SECONDS
+    ? undefined
     : requestedTimeout > 0
       ? Math.max(PLANNER_NATIVE_RUN_TIMEOUT_FLOOR_SECONDS, requestedTimeout)
       : PLANNER_NATIVE_RUN_TIMEOUT_FLOOR_SECONDS;

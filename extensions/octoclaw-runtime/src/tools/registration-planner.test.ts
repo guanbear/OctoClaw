@@ -316,6 +316,28 @@ describe("octoclaw_dispatch planner backend", () => {
     }));
   });
 
+  it("does not convert expectedSeconds into a native hard run timeout", async () => {
+    process.env.OCTOCLAW_SPAWN_BACKEND = "planner";
+    process.env.OCTOCLAW_RUNTIME_LEDGER = "enforce";
+    const contract = seedWorkContract("session-planner-soft-timeout");
+
+    const response = await dispatchTool().execute({
+      task: contract.userAsk,
+      workContractId: contract.workContractId,
+      policyJson: JSON.stringify(delegateDecision(contract)),
+      expectedSeconds: 300,
+    }, {
+      sessionKey: contract.sessionKey,
+      sessionId: "session-planner-soft-timeout",
+      cwd: tempWorkspace,
+    });
+
+    const body = JSON.parse(String(response.text));
+    expect(body.ok).toBe(true);
+    expect(body.status).toBe("requires_native_spawn");
+    expect(body.sessionsSpawnArgs.runTimeoutSeconds).toBeUndefined();
+  });
+
   it("preserves judge complexity_band for planner native final footers", async () => {
     process.env.OCTOCLAW_SPAWN_BACKEND = "planner";
     process.env.OCTOCLAW_RUNTIME_LEDGER = "enforce";
