@@ -126,6 +126,8 @@ node tools/octoclawctl/dist/cli.js enable
 node tools/octoclawctl/dist/cli.js status
 ```
 
+Migrating to a new machine, running without a local judge, or installing into a Feishu-only environment: follow [`docs/octoclaw-migration-onboarding-feishu-guide.md`](./docs/octoclaw-migration-onboarding-feishu-guide.md). The intended flow is AI-runbook first, thin wizard only for secrets and explicit config choices.
+
 Once `octoclawctl` is on your PATH:
 
 ```bash

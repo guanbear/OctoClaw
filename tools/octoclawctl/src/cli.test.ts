@@ -508,6 +508,7 @@ describe("octoclawctl cli", () => {
     const pkg = JSON.parse(raw) as {
       dependencies?: Record<string, string>;
       peerDependenciesMeta?: Record<string, { optional?: boolean }>;
+      files?: string[];
     };
     const runtimePackages = [
       "@octoclaw/policy",
@@ -520,6 +521,11 @@ describe("octoclawctl cli", () => {
       expect(pkg.dependencies ?? {}).not.toHaveProperty(packageName);
       expect(pkg.peerDependenciesMeta?.[packageName]?.optional).toBe(true);
     }
+    expect(pkg.files).toContain("README.md");
+    expect(pkg.files).toContain("LICENSE");
+    expect(pkg.files).toContain("!dist/**/*.test.*");
+    await expect(fs.readFile(path.join("tools", "octoclawctl", "README.md"), "utf8")).resolves.toContain("@octoclaw/cli");
+    await expect(fs.readFile(path.join("tools", "octoclawctl", "LICENSE"), "utf8")).resolves.toContain("MIT License");
   });
 
   it("runs init non-interactively without runtime data", async () => {
