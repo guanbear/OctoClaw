@@ -43,7 +43,8 @@ export function evaluateNativeSessionsSendGate(input: NativeSpawnGateInput): Nat
   for (const sessionKey of keys) {
     let pending: NativeSpawnIntent | null;
     try {
-      pending = nativeSpawnIntentStore.findPendingForSession(sessionKey, { now: input.now, dispatchMode: "send_to_speculative" });
+      pending = nativeSpawnIntentStore.findPendingMatchingForSession(sessionKey, { now: input.now, dispatchMode: "send_to_speculative", argsHash: actualHash })
+        ?? nativeSpawnIntentStore.findPendingForSession(sessionKey, { now: input.now, dispatchMode: "send_to_speculative" });
     } catch (error) {
       firstTransitionFailure ??= { allowed: false, reason: storeErrorReason(error) };
       continue;
@@ -239,7 +240,8 @@ export function evaluateNativeSpawnGate(input: NativeSpawnGateInput): NativeSpaw
   for (const sessionKey of keys) {
     let pending: NativeSpawnIntent | null;
     try {
-      pending = nativeSpawnIntentStore.findPendingForSession(sessionKey, { now: input.now, dispatchMode: "new_spawn" });
+      pending = nativeSpawnIntentStore.findPendingMatchingForSession(sessionKey, { now: input.now, dispatchMode: "new_spawn", argsHash: actualHash })
+        ?? nativeSpawnIntentStore.findPendingForSession(sessionKey, { now: input.now, dispatchMode: "new_spawn" });
     } catch (error) {
       firstTransitionFailure ??= { allowed: false, reason: storeErrorReason(error) };
       continue;

@@ -65,6 +65,7 @@ const NIGHTLY_EXTRA_CASES: StabilityCase[] = [
   syntheticCase("delegate.spawn_intent_hash_escape", "major", ["delegate", "spawn-intent"], { fixtureKind: "escaped_spawn_json", canonicalSpawnArgs: true }),
   syntheticCase("delegate.spawn_mismatch_recovery", "blocker", ["delegate", "spawn-intent", "ticket"], { fixtureKind: "native_spawn_recovery", mismatchBlocked: true, redispatchAfterMismatch: true, terminalError: "delegation_ticket_rejected:ticket_used", finalSpawnAllowed: false, failureCode: "native_spawn_redispatch_after_mismatch" }),
   syntheticCase("delegate.native_final_footer", "blocker", ["delegate", "footer"], { fixtureKind: "delegate_footer", footerRoute: "delegate", footerDifficulty: "normal", hasSpawnIntent: true, hasChildSession: true, footerVia: "native_announce" }),
+  syntheticCase("delegate.parallel_children_status_panel", "major", ["delegate", "parallel", "status"], { fixtureKind: "parallel_children_status", expectedChildCount: 2, visibleChildCount: 2, mainResponsiveDuringChildren: true }),
   syntheticCase("footer.no_delegate_without_spawn", "blocker", ["footer", "delegate"], { fixtureKind: "delegate_footer", footerRoute: "delegate", hasSpawnIntent: false, hasChildSession: false, failureCode: "delegate_footer_without_spawn" }),
   syntheticCase("exec.heavy_main_tool_after_escalation", "blocker", ["exec", "dispatch", "budgeted-main"], { fixtureKind: "main_tool_guard", route: "reply", escalationReason: "tool_risk_unknown", attemptedToolName: "exec", ordinaryToolRanAfterEscalation: true, dispatchCalled: false, failureCode: "main_tool_after_escalation" }),
   syntheticCase("router.simple_normal_deep_model_matrix", "major", ["router", "model-choice"], { complexityMatrix: ["simple", "normal", "deep"] }),
@@ -79,6 +80,21 @@ const FULL_EXTRA_CASES: StabilityCase[] = [
   syntheticCase("router.health_cooldown_fallback_suggestion", "major", ["router", "health"], { cooldownExcludesExpected: true }),
   syntheticCase("restart.interruption_recovery", "major", ["restart", "recovery"], { restartWindowRecovery: true }),
   syntheticCase("delivery.duplicate_final_parent_echo", "blocker", ["delivery", "delegate"], { fixtureKind: "native_final_delivery", nativeFinalDelivered: true, parentEchoAfterNativeFinalCount: 1, duplicateFinalCount: 1, failureCode: "parent_echo_after_native_final" }),
+  {
+    id: "delegate.parallel_two_children_status",
+    mode: "live_slack",
+    severity: "major",
+    tags: ["slack", "delegate", "parallel", "status"],
+    prompt: "请同时启动两个子 agent：A 只读总结当前 OctoClaw readiness，B 只读总结当前 Gateway 状态。它们运行时主会话要回复一句“主会话仍可响应”，并在状态面板里能看到两个正在运行的子任务；两个子任务完成后再给最终摘要。",
+    maxRuntimeMs: 300_000,
+    expect: {
+      route: "delegate",
+      minSpawnEvidence: 2,
+      statusPanelMinChildren: 2,
+      mainResponsiveDuringChildren: true,
+      footerDifficultyRequired: true,
+    },
+  },
 ];
 
 export function buildCatalogCasePack(runKind: StabilityRunKind, options: BuildCatalogOptions = {}): StabilityCasePack {

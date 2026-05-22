@@ -77,6 +77,7 @@ type StoreOptions = { dbPath?: string; sqlite?: SqliteProvider };
 type StoreRuntimeOptions = StoreOptions & { persist?: boolean; memory?: Map<string, NativeSpawnIntent> };
 type OpenedIntentDb = ReturnType<typeof openDb>;
 type FindPendingOptions = { now?: Date | number; dbPath?: string; sqlite?: SqliteProvider; dispatchMode?: NativeSpawnIntent["dispatchMode"] };
+type FindPendingMatchingOptions = FindPendingOptions & { argsHash?: string };
 
 const SQLITE_BUSY_RETRY_DELAYS_MS = [0, 5, 25, 75] as const;
 
@@ -298,6 +299,7 @@ function findPendingInMemory(
   sessionKey: string,
   nowMs: number,
   dispatchMode?: NativeSpawnIntent["dispatchMode"],
+  argsHash?: string,
 ): NativeSpawnIntent | null {
   let latest: NativeSpawnIntent | null = null;
   for (const intent of memory.values()) {
@@ -305,6 +307,7 @@ function findPendingInMemory(
     if (normalized.sessionKey !== sessionKey) continue;
     if (dispatchMode && normalized.dispatchMode !== dispatchMode) continue;
     if (intent.status !== "planned") continue;
+    if (argsHash && normalized.canonicalArgsHash !== argsHash) continue;
     if (parseTime(intent.expiresAt) <= nowMs) {
       const expired = { ...intent, status: "expired" as const, updatedAt: new Date(nowMs).toISOString() };
       memory.set(expired.spawnIntentId, normalizeIntent(expired));
@@ -358,6 +361,10 @@ export class NativeSpawnIntentStore {
   }
 
   findPendingForSession(sessionKey: string, opts?: FindPendingOptions | number): NativeSpawnIntent | null {
+    return this.findPendingMatchingForSession(sessionKey, opts);
+  }
+
+  findPendingMatchingForSession(sessionKey: string, opts?: FindPendingMatchingOptions | number): NativeSpawnIntent | null {
     const key = asString(sessionKey);
     if (!key) return null;
     const options = typeof opts === "number" ? { now: opts } : opts;
@@ -367,7 +374,7 @@ export class NativeSpawnIntentStore {
     const opened = openDb(runtimeOptions);
     if (!opened.db) {
       failIfPersistentUnavailable(opened);
-      return findPendingInMemory(this.memory, key, nowMs, options?.dispatchMode);
+      return findPendingInMemory(this.memory, key, nowMs, options?.dispatchMode, options?.argsHash);
     }
     try {
       const rows = withSqliteBusyRetry(() => opened.db!.prepare(
@@ -379,6 +386,7 @@ export class NativeSpawnIntentStore {
         const intent = parseIntent(row);
         if (!intent) continue;
         if (options?.dispatchMode && intent.dispatchMode !== options.dispatchMode) continue;
+        if (options?.argsHash && intent.canonicalArgsHash !== options.argsHash) continue;
         if (parseTime(intent.expiresAt) <= nowMs) {
           upsertDbIntent(opened.db, { ...intent, status: "expired", updatedAt: now.toISOString() });
           continue;

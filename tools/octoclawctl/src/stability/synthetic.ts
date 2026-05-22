@@ -72,6 +72,19 @@ export type SyntheticFixture =
       id: string;
       kind: "wizard_start";
       nextState: string;
+    }
+  | {
+      id: string;
+      kind: "parallel_children_status";
+      expectedChildCount: number;
+      visibleChildCount: number;
+      mainResponsiveDuringChildren: boolean;
+      children: Array<{
+        workContractId: string;
+        childSessionKey: string;
+        status: string;
+        title?: string;
+      }>;
     };
 
 export interface SyntheticFixtureResult {
@@ -227,6 +240,22 @@ function syntheticFailures(fixture: SyntheticFixture): StabilityFailurePacket[] 
       return fixture.nextState === "completed"
         ? [failure("wizard_flow_stuck", fixture.id, "wizard")]
         : [];
+    case "parallel_children_status": {
+      const failures: StabilityFailurePacket[] = [];
+      if (fixture.visibleChildCount < fixture.expectedChildCount || fixture.children.length < fixture.expectedChildCount) {
+        failures.push(failure("parallel_status_missing_child", fixture.id, "synthetic", {
+          classification: "runtime_bug",
+          errors: [`expected ${fixture.expectedChildCount} visible children, observed ${fixture.visibleChildCount}`],
+        }));
+      }
+      if (!fixture.mainResponsiveDuringChildren) {
+        failures.push(failure("parallel_main_unresponsive", fixture.id, "synthetic", {
+          classification: "runtime_bug",
+          errors: ["main agent did not respond while parallel children were running"],
+        }));
+      }
+      return failures;
+    }
   }
 }
 
@@ -281,6 +310,19 @@ function syntheticEvidence(fixture: SyntheticFixture): Record<string, unknown> {
       nativeFinalDelivered: fixture.nativeFinalDelivered,
       parentEchoAfterNativeFinalCount: fixture.parentEchoAfterNativeFinalCount,
       duplicateFinalCount: fixture.duplicateFinalCount,
+    };
+  }
+  if (fixture.kind === "parallel_children_status") {
+    return {
+      expectedChildCount: fixture.expectedChildCount,
+      visibleChildCount: fixture.visibleChildCount,
+      mainResponsiveDuringChildren: fixture.mainResponsiveDuringChildren,
+      children: fixture.children.map((child) => ({
+        workContractId: child.workContractId,
+        childSessionKey: child.childSessionKey,
+        status: child.status,
+        title: child.title,
+      })),
     };
   }
   return {};

@@ -2383,6 +2383,29 @@ describe("octoclawctl nightly integration", () => {
       }
     });
 
+    it("SSV2-054: full live pack includes the parallel two-child status scenario", () => {
+      const cases = buildStabilitySlackAcceptanceCases([], { hasReplayPath: true, runKind: "full_3d" });
+      const parallel = cases.find((item) => item.id === "delegate.parallel_two_children_status");
+
+      expect(parallel).toMatchObject({
+        kind: "delegated_work",
+        ackRequired: true,
+        allowFastFinalAck: true,
+        finalRequired: true,
+        expectFooter: { route: "delegate", difficultyRequired: true },
+      });
+      expect(parallel?.prompt).toContain("两个子 agent");
+      expect(parallel?.prompt).toContain("主会话仍可响应");
+      expect(parallel?.expectReplay).toMatchObject({
+        requireWorkContract: true,
+        requireSpawnIntent: true,
+        requireRunId: true,
+        requireChildSession: true,
+        minSpawnIntentCount: 2,
+        minChildSessionCount: 2,
+      });
+    });
+
     it("SSV2-053: full acceptance cadence defaults to 3d", async () => {
       const tmpDir = path.join(os.homedir(), ".octoclawctl-test-tmp", `stability-full-cadence-${Date.now()}-${Math.random().toString(36).slice(2)}`);
       const outputDir = path.join(tmpDir, "reports");

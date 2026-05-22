@@ -74,6 +74,10 @@ export interface SlackAcceptanceReplayExpectation {
   requireSpawnIntent?: boolean;
   requireRunId?: boolean;
   requireChildSession?: boolean;
+  minWorkContractCount?: number;
+  minSpawnIntentCount?: number;
+  minRunIdCount?: number;
+  minChildSessionCount?: number;
 }
 
 export interface SlackAcceptanceConfig {
@@ -209,6 +213,10 @@ export interface SlackAcceptanceReplayEvidence {
   spawnIntentId?: string;
   runId?: string;
   childSessionKey?: string;
+  workContractCount?: number;
+  spawnIntentCount?: number;
+  runIdCount?: number;
+  childSessionCount?: number;
   completionFileTimeoutCount?: number;
   stageMs?: Record<string, number>;
 }

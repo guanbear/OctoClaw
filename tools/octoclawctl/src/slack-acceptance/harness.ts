@@ -624,6 +624,18 @@ function evidenceExpectationErrors(caseConfig: SlackAcceptanceCaseConfig, replay
   if (replay?.requireChildSession === true && !replayEvidence.childSessionKey) {
     errors.push("replay_child_session_missing");
   }
+  if (replay?.minWorkContractCount !== undefined && (replayEvidence.workContractCount ?? 0) < replay.minWorkContractCount) {
+    errors.push(`replay_work_contract_count_low:expected>=${replay.minWorkContractCount}:actual=${replayEvidence.workContractCount ?? 0}`);
+  }
+  if (replay?.minSpawnIntentCount !== undefined && (replayEvidence.spawnIntentCount ?? 0) < replay.minSpawnIntentCount) {
+    errors.push(`replay_spawn_intent_count_low:expected>=${replay.minSpawnIntentCount}:actual=${replayEvidence.spawnIntentCount ?? 0}`);
+  }
+  if (replay?.minRunIdCount !== undefined && (replayEvidence.runIdCount ?? 0) < replay.minRunIdCount) {
+    errors.push(`replay_run_id_count_low:expected>=${replay.minRunIdCount}:actual=${replayEvidence.runIdCount ?? 0}`);
+  }
+  if (replay?.minChildSessionCount !== undefined && (replayEvidence.childSessionCount ?? 0) < replay.minChildSessionCount) {
+    errors.push(`replay_child_session_count_low:expected>=${replay.minChildSessionCount}:actual=${replayEvidence.childSessionCount ?? 0}`);
+  }
 
   const footer = caseConfig.expectFooter;
   if (footer?.route !== undefined && replayEvidence.footerRoute !== footer.route) {
@@ -821,6 +833,10 @@ async function collectReplayEvidence(
     spawnIntentId: spawnIntentId || undefined,
     runId: runId || undefined,
     childSessionKey: childSessionKey || undefined,
+    workContractCount: workContractIds.size,
+    spawnIntentCount: spawnIntentIds.size,
+    runIdCount: runIds.size,
+    childSessionCount: childSessionKeys.size,
     completionFileTimeoutCount,
     stageMs: Object.keys(stageMs).length > 0 ? stageMs : undefined,
   };

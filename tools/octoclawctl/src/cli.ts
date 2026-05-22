@@ -3936,7 +3936,7 @@ async function runStabilityCliCommand(parsed: ParsedCliArgs, env: Record<string,
   const cadence = parseCadence(parsed.cadence);
   const replaySince = new Date().toISOString();
   const liveSlackReport = parsed.config
-    ? await runStabilityLiveSlackPack(parsed.config, env)
+    ? await runStabilityLiveSlackPack(parsed.config, env, sub === "full" ? "full_3d" : sub === "nightly" ? "nightly" : "post_deploy")
     : undefined;
   const result = await runStabilityOrchestration({
     subcommand: sub,
@@ -3977,9 +3977,13 @@ async function runStabilityCliCommand(parsed: ParsedCliArgs, env: Record<string,
   return lines.join("\n");
 }
 
-async function runStabilityLiveSlackPack(configPath: string, env: Record<string, string | undefined>) {
+async function runStabilityLiveSlackPack(
+  configPath: string,
+  env: Record<string, string | undefined>,
+  runKind: BuildStabilitySlackAcceptanceCasesOptions["runKind"] = "post_deploy",
+) {
   const resolvedConfig = await loadSlackAcceptanceConfig(configPath, env);
-  const stabilityCases = buildStabilitySlackAcceptanceCases(resolvedConfig.cases, { hasReplayPath: Boolean(resolvedConfig.replayPath) });
+  const stabilityCases = buildStabilitySlackAcceptanceCases(resolvedConfig.cases, { hasReplayPath: Boolean(resolvedConfig.replayPath), runKind });
   const scopedConfig = {
     ...resolvedConfig,
     cases: stabilityCases,
@@ -4013,6 +4017,7 @@ function withSlackTrigger(trigger: string, prompt: string): string {
 
 export interface BuildStabilitySlackAcceptanceCasesOptions {
   hasReplayPath?: boolean;
+  runKind?: "post_deploy" | "nightly" | "full_3d";
 }
 
 export function buildStabilitySlackAcceptanceCases(
@@ -4026,7 +4031,7 @@ export function buildStabilitySlackAcceptanceCases(
     "429 status code \\(no body\\)",
     "Previous run is still shutting down",
   ];
-  return [
+  const cases: SlackAcceptanceCaseConfig[] = [
     {
       id: "reply_core.simple_chat",
       kind: "plain_chat",
@@ -4085,4 +4090,28 @@ export function buildStabilitySlackAcceptanceCases(
       rejectFinal: rejectInfrastructureErrors,
     },
   ];
+  if (options.runKind === "full_3d") {
+    cases.push({
+      id: "delegate.parallel_two_children_status",
+      kind: "delegated_work",
+      prompt: withSlackTrigger(trigger, "请同时启动两个子 agent：A 只读总结当前 OctoClaw readiness，B 只读总结当前 Gateway 状态。它们运行时主会话要回复一句“主会话仍可响应”，并确认状态面板里能看到两个正在运行的子任务；两个子任务完成后再给最终摘要。"),
+      ackRequired: true,
+      allowFastFinalAck: true,
+      ackTimeoutMs: 180_000,
+      finalRequired: true,
+      finalTimeoutMs: 420_000,
+      expectFinalAll: ["主会话仍可响应|两个子|A|B", "状态|摘要|结论"],
+      expectFooter: { route: "delegate", difficultyRequired: true },
+      expectReplay: hasReplayPath ? {
+        requireWorkContract: true,
+        requireSpawnIntent: true,
+        requireRunId: true,
+        requireChildSession: true,
+        minSpawnIntentCount: 2,
+        minChildSessionCount: 2,
+      } : undefined,
+      rejectFinal: rejectInfrastructureErrors,
+    });
+  }
+  return cases;
 }

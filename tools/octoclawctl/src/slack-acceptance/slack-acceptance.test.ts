@@ -843,6 +843,53 @@ describe("no-spawn replay assertion", () => {
     expect(renderSlackAcceptanceMarkdown(report)).toContain("parentEchoAfterNativeAnnounce=0");
   });
 
+  it("SSV2-054: validates multiple native child spawn evidence for parallel delegate smoke", async () => {
+    const replayPath = path.join(tmpDir, "replay-parallel-children.jsonl");
+    const threadTs = "1234567890.000001";
+    const sessionKey = `slack:channel:C_ACC_TEST:thread:${threadTs}`;
+    const replayEvents = [
+      { at: "2099-12-31T23:59:49.000Z", event: "message_received_observed", sessionKey, inboundMessageTs: threadTs },
+      { at: "2099-12-31T23:59:50.000Z", event: "dispatch_planner_intent_created", sessionKey, work_contract_id: "wc-a", spawn_intent_id: "nsp-a" },
+      { at: "2099-12-31T23:59:51.000Z", event: "sessions_spawn_intent_allowed", sessionKey, work_contract_id: "wc-a", spawn_intent_id: "nsp-a" },
+      { at: "2099-12-31T23:59:52.000Z", event: "execution_transition", transitionKind: "spawn_started", sessionKey, workContractId: "wc-a", childSessionKey: "agent:main:subagent:a", runId: "run-a" },
+      { at: "2099-12-31T23:59:53.000Z", event: "dispatch_planner_intent_created", sessionKey, work_contract_id: "wc-b", spawn_intent_id: "nsp-b" },
+      { at: "2099-12-31T23:59:54.000Z", event: "sessions_spawn_intent_allowed", sessionKey, work_contract_id: "wc-b", spawn_intent_id: "nsp-b" },
+      { at: "2099-12-31T23:59:55.000Z", event: "execution_transition", transitionKind: "spawn_started", sessionKey, workContractId: "wc-b", childSessionKey: "agent:main:subagent:b", runId: "run-b" },
+      { at: "2099-12-31T23:59:58.000Z", event: "native_announce_final_delivered", sessionKey, workContractId: "wc-a", footer_via: "native_announce" },
+    ];
+    await fs.writeFile(replayPath, replayEvents.map((event) => JSON.stringify(event)).join("\n"), "utf8");
+
+    const client = createMockClient([
+      { ts: "1234567890.150001", text: "主会话仍可响应，两个子任务 A/B 已完成。\n\n• route=delegate | via=native_announce" },
+    ]);
+    const config = parseSlackAcceptanceConfig(validConfig({
+      cases: [{
+        kind: "delegated_work",
+        prompt: "parallel",
+        finalRequired: true,
+        expectFinalAll: ["主会话仍可响应", "两个子任务"],
+        expectReplay: {
+          minSpawnIntentCount: 2,
+          minChildSessionCount: 2,
+        },
+      }],
+      replayPath,
+    }), validEnv());
+    config.finalTimeoutMs = 100;
+    config.pollIntervalMs = 1;
+
+    const report = await runSlackAcceptanceHarness(client, config);
+    const delegatedCase = report.cases.find((c) => c.kind === "delegated_work")!;
+
+    expect(delegatedCase.status).toBe("pass");
+    expect(delegatedCase.replayEvidence).toMatchObject({
+      spawnIntentCount: 2,
+      childSessionCount: 2,
+      runIdCount: 2,
+      workContractCount: 2,
+    });
+  });
+
   it("fails when replay shows uncanceled parent echo after native announce delivery", async () => {
     const replayPath = path.join(tmpDir, "replay-parent-echo.jsonl");
     const threadTs = "1234567890.000001";

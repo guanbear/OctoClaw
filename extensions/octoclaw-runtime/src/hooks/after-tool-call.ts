@@ -1,4 +1,5 @@
 import { resolveSpeculativePreloadEnabled } from "../config/index.js";
+import { confirmNativeSpawn } from "../delegate/native-spawn-confirm.js";
 import {
   isMatchingSpeculativePreloadSpawn,
   readSpeculativePreloadState,
@@ -27,6 +28,70 @@ export interface AfterToolCallDeps {
   currentPluginConfig: () => UnknownRecord;
 }
 
+async function autoConfirmPlannerSpawn(input: {
+  ctx: UnknownRecord;
+  state: UnknownRecord;
+  stateKey: string;
+  resultRecord: UnknownRecord;
+  accepted: boolean;
+  logger: PluginInterface["logger"];
+}): Promise<void> {
+  const spawnIntentId = firstNonEmptyString(input.state.spawnIntentId, input.state.spawn_intent_id);
+  const workContractId = firstNonEmptyString(input.state.workContractId, input.state.work_contract_id);
+  if (!input.accepted || !spawnIntentId || !workContractId) return;
+
+  const decision = asRecord(input.state.decision);
+  const sessionKey = firstNonEmptyString(
+    asRecord(decision.request).session_key,
+    input.ctx.sessionKey,
+    input.ctx.canonicalSessionKey,
+    input.stateKey,
+  );
+  const runId = firstNonEmptyString(
+    input.resultRecord.runId,
+    input.resultRecord.run_id,
+    input.resultRecord.childRunId,
+    input.resultRecord.child_run_id,
+  );
+  if (!runId) return;
+
+  const childRunId = firstNonEmptyString(input.resultRecord.childRunId, input.resultRecord.child_run_id, runId);
+  const childSessionKey = firstNonEmptyString(
+    input.resultRecord.childSessionKey,
+    input.resultRecord.child_session_key,
+    input.resultRecord.sessionKey,
+    input.resultRecord.session_key,
+  );
+  const confirmed = await confirmNativeSpawn({
+    spawnIntentId,
+    workContractId,
+    sessionKey,
+    stateKey: input.stateKey,
+    sessionsSpawnStatus: "accepted",
+    runId,
+    childRunId,
+    childSessionKey,
+    modelId: firstNonEmptyString(input.resultRecord.model, input.resultRecord.modelId, input.resultRecord.model_id),
+    cwd: stringValue(input.ctx.cwd) || undefined,
+    decision,
+  });
+  await recordPolicyReplay("sessions_spawn_auto_confirm_completed", {
+    sessionKey,
+    stateKey: input.stateKey,
+    sessionId: stringValue(input.ctx.sessionId),
+    spawn_intent_id: spawnIntentId,
+    work_contract_id: workContractId,
+    ok: confirmed.ok,
+    confirm_status: confirmed.status,
+    error: stringValue(confirmed.error),
+    run_id: stringValue(confirmed.runId),
+    child_run_id: stringValue(confirmed.childRunId),
+    child_session_key: stringValue(confirmed.childSessionKey),
+    ack_sent: confirmed.ackSent === true,
+    ack_skipped: confirmed.ackSkipped === true,
+  }, input.logger, decision).catch(() => {});
+}
+
 export function makeAfterToolCallHook(deps: AfterToolCallDeps) {
   return async (event: UnknownRecord, ctx: UnknownRecord) => {
     if (!isManagedAgentContext(ctx)) return;
@@ -46,6 +111,20 @@ export function makeAfterToolCallHook(deps: AfterToolCallDeps) {
       success: accepted,
       toolCallFailed: !accepted,
       logger: deps.pi.logger,
+    });
+    await autoConfirmPlannerSpawn({
+      ctx,
+      state: asRecord(resolvedState),
+      stateKey: resolvedStateKey,
+      resultRecord,
+      accepted,
+      logger: deps.pi.logger,
+    }).catch((error) => {
+      void recordPolicyReplay("sessions_spawn_auto_confirm_failed", {
+        sessionKey: resolvedStateKey,
+        sessionId: stringValue(ctx.sessionId),
+        error: error instanceof Error ? error.message : String(error),
+      }, deps.pi.logger, asRecord(resolvedState?.decision)).catch(() => {});
     });
     if (!resolveSpeculativePreloadEnabled(deps.currentPluginConfig())) return;
     const candidateKeys = Array.from(new Set([

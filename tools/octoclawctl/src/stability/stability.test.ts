@@ -67,6 +67,24 @@ describe("stability smoke v2 catalog", () => {
       fixtureKind: "native_final_delivery",
       failureCode: "parent_echo_after_native_final",
     });
+    expect(nightly.cases.find((item) => item.id === "delegate.parallel_children_status_panel")?.expect).toMatchObject({
+      fixtureKind: "parallel_children_status",
+      expectedChildCount: 2,
+      visibleChildCount: 2,
+      mainResponsiveDuringChildren: true,
+    });
+    expect(full.cases.find((item) => item.id === "delegate.parallel_two_children_status")).toMatchObject({
+      mode: "live_slack",
+      severity: "major",
+      tags: expect.arrayContaining(["slack", "delegate", "parallel", "status"]),
+      expect: expect.objectContaining({
+        route: "delegate",
+        minSpawnEvidence: 2,
+        statusPanelMinChildren: 2,
+        mainResponsiveDuringChildren: true,
+        footerDifficultyRequired: true,
+      }),
+    });
   });
 
   it("SSV2-002: rejects invalid AI case packs and leaves callers with catalog fallback", () => {
@@ -493,6 +511,40 @@ describe("stability smoke v2 synthetic fixtures", () => {
     }
   });
 
+  it("SSV2-053: live Slack reports must include every catalog live case for the selected run kind", async () => {
+    const tmpDir = path.join(os.homedir(), ".octoclawctl-test-tmp", `stability-missing-live-case-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    const outputDir = path.join(tmpDir, "reports");
+    try {
+      await fs.mkdir(tmpDir, { recursive: true });
+
+      const result = await runStabilityOrchestration({
+        subcommand: "full",
+        outputDir,
+        env: {},
+        liveSlackReport: {
+          overallGate: "pass",
+          cases: [
+            { id: "reply_core.simple_chat", status: "pass" },
+            { id: "streaming_core.long_reply", status: "pass" },
+            { id: "delegate_core.native_final", status: "pass" },
+            { id: "footer_truth.current_model", status: "pass" },
+            { id: "status_core.read_only", status: "pass" },
+          ],
+        },
+      });
+
+      expect(result.overallGate).toBe("unknown");
+      expect(result.failures).toContainEqual(expect.objectContaining({
+        code: "live_slack_case_missing",
+        caseId: "delegate.parallel_two_children_status",
+        mode: "live_slack",
+      }));
+      expect(result.lanes.find((lane) => lane.name === "slack_delivery")?.failureCodes).toContain("live_slack_case_missing");
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   it("SSV2-024: orchestration executes wizard fixtures instead of leaving the lane unknown", async () => {
     const tmpDir = path.join(os.homedir(), ".octoclawctl-test-tmp", `stability-wizard-lane-${Date.now()}-${Math.random().toString(36).slice(2)}`);
     const outputDir = path.join(tmpDir, "reports");
@@ -567,6 +619,7 @@ describe("stability smoke v2 synthetic fixtures", () => {
             { id: "delegate_core.native_final", status: "pass" },
             { id: "footer_truth.current_model", status: "pass" },
             { id: "status_core.read_only", status: "pass" },
+            { id: "delegate.parallel_two_children_status", status: "pass" },
           ],
         },
       });
@@ -690,6 +743,61 @@ describe("stability smoke v2 synthetic fixtures", () => {
     } finally {
       await fs.rm(tmpDir, { recursive: true, force: true });
     }
+  });
+
+  it("SSV2-025: parallel children fixture passes when both children are visible and main remains responsive", () => {
+    const result = runSyntheticStabilityFixture({
+      id: "delegate.parallel_children_status_panel",
+      kind: "parallel_children_status",
+      expectedChildCount: 2,
+      visibleChildCount: 2,
+      mainResponsiveDuringChildren: true,
+      children: [
+        { workContractId: "wc-a", childSessionKey: "agent:main:subagent:a", status: "running", title: "task A" },
+        { workContractId: "wc-b", childSessionKey: "agent:main:subagent:b", status: "running", title: "task B" },
+      ],
+    });
+
+    expect(result.gate).toBe("pass");
+    expect(result.evidence).toMatchObject({
+      expectedChildCount: 2,
+      visibleChildCount: 2,
+      mainResponsiveDuringChildren: true,
+    });
+  });
+
+  it("SSV2-026: parallel children fixture fails when the status panel hides a running child", () => {
+    const result = runSyntheticStabilityFixture({
+      id: "delegate.parallel_children_status_panel",
+      kind: "parallel_children_status",
+      expectedChildCount: 2,
+      visibleChildCount: 1,
+      mainResponsiveDuringChildren: true,
+      children: [
+        { workContractId: "wc-a", childSessionKey: "agent:main:subagent:a", status: "running", title: "task A" },
+        { workContractId: "wc-b", childSessionKey: "agent:main:subagent:b", status: "running", title: "task B" },
+      ],
+    });
+
+    expect(result.gate).toBe("fail");
+    expect(result.failures.map((item) => item.code)).toContain("parallel_status_missing_child");
+  });
+
+  it("SSV2-027: parallel children fixture fails when main cannot respond during children", () => {
+    const result = runSyntheticStabilityFixture({
+      id: "delegate.parallel_children_status_panel",
+      kind: "parallel_children_status",
+      expectedChildCount: 2,
+      visibleChildCount: 2,
+      mainResponsiveDuringChildren: false,
+      children: [
+        { workContractId: "wc-a", childSessionKey: "agent:main:subagent:a", status: "running", title: "task A" },
+        { workContractId: "wc-b", childSessionKey: "agent:main:subagent:b", status: "running", title: "task B" },
+      ],
+    });
+
+    expect(result.gate).toBe("fail");
+    expect(result.failures.map((item) => item.code)).toContain("parallel_main_unresponsive");
   });
 
   it("SSV2-013/SSV2-022: orchestration treats expected synthetic regression classifications as pass evidence", async () => {

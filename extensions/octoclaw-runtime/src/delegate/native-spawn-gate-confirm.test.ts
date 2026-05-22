@@ -643,6 +643,45 @@ describe("evaluateNativeSpawnGate", () => {
     expect(nativeSpawnIntentStore.get(sendIntent.spawnIntentId)?.status).toBe("spawn_call_started");
   });
 
+  it("matches older pending spawn intent by args hash when parallel intents share a session", () => {
+    const key = "session-parallel-spawn-intents";
+    const now = Date.now();
+    const olderArgs = {
+      ...args,
+      task: "Research project A and summarize archival risk.",
+      label: "parallel-project-a",
+    };
+    const newerArgs = {
+      ...args,
+      task: "Research project B and summarize maintenance risk.",
+      label: "parallel-project-b",
+    };
+    const older = nativeSpawnIntentStore.create({
+      workContractId: "wc-parallel-a",
+      sessionKey: key,
+      sessionsSpawnArgs: olderArgs,
+      ttlMs: 60_000,
+      now,
+    });
+    const newer = nativeSpawnIntentStore.create({
+      workContractId: "wc-parallel-b",
+      sessionKey: key,
+      sessionsSpawnArgs: newerArgs,
+      ttlMs: 60_000,
+      now: now + 1,
+    });
+
+    const olderGate = evaluateNativeSpawnGate({ sessionKeys: [key], args: olderArgs, now: new Date(now + 2) });
+    const newerGate = evaluateNativeSpawnGate({ sessionKeys: [key], args: newerArgs, now: new Date(now + 3) });
+
+    expect(olderGate.allowed).toBe(true);
+    expect(olderGate.allowed ? olderGate.intent.spawnIntentId : "").toBe(older.spawnIntentId);
+    expect(newerGate.allowed).toBe(true);
+    expect(newerGate.allowed ? newerGate.intent.spawnIntentId : "").toBe(newer.spawnIntentId);
+    expect(nativeSpawnIntentStore.get(older.spawnIntentId)?.status).toBe("spawn_call_started");
+    expect(nativeSpawnIntentStore.get(newer.spawnIntentId)?.status).toBe("spawn_call_started");
+  });
+
   it("checks every Slack session alias before blocking on a stale hash mismatch", () => {
     const staleSlackChannelKey = "agent:main:slack:channel:c0as4dappu3";
     const matchingSlackThreadKey = "agent:main:slack:channel:c0as4dappu3:thread:1777707495.459389";

@@ -149,6 +149,7 @@ function isSyntheticFixtureKind(value: unknown): value is SyntheticFixture["kind
     "native_final_delivery",
     "restart_shutdown",
     "wizard_start",
+    "parallel_children_status",
   ].includes(value);
 }
 
@@ -235,6 +236,7 @@ export async function runStabilityOrchestration(options: StabilityRunnerOptions)
 
   if (liveCases.length > 0) {
     if (options.liveSlackReport) {
+      const reportedLiveCaseIds = new Set(options.liveSlackReport.cases.map((item) => item.id));
       const liveFailures = options.liveSlackReport.cases
         .filter((item) => item.status !== "pass")
         .map((item): StabilityFailurePacket => {
@@ -259,11 +261,28 @@ export async function runStabilityOrchestration(options: StabilityRunnerOptions)
             stageMs: item.replayEvidence?.stageMs,
           };
         });
+      const missingLiveFailures = liveCases
+        .filter((liveCase) => !reportedLiveCaseIds.has(liveCase.id))
+        .map((liveCase): StabilityFailurePacket => ({
+          code: "live_slack_case_missing",
+          severity: liveCase.severity,
+          caseId: liveCase.id,
+          mode: "live_slack",
+          classification: "smoke_spec_bug",
+          errors: ["live Slack report did not include this catalog case"],
+        }));
+      liveFailures.push(...missingLiveFailures);
+      const liveGate: StabilityGate = liveFailures.some((item) => item.code === "live_slack_case_failed")
+        || options.liveSlackReport.overallGate === "fail"
+        ? "fail"
+        : liveFailures.length > 0 || options.liveSlackReport.overallGate === "unknown"
+          ? "unknown"
+          : "pass";
       allFailures.push(...liveFailures);
       allLanes.push({
         name: "slack_delivery",
-        gate: options.liveSlackReport.overallGate,
-        caseIds: options.liveSlackReport.cases.map((item) => item.id),
+        gate: liveGate,
+        caseIds: liveCases.map((item) => item.id),
         failureCodes: [...new Set(liveFailures.map((item) => item.code))],
       });
     } else if (slackAvailable) {
@@ -514,6 +533,26 @@ function buildMinimalFixture(id: string, kind: SyntheticFixture["kind"], expect:
       };
     case "wizard_start":
       return { id, kind, nextState: "step_1" };
+    case "parallel_children_status":
+      return {
+        id,
+        kind,
+        expectedChildCount: typeof expect.expectedChildCount === "number" ? expect.expectedChildCount : 2,
+        visibleChildCount: typeof expect.visibleChildCount === "number" ? expect.visibleChildCount : 2,
+        mainResponsiveDuringChildren: typeof expect.mainResponsiveDuringChildren === "boolean" ? expect.mainResponsiveDuringChildren : true,
+        children: Array.isArray(expect.children) ? expect.children.map((item, index) => {
+          const child = isRecord(item) ? item : {};
+          return {
+            workContractId: asString(child.workContractId) ?? `wc-parallel-${index + 1}`,
+            childSessionKey: asString(child.childSessionKey) ?? `agent:main:subagent:parallel-${index + 1}`,
+            status: asString(child.status) ?? "running",
+            title: asString(child.title),
+          };
+        }) : [
+          { workContractId: "wc-parallel-a", childSessionKey: "agent:main:subagent:parallel-a", status: "running", title: "parallel task A" },
+          { workContractId: "wc-parallel-b", childSessionKey: "agent:main:subagent:parallel-b", status: "running", title: "parallel task B" },
+        ],
+      };
     case "escaped_spawn_json":
     default:
       return { id, kind: "escaped_spawn_json", expectedSpawnArgs: { task: "test" }, observedSpawnArgsText: '{"task":"test"}' };
