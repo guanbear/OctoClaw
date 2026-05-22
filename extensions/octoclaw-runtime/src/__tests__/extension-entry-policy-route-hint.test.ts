@@ -2559,6 +2559,166 @@ describe("speculative preload planner path", () => {
     }));
     policyState.clearState(key);
   });
+
+  it("auto-confirms each parallel sessions_spawn result against its matching intent, not latest session state", async () => {
+    process.env.OCTOCLAW_SPAWN_BACKEND = "planner";
+    const handlers = new Map<string, Function>();
+    plugin.register({
+      on: (event, handler) => handlers.set(event, handler),
+      registerTool: () => {},
+      registerCommand: () => {},
+      logger: {},
+    });
+
+    const key = "agent:main:slack:channel:c0as4dappu3:thread:t-native-auto-confirm-parallel";
+    const makeContract = (task: string, marker: string) => {
+      const contract = buildWorkContractFromPolicy(
+        key,
+        task,
+        "fresh_live_lookup",
+        coverageSnapshot(),
+        buildWorkDecisionSeal("local_judge", "delegate", [`native_auto_confirm_parallel_${marker}`]),
+        { status: "sealed" },
+      );
+      saveWorkContract(contract);
+      return contract;
+    };
+    const spawnArgsA = {
+      task: "A 只读总结当前 OctoClaw readiness。",
+      label: "octoclaw-native-auto-confirm-a",
+      runtime: "subagent" as const,
+      model: "zhipu/GLM-5.1",
+      mode: "run" as const,
+      cleanup: "keep" as const,
+      sandbox: "inherit" as const,
+      context: "isolated" as const,
+      lightContext: true,
+    };
+    const spawnArgsB = {
+      task: "B 只读总结当前 Gateway 状态。",
+      label: "octoclaw-native-auto-confirm-b",
+      runtime: "subagent" as const,
+      model: "zhipu/GLM-5.1",
+      mode: "run" as const,
+      cleanup: "keep" as const,
+      sandbox: "inherit" as const,
+      context: "isolated" as const,
+      lightContext: true,
+    };
+    const contractA = makeContract(spawnArgsA.task, "a");
+    const contractB = makeContract(spawnArgsB.task, "b");
+    const intentA = nativeSpawnIntentStore.create({
+      workContractId: contractA.workContractId,
+      delegateTaskId: `delegate-task:${contractA.workContractId}`,
+      attemptId: `delegate-task:${contractA.workContractId}:attempt:1`,
+      sessionKey: key,
+      sessionsSpawnArgs: spawnArgsA,
+      dispatchMode: "new_spawn",
+      ttlMs: 60_000,
+    });
+    const intentB = nativeSpawnIntentStore.create({
+      workContractId: contractB.workContractId,
+      delegateTaskId: `delegate-task:${contractB.workContractId}`,
+      attemptId: `delegate-task:${contractB.workContractId}:attempt:1`,
+      sessionKey: key,
+      sessionsSpawnArgs: spawnArgsB,
+      dispatchMode: "new_spawn",
+      ttlMs: 60_000,
+    });
+
+    const beforeToolCall = handlers.get("before_tool_call");
+    const afterToolCall = handlers.get("after_tool_call");
+    expect(beforeToolCall).toBeTruthy();
+    expect(afterToolCall).toBeTruthy();
+
+    policyState.setState(key, {
+      decision: budgetedMainDecision("delegate"),
+      routeHintSubmitted: true,
+      spawnIntentId: intentA.spawnIntentId,
+      workContractId: contractA.workContractId,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    });
+    await beforeToolCall!(
+      { toolName: "sessions_spawn", params: spawnArgsA },
+      { sessionKey: key, sessionId: "session-native-auto-confirm-parallel", agentId: "main", cwd: tempWorkspace },
+    );
+    policyState.setState(key, {
+      decision: budgetedMainDecision("delegate"),
+      routeHintSubmitted: true,
+      spawnIntentId: intentB.spawnIntentId,
+      workContractId: contractB.workContractId,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    });
+    await beforeToolCall!(
+      { toolName: "sessions_spawn", params: spawnArgsB },
+      { sessionKey: key, sessionId: "session-native-auto-confirm-parallel", agentId: "main", cwd: tempWorkspace },
+    );
+    expect(nativeSpawnIntentStore.get(intentA.spawnIntentId)?.status).toBe("spawn_call_started");
+    expect(nativeSpawnIntentStore.get(intentB.spawnIntentId)?.status).toBe("spawn_call_started");
+
+    await afterToolCall!(
+      {
+        toolName: "sessions_spawn",
+        params: spawnArgsA,
+        result: {
+          status: "accepted",
+          runId: "run-native-auto-confirm-a",
+          childRunId: "child-run-native-auto-confirm-a",
+          childSessionKey: "agent:main:subagent:native-auto-confirm-a",
+          model: "zhipu/GLM-5.1",
+        },
+      },
+      { sessionKey: key, sessionId: "session-native-auto-confirm-parallel", agentId: "main", cwd: tempWorkspace },
+    );
+    await afterToolCall!(
+      {
+        toolName: "sessions_spawn",
+        params: spawnArgsB,
+        result: {
+          status: "accepted",
+          runId: "run-native-auto-confirm-b",
+          childRunId: "child-run-native-auto-confirm-b",
+          childSessionKey: "agent:main:subagent:native-auto-confirm-b",
+          model: "zhipu/GLM-5.1",
+        },
+      },
+      { sessionKey: key, sessionId: "session-native-auto-confirm-parallel", agentId: "main", cwd: tempWorkspace },
+    );
+
+    expect(nativeSpawnIntentStore.get(intentA.spawnIntentId)).toMatchObject({
+      status: "accepted",
+      runId: "run-native-auto-confirm-a",
+      childSessionKey: "agent:main:subagent:native-auto-confirm-a",
+    });
+    expect(nativeSpawnIntentStore.get(intentB.spawnIntentId)).toMatchObject({
+      status: "accepted",
+      runId: "run-native-auto-confirm-b",
+      childSessionKey: "agent:main:subagent:native-auto-confirm-b",
+    });
+    expect(loadWorkContract(contractA.workContractId)?.nativeSpawnRefs?.childSessionKey).toBe("agent:main:subagent:native-auto-confirm-a");
+    expect(loadWorkContract(contractB.workContractId)?.nativeSpawnRefs?.childSessionKey).toBe("agent:main:subagent:native-auto-confirm-b");
+    await waitForFireAndForget();
+    const events = readReplayEvents().filter((event) => event.event === "sessions_spawn_auto_confirm_completed");
+    expect(events).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        spawn_intent_id: intentA.spawnIntentId,
+        work_contract_id: contractA.workContractId,
+        ok: true,
+        run_id: "run-native-auto-confirm-a",
+        child_session_key: "agent:main:subagent:native-auto-confirm-a",
+      }),
+      expect.objectContaining({
+        spawn_intent_id: intentB.spawnIntentId,
+        work_contract_id: contractB.workContractId,
+        ok: true,
+        run_id: "run-native-auto-confirm-b",
+        child_session_key: "agent:main:subagent:native-auto-confirm-b",
+      }),
+    ]));
+    policyState.clearState(key);
+  });
 });
 
 describe("before_tool_call route hint guard", () => {

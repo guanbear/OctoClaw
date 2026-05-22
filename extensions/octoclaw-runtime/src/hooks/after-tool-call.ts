@@ -1,5 +1,7 @@
 import { resolveSpeculativePreloadEnabled } from "../config/index.js";
 import { confirmNativeSpawn } from "../delegate/native-spawn-confirm.js";
+import { hashSessionsSpawnArgs, type SessionsSpawnArgs } from "../delegate/native-spawn-intent.js";
+import { nativeSpawnIntentStore } from "../delegate/native-spawn-intent-store.js";
 import {
   isMatchingSpeculativePreloadSpawn,
   readSpeculativePreloadState,
@@ -32,13 +34,12 @@ async function autoConfirmPlannerSpawn(input: {
   ctx: UnknownRecord;
   state: UnknownRecord;
   stateKey: string;
+  toolParams: UnknownRecord;
   resultRecord: UnknownRecord;
   accepted: boolean;
   logger: PluginInterface["logger"];
 }): Promise<void> {
-  const spawnIntentId = firstNonEmptyString(input.state.spawnIntentId, input.state.spawn_intent_id);
-  const workContractId = firstNonEmptyString(input.state.workContractId, input.state.work_contract_id);
-  if (!input.accepted || !spawnIntentId || !workContractId) return;
+  if (!input.accepted) return;
 
   const decision = asRecord(input.state.decision);
   const sessionKey = firstNonEmptyString(
@@ -47,6 +48,15 @@ async function autoConfirmPlannerSpawn(input: {
     input.ctx.canonicalSessionKey,
     input.stateKey,
   );
+  const argsHash = firstNonEmptyString(input.toolParams.task)
+    ? hashSessionsSpawnArgs(input.toolParams as SessionsSpawnArgs)
+    : "";
+  const matchedIntent = argsHash
+    ? nativeSpawnIntentStore.findInFlightMatchingForSession(sessionKey, { dispatchMode: "new_spawn", argsHash })
+    : null;
+  const spawnIntentId = firstNonEmptyString(matchedIntent?.spawnIntentId, input.state.spawnIntentId, input.state.spawn_intent_id);
+  const workContractId = firstNonEmptyString(matchedIntent?.workContractId, input.state.workContractId, input.state.work_contract_id);
+  if (!spawnIntentId || !workContractId) return;
   const runId = firstNonEmptyString(
     input.resultRecord.runId,
     input.resultRecord.run_id,
@@ -116,6 +126,7 @@ export function makeAfterToolCallHook(deps: AfterToolCallDeps) {
       ctx,
       state: asRecord(resolvedState),
       stateKey: resolvedStateKey,
+      toolParams,
       resultRecord,
       accepted,
       logger: deps.pi.logger,
