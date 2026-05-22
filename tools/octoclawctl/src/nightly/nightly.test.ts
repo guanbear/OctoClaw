@@ -399,6 +399,34 @@ describe("execution transition — real D2 shapes", () => {
     expect(lane.spawnStartedSent).toBe(0);
   });
 
+  it("classifies transition notification send failures as failures instead of unknown", () => {
+    const events = [
+      executionTransition({
+        transitionKind: "dispatch_materialized",
+        sent: false,
+        skipped: false,
+        ack_delivery_state: "failed",
+        ack_target_resolution_state: "resolved_send_failed",
+        reason: "channel_message_failed",
+      }),
+      executionTransition({
+        transitionKind: "spawn_started",
+        sent: false,
+        skipped: false,
+        ack_delivery_state: "failed",
+        ack_target_resolution_state: "resolved_send_failed",
+        reason: "channel_message_failed",
+      }),
+    ];
+    const lane = classifyExecutionTransition(events);
+    expect(lane.notificationDeliveryFailed).toBe(2);
+    expect(lane.fail).toBe(2);
+    expect(lane.unknown).toBe(0);
+    expect(lane.dispatchedSkipped).toBe(0);
+    expect(lane.spawnStartedSkipped).toBe(0);
+    expect(lane.samples.map((sample) => sample.verdict)).toEqual(["delivery_failed", "delivery_failed"]);
+  });
+
   it("ignores events without transitionKind", () => {
     const events = [makeEvent({ event: "execution_transition", at: "2026-04-26T10:00:00.000Z" })];
     const lane = classifyExecutionTransition(events);
@@ -559,6 +587,53 @@ describe("native runtime replay filtering", () => {
     expect(events).toHaveLength(1);
     expect(events[0]?.event).toBe("native_announce_final_delivered");
   });
+
+  it("filters dispatch helper replay events with synthetic child run markers", () => {
+    const { events } = filterNightlyReplayEvents([
+      makeEvent({
+        event: "execution_transition",
+        at: "2026-05-22T02:09:59.436Z",
+        sessionKey: "agent:main:slack:channel:c0as4dappu3:thread:1779257025.427719",
+        workContractId: "wc-dba78065d8a077f9",
+        transitionKind: "spawn_started",
+        sent: false,
+        skipped: false,
+        ack_delivery_state: "failed",
+        ack_target_resolution_state: "resolved_send_failed",
+        compactParentPacket: {
+          taskId: "delegate-task:agent:main:slack:channel:c0as4dappu3:thread:1779257025.427719:1779415793393",
+          status: "running",
+          modelId: "zhipu/GLM-5.1",
+          backend: "octoclaw.delegate",
+          artifactRefIds: [],
+          childSessionKey: "child-session-spawned",
+          runId: "run-spawned",
+        },
+      }),
+      makeEvent({
+        event: "execution_transition",
+        at: "2026-05-22T02:10:23.089Z",
+        sessionKey: "agent:main:slack:channel:c0as4dappu3:thread:1779415669.331739",
+        workContractId: "wc-live",
+        transitionKind: "spawn_started",
+        sent: true,
+        skipped: false,
+        ack_delivery_state: "sent",
+        ack_target_resolution_state: "resolved",
+        compactParentPacket: {
+          taskId: "delegate-task:wc-live",
+          status: "running",
+          modelId: "zhipu/GLM-5.1",
+          backend: "openclaw.sessions_spawn",
+          artifactRefIds: [],
+          childSessionKey: "agent:main:subagent:2c835ea5-a616-41db-bb12-7fe9335df2db",
+          runId: "8ff35d34-f22a-4838-a532-1063f0c62e8e",
+        },
+      }),
+    ], { now: "2026-05-22T02:11:00.000Z", lookbackHours: 1 });
+
+    expect(events.map((event) => event.workContractId)).toEqual(["wc-live"]);
+  });
 });
 
 
@@ -567,7 +642,7 @@ describe("overall gate — stricter semantics", () => {
     const gate = computeOverallGate([
       { lane: "route_quality", total: 10, pass: 10, fail: 0, unknown: 0, falseDelegate: 0, falseReply: 0, unclear: 0, protectedLaneMisroute: 0, statusRespawnRisk: 0, directPathLatency: 0, routeSourceDistribution: {}, judgeTimeoutCount: 0, judgeFallbackCount: 0, samples: [] },
       { lane: "route_commit_ack", total: 5, pass: 5, fail: 0, unknown: 0, ackSent: 5, ackSkipped: 0, ackFailed: 0, ackDuplicate: 0, ackMissing: 0, ackNoTarget: 0, ackMsP50: null, ackMsP95: null, ackMsP99: null, coverage: 1, samples: [] },
-      { lane: "execution_transition", total: 8, pass: 8, fail: 0, unknown: 0, dispatchedSent: 2, dispatchedSkipped: 0, materializedNoSpawnSent: 0, materializedNoSpawnSkipped: 0, spawnStartedSent: 2, spawnStartedSkipped: 0, spawnFailedSent: 0, spawnFailedSkipped: 0, queuedStaleSent: 0, queuedStaleSkipped: 0, heartbeatStaleSent: 0, heartbeatStaleSkipped: 0, timedOutSent: 0, timedOutSkipped: 0, resultReadySent: 2, resultReadySkipped: 0, deliveryFailedSent: 0, deliveryFailedSkipped: 0, dispatchToSpawnLatencyP50: null, dispatchToSpawnLatencyP95: null, resultReadyToDeliveryLatencyP50: null, resultReadyToDeliveryLatencyP95: null, samples: [] },
+      { lane: "execution_transition", total: 8, pass: 8, fail: 0, unknown: 0, dispatchedSent: 2, dispatchedSkipped: 0, materializedNoSpawnSent: 0, materializedNoSpawnSkipped: 0, spawnStartedSent: 2, spawnStartedSkipped: 0, spawnFailedSent: 0, spawnFailedSkipped: 0, queuedStaleSent: 0, queuedStaleSkipped: 0, heartbeatStaleSent: 0, heartbeatStaleSkipped: 0, timedOutSent: 0, timedOutSkipped: 0, resultReadySent: 2, resultReadySkipped: 0, deliveryFailedSent: 0, deliveryFailedSkipped: 0, notificationDeliveryFailed: 0, dispatchToSpawnLatencyP50: null, dispatchToSpawnLatencyP95: null, resultReadyToDeliveryLatencyP50: null, resultReadyToDeliveryLatencyP95: null, samples: [] },
       { lane: "delegation_health", total: 3, pass: 3, fail: 0, unknown: 0, noSpawnCount: 0, spawnFailedCount: 0, staleCount: 0, timedOutCount: 0, resultOrphanCount: 0, contextPollutionCount: 0, parentContextTokensAddedMax: null, parentContextTokensAddedP95: null, resultPacketTokensMax: null, samples: [] },
       { lane: "delivery", total: 4, pass: 4, fail: 0, unknown: 0, deliveryFailedCount: 0, retryDeferredCount: 0, compensatedCount: 0, samples: [] },
     ]);
@@ -905,6 +980,7 @@ describe("report rendering", () => {
     expect(md).toContain("## Route Commit ACK");
     expect(md).toContain("## Execution Transitions");
     expect(md).toContain("dispatch_materialized sent/skipped");
+    expect(md).toContain("Notification Delivery Failed");
     expect(md).toContain("ACK ms P50");
     expect(md).toContain("Dispatch→Spawn ms P50");
     expect(md).toContain("Result→Delivery ms P50");

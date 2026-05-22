@@ -141,6 +141,7 @@ function renderLaneDetails(lane: EvaluationLaneResult): string {
         `| timed_out sent/skipped | ${lane.timedOutSent} / ${lane.timedOutSkipped} |`,
         `| result_ready sent/skipped | ${lane.resultReadySent} / ${lane.resultReadySkipped} |`,
         `| delivery_failed sent/skipped | ${lane.deliveryFailedSent} / ${lane.deliveryFailedSkipped} |`,
+        `| Notification Delivery Failed | ${lane.notificationDeliveryFailed} |`,
         `| Dispatch→Spawn ms P50 | ${lane.dispatchToSpawnLatencyP50 ?? "N/A"} |`,
         `| Dispatch→Spawn ms P95 | ${lane.dispatchToSpawnLatencyP95 ?? "N/A"} |`,
         `| Result→Delivery ms P50 | ${lane.resultReadyToDeliveryLatencyP50 ?? "N/A"} |`,

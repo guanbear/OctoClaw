@@ -383,6 +383,7 @@ function makeNightlyReport(options: { reportId?: string; lanes?: NightlyOverride
     resultReadyToDeliveryLatencyP95: 200,
     samples: [],
     ...options.lanes?.executionTransition,
+    notificationDeliveryFailed: options.lanes?.executionTransition?.notificationDeliveryFailed ?? 0,
   };
   const delegationHealth: Extract<EvaluationLaneResult, { lane: "delegation_health" }> = {
     lane: "delegation_health",

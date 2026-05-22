@@ -2395,6 +2395,8 @@ describe("octoclawctl nightly integration", () => {
         expectFooter: { route: "delegate", difficultyRequired: true },
       });
       expect(parallel?.prompt).toContain("两个子 agent");
+      expect(parallel?.prompt).toContain("octoclaw_dispatch");
+      expect(parallel?.prompt).toContain("sessions_spawn");
       expect(parallel?.prompt).toContain("主会话仍可响应");
       expect(parallel?.expectReplay).toMatchObject({
         requireWorkContract: true,

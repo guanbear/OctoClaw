@@ -65,8 +65,13 @@ function containsSyntheticMarker(value: unknown): boolean {
     || lower === "wc-123"
     || lower === "task-honesty"
     || lower === "flow-honesty"
+    || lower === "child-session-spawned"
+    || lower === "child-session-id-spawned"
+    || lower === "run-spawned"
+    || lower === "flow-spawned"
     || lower === "task-delivery-failed"
     || lower === "task-no-target"
+    || lower.startsWith("child-session-")
     || lower.startsWith("session-dispatch-honesty")
     || lower.startsWith("session-")
     || lower.startsWith("policy-")
@@ -464,6 +469,7 @@ export function classifyExecutionTransition(events: ReplayEvent[]): ExecutionTra
   const spawnLatencies: number[] = [];
   const resultReadyTimes = new Map<string, number>();
   const resultDeliveryLatencies: number[] = [];
+  let notificationDeliveryFailed = 0;
 
   for (const event of transitionEvents) {
     const kind = event.transitionKind as string;
@@ -473,6 +479,7 @@ export function classifyExecutionTransition(events: ReplayEvent[]): ExecutionTra
 
     const sent = event.sent === true;
     const skipped = event.skipped === true;
+    const deliveryFailed = event.ack_delivery_state === "failed" || event.ack_target_resolution_state === "resolved_send_failed";
     const timestamp = eventTimeMs(event);
     const key = eventCorrelationKey(event);
 
@@ -480,6 +487,8 @@ export function classifyExecutionTransition(events: ReplayEvent[]): ExecutionTra
       counts[kind].sent++;
     } else if (skipped) {
       counts[kind].skipped++;
+    } else if (deliveryFailed) {
+      notificationDeliveryFailed++;
     } else {
       counts[kind].skipped++;
     }
@@ -504,7 +513,7 @@ export function classifyExecutionTransition(events: ReplayEvent[]): ExecutionTra
       "delivery_failed",
     ].includes(kind);
 
-    if (isAnomaly || !sent) {
+    if (isAnomaly || deliveryFailed || !sent) {
       samples.push({
         eventId: `${event.at}:execution_transition:${event.taskId ?? ""}:${kind}`,
         at: event.at,
@@ -512,15 +521,18 @@ export function classifyExecutionTransition(events: ReplayEvent[]): ExecutionTra
         turnId: event.turnId,
         taskId: event.taskId,
         route: event.route,
-        verdict: sent ? "pass" : "skipped",
-        reason: `${kind} sent=${sent} skipped=${skipped}`,
+        verdict: sent ? "pass" : deliveryFailed ? "delivery_failed" : "skipped",
+        reason: deliveryFailed ? `${kind} delivery_failed` : `${kind} sent=${sent} skipped=${skipped}`,
         details: {
           transitionKind: kind,
           projectionStatus: event.projectionStatus,
+          projectionStatusReason: event.projectionStatusReason,
           dispatchExecuted: event.dispatchExecuted,
           spawnExecuted: event.spawnExecuted,
           resultMaterialized: event.resultMaterialized,
+          ack_target_resolution_state: event.ack_target_resolution_state,
           ack_delivery_state: event.ack_delivery_state,
+          reason: event.reason,
           compactParentPacket: event.compactParentPacket,
         },
       });
@@ -542,7 +554,7 @@ export function classifyExecutionTransition(events: ReplayEvent[]): ExecutionTra
 
   const c = counts;
   const failKinds = ["materialized_no_spawn", "spawn_failed", "queued_stale", "heartbeat_stale", "timed_out", "delivery_failed"];
-  const failCount = failKinds.reduce((sum, k) => sum + (c[k]?.sent ?? 0), 0);
+  const failCount = failKinds.reduce((sum, k) => sum + (c[k]?.sent ?? 0), 0) + notificationDeliveryFailed;
   const passCount = (c["dispatch_materialized"]?.sent ?? 0) + (c["spawn_started"]?.sent ?? 0) + (c["result_ready"]?.sent ?? 0);
 
   return {
@@ -569,6 +581,7 @@ export function classifyExecutionTransition(events: ReplayEvent[]): ExecutionTra
     resultReadySkipped: c["result_ready"]?.skipped ?? 0,
     deliveryFailedSent: c["delivery_failed"]?.sent ?? 0,
     deliveryFailedSkipped: c["delivery_failed"]?.skipped ?? 0,
+    notificationDeliveryFailed,
     dispatchToSpawnLatencyP50: percentile(spawnLatencies, 50),
     dispatchToSpawnLatencyP95: percentile(spawnLatencies, 95),
     resultReadyToDeliveryLatencyP50: percentile(resultDeliveryLatencies, 50),

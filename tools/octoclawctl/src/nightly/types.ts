@@ -260,6 +260,7 @@ export interface ExecutionTransitionLane {
   resultReadySkipped: number;
   deliveryFailedSent: number;
   deliveryFailedSkipped: number;
+  notificationDeliveryFailed: number;
   dispatchToSpawnLatencyP50: number | null;
   dispatchToSpawnLatencyP95: number | null;
   resultReadyToDeliveryLatencyP50: number | null;

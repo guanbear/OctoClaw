@@ -85,7 +85,7 @@ const FULL_EXTRA_CASES: StabilityCase[] = [
     mode: "live_slack",
     severity: "major",
     tags: ["slack", "delegate", "parallel", "status"],
-    prompt: "请同时启动两个子 agent：A 只读总结当前 OctoClaw readiness，B 只读总结当前 Gateway 状态。它们运行时主会话要回复一句“主会话仍可响应”，并在状态面板里能看到两个正在运行的子任务；两个子任务完成后再给最终摘要。",
+    prompt: "这是并行委派稳定性 smoke。请不要直接完成任务：先用 octoclaw_dispatch 分别登记两个独立子任务 A/B，再按返回的 sessions_spawn 提示分别启动两个子 agent。A 只读总结当前 OctoClaw readiness，B 只读总结当前 Gateway 状态。两个子 agent 都启动后，主会话回复一句“主会话仍可响应”，并在状态面板里能看到两个正在运行的子任务；两个子任务完成后再给最终摘要。",
     maxRuntimeMs: 300_000,
     expect: {
       route: "delegate",
