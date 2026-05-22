@@ -135,6 +135,7 @@ const PROVENANCE_PROMPT_PATTERNS = [
 ];
 const TASK_PROGRESS_PROMPT_PATTERNS = [
   /((?:single|spawn|runner)\s*成功了吗|任务怎样了|任务怎么样了|现在什么状态|还在\s*queued\s*吗|还在排队吗)/iu,
+  /(为啥|为什么|怎么).{0,12}(处理中|正在处理|还没回复|没回复|没回|还没好|没好|pending|processing)/iu,
   /\b(single succeeded|spawn succeeded|runner succeeded|task status|still queued|still running)\b/iu,
 ];
 const PLAIN_CHAT_PROMPT_PATTERNS = [
