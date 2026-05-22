@@ -96,22 +96,26 @@ function isSelectable(model: SnapshotModel): boolean {
   return true;
 }
 
-function cheapestInTier(models: SnapshotModel[], tier: CodingTier): string | undefined {
-  const eligible = models.filter((m) => isSelectable(m) && (m.capability?.codingTier ?? "unknown") === tier);
-  if (eligible.length === 0) return undefined;
-  eligible.sort((a, b) => (a.marketPrice?.blendedUsdPerMTok ?? Infinity) - (b.marketPrice?.blendedUsdPerMTok ?? Infinity));
-  return eligible[0].modelKey;
+function priceSortKey(price: number | undefined): number {
+  if (price === undefined || price <= 0) return Infinity;
+  return price;
+}
+
+function compareForCost(a: SnapshotModel, b: SnapshotModel): number {
+  const priceA = priceSortKey(a.marketPrice?.blendedUsdPerMTok);
+  const priceB = priceSortKey(b.marketPrice?.blendedUsdPerMTok);
+  if (priceA !== priceB) return priceA - priceB;
+  const tierA = TIER_FLOOR[a.capability?.codingTier ?? "unknown"];
+  const tierB = TIER_FLOOR[b.capability?.codingTier ?? "unknown"];
+  if (tierA !== tierB) return tierB - tierA;
+  return (a.modelKey ?? "").localeCompare(b.modelKey ?? "");
 }
 
 function cheapestMeetingFloor(models: SnapshotModel[], floor: CodingTier): string | undefined {
   const eligible = models.filter((m) => isSelectable(m) && meetsFloor(m, floor));
   if (eligible.length === 0) return undefined;
-  eligible.sort((a, b) => (a.marketPrice?.blendedUsdPerMTok ?? Infinity) - (b.marketPrice?.blendedUsdPerMTok ?? Infinity));
+  eligible.sort(compareForCost);
   return eligible[0].modelKey;
-}
-
-function cheapestForTier(models: SnapshotModel[], tier: CodingTier): string | undefined {
-  return cheapestInTier(models, tier) ?? cheapestMeetingFloor(models, tier);
 }
 
 function parseSnapshotModels(raw: string): SnapshotModel[] | undefined {
@@ -142,17 +146,16 @@ function readSnapshotModels(): SnapshotModel[] | undefined {
 }
 
 function applySnapshotTierSelection(map: ResolvedModelMap, snapshotModels: SnapshotModel[]): ResolvedModelMap {
-  const simple = cheapestForTier(snapshotModels, "mini");
-  const complex = cheapestForTier(snapshotModels, "strong");
-  const deep = cheapestForTier(snapshotModels, "frontier");
-
-  const normalExact = cheapestInTier(snapshotModels, "standard");
+  const simple = cheapestMeetingFloor(snapshotModels, "mini");
+  const normal = cheapestMeetingFloor(snapshotModels, "standard");
+  const complex = cheapestMeetingFloor(snapshotModels, "strong");
+  const deep = cheapestMeetingFloor(snapshotModels, "frontier");
 
   return {
     ...map,
     complexity: {
       simple: simple ?? map.complexity.simple,
-      normal: normalExact ?? map.complexity.normal,
+      normal: normal ?? map.complexity.normal,
       complex: complex ?? map.complexity.complex,
       deep: deep ?? map.complexity.deep,
     },

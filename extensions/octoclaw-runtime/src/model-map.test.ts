@@ -41,7 +41,7 @@ describe("model map", () => {
     });
   });
 
-  it("uses model-intel tiers for deep and complex lanes when fallback tags underspecify capability", async () => {
+  it("uses cost-first quality floors for live complexity lanes", async () => {
     process.env.OCTOCLAW_ROUTER_SNAPSHOT_JSON = JSON.stringify({
       schemaVersion: "octoclaw.router_lite.model_intel_snapshot/v1",
       snapshotId: "test-snapshot",
@@ -56,8 +56,8 @@ describe("model map", () => {
     });
     await expect(buildModelMap()).resolves.toMatchObject({
       complexity: {
-        simple: "cliproxyapi/gpt-5.4-mini",
-        normal: "zhipu/GLM-5.1",
+        simple: "zai/glm-4.7",
+        normal: "zai/glm-4.7",
         complex: "zai/glm-4.7",
         deep: "cliproxyapi/gpt-5.5",
       },
@@ -82,7 +82,7 @@ describe("model map", () => {
 
     await expect(buildModelMap()).resolves.toMatchObject({
       complexity: {
-        simple: "cliproxyapi/gpt-5.4-mini",
+        simple: "zhipu/GLM-5.1",
         deep: "cliproxyapi/gpt-5.5",
       },
     });
@@ -106,9 +106,30 @@ describe("model map", () => {
       },
     });
   });
+
+  it("treats zero openclaw_config blended cost as unknown instead of free", async () => {
+    process.env.OCTOCLAW_ROUTER_SNAPSHOT_JSON = JSON.stringify({
+      schemaVersion: "octoclaw.router_lite.model_intel_snapshot/v1",
+      snapshotId: "test-zero-cost",
+      generatedAt: "2026-05-22T00:00:00.000Z",
+      sourceStatus: [],
+      models: [
+        modelIntel("zhipu/GLM-5.1", "strong", 0, ["openclaw_config"]),
+        modelIntel("zai/glm-4.7", "strong", 1, ["models.dev", "litellm"]),
+      ],
+    });
+
+    await expect(buildModelMap()).resolves.toMatchObject({
+      complexity: {
+        simple: "zai/glm-4.7",
+        normal: "zai/glm-4.7",
+        complex: "zai/glm-4.7",
+      },
+    });
+  });
 });
 
-function modelIntel(modelKey: string, tier: string, price: number) {
+function modelIntel(modelKey: string, tier: string, price: number, priceSources = ["test"]) {
   const [provider, model] = modelKey.split("/");
   return {
     provider,
@@ -118,7 +139,7 @@ function modelIntel(modelKey: string, tier: string, price: number) {
     available: "yes",
     proposalOnly: false,
     tags: [],
-    marketPrice: { blendedUsdPerMTok: price, confidence: "high", sources: ["test"] },
+    marketPrice: { blendedUsdPerMTok: price, confidence: "high", sources: priceSources },
     capability: {
       input: ["text"],
       toolUse: "yes",
