@@ -72,10 +72,13 @@ function coverageSnapshot(): ContextCoverageSnapshot {
   };
 }
 
-function seedWorkContract(sessionKey = "session-planner-dispatch") {
+function seedWorkContract(
+  sessionKey = "session-planner-dispatch",
+  userAsk = "Research OpenClaw sessions_spawn planner behavior and summarize implementation risks.",
+) {
   const contract = buildWorkContractFromPolicy(
     sessionKey,
-    "Research OpenClaw sessions_spawn planner behavior and summarize implementation risks.",
+    userAsk,
     "fresh_live_lookup",
     coverageSnapshot(),
     buildWorkDecisionSeal("local_judge", "delegate", ["planner_dispatch_test"]),
@@ -482,6 +485,45 @@ describe("octoclaw_dispatch planner backend", () => {
     expect(secondLabel).toContain(`[${secondContract.workContractId}]`);
     expect(firstLabel.length).toBeLessThanOrEqual(80);
     expect(secondLabel.length).toBeLessThanOrEqual(80);
+  });
+
+  it("issues a new planner ticket for a second same-thread dispatch with different task text", async () => {
+    process.env.OCTOCLAW_SPAWN_BACKEND = "planner";
+    process.env.OCTOCLAW_RUNTIME_LEDGER = "enforce";
+    const sessionKey = "agent:main:slack:channel:c0as4dappu3:thread:t-parallel-two";
+    const firstTask = "A 只读总结当前 OctoClaw readiness。";
+    const secondTask = "B 只读总结当前 Gateway 状态。";
+    const firstContract = seedWorkContract(sessionKey, firstTask);
+
+    const firstResponse = await dispatchTool().execute({
+      task: firstTask,
+      workContractId: firstContract.workContractId,
+      policyJson: JSON.stringify(delegateDecision(firstContract)),
+      timeoutSeconds: 900,
+    }, {
+      sessionKey,
+      sessionId: "session-planner-parallel-two",
+      cwd: tempWorkspace,
+    });
+    const firstBody = JSON.parse(String(firstResponse.text));
+    expect(firstBody.ok).toBe(true);
+    expect(firstBody.status).toBe("requires_native_spawn");
+
+    const secondResponse = await dispatchTool().execute({
+      task: secondTask,
+      timeoutSeconds: 900,
+    }, {
+      sessionKey,
+      sessionId: "session-planner-parallel-two",
+      cwd: tempWorkspace,
+    });
+    const secondBody = JSON.parse(String(secondResponse.text));
+
+    expect(secondBody.ok).toBe(true);
+    expect(secondBody.status).toBe("requires_native_spawn");
+    expect(secondBody.workContractId).not.toBe(firstBody.workContractId);
+    expect(secondBody.spawnIntentId).not.toBe(firstBody.spawnIntentId);
+    expect(secondBody.error).toBeUndefined();
   });
 
   it("fails closed with explicit planner_not_allowed instead of falling through to legacy taskFlow", async () => {

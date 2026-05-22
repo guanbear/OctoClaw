@@ -169,6 +169,70 @@ function persistDispatchComplexityBand(contract: WorkContract | null, complexity
   })) ?? contract;
 }
 
+function normalizeDispatchTaskText(value: unknown): string {
+  return String(value ?? "").replace(/\s+/gu, " ").trim();
+}
+
+function isImplicitPriorContractForDifferentTask(contract: WorkContract | null, task: unknown): boolean {
+  const currentTask = normalizeDispatchTaskText(task);
+  const priorTask = normalizeDispatchTaskText(contract?.userAsk);
+  return Boolean(contract && currentTask && priorTask && currentTask !== priorTask);
+}
+
+function implicitContractAlreadyAssignedToDispatch(contract: WorkContract | null, state: UnknownRecord | null | undefined): boolean {
+  if (!contract) return false;
+  const telemetry = asRecord(contract.telemetry);
+  const refs = asRecord(contract.nativeSpawnRefs);
+  const delegate = asRecord(contract.delegate);
+  const nativeBinding = asRecord(delegate.nativeBinding);
+  if (
+    contract.status === "completed"
+    || contract.status === "failed"
+    || telemetry.dispatchExecuted === true
+    || telemetry.spawnExecuted === true
+    || telemetry.resultMaterialized === true
+    || Boolean(asString(refs.openclawRunId || refs.childRunId || refs.childSessionKey || refs.spawnIntentId))
+    || Boolean(asString(nativeBinding.runId || nativeBinding.childRunId || nativeBinding.childSessionKey || nativeBinding.nativeTaskId))
+  ) {
+    return true;
+  }
+  const stateRecord = asRecord(state);
+  const stateContractId = asString(stateRecord.workContractId || stateRecord.work_contract_id);
+  if (stateContractId !== contract.workContractId) return false;
+  const dispatchStatus = asString(stateRecord.dispatchStatus || stateRecord.dispatch_status);
+  return Boolean(
+    asString(stateRecord.spawnIntentId || stateRecord.spawn_intent_id)
+    || stateRecord.dispatchExecuted === true
+    || stateRecord.dispatch_executed === true
+    || stateRecord.spawnExecuted === true
+    || stateRecord.spawn_executed === true
+    || stateRecord.resultMaterialized === true
+    || stateRecord.result_materialized === true
+    || dispatchStatus === "requires_native_spawn"
+    || dispatchStatus === "native_spawn_accepted"
+    || dispatchStatus === "running"
+    || dispatchStatus === "completed"
+  );
+}
+
+function forceNewDelegatedWorkMetadata(metadata: UnknownRecord, task: unknown): UnknownRecord {
+  return {
+    ...metadata,
+    conversation_control: {
+      ...asRecord(metadata.conversation_control),
+      source: "explicit_conversation_control",
+      explicit_delegate_request: true,
+      intent_class: "delegated_work",
+    },
+    requested_route: "delegate",
+    route_request_source: "force_route",
+    route_request_trusted: true,
+    is_new_work: true,
+    relation_to_recent_execution: "new_work",
+    expected_deliverable: asString(metadata.expected_deliverable || metadata.expectedDeliverable || task).slice(0, 200),
+  };
+}
+
 export async function executeOctoclawDispatch(params: Record<string, unknown>, _rawCtx: Record<string, unknown>, options: ToolRegistrationOptions = {}): Promise<Record<string, unknown>> {
         const ctx = _rawCtx ?? {};
         const dispatchToolStartedAt = Date.now();
@@ -178,8 +242,23 @@ export async function executeOctoclawDispatch(params: Record<string, unknown>, _
         let dispatchWorkContract: WorkContract | null = null;
         let workContractDispatchError: { route: string; error: string } | null = null;
         const explicitWorkContractId = asString(params.workContractId);
-        const requestedWorkContractId = selectDispatchWorkContractId(asRecord(params), cachedDecision)
+        let ignoredImplicitWorkContractId = "";
+        let requestedWorkContractId = selectDispatchWorkContractId(asRecord(params), cachedDecision)
           || asString(state?.workContractId || state?.work_contract_id);
+        if (requestedWorkContractId) {
+          const requestedContract = loadWorkContract(requestedWorkContractId);
+          if (
+            !explicitWorkContractId
+            && !params.policyJson
+            && isImplicitPriorContractForDifferentTask(requestedContract, params.task)
+            && implicitContractAlreadyAssignedToDispatch(requestedContract, state)
+          ) {
+            ignoredImplicitWorkContractId = requestedWorkContractId;
+            requestedWorkContractId = "";
+            cachedDecision = null;
+            hadCachedDecision = false;
+          }
+        }
         if (requestedWorkContractId) {
           const validation = validateDispatchWorkContract(loadWorkContract(requestedWorkContractId), requestedWorkContractId);
           if (validation.ok) {
@@ -197,12 +276,18 @@ export async function executeOctoclawDispatch(params: Record<string, unknown>, _
         }
         let freshDecisionSource = "";
         if (!cachedDecision) {
+          const freshMetadata = ignoredImplicitWorkContractId
+            ? forceNewDelegatedWorkMetadata(buildPolicyMetadata(ctx, { stateKey }), params.task)
+            : buildPolicyMetadata(ctx, { stateKey });
           cachedDecision = await resolveStatelessPolicyDecision(asString(params.task), {
             command: asString(params.command),
-            metadata: buildPolicyMetadata(ctx, { stateKey }),
-            forceRoute: asString(params.forceRoute === "auto" ? "" : params.forceRoute),
+            metadata: freshMetadata,
+            forceRoute: ignoredImplicitWorkContractId ? "delegate" : asString(params.forceRoute === "auto" ? "" : params.forceRoute),
           });
-          freshDecisionSource = "fresh_context_resolve";
+          freshDecisionSource = ignoredImplicitWorkContractId ? "implicit_new_work_dispatch_resolve" : "fresh_context_resolve";
+          if (ignoredImplicitWorkContractId) {
+            hadCachedDecision = true;
+          }
         }
         const promoteBudgetedMainDispatch = shouldPromoteBudgetedMainDispatch({
           decision: cachedDecision,
@@ -229,6 +314,9 @@ export async function executeOctoclawDispatch(params: Record<string, unknown>, _
           parseObjectJson(params.metadataJson),
         );
         initialMetadata = finalizeDispatchMetadata(ctx, initialMetadata, { stateKey, state, cachedDecision });
+        if (ignoredImplicitWorkContractId) {
+          initialMetadata = forceNewDelegatedWorkMetadata(initialMetadata, params.task);
+        }
         const managedSessionKey = resolveDispatchSessionKey(ctx, initialMetadata, { stateKey, state, cachedDecision })
           || asString(asRecord(cachedDecision.request).session_key || initialMetadata.session_key);
         let resolvedRoute = resolveDispatchTargetRoute({
@@ -251,7 +339,7 @@ export async function executeOctoclawDispatch(params: Record<string, unknown>, _
               asString(ctx.sessionKey),
             ],
             newerThanMs: policyStateTimeMs(state, cachedDecision),
-            excludedWorkContractIds: [requestedWorkContractId],
+            excludedWorkContractIds: [requestedWorkContractId, ignoredImplicitWorkContractId],
           });
           if (fallbackContract) {
             dispatchWorkContract = fallbackContract;
