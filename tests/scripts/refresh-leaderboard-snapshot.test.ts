@@ -480,7 +480,7 @@ describe("refresh-leaderboard-snapshot script", () => {
       const snapshot = JSON.parse(await fs.readFile(output, "utf8"));
       const flash = snapshot.models["google/gemini-3.5-flash"].capabilityScore;
 
-      expect(flash.score).toBeLessThan(84);
+      expect(flash.score).toBeLessThan(83);
       expect(flash.reasonCodes).toContain("compact_missing_agentic_cap");
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true });
@@ -560,7 +560,7 @@ describe("refresh-leaderboard-snapshot script", () => {
       const snapshot = JSON.parse(await fs.readFile(output, "utf8"));
       const disputed = snapshot.models["example/disputed-strong"].capabilityScore;
 
-      expect(disputed.score).toBeGreaterThan(70);
+      expect(disputed.score).toBeGreaterThan(78);
       expect(disputed.reasonCodes).toContain("single_source_global_anchor_softened");
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true });

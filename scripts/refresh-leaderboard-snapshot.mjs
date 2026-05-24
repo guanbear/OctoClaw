@@ -658,6 +658,14 @@ function buildBenchmarkEfficiency(pinchEntry) {
   };
 }
 
+function scenarioScoreExcludingFamilies(score, excludedFamilies) {
+  const usable = (score?.contributions ?? [])
+    .filter((contribution) => (contribution.effectiveWeight ?? 0) > 0 && !excludedFamilies.has(sourceFamily(contribution.source)));
+  const totalWeight = usable.reduce((sum, contribution) => sum + contribution.effectiveWeight, 0);
+  if (totalWeight <= 0) return undefined;
+  return usable.reduce((sum, contribution) => sum + contribution.rawScore * (contribution.effectiveWeight / totalWeight), 0);
+}
+
 function heuristicScoreForTier(tier) {
   if (tier === "frontier") return 90;
   if (tier === "strong") return 76;
@@ -682,6 +690,7 @@ function buildCapabilityScore(scoreByScenario) {
     const globalSourceFamilies = new Set();
     const nonGlobalSourceFamilies = new Set();
     let nonGlobalWeightedScore = 0;
+    let nonGlobalIndependentWeightedScore = 0;
     let nonGlobalWeight = 0;
     let nonGlobalScenarioCount = 0;
     for (const contribution of globalScore.contributions ?? []) {
@@ -701,6 +710,7 @@ function buildCapabilityScore(scoreByScenario) {
       }
       totalScore += score.score * weight;
       nonGlobalWeightedScore += score.score * weight;
+      nonGlobalIndependentWeightedScore += (scenarioScoreExcludingFamilies(score, globalSourceFamilies) ?? score.score) * weight;
       nonGlobalWeight += weight;
       nonGlobalScenarioCount += 1;
       observedScenarioValues.push(score.score);
@@ -715,6 +725,7 @@ function buildCapabilityScore(scoreByScenario) {
       for (const reason of score.reasonCodes ?? []) reasonCodes.add(reason);
     }
     const nonGlobalAverage = nonGlobalWeight > 0 ? nonGlobalWeightedScore / nonGlobalWeight : undefined;
+    const nonGlobalIndependentAverage = nonGlobalWeight > 0 ? nonGlobalIndependentWeightedScore / nonGlobalWeight : undefined;
     const softenedSingleSourceGlobal = nonGlobalAverage !== undefined &&
       globalSourceFamilies.size <= 1 &&
       nonGlobalScenarioCount >= 2 &&
@@ -722,7 +733,7 @@ function buildCapabilityScore(scoreByScenario) {
       nonGlobalSourceFamilies.size > globalSourceFamilies.size &&
       nonGlobalAverage - globalScore.score > 16;
     if (softenedSingleSourceGlobal) {
-      totalScore = globalScore.score * 0.35 + nonGlobalAverage * 0.65;
+      totalScore = globalScore.score * 0.15 + (nonGlobalIndependentAverage ?? nonGlobalAverage) * 0.85;
       reasonCodes.add("single_source_global_anchor_softened");
     }
     const spread = Math.max(...observedScenarioValues) - Math.min(...observedScenarioValues);
@@ -1023,11 +1034,7 @@ function applySiblingCalibrations(models) {
     const agentic = scenarioScoreValue(model, "agentic");
     if (score === undefined || research === undefined || coding === undefined || agentic !== undefined || roleRank(modelKey) !== 0) continue;
     if (score <= 84 || research - coding < 10 || score <= coding + 1.5) continue;
-    adjusted[modelKey] = capModelGlobalCapability(
-      model,
-      coding + 1.5,
-      "compact_missing_agentic_cap",
-    );
+    adjusted[modelKey] = capModelGlobalCapability(model, coding, "compact_missing_agentic_cap");
   }
 
   return adjusted;
