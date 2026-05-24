@@ -29,7 +29,11 @@ describe("build-capability-site script", () => {
       ],
       models: [
         { modelKey: "openai/gpt-5.5", capability: { codingTier: "frontier", capabilityScore: { score: 86.28, confidence: "high", sources: ["artificial_analysis"] } } },
-        { modelKey: "google/gemini-3.5-flash", capability: { codingTier: "strong", capabilityScore: { score: 78.5, confidence: "medium", sources: ["lmarena_text"] } } },
+        { modelKey: "openai/gpt-5.5-xhigh--codex-harness", capability: { codingTier: "frontier", capabilityScore: { score: 96, confidence: "medium", sources: ["lmarena_webdev"] } } },
+        { modelKey: "openai/gpt-5.5-high", capability: { codingTier: "frontier", capabilityScore: { score: 95, confidence: "medium", sources: ["lmarena_text"] } } },
+        { modelKey: "example/single-source-spike", capability: { codingTier: "standard", capabilityScore: { score: 94, confidence: "medium", sources: ["lmarena_text"] } } },
+        { modelKey: "anthropic/claude-sonnet-4.5-20250929-fc", capability: { codingTier: "strong", capabilityScore: { score: 93, confidence: "medium", sources: ["bfcl"] } } },
+        { modelKey: "google/gemini-3.5-flash", available: "yes", marketPrice: { confidence: "medium" }, capability: { codingTier: "strong", capabilityScore: { score: 78.5, confidence: "medium", sources: ["lmarena_text", "pinchbench"] } } },
         { modelKey: "zhipu/glm-5.1", capability: { codingTier: "strong", capabilityScore: { score: 80, confidence: "medium", sources: ["artificial_analysis"] } }, benchmarkEfficiency: { valueScore: 76, sources: ["pinchbench"] } },
       ],
     };
@@ -56,13 +60,14 @@ describe("build-capability-site script", () => {
         generatedAt: "2026-05-24T00:00:00.000Z",
         snapshotUrl: "https://octoclaw.github.io/OctoClaw/capability/leaderboard-snapshot.json",
         summaryUrl: "https://octoclaw.github.io/OctoClaw/capability/leaderboard-summary.json",
-        modelCount: 3,
+        modelCount: 7,
         minOctoClawVersion: "0.6.0",
       });
       expect(manifest.snapshotSha256).toBe(createHash("sha256").update(publishedSnapshotText).digest("hex"));
       expect(summary).toMatchObject({
         snapshotId: "official-test",
-        modelCount: 3,
+        modelCount: 7,
+        primaryModelCount: 3,
         sourceStatus: snapshot.sourceStatus,
         topModels: [
           { modelKey: "openai/gpt-5.5", score: 86.28, confidence: "high" },
@@ -70,6 +75,15 @@ describe("build-capability-site script", () => {
           { modelKey: "google/gemini-3.5-flash", score: 78.5, confidence: "medium" },
         ],
       });
+      expect(summary.topModels.map((model: { modelKey: string }) => model.modelKey)).not.toContain("openai/gpt-5.5-xhigh--codex-harness");
+      expect(summary.topModels.map((model: { modelKey: string }) => model.modelKey)).not.toContain("openai/gpt-5.5-high");
+      expect(summary.topModels.map((model: { modelKey: string }) => model.modelKey)).not.toContain("example/single-source-spike");
+      expect(summary.observationModels).toEqual(expect.arrayContaining([
+        expect.objectContaining({ modelKey: "openai/gpt-5.5-xhigh--codex-harness", leaderboardClass: "benchmark_variant" }),
+        expect.objectContaining({ modelKey: "openai/gpt-5.5-high", leaderboardClass: "benchmark_variant" }),
+        expect.objectContaining({ modelKey: "example/single-source-spike", leaderboardClass: "observation_only" }),
+        expect.objectContaining({ modelKey: "anthropic/claude-sonnet-4.5-20250929-fc", leaderboardClass: "benchmark_variant" }),
+      ]));
       expect(summary.watchedModels).toEqual(expect.arrayContaining([
         expect.objectContaining({ modelKey: "openai/gpt-5.5", tier: "frontier", sources: ["artificial_analysis"] }),
         expect.objectContaining({ modelKey: "zhipu/glm-5.1", tier: "strong", valueScore: 76 }),
@@ -77,6 +91,7 @@ describe("build-capability-site script", () => {
       expect(summary.models).toHaveLength(3);
       expect(index).toContain("OctoClaw Capability Snapshot");
       expect(index).toContain("Watched Models");
+      expect(index).toContain("Observation Models");
       expect(index).toContain("leaderboard-manifest.json");
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true });

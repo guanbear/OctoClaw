@@ -537,6 +537,93 @@ describe("refresh-leaderboard-snapshot script", () => {
     }
   });
 
+  it("keeps routeable strong models above compact models when one coding source is an outlier", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "octoclaw-refresh-leaderboard-"));
+    const output = path.join(tempDir, "leaderboard-snapshot.json");
+    try {
+      await execFileAsync("node", ["scripts/refresh-leaderboard-snapshot.mjs", "--output", output], {
+        cwd: path.resolve("."),
+        env: {
+          ...process.env,
+          OCTOCLAW_ROUTER_SOURCE_FIXTURE_JSON: JSON.stringify({
+            openrouter: {
+              data: [{
+                id: "openai/gpt-5.4",
+                pricing: { prompt: "0.0000025", completion: "0.000015" },
+              }, {
+                id: "google/gemini-3.5-flash",
+                pricing: { prompt: "0.0000015", completion: "0.000009" },
+              }],
+            },
+            pinchbench: {
+              leaderboard: [{
+                model: "openai/gpt-5.4",
+                best_score_percentage: 0.88,
+                submission_count: 8,
+              }, {
+                model: "google/gemini-3.5-flash",
+                best_score_percentage: 0.76,
+                submission_count: 8,
+              }],
+            },
+            aider: "[]",
+            bfcl: [],
+            lmarenaText: {
+              rows: [
+                { row: { model_name: "gpt-5.4", organization: "openai", rating: 77.35, category: "overall", vote_count: 1000, leaderboard_publish_date: "2026-05-21" } },
+                { row: { model_name: "gemini-3.5-flash", organization: "google", rating: 95.24, category: "overall", vote_count: 1000, leaderboard_publish_date: "2026-05-21" } },
+              ],
+            },
+            lmarenaWebdev: {
+              rows: [
+                { row: { model_name: "gpt-5.4", organization: "openai", rating: 70.11, category: "overall", vote_count: 1000, leaderboard_publish_date: "2026-05-21" } },
+                { row: { model_name: "gemini-3.5-flash", organization: "google", rating: 86.03, category: "overall", vote_count: 1000, leaderboard_publish_date: "2026-05-21" } },
+              ],
+            },
+          }),
+        },
+      });
+
+      const snapshot = JSON.parse(await fs.readFile(output, "utf8"));
+      const gpt = snapshot.models["openai/gpt-5.4"];
+      const flash = snapshot.models["google/gemini-3.5-flash"];
+
+      expect(gpt.capabilityScore.score).toBeGreaterThan(flash.capabilityScore.score);
+      expect(gpt.scoreByScenario.coding_worker.reasonCodes).toContain("routeable_strong_pinchbench_floor");
+      expect(flash.capabilityScore.reasonCodes).toContain("compact_missing_agentic_cap");
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps single-scenario single-family spikes out of the top overall band", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "octoclaw-refresh-leaderboard-"));
+    const output = path.join(tempDir, "leaderboard-snapshot.json");
+    try {
+      await execFileAsync("node", ["scripts/refresh-leaderboard-snapshot.mjs", "--output", output], {
+        cwd: path.resolve("."),
+        env: {
+          ...process.env,
+          OCTOCLAW_ROUTER_SOURCE_FIXTURE_JSON: JSON.stringify({
+            openrouter: { data: [] },
+            pinchbench: { leaderboard: [] },
+            aider: "[]",
+            bfcl: [],
+            sweBenchVerified: [{ modelId: "example/Task-Spike-Flash", value: 91 }],
+          }),
+        },
+      });
+
+      const snapshot = JSON.parse(await fs.readFile(output, "utf8"));
+      const spike = snapshot.models["example/task-spike-flash"].capabilityScore;
+
+      expect(spike.score).toBeLessThan(75);
+      expect(spike.reasonCodes).toContain("global_single_scenario_coverage_cap");
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("prefers balanced overall capability over a single high scenario spike", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "octoclaw-refresh-leaderboard-"));
     const output = path.join(tempDir, "leaderboard-snapshot.json");

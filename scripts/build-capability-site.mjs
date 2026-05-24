@@ -62,6 +62,31 @@ function benchmarkValueScore(model) {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
+function isBenchmarkVariant(modelKey) {
+  const normalized = String(modelKey ?? "").toLowerCase();
+  return /(^|[-_.])(?:fc|function-calling|prompt|codex-harness|thinking)(?:[-_.]|$)/u.test(normalized) ||
+    /--(?:codex-harness|high|xhigh|medium|low|minimal|reasoning|non-reasoning)(?:$|[-_.])/u.test(normalized) ||
+    /^openai\/gpt-\d+(?:\.\d+)?-(?:high|xhigh|medium|low|minimal)(?:$|[-_.])/u.test(normalized);
+}
+
+function marketPriceConfidence(model) {
+  return model?.marketPrice?.confidence ?? model?.price?.confidence ?? "unknown";
+}
+
+function isRouteableEvidence(model) {
+  const priceConfidence = marketPriceConfidence(model);
+  return model?.configured === true ||
+    model?.available === "yes" && priceConfidence !== "unknown" ||
+    capabilitySources(model).includes("artificial_analysis");
+}
+
+function leaderboardClass(model, entry) {
+  if (isBenchmarkVariant(model.modelKey)) return "benchmark_variant";
+  if (!isRouteableEvidence(model)) return "observation_only";
+  if ((entry?.sources ?? []).length <= 1 && !entry?.sources?.includes("artificial_analysis") && entry?.confidence !== "high") return "observation_only";
+  return "primary";
+}
+
 const WATCHED_MODEL_PATTERNS = [
   /^openai\/gpt-/u,
   /^anthropic\/claude-/u,
@@ -76,13 +101,17 @@ const WATCHED_MODEL_PATTERNS = [
 function summaryEntry(model) {
   const score = capabilityScore(model);
   if (score === undefined) return undefined;
-  return {
+  const entry = {
     modelKey: model.modelKey,
     score,
     confidence: capabilityConfidence(model),
     tier: capabilityTier(model),
     sources: capabilitySources(model),
     ...(benchmarkValueScore(model) !== undefined ? { valueScore: benchmarkValueScore(model) } : {}),
+  };
+  return {
+    ...entry,
+    leaderboardClass: leaderboardClass(model, entry),
   };
 }
 
@@ -93,7 +122,9 @@ function buildSummary(snapshot, models) {
       return entry === undefined ? [] : [entry];
     })
     .sort((a, b) => b.score - a.score || a.modelKey.localeCompare(b.modelKey));
-  const watchedModels = scored.filter((model) =>
+  const primaryModels = scored.filter((model) => model.leaderboardClass === "primary");
+  const observationModels = scored.filter((model) => model.leaderboardClass !== "primary");
+  const watchedModels = primaryModels.filter((model) =>
     WATCHED_MODEL_PATTERNS.some((pattern) => pattern.test(model.modelKey)),
   );
   return {
@@ -101,10 +132,13 @@ function buildSummary(snapshot, models) {
     snapshotId: snapshot.snapshotId ?? "leaderboard-snapshot",
     generatedAt: snapshot.generatedAt,
     modelCount: models.length,
+    primaryModelCount: primaryModels.length,
+    observationModelCount: observationModels.length,
     sourceStatus: snapshot.sourceStatus ?? {},
-    topModels: scored.slice(0, 20),
+    topModels: primaryModels.slice(0, 20),
     watchedModels,
-    models: scored,
+    observationModels,
+    models: primaryModels,
   };
 }
 
@@ -147,6 +181,11 @@ function html(summary) {
   <table>
     <thead><tr><th>Model</th><th>Score</th><th>Confidence</th><th>Tier</th><th>Sources</th><th>Value</th></tr></thead>
     <tbody>${rows}</tbody>
+  </table>
+  <h2>Observation Models</h2>
+  <table>
+    <thead><tr><th>Model</th><th>Score</th><th>Confidence</th><th>Tier</th><th>Sources</th><th>Value</th></tr></thead>
+    <tbody>${tableRows(summary.observationModels.slice(0, 80))}</tbody>
   </table>
 </body>
 </html>

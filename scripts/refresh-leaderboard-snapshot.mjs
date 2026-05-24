@@ -611,6 +611,18 @@ function fuseScenarioScore(contributions, weights, health, now) {
   };
 }
 
+function applyRouteableStrongCodingFloor(fused, modelKey, openrouterModel) {
+  if (!fused || roleRank(modelKey) < 1 || !openrouterModel) return fused;
+  const pinch = fused.contributions?.find((entry) => entry.source === "pinchbench" && entry.effectiveWeight > 0);
+  if (!pinch || pinch.rawScore < 86 || fused.score >= pinch.rawScore - 8) return fused;
+  const floor = pinch.rawScore - 6;
+  return {
+    ...fused,
+    score: Math.max(fused.score, floor),
+    reasonCodes: [...new Set([...(fused.reasonCodes ?? []), "routeable_strong_pinchbench_floor"])],
+  };
+}
+
 function loadSourceWeights() {
   const parsed = JSON.parse(readFileSync(SOURCE_WEIGHTS, "utf8"));
   for (const [scenario, weights] of Object.entries(parsed.weights ?? {})) {
@@ -795,6 +807,10 @@ function buildCapabilityScore(scoreByScenario) {
     totalScore -= (spread - 18) * 0.25;
     reasonCodes.add("global_single_scenario_spike_penalty");
   }
+  if (usableScores.length === 1 && evidenceFamilyCount <= 1) {
+    totalScore = Math.min(totalScore, usableScores[0].score - 17);
+    reasonCodes.add("global_single_scenario_coverage_cap");
+  }
   return {
     score: Math.round(totalScore * 100) / 100,
     confidence,
@@ -823,7 +839,11 @@ function buildModelRecord(modelKey, openrouterModel, pinchEntry, leaderboardReco
 	  };
 	  const scoreByScenario = {};
 	  for (const [scenario, contributions] of Object.entries(scenarioContributions)) {
-	    const fused = fuseScenarioScore(contributions, sourceWeights[scenario] ?? {}, sourceHealth, Date.parse(generatedAt));
+	    const fused = applyRouteableStrongCodingFloor(
+        fuseScenarioScore(contributions, sourceWeights[scenario] ?? {}, sourceHealth, Date.parse(generatedAt)),
+        modelKey,
+        scenario === "coding_worker" ? openrouterModel : undefined,
+      );
 	    if (fused.confidence !== "unknown") {
 	      scoreByScenario[scenario] = fused;
 	    }
