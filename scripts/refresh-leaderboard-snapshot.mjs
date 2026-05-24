@@ -679,9 +679,18 @@ function buildCapabilityScore(scoreByScenario) {
     const sources = new Set();
     const sourceFamilies = new Set();
     const reasonCodes = new Set(globalScore.reasonCodes ?? []);
+    const globalSourceFamilies = new Set();
+    const nonGlobalSourceFamilies = new Set();
+    let nonGlobalWeightedScore = 0;
+    let nonGlobalWeight = 0;
+    let nonGlobalScenarioCount = 0;
     for (const contribution of globalScore.contributions ?? []) {
       if ((contribution.effectiveWeight ?? 0) > 0) sources.add(contribution.source);
-      if ((contribution.effectiveWeight ?? 0) > 0) sourceFamilies.add(sourceFamily(contribution.source));
+      if ((contribution.effectiveWeight ?? 0) > 0) {
+        const family = sourceFamily(contribution.source);
+        sourceFamilies.add(family);
+        globalSourceFamilies.add(family);
+      }
     }
     for (const [scenario, weight] of scenarioSupplements) {
       const score = scoreByScenario[scenario];
@@ -691,15 +700,33 @@ function buildCapabilityScore(scoreByScenario) {
         continue;
       }
       totalScore += score.score * weight;
+      nonGlobalWeightedScore += score.score * weight;
+      nonGlobalWeight += weight;
+      nonGlobalScenarioCount += 1;
       observedScenarioValues.push(score.score);
       for (const contribution of score.contributions ?? []) {
         if ((contribution.effectiveWeight ?? 0) > 0) sources.add(contribution.source);
-        if ((contribution.effectiveWeight ?? 0) > 0) sourceFamilies.add(sourceFamily(contribution.source));
+        if ((contribution.effectiveWeight ?? 0) > 0) {
+          const family = sourceFamily(contribution.source);
+          sourceFamilies.add(family);
+          nonGlobalSourceFamilies.add(family);
+        }
       }
       for (const reason of score.reasonCodes ?? []) reasonCodes.add(reason);
     }
+    const nonGlobalAverage = nonGlobalWeight > 0 ? nonGlobalWeightedScore / nonGlobalWeight : undefined;
+    const softenedSingleSourceGlobal = nonGlobalAverage !== undefined &&
+      globalSourceFamilies.size <= 1 &&
+      nonGlobalScenarioCount >= 2 &&
+      nonGlobalSourceFamilies.size >= 2 &&
+      nonGlobalSourceFamilies.size > globalSourceFamilies.size &&
+      nonGlobalAverage - globalScore.score > 16;
+    if (softenedSingleSourceGlobal) {
+      totalScore = globalScore.score * 0.35 + nonGlobalAverage * 0.65;
+      reasonCodes.add("single_source_global_anchor_softened");
+    }
     const spread = Math.max(...observedScenarioValues) - Math.min(...observedScenarioValues);
-    if (spread > 18) {
+    if (!softenedSingleSourceGlobal && spread > 18) {
       totalScore -= (spread - 18) * 0.25;
       reasonCodes.add("global_single_scenario_spike_penalty");
     }
@@ -986,6 +1013,20 @@ function applySiblingCalibrations(models) {
       model,
       strongerBroad.score - 0.25,
       `compact_global_broad_ceiling:${strongerBroad.modelKey}`,
+    );
+  }
+
+  for (const [modelKey, model] of Object.entries(adjusted)) {
+    const score = fusedScoreValue(model);
+    const research = scenarioScoreValue(model, "research");
+    const coding = scenarioScoreValue(model, "coding_worker");
+    const agentic = scenarioScoreValue(model, "agentic");
+    if (score === undefined || research === undefined || coding === undefined || agentic !== undefined || roleRank(modelKey) !== 0) continue;
+    if (score <= 84 || research - coding < 10 || score <= coding + 1.5) continue;
+    adjusted[modelKey] = capModelGlobalCapability(
+      model,
+      coding + 1.5,
+      "compact_missing_agentic_cap",
     );
   }
 

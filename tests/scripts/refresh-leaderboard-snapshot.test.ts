@@ -449,6 +449,44 @@ describe("refresh-leaderboard-snapshot script", () => {
     }
   });
 
+  it("caps compact models when a single research source lifts them without agentic evidence", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "octoclaw-refresh-leaderboard-"));
+    const output = path.join(tempDir, "leaderboard-snapshot.json");
+    try {
+      await execFileAsync("node", ["scripts/refresh-leaderboard-snapshot.mjs", "--output", output], {
+        cwd: path.resolve("."),
+        env: {
+          ...process.env,
+          OCTOCLAW_ROUTER_SOURCE_FIXTURE_JSON: JSON.stringify({
+            openrouter: { data: [] },
+            pinchbench: {
+              leaderboard: [{
+                model: "google/gemini-3.5-flash",
+                best_score_percentage: 0.76,
+                submission_count: 8,
+              }],
+            },
+            aider: "[]",
+            bfcl: [],
+            lmarenaText: {
+              rows: [
+                { row: { model_name: "gemini-3.5-flash", organization: "google", rating: 1900, category: "overall", vote_count: 1000, leaderboard_publish_date: "2026-05-21" } },
+              ],
+            },
+          }),
+        },
+      });
+
+      const snapshot = JSON.parse(await fs.readFile(output, "utf8"));
+      const flash = snapshot.models["google/gemini-3.5-flash"].capabilityScore;
+
+      expect(flash.score).toBeLessThan(84);
+      expect(flash.reasonCodes).toContain("compact_missing_agentic_cap");
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("prefers balanced overall capability over a single high scenario spike", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "octoclaw-refresh-leaderboard-"));
     const output = path.join(tempDir, "leaderboard-snapshot.json");
@@ -483,6 +521,47 @@ describe("refresh-leaderboard-snapshot script", () => {
 
       expect(balanced.score).toBeGreaterThan(spike.score);
       expect(spike.reasonCodes).toContain("global_single_scenario_spike_penalty");
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("softens a single-source global anchor when multiple non-global sources strongly disagree", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "octoclaw-refresh-leaderboard-"));
+    const output = path.join(tempDir, "leaderboard-snapshot.json");
+    try {
+      await execFileAsync("node", ["scripts/refresh-leaderboard-snapshot.mjs", "--output", output], {
+        cwd: path.resolve("."),
+        env: {
+          ...process.env,
+          OCTOCLAW_ROUTER_SOURCE_FIXTURE_JSON: JSON.stringify({
+            openrouter: { data: [] },
+            pinchbench: { leaderboard: [] },
+            aider: "[]",
+            bfcl: [],
+            artificialAnalysis: {
+              data: [{
+                model_name: "example/disputed-strong",
+                artificial_analysis_intelligence_index: 54,
+                artificial_analysis_coding_index: 47,
+              }],
+            },
+            sweBenchVerified: [{ modelId: "example/Disputed-Strong", value: 94 }],
+            sweBenchPro: [{ modelId: "example/Disputed-Strong", value: 95 }],
+            lmarenaText: {
+              rows: [
+                { row: { model_name: "disputed-strong", organization: "example", rating: 1500, category: "overall", vote_count: 1000, leaderboard_publish_date: "2026-05-21" } },
+              ],
+            },
+          }),
+        },
+      });
+
+      const snapshot = JSON.parse(await fs.readFile(output, "utf8"));
+      const disputed = snapshot.models["example/disputed-strong"].capabilityScore;
+
+      expect(disputed.score).toBeGreaterThan(70);
+      expect(disputed.reasonCodes).toContain("single_source_global_anchor_softened");
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true });
     }
