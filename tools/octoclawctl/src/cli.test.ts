@@ -65,6 +65,12 @@ function createIo() {
   };
 }
 
+async function sha256Hex(text: string): Promise<string> {
+  const bytes = new TextEncoder().encode(text);
+  const digest = await globalThis.crypto.subtle.digest("SHA-256", bytes);
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
 describe("octoclawctl cli", () => {
   it("parses supported actions", () => {
     expect(parseCliArgs(["status"]).command).toBe("status");
@@ -754,6 +760,7 @@ describe("octoclawctl cli", () => {
         "router",
         "model-intel",
         "refresh",
+        "--from-sources",
         "--openclaw-home",
         openclawHome,
         "--output-dir",
@@ -761,6 +768,7 @@ describe("octoclawctl cli", () => {
         "--format",
         "json",
       ], env, refreshCapture.io);
+      expect(refreshCapture.stderr.join("\n")).toBe("");
       expect(refreshExitCode).toBe(0);
       const refreshSummary = JSON.parse(refreshCapture.stdout[0] ?? "{}");
       expect(refreshSummary).toMatchObject({ configured: 1 });
@@ -933,6 +941,7 @@ describe("octoclawctl cli", () => {
         "router",
         "capability",
         "refresh",
+        "--from-sources",
         "--openclaw-home",
         openclawHome,
         "--output-dir",
@@ -1019,6 +1028,146 @@ describe("octoclawctl cli", () => {
         reason: "known_available",
       });
     } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("router capability refresh downloads the official capability snapshot by default", async () => {
+    const tempDir = path.join(os.homedir(), ".octoclawctl-test-tmp", `router-capability-official-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    const openclawHome = path.join(tempDir, "home");
+    const outputDir = path.join(tempDir, "out");
+    const generatedAt = "2026-05-24T00:00:00.000Z";
+    const officialSnapshot = {
+      schemaVersion: "octoclaw.router_lite.model_intel_snapshot/v1",
+      snapshotId: "official-2026-05-24",
+      generatedAt,
+      sourceStatus: [{ source: "octoclaw_official_capability_snapshot", status: "ok" }],
+      models: [{
+        provider: "google",
+        model: "gemini-3.5-flash",
+        modelKey: "google/gemini-3.5-flash",
+        configured: false,
+        available: "unknown",
+        proposalOnly: true,
+        tags: [],
+        marketPrice: { confidence: "unknown", sources: ["official"] },
+        capability: {
+          codingTier: "strong",
+          confidence: "medium",
+          evidence: ["official"],
+          sources: ["official"],
+          input: ["text"],
+          toolUse: "yes",
+          structuredOutput: "yes",
+          reasoning: "yes",
+          promptCache: "unknown",
+        },
+        health: { available: "unknown", cooldown: false, quotaPressure: "unknown", sources: ["official"] },
+        plan: { type: "unknown", quotaPressure: "unknown", effectiveCostBand: "unknown", sources: ["official"] },
+        sources: ["official"],
+      }],
+    };
+    const snapshotText = JSON.stringify(officialSnapshot);
+    const manifest = {
+      schemaVersion: "octoclaw.capability_manifest/v1",
+      generatedAt,
+      snapshotUrl: "https://example.test/capability/leaderboard-snapshot.json",
+      snapshotSha256: await sha256Hex(snapshotText),
+      modelCount: 1,
+    };
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (url: string | URL | Request) => {
+      const href = String(url);
+      if (href === "https://example.test/capability/leaderboard-manifest.json") {
+        return new Response(JSON.stringify(manifest), { status: 200 });
+      }
+      if (href === manifest.snapshotUrl) {
+        return new Response(snapshotText, { status: 200 });
+      }
+      return new Response("not found", { status: 404 });
+    }) as typeof fetch;
+    try {
+      const capture = createIo();
+      const exitCode = await main([
+        "router",
+        "capability",
+        "refresh",
+        "--openclaw-home",
+        openclawHome,
+        "--output-dir",
+        outputDir,
+        "--format",
+        "json",
+      ], {
+        OCTOCLAW_ROUTER_CAPABILITY_MANIFEST_URL: "https://example.test/capability/leaderboard-manifest.json",
+      }, capture.io);
+
+      expect(exitCode).toBe(0);
+      const summary = JSON.parse(capture.stdout[0] ?? "{}");
+      expect(summary).toMatchObject({
+        source: "official",
+        snapshotId: "official-2026-05-24",
+        models: 1,
+        manifestUrl: "https://example.test/capability/leaderboard-manifest.json",
+      });
+      const snapshotPath = path.join(outputDir, "model-intel-snapshot.json");
+      const fullCatalogPath = path.join(outputDir, "capability-catalog-full.json");
+      await expect(fs.readFile(snapshotPath, "utf8").then(JSON.parse)).resolves.toMatchObject({
+        snapshotId: "official-2026-05-24",
+        models: [expect.objectContaining({ modelKey: "google/gemini-3.5-flash" })],
+      });
+      await expect(fs.readFile(fullCatalogPath, "utf8").then(JSON.parse)).resolves.toMatchObject({
+        snapshotId: "official-2026-05-24",
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("router capability refresh rejects an official snapshot with a bad sha", async () => {
+    const tempDir = path.join(os.homedir(), ".octoclawctl-test-tmp", `router-capability-bad-sha-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    const outputDir = path.join(tempDir, "out");
+    const manifest = {
+      schemaVersion: "octoclaw.capability_manifest/v1",
+      generatedAt: "2026-05-24T00:00:00.000Z",
+      snapshotUrl: "https://example.test/capability/leaderboard-snapshot.json",
+      snapshotSha256: "0".repeat(64),
+      modelCount: 1,
+    };
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (url: string | URL | Request) => {
+      const href = String(url);
+      if (href.endsWith("leaderboard-manifest.json")) {
+        return new Response(JSON.stringify(manifest), { status: 200 });
+      }
+      return new Response(JSON.stringify({
+        schemaVersion: "octoclaw.router_lite.model_intel_snapshot/v1",
+        snapshotId: "tampered",
+        generatedAt: "2026-05-24T00:00:00.000Z",
+        sourceStatus: [],
+        models: [{}],
+      }), { status: 200 });
+    }) as typeof fetch;
+    try {
+      const capture = createIo();
+      const exitCode = await main([
+        "router",
+        "capability",
+        "refresh",
+        "--output-dir",
+        outputDir,
+        "--format",
+        "json",
+      ], {
+        OCTOCLAW_ROUTER_CAPABILITY_MANIFEST_URL: "https://example.test/capability/leaderboard-manifest.json",
+      }, capture.io);
+
+      expect(exitCode).toBe(1);
+      expect(capture.stderr.join("\n")).toContain("sha256 mismatch");
+      await expect(fs.readFile(path.join(outputDir, "model-intel-snapshot.json"), "utf8")).rejects.toThrow();
+    } finally {
+      globalThis.fetch = originalFetch;
       await fs.rm(tempDir, { recursive: true, force: true });
     }
   });
@@ -1363,6 +1512,8 @@ console.log(JSON.stringify({ choices: [{ message: { content: "pong" } }] }));
         openclawHome,
         "--schedule-hour",
         "4",
+        "--cadence",
+        "daily",
         "--format",
         "json",
       ], { OPENCLAW_BIN: fakeOpenClaw, TEST_OPENCLAW_CALLS: callsPath }, capture.io);
@@ -1388,6 +1539,94 @@ console.log(JSON.stringify({ choices: [{ message: { content: "pong" } }] }));
       ]));
       expect(calls[1].args.join("\n")).toContain("router capability refresh");
       expect(calls[1].args.join("\n")).toContain("router model-intel refresh");
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("router capability install-schedule defaults to a weekly refresh cadence", async () => {
+    const tempDir = path.join(os.homedir(), ".octoclawctl-test-tmp", `router-capability-schedule-weekly-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    const openclawHome = path.join(tempDir, "home");
+    const fakeOpenClaw = path.join(tempDir, "openclaw");
+    const callsPath = path.join(tempDir, "calls.jsonl");
+    try {
+      await fs.mkdir(tempDir, { recursive: true });
+      await fs.writeFile(fakeOpenClaw, [
+        "#!/usr/bin/env node",
+        "const fs = require('node:fs');",
+        "const callsPath = process.env.TEST_OPENCLAW_CALLS;",
+        "fs.appendFileSync(callsPath, JSON.stringify({ args: process.argv.slice(2), env: { OPENCLAW_HOME: process.env.OPENCLAW_HOME } }) + '\\n');",
+        "if (process.argv.slice(2).join(' ') === 'cron list --json') { console.log(JSON.stringify({ jobs: [] })); process.exit(0); }",
+        "if (process.argv[2] === 'cron' && process.argv[3] === 'add') { console.log(JSON.stringify({ id: 'job-new' })); process.exit(0); }",
+        "console.error('unexpected args ' + process.argv.slice(2).join(' '));",
+        "process.exit(2);",
+      ].join("\n"), "utf8");
+      await runTestCommand("chmod", ["755", fakeOpenClaw]);
+
+      const capture = createIo();
+      const exitCode = await main([
+        "router",
+        "capability",
+        "install-schedule",
+        "--openclaw-home",
+        openclawHome,
+        "--format",
+        "json",
+      ], { OPENCLAW_BIN: fakeOpenClaw, TEST_OPENCLAW_CALLS: callsPath }, capture.io);
+
+      expect(exitCode).toBe(0);
+      expect(JSON.parse(capture.stdout[0] ?? "{}")).toMatchObject({
+        action: "created",
+        jobId: "job-new",
+        cron: "0 4 * * 1",
+        cadence: "weekly",
+      });
+      const calls = (await fs.readFile(callsPath, "utf8")).trim().split("\n").map((line) => JSON.parse(line));
+      expect(calls[1].args).toEqual(expect.arrayContaining(["--cron", "0 4 * * 1", "--wake", "now"]));
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("router capability install-schedule supports explicit daily cadence for compatibility", async () => {
+    const tempDir = path.join(os.homedir(), ".octoclawctl-test-tmp", `router-capability-schedule-daily-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    const openclawHome = path.join(tempDir, "home");
+    const fakeOpenClaw = path.join(tempDir, "openclaw");
+    const callsPath = path.join(tempDir, "calls.jsonl");
+    try {
+      await fs.mkdir(tempDir, { recursive: true });
+      await fs.writeFile(fakeOpenClaw, [
+        "#!/usr/bin/env node",
+        "const fs = require('node:fs');",
+        "const callsPath = process.env.TEST_OPENCLAW_CALLS;",
+        "fs.appendFileSync(callsPath, JSON.stringify({ args: process.argv.slice(2) }) + '\\n');",
+        "if (process.argv.slice(2).join(' ') === 'cron list --json') { console.log(JSON.stringify({ jobs: [] })); process.exit(0); }",
+        "if (process.argv[2] === 'cron' && process.argv[3] === 'add') { console.log(JSON.stringify({ id: 'job-new' })); process.exit(0); }",
+        "console.error('unexpected args ' + process.argv.slice(2).join(' '));",
+        "process.exit(2);",
+      ].join("\n"), "utf8");
+      await runTestCommand("chmod", ["755", fakeOpenClaw]);
+
+      const capture = createIo();
+      const exitCode = await main([
+        "router",
+        "capability",
+        "install-schedule",
+        "--openclaw-home",
+        openclawHome,
+        "--schedule-hour=6",
+        "--cadence=daily",
+        "--format=json",
+      ], { OPENCLAW_BIN: fakeOpenClaw, TEST_OPENCLAW_CALLS: callsPath }, capture.io);
+
+      expect(exitCode).toBe(0);
+      expect(JSON.parse(capture.stdout[0] ?? "{}")).toMatchObject({
+        action: "created",
+        cron: "0 6 * * *",
+        cadence: "daily",
+      });
+      const calls = (await fs.readFile(callsPath, "utf8")).trim().split("\n").map((line) => JSON.parse(line));
+      expect(calls[1].args).toEqual(expect.arrayContaining(["--cron", "0 6 * * *"]));
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true });
     }
@@ -1420,6 +1659,7 @@ console.log(JSON.stringify({ choices: [{ message: { content: "pong" } }] }));
         "--openclaw-home",
         openclawHome,
         "--schedule-hour=5",
+        "--cadence=daily",
         "--format=json",
       ], { OPENCLAW_BIN: fakeOpenClaw, TEST_OPENCLAW_CALLS: callsPath }, capture.io);
 

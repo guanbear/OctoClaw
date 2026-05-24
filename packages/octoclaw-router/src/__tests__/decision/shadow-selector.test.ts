@@ -21,6 +21,23 @@ function scenarioAbility(): ScenarioAbilityLite {
   };
 }
 
+function strongScenarioAbility(scoreValue = 82): ScenarioAbilityLite {
+  const score = {
+    score: scoreValue,
+    tier: "A" as const,
+    confidence: "high" as const,
+    sources: [{ source: "operator_override" as const, score: scoreValue, fetchedAt: FRESH_TEST_TIMESTAMP }],
+  };
+  return {
+    codingWorker: score,
+    agenticToolTask: score,
+    researchLookup: score,
+    dataLogAnalysis: score,
+    mainReasoning: score,
+    defaultDelegate: score,
+  };
+}
+
 function model(modelKey: string, price: number, overrides: Partial<ModelIntelLite> = {}): ModelIntelLite {
   const [provider, name] = modelKey.split("/");
   return {
@@ -194,5 +211,55 @@ describe("selectShadowRecommendation promotion state", () => {
     );
 
     expect(recommendation.recommendedModel).toBe("provider/fallback1");
+  });
+
+  it("does not let sparse health data override a large same-tier price advantage", () => {
+    const recommendation = selectShadowRecommendation(
+      request({ runtime: { needsTools: true, needsStructuredOutput: true } }),
+      snapshot([
+        model("cliproxyapi/gpt-5.5", 11.25, {
+          capability: { ...model("x/y", 1).capability, codingTier: "frontier" },
+          health: { ...model("x/y", 1).health, recentFailureRate: undefined },
+        }),
+        model("zhipu/GLM-5.1", 1.505, {
+          capability: { ...model("x/y", 1).capability, codingTier: "strong" },
+          health: { ...model("x/y", 1).health, recentFailureRate: 0 },
+        }),
+        model("zai/glm-4.7", 0.7375, {
+          capability: { ...model("x/y", 1).capability, codingTier: "strong" },
+          health: { ...model("x/y", 1).health, recentFailureRate: undefined },
+        }),
+      ]),
+      "balanced",
+    );
+
+    expect(recommendation.recommendedModel).toBe("zai/glm-4.7");
+  });
+
+  it("keeps complex balanced routing from over-optimizing same-tier cost", () => {
+    const models = [
+      model("cliproxyapi/gpt-5.5", 11.25, {
+        capability: { ...model("x/y", 1).capability, codingTier: "frontier" },
+        scenarioAbility: strongScenarioAbility(90),
+      }),
+      model("zhipu/GLM-5.1", 1.505, {
+        capability: { ...model("x/y", 1).capability, codingTier: "strong" },
+        scenarioAbility: strongScenarioAbility(82),
+      }),
+      model("zai/glm-4.7", 0.7375, {
+        capability: { ...model("x/y", 1).capability, codingTier: "strong" },
+        scenarioAbility: strongScenarioAbility(78),
+      }),
+    ];
+    const complexRequest = request({
+      judge: { route: "delegate", confidence: 0.9, complexity: "complex" },
+      runtime: { needsTools: true, needsStructuredOutput: true, needsReasoning: true },
+    });
+    const nativeFallbackOrder = ["cliproxyapi/gpt-5.5", "zhipu/GLM-5.1", "zai/glm-4.7"];
+
+    expect(selectShadowRecommendation(complexRequest, snapshot(models), "cost_first", { nativeFallbackOrder }).recommendedModel)
+      .toBe("zai/glm-4.7");
+    expect(selectShadowRecommendation(complexRequest, snapshot(models), "balanced", { nativeFallbackOrder }).recommendedModel)
+      .toBe("zhipu/GLM-5.1");
   });
 });

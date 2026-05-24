@@ -6,6 +6,7 @@ import {
   buildRecommendation,
   capabilityScoreFor,
   costScoreFor,
+  qualityFloorPassesFor,
   scoreModel,
   type ScoringContext,
 } from "../../scoring/index.js";
@@ -83,6 +84,189 @@ describe("scoring engine RT-S-001..010", () => {
     });
 
     expect(capabilityScoreFor(subject, "complex")).toBe(86);
+  });
+
+  it("keeps low-confidence mini benchmark scores below complex and deep quality floors", () => {
+    const subject = model("deepseek/deepseek-v4-flash", "mini", {
+      capability: {
+        ...model("deepseek/deepseek-v4-flash", "mini").capability,
+        capabilityScore: {
+          score: 90,
+          confidence: "low",
+          contributions: [],
+          reasonCodes: ["catalog_low_confidence"],
+        },
+      },
+    });
+    const frontier = model("deepseek/deepseek-v4-pro", "frontier", {
+      marketPrice: { blendedUsdPerMTok: 20, confidence: "high", sources: ["test"] },
+    });
+    const models = [subject, frontier];
+
+    expect(capabilityScoreFor(subject, "deep")).toBeLessThan(45);
+    expect(buildRecommendation(models, context("complex", models)).recommendedModel).toBe("deepseek/deepseek-v4-pro");
+    expect(buildRecommendation(models, context("deep", models)).recommendedModel).toBe("deepseek/deepseek-v4-pro");
+    expect(buildRecommendation(models, context("deep", models)).rejectedModels).toContainEqual({
+      model: "deepseek/deepseek-v4-flash",
+      reason: "quality_floor_not_met",
+    });
+  });
+
+  it("low-confidence capabilityScore does not promote mini to strong tier", () => {
+    const subject = model("openai/gpt-5.4-mini", "mini", {
+      capability: {
+        ...model("openai/gpt-5.4-mini", "mini").capability,
+        capabilityScore: {
+          score: 86,
+          confidence: "low",
+          contributions: [],
+          reasonCodes: ["test_score"],
+        },
+      },
+    });
+
+    expect(capabilityScoreFor(subject, "complex")).toBeLessThan(45);
+
+    // Quality floor for complex = strong, effective tier should stay "mini" for low confidence
+    expect(qualityFloorPassesFor(subject, "complex")).toBe(false);
+    expect(qualityFloorPassesFor(subject, "deep")).toBe(false);
+  });
+
+  it("medium-confidence capabilityScore partially blends toward tier prior", () => {
+    const subject = model("openai/gpt-5.4-mini", "mini", {
+      capability: {
+        ...model("openai/gpt-5.4-mini", "mini").capability,
+        capabilityScore: {
+          score: 86,
+          confidence: "medium",
+          contributions: [],
+          reasonCodes: ["test_score"],
+        },
+      },
+    });
+
+    expect(capabilityScoreFor(subject, "complex")).toBeGreaterThan(60);
+    expect(qualityFloorPassesFor(subject, "complex")).toBe(false);
+  });
+
+  it("high-confidence capabilityScore still uses raw score unchanged", () => {
+    const subject = model("openai/gpt-5.4-mini", "mini", {
+      capability: {
+        ...model("openai/gpt-5.4-mini", "mini").capability,
+        capabilityScore: {
+          score: 86,
+          confidence: "high",
+          contributions: [],
+          reasonCodes: ["test_score"],
+        },
+      },
+    });
+
+    expect(capabilityScoreFor(subject, "complex")).toBe(86);
+    // High-confidence score CAN promote tier
+    expect(qualityFloorPassesFor(subject, "complex")).toBe(true);
+  });
+
+  it("keeps low-confidence family scores ordered by model generation", () => {
+    const glm51 = model("zhipu/glm-5.1", "strong", {
+      capability: {
+        ...model("zhipu/glm-5.1", "strong").capability,
+        capabilityScore: {
+          score: 77,
+          confidence: "low",
+          contributions: [],
+          reasonCodes: ["catalog_low_confidence"],
+        },
+      },
+    });
+    const glm5 = model("zhipu/glm-5", "strong", {
+      capability: {
+        ...model("zhipu/glm-5", "strong").capability,
+        capabilityScore: {
+          score: 78,
+          confidence: "low",
+          contributions: [],
+          reasonCodes: ["catalog_low_confidence"],
+        },
+      },
+    });
+    const glm47 = model("zhipu/glm-4.7", "strong", {
+      capability: {
+        ...model("zhipu/glm-4.7", "strong").capability,
+        capabilityScore: {
+          score: 85,
+          confidence: "low",
+          contributions: [],
+          reasonCodes: ["catalog_low_confidence"],
+        },
+      },
+    });
+
+    expect(capabilityScoreFor(glm51, "complex")).toBeGreaterThan(capabilityScoreFor(glm5, "complex"));
+    expect(capabilityScoreFor(glm5, "complex")).toBeGreaterThan(capabilityScoreFor(glm47, "complex"));
+  });
+
+  it("does not rank DeepSeek pro and Kimi current-gen below GLM 4.7 on weak evidence", () => {
+    const glm47 = model("zhipu/glm-4.7", "strong", {
+      capability: {
+        ...model("zhipu/glm-4.7", "strong").capability,
+        capabilityScore: {
+          score: 85,
+          confidence: "low",
+          contributions: [],
+          reasonCodes: ["catalog_low_confidence"],
+        },
+      },
+    });
+    const deepseekPro = model("deepseek/deepseek-v4-pro", "strong", {
+      capability: {
+        ...model("deepseek/deepseek-v4-pro", "strong").capability,
+        capabilityScore: {
+          score: 61,
+          confidence: "low",
+          contributions: [],
+          reasonCodes: ["catalog_low_confidence"],
+        },
+      },
+    });
+    const kimi26 = model("moonshotai/kimi-k2.6", "strong", {
+      capability: {
+        ...model("moonshotai/kimi-k2.6", "strong").capability,
+        capabilityScore: {
+          score: 70,
+          confidence: "low",
+          contributions: [],
+          reasonCodes: ["catalog_low_confidence"],
+        },
+      },
+    });
+
+    expect(capabilityScoreFor(deepseekPro, "complex")).toBeGreaterThanOrEqual(capabilityScoreFor(glm47, "complex"));
+    expect(capabilityScoreFor(kimi26, "complex")).toBeGreaterThanOrEqual(capabilityScoreFor(glm47, "complex"));
+  });
+
+  it("low-confidence mini does not outrank true frontier for deep", () => {
+    const miniLow = model("deepseek/deepseek-v4-flash", "mini", {
+      marketPrice: { blendedUsdPerMTok: 1, confidence: "high", sources: ["test"] },
+      capability: {
+        ...model("deepseek/deepseek-v4-flash", "mini").capability,
+        capabilityScore: {
+          score: 90,
+          confidence: "low",
+          contributions: [],
+          reasonCodes: ["test_score"],
+        },
+      },
+    });
+    const proFrontier = model("deepseek/deepseek-v4-pro", "frontier", {
+      marketPrice: { blendedUsdPerMTok: 5, confidence: "high", sources: ["test"] },
+    });
+    const models = [miniLow, proFrontier];
+
+    const recommendation = buildRecommendation(models, context("deep", models));
+
+    expect(recommendation.recommendedModel).toBe("deepseek/deepseek-v4-pro");
+    expect(recommendation.rejectedModels).toContainEqual({ model: "deepseek/deepseek-v4-flash", reason: "quality_floor_not_met" });
   });
 
   it("RT-S-001 recommends frontier model for deep complexity", () => {
@@ -266,5 +450,62 @@ describe("scoring engine RT-S-001..010", () => {
     expect(recommendation.recommendedModel).toBe("openai/gpt-5.5");
     expect(recommendation.rejectedModels).toContainEqual({ model: "deepseek/deepseek-v4", reason: "budget_exceeded_plan_only" });
     expect(recommendation.reasonCodes).toContain("budget_exceeded_plan_only");
+  });
+
+  it("CEC-008 safety filters reject unconfigured, unavailable, and cooldown models even with high capabilityScore", () => {
+    const highScoreCap = {
+      ...model("x/y", "frontier").capability,
+      capabilityScore: { score: 95, confidence: "high" as const, contributions: [], reasonCodes: ["test_score"] },
+    };
+
+    const unconfigured = model("test/unconfigured-high", "frontier", {
+      configured: false,
+      capability: highScoreCap,
+    });
+    const unavailable = model("test/unavailable-high", "frontier", {
+      health: { ...model("x/y", "frontier").health, available: "no" },
+      capability: highScoreCap,
+    });
+    const cooldown = model("test/cooldown-high", "frontier", {
+      health: { ...model("x/y", "frontier").health, cooldown: true },
+      capability: highScoreCap,
+    });
+    const eligible = model("test/eligible-normal", "strong");
+
+    const models = [unconfigured, unavailable, cooldown, eligible];
+
+    const recommendation = buildRecommendation(models, context("complex", models));
+
+    expect(recommendation.recommendedModel).toBe("test/eligible-normal");
+    expect(recommendation.rejectedModels).toContainEqual({ model: "test/unconfigured-high", reason: "not_configured" });
+    expect(recommendation.rejectedModels).toContainEqual({ model: "test/unavailable-high", reason: "unavailable" });
+    expect(recommendation.rejectedModels).toContainEqual({ model: "test/cooldown-high", reason: "cooldown_active" });
+  });
+
+  it("CEC-009 buildRecommendation does not expose internal capability scores or prices", () => {
+    const models = [
+      model("openai/gpt-5.5", "frontier", {
+        capability: {
+          ...model("openai/gpt-5.5", "frontier").capability,
+          capabilityScore: { score: 95, confidence: "high", contributions: [], reasonCodes: ["test_score"] },
+        },
+        marketPrice: { blendedUsdPerMTok: 11.25, confidence: "high", sources: ["test"] },
+      }),
+    ];
+
+    const recommendation = buildRecommendation(models, context("deep", models));
+
+    expect(recommendation.recommendedModel).toBe("openai/gpt-5.5");
+    const recKeys = Object.keys(recommendation);
+    expect(recKeys).not.toContain("capabilityScore");
+    expect(recKeys).not.toContain("internalScore");
+    expect(recKeys).not.toContain("estimatedPrice");
+    expect(recKeys).not.toContain("price");
+
+    for (const rejected of recommendation.rejectedModels) {
+      const rejKeys = Object.keys(rejected);
+      expect(rejKeys).not.toContain("score");
+      expect(rejKeys).not.toContain("price");
+    }
   });
 });

@@ -191,7 +191,8 @@ describe("parseSlackAcceptanceConfig — fail closed", () => {
     const routeFlip = config.cases.find((item) => item.kind === "route_flip_no_stale_projection");
     expect(statusPanel?.expectFinalAll).toEqual(["任务|task", "状态|status|running|queued|completed|degraded|delivered", "模型|model|profile", "耗时|运行|elapsed|\\d+(?:ms|s|m|h)|分钟前|小时前", "结果|artifact|位置|在哪|投递"]);
     expect(provenance?.expectFinalAll).toEqual(["判定|route", "policy|投影|依据|查法|证据|coverage|WorkContract|octoclaw_status"]);
-    expect(routeFlip?.expectFinalAll).toEqual(["版本|最新版|release|发布|稳定版|beta", "特性|更新|亮点|改进|修复"]);
+    expect(routeFlip?.expectFinalAll).toEqual(["版本|最新版|release|发布|稳定版|beta|OpenClaw\\s*\\d{4}\\.\\d{1,2}\\.\\d{1,2}", "特性|更新|亮点|改进|修复"]);
+    expect(routeFlip?.expectFooter).toEqual({ route: "reply" });
   });
 
   it("does not require the default fresh_lookup answer to repeat the product name", () => {
@@ -569,6 +570,7 @@ describe("content assertions via runSlackAcceptanceHarness", () => {
     const report = await runSlackAcceptanceHarness(client, config);
     const lookupCase = report.cases.find((c) => c.kind === "fresh_lookup")!;
     expect(lookupCase.final.status).toBe("fail");
+    expect(lookupCase.final.reason).toContain("OpenClaw");
   });
 
   it("fails when rejected content appears in reply", async () => {
@@ -1211,6 +1213,53 @@ describe("no-spawn replay assertion", () => {
 
     expect(plainCase.status).toBe("fail");
     expect(plainCase.errors.join("\n")).toContain("ack_misleading_text");
+  });
+});
+
+
+describe("route-flip acceptance diagnostics", () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    const base = path.join("/tmp", "octoclaw-route-flip-test");
+    tmpDir = path.join(base, `test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    await fs.mkdir(tmpDir, { recursive: true });
+  });
+
+  afterEach(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("accepts route-flip reply when it has reply footer, no spawn, version number, and feature summary", async () => {
+    const replayPath = path.join(tmpDir, "replay-route-flip.jsonl");
+    const threadTs = "1234567890.000001";
+    const sessionKey = `slack:channel:C_ACC_TEST:thread:${threadTs}`;
+    const events = [
+      { at: "2099-12-31T23:59:50.000Z", event: "message_received_observed", sessionKey, inboundMessageTs: threadTs },
+      { at: "2099-12-31T23:59:51.000Z", event: "policy_resolved", sessionKey, route: "reply", decision_bucket: "budgeted_main_then_delegate" },
+    ];
+    await fs.writeFile(replayPath, events.map((event) => JSON.stringify(event)).join("\n"), "utf8");
+
+    const defaultConfig = parseSlackAcceptanceConfig(validConfig(), validEnv());
+    const routeFlip = defaultConfig.cases.find((c) => c.kind === "route_flip_no_stale_projection")!;
+    const client = createMockClient([
+      {
+        ts: "1234567890.000002",
+        text: "当前安装的是 _OpenClaw 2026.5.12_，主要亮点：\n\n*新特性*\n• 插件外部化\n• ACP 新增 `acp.fallbacks`\n\n• octoclaw: route=reply | model=zhipu/GLM-5.1 · thread | via=rule | wc=wc-2e72a",
+      },
+    ]);
+    const config = parseSlackAcceptanceConfig(validConfig({
+      cases: [routeFlip],
+      replayPath,
+    }), validEnv());
+    config.finalTimeoutMs = 100;
+    config.pollIntervalMs = 10;
+
+    const report = await runSlackAcceptanceHarness(client, config);
+    const routeFlipCase = report.cases.find((c) => c.kind === "route_flip_no_stale_projection")!;
+    expect(routeFlipCase.final.status).toBe("pass");
+    expect(routeFlipCase.noSpawn.status).toBe("pass");
+    expect(routeFlipCase.status).toBe("pass");
   });
 });
 

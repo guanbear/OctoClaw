@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { ModelIntelLite } from "@octoclaw/router";
+import { runCapabilityEvidenceSmoke } from "../nightly/index.js";
 import {
   buildCatalogCasePack,
   buildAiCaseSelectionPrompt,
@@ -19,6 +20,7 @@ import {
   shouldRunFixDraft,
   validateStabilityCasePack,
 } from "./index.js";
+import { OPENROUTER_TOP20_OBSERVED_MODELS, ROUTER_SCORE_SANITY_MODELS } from "./catalog.js";
 
 describe("stability smoke v2 catalog", () => {
   it("SSV2-001: loads the post-deploy catalog with core blocker/major cases", () => {
@@ -73,6 +75,26 @@ describe("stability smoke v2 catalog", () => {
       visibleChildCount: 2,
       mainResponsiveDuringChildren: true,
     });
+    expect(nightly.cases.find((item) => item.id === "router.capability_score_sanity_watchlist")).toMatchObject({
+      mode: "router_model",
+      expect: expect.objectContaining({
+        fixtureKind: "model_score_sanity",
+        watchlistModels: expect.arrayContaining([
+          "zhipu/glm-5.1",
+          "zhipu/glm-4.7",
+          "openai/gpt-5.5",
+          "openai/gpt-5.4-mini",
+          "google/gemini-3.5-flash",
+          "deepseek/deepseek-v4-pro",
+          "deepseek/deepseek-v4-flash",
+          "moonshotai/kimi-k2.6",
+          "minimax/minimax-m2.7",
+          "anthropic/claude-sonnet-4.6",
+          "anthropic/claude-opus-4.7",
+        ]),
+        openRouterTop20Observed: expect.arrayContaining(["openai/gpt-5.5"]),
+      }),
+    });
     expect(full.cases.find((item) => item.id === "delegate.parallel_two_children_status")).toMatchObject({
       mode: "live_slack",
       severity: "major",
@@ -85,6 +107,26 @@ describe("stability smoke v2 catalog", () => {
         footerDifficultyRequired: true,
       }),
     });
+  });
+
+  it("keeps the router score sanity watchlists broad enough for user and OpenRouter top20 observation", () => {
+    expect(ROUTER_SCORE_SANITY_MODELS).toEqual(expect.arrayContaining([
+      "zhipu/glm-5.1",
+      "zhipu/glm-5",
+      "zhipu/glm-4.7",
+      "openai/gpt-5.4",
+      "openai/gpt-5.5",
+      "openai/gpt-5.4-mini",
+      "google/gemini-3.5-flash",
+      "deepseek/deepseek-v4-pro",
+      "deepseek/deepseek-v4-flash",
+      "qwen/qwen-3.7-max",
+      "qwen/qwen-3.6-plus",
+      "anthropic/claude-sonnet-4.7",
+      "anthropic/claude-opus-4.7",
+    ]));
+    expect(OPENROUTER_TOP20_OBSERVED_MODELS).toHaveLength(20);
+    expect(OPENROUTER_TOP20_OBSERVED_MODELS).toContain("openrouter/auto");
   });
 
   it("SSV2-002: rejects invalid AI case packs and leaves callers with catalog fallback", () => {
@@ -1050,5 +1092,23 @@ describe("stability smoke v2 synthetic fixtures", () => {
     expect(result.nightlyReport?.lanes.map((lane) => lane.lane)).toContain("route_quality");
     expect(result.lanes.map((lane) => lane.name)).toContain("nightly:route_quality");
     expect(result.lanes.map((lane) => lane.name)).toContain("nightly:route_commit_ack");
+  });
+
+  it("SSV2-055: capability evidence smoke runs for watchlist and OpenRouter top20 observation", () => {
+    const result = runCapabilityEvidenceSmoke([], {
+      watchlist: ["deepseek/deepseek-v4-flash"],
+      openRouterTop20: ["openrouter/auto", "openai/gpt-5.5"],
+    });
+
+    expect(result.findings).toContainEqual(expect.objectContaining({
+      kind: "missing_evidence",
+      modelKey: "deepseek/deepseek-v4-flash",
+    }));
+    expect(result.findings).toContainEqual(expect.objectContaining({
+      kind: "missing_evidence",
+      modelKey: "openai/gpt-5.5",
+    }));
+    expect(result.openRouterTop20Checked).toBe(1);
+    expect(JSON.stringify(result)).not.toContain("\"score\"");
   });
 });

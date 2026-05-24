@@ -60,7 +60,10 @@ octoclawctl router model-config analyze
 
 This writes a proposal file. It does not edit OpenClaw config and does not make proposal-only models live.
 
-Refresh the public capability snapshot cache:
+Refresh the public capability snapshot cache. By default this downloads the
+OctoClaw-maintained official snapshot from GitHub Pages and verifies its
+manifest SHA before writing the local cache; users do not need benchmark API
+keys.
 
 ```bash
 octoclawctl router capability refresh
@@ -74,29 +77,36 @@ Install or update the OpenClaw cron job that keeps router capability data fresh:
 
 ```bash
 octoclawctl router capability install-schedule --schedule-hour 4
+octoclawctl router capability install-schedule --schedule-hour 4 --cadence daily
 ```
 
-This creates one managed OpenClaw cron job named `OctoClaw AutoRouter capability refresh`. The job runs a lightweight isolated agent with only `exec` enabled, does not deliver IM messages, and executes:
+The `--cadence` flag accepts `weekly` (default) or `daily`. This creates one managed OpenClaw cron job named `OctoClaw AutoRouter capability refresh`. The job runs a lightweight isolated agent with only `exec` enabled, does not deliver IM messages, and executes:
 
 ```bash
 octoclawctl router capability refresh --output-dir ~/.openclaw/workspace/tmp/octopus/router-lite --format json
 octoclawctl router model-intel refresh --output-dir ~/.openclaw/workspace/tmp/octopus/router-lite --openclaw-home ~/.openclaw --format json
 ```
 
-Running the install command again updates the existing managed job instead of creating duplicates. Routing still reads local snapshots only; external model catalogs and leaderboard sources are contacted only by the scheduled refresh.
+Running the install command again updates the existing managed job instead of creating duplicates. Routing still reads local snapshots only; the scheduled refresh downloads the official OctoClaw snapshot and does not recompute benchmark leaderboards locally.
 
 The refresh keeps two local files:
 
 - `model-intel-snapshot.json` is the slim routing snapshot. It keeps configured/default/fallback models, same-provider candidates, and common public candidates.
 - `capability-catalog-full.json` is the full discovery catalog. Long-tail providers stay here so the wizard and CLI can still find cold or uncommon models without putting thousands of models on the routing hot path.
 
-Maintainers can regenerate the packaged leaderboard seed from external sources:
+Maintainers can regenerate the packaged leaderboard seed or debug a local
+source recompute from external sources:
 
 ```bash
 pnpm router:leaderboard:refresh
+octoclawctl router capability refresh --from-sources
 ```
 
-The refresh script pulls OpenRouter catalog metadata and PinchBench leaderboard data, then writes `packages/octoclaw-router/src/data/leaderboard-snapshot.json` unless `OCTOCLAW_ROUTER_SNAPSHOT_OUT` or `--output` is provided.
+The refresh script pulls benchmark/catalog sources and writes
+`packages/octoclaw-router/src/data/leaderboard-snapshot.json` unless
+`OCTOCLAW_ROUTER_SNAPSHOT_OUT` or `--output` is provided. The official
+GitHub Pages publisher owns authenticated or expensive sources such as
+Artificial Analysis; normal installs consume the published snapshot.
 
 ## Shadow And Promotion
 

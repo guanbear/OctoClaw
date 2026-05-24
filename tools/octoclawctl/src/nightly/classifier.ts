@@ -308,7 +308,7 @@ export function classifyRouteQuality(events: ReplayEvent[]): RouteQualityLane {
 
 export function classifyRouteCommitAck(events: ReplayEvent[]): RouteCommitAckLane {
   const routeCommitAckEvents = events.filter((e) => e.event === "route_commit_ack");
-  const nativeAckEvents = events.filter((e) => e.event === "neutral_inbound_ack" && (e.sent === true || typeof e.error === "string"));
+  const nativeAckEvents = events.filter((e) => e.event === "neutral_inbound_ack" && (e.sent === true || (typeof e.error === "string" && e.error.trim().length > 0)));
   const useNativeAckEvents = nativeAckEvents.length > 0;
   const ackEvents = useNativeAckEvents ? nativeAckEvents : routeCommitAckEvents;
   const routedEvents = events.filter(

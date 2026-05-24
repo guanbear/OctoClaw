@@ -409,3 +409,25 @@ export interface NightlyReport {
   recommendation: string;
   rollbackTarget: string | null;
 }
+
+export type CapabilitySmokeFindingKind =
+  | "missing_evidence"
+  | "low_confidence"
+  | "observation"
+  | "suspicious_ordering";
+
+export interface CapabilitySmokeFinding {
+  kind: CapabilitySmokeFindingKind;
+  modelKey: string;
+  detail: string;
+  family?: string;
+  sibling?: string;
+}
+
+export interface CapabilitySmokeResult {
+  findings: CapabilitySmokeFinding[];
+  watchlistChecked: number;
+  watchlistCoverage: number;
+  openRouterTop20Checked: number;
+  openRouterTop20Coverage: number;
+}

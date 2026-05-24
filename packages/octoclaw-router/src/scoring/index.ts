@@ -62,9 +62,110 @@ const MIN_TIER_BY_COMPLEXITY = {
   deep: "frontier",
 } as const;
 
+function confidenceAllowsTierPromotion(confidence?: string): boolean {
+  return confidence === "high";
+}
+
+function confidenceWeight(confidence?: string): number {
+  if (confidence === "high") return 1;
+  if (confidence === "medium") return 0.6;
+  if (confidence === "low") return 0.1;
+  return 0;
+}
+
+function calibratedNamePrior(modelKey: string, tier: ModelIntelLite["capability"]["codingTier"]): number {
+  const key = modelKey.toLowerCase();
+  const base = TIER_SCORE[tier] ?? TIER_SCORE.unknown;
+  const roleBonus = roleModifierScore(key);
+  const generationBonus = generationModifierScore(key);
+  const rawPrior = base + roleBonus + generationBonus;
+
+  if (hasCompactModifier(key)) {
+    return Math.min(rawPrior, TIER_SCORE.mini + 3);
+  }
+
+  const cappedPrior = Math.min(tierCeiling(tier), rawPrior);
+  return Math.max(TIER_SCORE.unknown, Math.round(cappedPrior * 100) / 100);
+}
+
+function tierCeiling(tier: ModelIntelLite["capability"]["codingTier"]): number {
+  if (tier === "frontier") return 96;
+  if (tier === "strong") return 88;
+  if (tier === "standard") return 73;
+  if (tier === "mini") return 43;
+  return 35;
+}
+
+function hasCompactModifier(key: string): boolean {
+  return /(^|[/._-])(mini|flash|lite|haiku|small|air)([/._-]|$)/.test(key);
+}
+
+function roleModifierScore(key: string): number {
+  if (hasCompactModifier(key)) return -8;
+  if (/(^|[/._-])(opus|ultra)([/._-]|$)/.test(key)) return 0.8;
+  if (/(^|[/._-])(max)([/._-]|$)/.test(key)) return 0.6;
+  if (/(^|[/._-])(pro)([/._-]|$)/.test(key)) return 0.5;
+  if (/(^|[/._-])(sonnet)([/._-]|$)/.test(key)) return 0.6;
+  if (/(^|[/._-])(plus)([/._-]|$)/.test(key)) return 0.4;
+  return 0;
+}
+
+function generationModifierScore(key: string): number {
+  if (/(^|[/._-])[a-z]+[0-9]+[._-][0-9]+([/._-]|$)/.test(key)) {
+    const namedSeriesVersions = Array.from(key.matchAll(/(?:^|[/._-])[a-z]+(\d+)[._-](\d+)(?:[/._-]|$)/g))
+      .map((match) => ({
+        major: Number(match[1]),
+        minor: Number(`0.${match[2]}`),
+      }))
+      .filter((version) => Number.isFinite(version.major) && Number.isFinite(version.minor));
+    if (namedSeriesVersions.length > 0) {
+      const version = namedSeriesVersions.reduce((best, item) => {
+        if (item.major !== best.major) return item.major > best.major ? item : best;
+        return item.minor > best.minor ? item : best;
+      });
+      return 0.8 + Math.min(0.35, version.major * 0.03 + version.minor * 0.2);
+    }
+  }
+
+  const versions = Array.from(key.matchAll(/(?:^|[/._-]|[a-z])(?:v)?(\d+)(?:[._-](\d+))?/g))
+    .map((match) => ({
+      major: Number(match[1]),
+      minor: match[2] === undefined ? 0 : Number(`0.${match[2]}`),
+    }))
+    .filter((version) => Number.isFinite(version.major));
+  if (versions.length === 0) return 0;
+
+  const version = versions.reduce((best, item) => {
+    if (item.major !== best.major) return item.major > best.major ? item : best;
+    return item.minor > best.minor ? item : best;
+  });
+
+  if (version.major >= 5) return 1 + version.minor * 0.4;
+  if (version.major === 4) return 0.4 + version.minor * 0.4;
+  if (version.major === 3) return version.minor * 0.4;
+  if (version.major === 2) return version.minor * 0.2;
+  return 0;
+}
+
+function blendWithTierPrior(
+  modelKey: string,
+  score: number,
+  confidence: string | undefined,
+  tier: ModelIntelLite["capability"]["codingTier"],
+): number {
+  const weight = confidenceWeight(confidence);
+  const prior = calibratedNamePrior(modelKey, tier);
+  const blended = Math.round((score * weight + prior * (1 - weight)) * 100) / 100;
+  if (confidenceAllowsTierPromotion(confidence)) return blended;
+  if (confidence === "medium") return Math.max(blended, prior);
+  if (confidence === "low") return prior;
+  return prior;
+}
+
 function effectiveCodingTier(model: ModelIntelLite): ModelIntelLite["capability"]["codingTier"] {
-  const score = model.capability.capabilityScore?.score;
-  if (score === undefined) return model.capability.codingTier;
+  const capabilityScore = model.capability.capabilityScore;
+  if (capabilityScore === undefined || !confidenceAllowsTierPromotion(capabilityScore.confidence)) return model.capability.codingTier;
+  const score = capabilityScore.score;
   if (score >= 90) return "frontier";
   if (score >= 75) return "strong";
   if (score >= 60) return "standard";
@@ -145,14 +246,14 @@ export function buildRecommendation(models: ModelIntelLite[], context: ScoringCo
 export function capabilityScoreFor(model: ModelIntelLite, complexity: Complexity): number {
   const unified = model.capability.capabilityScore;
   if (unified !== undefined && unified.confidence !== "unknown") {
-    return unified.score;
+    return blendWithTierPrior(model.modelKey, unified.score, unified.confidence, model.capability.codingTier);
   }
   const scenario = scenarioForComplexity(complexity);
   const fused = model.capability.scoreByScenario?.[scenario];
   if (fused !== undefined && fused.confidence !== "unknown") {
-    return fused.score;
+    return blendWithTierPrior(model.modelKey, fused.score, fused.confidence, model.capability.codingTier);
   }
-  const baseScore = TIER_SCORE[model.capability.codingTier] ?? 30;
+  const baseScore = calibratedNamePrior(model.modelKey, model.capability.codingTier);
   const multiplier = model.capability.confidence === "high" ? 1
     : model.capability.confidence === "medium" ? 0.9
       : model.capability.confidence === "low" ? 0.75

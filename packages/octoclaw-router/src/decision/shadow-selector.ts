@@ -87,6 +87,9 @@ const OUTPUT_BUDGET_BY_COMPLEXITY: Record<RouterLiteRequest["judge"]["complexity
   deep: "deep",
 };
 
+const BALANCED_COMPLEX_NATIVE_SCORE_TOLERANCE = 6;
+const BALANCED_COMPLEX_NATIVE_PRICE_MULTIPLE_LIMIT = 3;
+
 export function selectShadowRecommendation(
   request: RouterLiteRequest,
   snapshot: ModelIntelSnapshot,
@@ -128,6 +131,14 @@ export function selectShadowRecommendation(
       score: scoreModel(request, model, mode, maxBlendedPrice, maxP50),
     }))
     .sort((left, right) => {
+      const complexFallbackPreference = compareBalancedComplexNativeFallback(
+        request,
+        mode,
+        left,
+        right,
+        options.nativeFallbackOrder ?? [],
+      );
+      if (complexFallbackPreference !== 0) return complexFallbackPreference;
       if (Math.abs(right.score - left.score) > 0.01) return right.score - left.score;
       return compareNativeFallbackTieBreak(left.model, right.model, options.nativeFallbackOrder ?? []);
     });
@@ -358,10 +369,10 @@ function getSpeedScore(model: ModelIntelLite, maxP50: number): number {
 function getStabilityScore(model: ModelIntelLite): number {
   const recentFailureRate = model.health.recentFailureRate;
   if (recentFailureRate === undefined) {
-    return 50;
+    return 90;
   }
 
-  return clampScore(100 * (1 - recentFailureRate));
+  return Math.min(95, clampScore(100 * (1 - recentFailureRate)));
 }
 
 function getIgnoredReason(
@@ -434,6 +445,40 @@ function compareNativeFallbackTieBreak(left: ModelIntelLite, right: ModelIntelLi
     - (right.marketPrice.blendedUsdPerMTok ?? Number.POSITIVE_INFINITY);
   if (priceDiff !== 0) return priceDiff;
   return left.modelKey.localeCompare(right.modelKey);
+}
+
+function compareBalancedComplexNativeFallback(
+  request: RouterLiteRequest,
+  mode: RouterLiteScoringMode,
+  left: { model: ModelIntelLite; score: number },
+  right: { model: ModelIntelLite; score: number },
+  nativeFallbackOrder: string[],
+): number {
+  if (mode !== "balanced" || request.judge.complexity !== "complex" || nativeFallbackOrder.length === 0) {
+    return 0;
+  }
+
+  const leftRank = nativeFallbackRank(left.model, nativeFallbackOrder);
+  const rightRank = nativeFallbackRank(right.model, nativeFallbackOrder);
+  if (leftRank === rightRank || leftRank === 10_000 || rightRank === 10_000) {
+    return 0;
+  }
+
+  const preferred = leftRank < rightRank ? left : right;
+  const other = preferred === left ? right : left;
+  const preferredPrice = preferred.model.marketPrice.blendedUsdPerMTok;
+  const otherPrice = other.model.marketPrice.blendedUsdPerMTok;
+  if (preferredPrice === undefined || otherPrice === undefined || otherPrice <= 0) {
+    return 0;
+  }
+
+  const preferredIsCloseEnough = other.score - preferred.score <= BALANCED_COMPLEX_NATIVE_SCORE_TOLERANCE;
+  const preferredIsNotOverpriced = preferredPrice / otherPrice <= BALANCED_COMPLEX_NATIVE_PRICE_MULTIPLE_LIMIT;
+  if (!preferredIsCloseEnough || !preferredIsNotOverpriced) {
+    return 0;
+  }
+
+  return preferred === left ? -1 : 1;
 }
 
 function nativeFallbackRank(model: ModelIntelLite, nativeFallbackOrder: string[]): number {

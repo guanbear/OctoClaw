@@ -53,6 +53,21 @@ describe("conversation grounding route projection", () => {
     expect(officialModelIntent.intent_class).toBe("fresh_live_lookup");
   });
 
+  it("guards fresh live lookups against local installed-version answers", () => {
+    const guard = buildDirectLookupGuard({
+      latency_ack: { required: true },
+      request: {
+        metadata: {
+          intent_packet: { intent_class: "fresh_live_lookup" },
+        },
+      },
+    });
+
+    expect(guard).toContain("fresh upstream lookup");
+    expect(guard).toContain("local installed/runtime state");
+    expect(guard).toContain("upstream latest release");
+  });
+
   it("projects exact task status panel commands to reply-only status surface tools", async () => {
     for (const prompt of ["状态面板", "八爪鱼状态", " 状态面板？ "]) {
       const intent = buildConversationIntentPacket({

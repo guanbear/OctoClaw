@@ -165,7 +165,7 @@ describe("router-lite model intel", () => {
     expect(model?.plan.sources).toContain("openclaw_usage_status");
   });
 
-  it("merges structured usage cost into plan and price signals", () => {
+  it("merges structured usage cost into plan without treating all-zero cost as API price", () => {
     const snapshot = buildModelIntelSnapshot({
       generatedAt: "2026-05-10T00:00:00.000Z",
       openClawModelsList: {
@@ -195,13 +195,10 @@ describe("router-lite model intel", () => {
     });
     expect(model?.plan.sources).toContain("openclaw_usage_cost");
     expect(model?.marketPrice).toMatchObject({
-      inputUsdPerMTok: 0,
-      outputUsdPerMTok: 0,
-      blendedUsdPerMTok: 0,
-      confidence: "high",
+      confidence: "unknown",
     });
-    expect(model?.marketPrice.sources).toContain("openclaw_usage_cost");
-    expect(model?.marketPrice.missingCostReason).toBeUndefined();
+    expect(model?.marketPrice.sources).not.toContain("openclaw_usage_cost");
+    expect(model?.marketPrice.missingCostReason).toBe("cost_not_observed");
   });
 
   it("marks heuristic-only models with low-confidence evidence", () => {

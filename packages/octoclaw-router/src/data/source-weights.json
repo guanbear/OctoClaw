@@ -2,20 +2,27 @@
   "schemaVersion": "octoclaw.router.source_weights/v1",
   "weights": {
     "coding_worker": {
-      "aider": 0.4,
-      "pinchbench": 0.3,
-      "bfcl": 0.1,
-      "artificial_analysis": 0.2
+      "aider": 0.18,
+      "swe_bench_verified": 0.18,
+      "swe_bench_pro": 0.18,
+      "lmarena_webdev": 0.18,
+      "artificial_analysis": 0.14,
+      "pinchbench": 0.09,
+      "bfcl": 0.05
     },
     "research": {
-      "artificial_analysis": 0.5,
-      "pinchbench": 0.3,
-      "lmarena": 0.2
+      "lmarena_text": 0.35,
+      "lmarena_search": 0.25,
+      "artificial_analysis": 0.25,
+      "pinchbench": 0.15
     },
     "agentic": {
-      "bfcl": 0.5,
-      "pinchbench": 0.3,
-      "artificial_analysis": 0.2
+      "bfcl": 0.45,
+      "swe_bench_verified": 0.12,
+      "swe_bench_pro": 0.12,
+      "lmarena_webdev": 0.12,
+      "artificial_analysis": 0.12,
+      "pinchbench": 0.07
     }
   }
 }

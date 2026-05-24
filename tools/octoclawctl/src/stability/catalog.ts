@@ -1,5 +1,49 @@
 import { CASE_PACK_SCHEMA_VERSION, type BuildCatalogOptions, type StabilityCase, type StabilityCasePack, type StabilityRunKind } from "./types.js";
 
+export const ROUTER_SCORE_SANITY_MODELS = [
+  "zhipu/glm-5.1",
+  "zhipu/glm-5",
+  "zhipu/glm-4.7",
+  "openai/gpt-5.4",
+  "openai/gpt-5.5",
+  "openai/gpt-5.4-mini",
+  "google/gemini-3.5-flash",
+  "minimax/minimax-m2.7",
+  "minimax/minimax-m2.5",
+  "moonshotai/kimi-k2.6",
+  "deepseek/deepseek-v4-pro",
+  "deepseek/deepseek-v4-flash",
+  "qwen/qwen-3.7-max",
+  "qwen/qwen-3.6-plus",
+  "anthropic/claude-sonnet-4.6",
+  "anthropic/claude-sonnet-4.7",
+  "anthropic/claude-opus-4.6",
+  "anthropic/claude-opus-4.7",
+] as const;
+
+export const OPENROUTER_TOP20_OBSERVED_MODELS = [
+  "openai/gpt-5.5",
+  "anthropic/claude-opus-4.7",
+  "anthropic/claude-sonnet-4.6",
+  "openai/gpt-5.4",
+  "openai/gpt-5.4-mini",
+  "google/gemini-3-pro",
+  "google/gemini-3-flash",
+  "x-ai/grok-4.2",
+  "zhipu/glm-5.1",
+  "deepseek/deepseek-v4-pro",
+  "deepseek/deepseek-v4-flash",
+  "moonshotai/kimi-k2.6",
+  "minimax/minimax-m2.7",
+  "qwen/qwen-3.7-max",
+  "qwen/qwen-3.6-plus",
+  "meta-llama/llama-4.1",
+  "mistralai/mistral-large-3.2",
+  "alibaba/qwen3-coder",
+  "perplexity/sonar-pro",
+  "openrouter/auto",
+] as const;
+
 const POST_DEPLOY_CASES: StabilityCase[] = [
   {
     id: "reply_core.simple_chat",
@@ -68,7 +112,18 @@ const NIGHTLY_EXTRA_CASES: StabilityCase[] = [
   syntheticCase("delegate.parallel_children_status_panel", "major", ["delegate", "parallel", "status"], { fixtureKind: "parallel_children_status", expectedChildCount: 2, visibleChildCount: 2, mainResponsiveDuringChildren: true }),
   syntheticCase("footer.no_delegate_without_spawn", "blocker", ["footer", "delegate"], { fixtureKind: "delegate_footer", footerRoute: "delegate", hasSpawnIntent: false, hasChildSession: false, failureCode: "delegate_footer_without_spawn" }),
   syntheticCase("exec.heavy_main_tool_after_escalation", "blocker", ["exec", "dispatch", "budgeted-main"], { fixtureKind: "main_tool_guard", route: "reply", escalationReason: "tool_risk_unknown", attemptedToolName: "exec", ordinaryToolRanAfterEscalation: true, dispatchCalled: false, failureCode: "main_tool_after_escalation" }),
-  syntheticCase("router.simple_normal_deep_model_matrix", "major", ["router", "model-choice"], { complexityMatrix: ["simple", "normal", "deep"] }),
+  routerCase("router.simple_normal_deep_model_matrix", "major", ["router", "model-choice"], { complexityMatrix: ["simple", "normal", "deep"] }),
+  routerCase("router.capability_score_sanity_watchlist", "major", ["router", "model-choice", "capability-score", "watchlist"], {
+    fixtureKind: "model_score_sanity",
+    watchlistModels: ROUTER_SCORE_SANITY_MODELS,
+    openRouterTop20Observed: OPENROUTER_TOP20_OBSERVED_MODELS,
+    invariants: [
+      { kind: "not_above", left: "deepseek/deepseek-v4-flash", right: "deepseek/deepseek-v4-pro" },
+      { kind: "not_below", left: "zhipu/glm-5", right: "zhipu/glm-4.7" },
+      { kind: "gap_at_least", left: "openai/gpt-5.5", right: "openai/gpt-5.4-mini", minGap: 10 },
+      { kind: "not_below", left: "moonshotai/kimi-k2.6", right: "minimax/minimax-m2.7" },
+    ],
+  }),
   wizardCase("wizard.start_resume_idempotent", "major", ["wizard", "idempotency"], { duplicateClickIdempotent: true }),
   providerCase("provider.402_or_429_fallback", "major", ["provider", "fallback"], { fixtureKind: "provider_status", providerProbe: "synthetic", statusCodes: [402, 429], fallbackAvailable: true, failureCode: "provider_bare_error" }),
   syntheticCase("restart.shutting_down_message", "major", ["restart", "gateway"], { fixtureKind: "restart_shutdown", classify: "gateway_restart_drop", failureCode: "gateway_restart_drop" }),
@@ -148,6 +203,16 @@ function wizardCase(id: string, severity: StabilityCase["severity"], tags: strin
   return {
     id,
     mode: "wizard",
+    severity,
+    tags,
+    expect,
+  };
+}
+
+function routerCase(id: string, severity: StabilityCase["severity"], tags: string[], expect: Record<string, unknown>): StabilityCase {
+  return {
+    id,
+    mode: "router_model",
     severity,
     tags,
     expect,

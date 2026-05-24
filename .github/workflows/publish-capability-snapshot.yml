@@ -1,0 +1,72 @@
+name: Publish Capability Snapshot
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 1 * * 1"
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages-capability-snapshot
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Build and publish capability snapshot
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    env:
+      OCTOCLAW_POLICY_JUDGE_DISABLE_NETWORK: "1"
+      ARTIFICIAL_ANALYSIS_API_KEY: ${{ secrets.ARTIFICIAL_ANALYSIS_API_KEY }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.12.1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Refresh leaderboard seed
+        run: node scripts/refresh-leaderboard-snapshot.mjs --check-seed --output packages/octoclaw-router/src/data/leaderboard-snapshot.json
+
+      - name: Build and typecheck
+        run: pnpm check
+
+      - name: Build runtime capability snapshot
+        run: node tools/octoclawctl/dist/cli.js router capability refresh --from-sources --output-dir /tmp/octoclaw-capability --format json
+
+      - name: Verify capability refresh and smoke tests
+        run: |
+          pnpm vitest run tests/scripts/refresh-leaderboard-snapshot.test.ts tests/scripts/build-capability-site.test.ts
+          pnpm vitest run tools/octoclawctl/src/nightly/nightly.test.ts tools/octoclawctl/src/stability/stability.test.ts
+
+      - name: Build Pages artifact
+        run: node scripts/build-capability-site.mjs --input /tmp/octoclaw-capability/model-intel-snapshot.json --out-dir public --base-url "https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}"
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: public
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

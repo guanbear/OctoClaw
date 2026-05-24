@@ -1053,6 +1053,14 @@ export function buildDirectLookupGuard(decision: JsonRecord = {}): string {
   if (!Boolean(latencyAck.required) && !guardedIntent) {
     return "";
   }
+  if (intentClass === "fresh_live_lookup") {
+    return [
+      "[OctoClaw live lookup guard]",
+      "This is a bounded fresh upstream lookup. Do not answer from memory or local installed/runtime state.",
+      "For latest, release, or version questions, identify the upstream latest release first; mention the local installed/runtime version only if it is clearly labeled separately.",
+      "Use the execution lane selected by the policy, and only report facts backed by fresh lookup evidence or clearly labeled local state.",
+    ].join("\n");
+  }
   return [
     "[OctoClaw live lookup guard]",
     "This is a bounded live lookup. Do not answer from memory.",

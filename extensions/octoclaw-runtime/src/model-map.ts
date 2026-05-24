@@ -95,11 +95,35 @@ function tierFromScore(score: number | undefined): CodingTier | undefined {
   return "unknown";
 }
 
+function oneTierAbove(tier: CodingTier): CodingTier {
+  switch (tier) {
+    case "unknown": return "mini";
+    case "mini": return "standard";
+    case "standard": return "strong";
+    case "strong": return "frontier";
+    case "frontier": return "frontier";
+  }
+}
+
 function effectiveTier(model: SnapshotModel): CodingTier {
-  const scoreTier = tierFromScore(model.capability?.capabilityScore?.score);
+  const capScore = model.capability?.capabilityScore;
   const rawTier = model.capability?.codingTier ?? "unknown";
-  if (!scoreTier) return rawTier;
-  return TIER_FLOOR[scoreTier] > TIER_FLOOR[rawTier] ? scoreTier : rawTier;
+
+  if (!capScore || capScore.score === undefined || !Number.isFinite(capScore.score)) {
+    return rawTier;
+  }
+
+  const scoreTier = tierFromScore(capScore.score);
+  if (scoreTier === undefined || TIER_FLOOR[scoreTier] <= TIER_FLOOR[rawTier]) return rawTier;
+
+  if (capScore.confidence === "high") return scoreTier;
+
+  if (capScore.confidence === "medium") {
+    const distance = TIER_FLOOR[scoreTier] - TIER_FLOOR[rawTier];
+    return distance <= 1 ? scoreTier : oneTierAbove(rawTier);
+  }
+
+  return rawTier;
 }
 
 function isSelectable(model: SnapshotModel): boolean {

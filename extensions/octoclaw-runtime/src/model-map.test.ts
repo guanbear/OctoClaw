@@ -168,9 +168,73 @@ describe("model map", () => {
       },
     });
   });
+
+  it("CEC-007 deep lane requires score >= 90 or frontier evidence; score 86 does not qualify", async () => {
+    process.env.OCTOCLAW_ROUTER_SNAPSHOT_JSON = JSON.stringify({
+      schemaVersion: "octoclaw.router_lite.model_intel_snapshot/v1",
+      snapshotId: "test-cec-007",
+      generatedAt: "2026-05-22T00:00:00.000Z",
+      sourceStatus: [],
+      models: [
+        modelIntel("cliproxyapi/gpt-5.4-mini", "mini", 1.6875, ["test"], 86),
+        modelIntel("cliproxyapi/gpt-5.5", "frontier", 11.25),
+      ],
+    });
+
+    await expect(buildModelMap()).resolves.toMatchObject({
+      complexity: {
+        complex: "cliproxyapi/gpt-5.4-mini",
+        deep: "cliproxyapi/gpt-5.5",
+      },
+    });
+  });
+
+  it("medium confidence score promotes mini one tier to standard but not to strong", async () => {
+    process.env.OCTOCLAW_ROUTER_SNAPSHOT_JSON = JSON.stringify({
+      schemaVersion: "octoclaw.router_lite.model_intel_snapshot/v1",
+      snapshotId: "test-medium-confidence",
+      generatedAt: "2026-05-22T00:00:00.000Z",
+      sourceStatus: [],
+      models: [
+        modelIntel("cliproxyapi/gpt-5.4-mini", "mini", 1, ["test"], 86, "medium"),
+        modelIntel("zhipu/GLM-5.1", "strong", 2),
+        modelIntel("cliproxyapi/gpt-5.5", "frontier", 11.25),
+      ],
+    });
+
+    await expect(buildModelMap()).resolves.toMatchObject({
+      complexity: {
+        simple: "cliproxyapi/gpt-5.4-mini",
+        normal: "cliproxyapi/gpt-5.4-mini",
+        complex: "zhipu/GLM-5.1",
+        deep: "cliproxyapi/gpt-5.5",
+      },
+    });
+  });
+
+  it("does not let low-confidence mini scores pass the complex floor", async () => {
+    process.env.OCTOCLAW_ROUTER_SNAPSHOT_JSON = JSON.stringify({
+      schemaVersion: "octoclaw.router_lite.model_intel_snapshot/v1",
+      snapshotId: "test-low-confidence-score",
+      generatedAt: "2026-05-22T00:00:00.000Z",
+      sourceStatus: [],
+      models: [
+        modelIntel("cliproxyapi/gpt-5.5", "frontier", 11.25),
+        modelIntel("cliproxyapi/gpt-5.4-mini", "mini", 1.6875, ["test"], 90, "low"),
+        modelIntel("zhipu/GLM-5.1", "strong", 2),
+      ],
+    });
+
+    await expect(buildModelMap()).resolves.toMatchObject({
+      complexity: {
+        complex: "zhipu/GLM-5.1",
+        deep: "cliproxyapi/gpt-5.5",
+      },
+    });
+  });
 });
 
-function modelIntel(modelKey: string, tier: string, price: number, priceSources = ["test"], score?: number) {
+function modelIntel(modelKey: string, tier: string, price: number, priceSources = ["test"], score?: number, scoreConfidence = "high") {
   const [provider, model] = modelKey.split("/");
   return {
     provider,
@@ -194,7 +258,7 @@ function modelIntel(modelKey: string, tier: string, price: number, priceSources 
       ...(score === undefined ? {} : {
         capabilityScore: {
           score,
-          confidence: "high",
+          confidence: scoreConfidence,
           contributions: [],
           reasonCodes: ["test_score"],
         },

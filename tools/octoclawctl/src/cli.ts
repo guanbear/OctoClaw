@@ -57,6 +57,7 @@ type StatusFormat = "compact" | "table" | "lanes" | "anchors" | "text" | "json";
 type ServiceName = "openclaw" | "runner";
 type RunnerMode = "ondemand" | "daemon";
 type NightlyFormat = "markdown" | "json";
+type RouterCapabilityRefreshCadence = "daily" | "weekly";
 type CliCommand =
   | "doctor"
   | "install"
@@ -116,6 +117,8 @@ const ROUTER_CAPABILITY_REFRESH_CRON_NAME = "OctoClaw AutoRouter capability refr
 const ROUTER_MODEL_INTEL_SNAPSHOT_FILENAME = "model-intel-snapshot.json";
 const ROUTER_CAPABILITY_FULL_CATALOG_FILENAME = "capability-catalog-full.json";
 const ROUTER_MODEL_INTEL_SLIM_LIMIT = 800;
+const ROUTER_CAPABILITY_REFRESH_CADENCES: readonly RouterCapabilityRefreshCadence[] = ["daily", "weekly"];
+const DEFAULT_ROUTER_CAPABILITY_MANIFEST_URL = "https://guanbear.github.io/OctoClaw/capability/leaderboard-manifest.json";
 
 interface ParsedCliArgs {
   command?: CliCommand;
@@ -157,11 +160,13 @@ interface ParsedCliArgs {
   nonInteractive: boolean;
   autoRemoteJudge: boolean;
   cooldownOnly: boolean;
+  fromSources: boolean;
   lang?: "zh" | "en";
   nightlyEvalSubcommand?: "run" | "install-launchagent" | "uninstall-launchagent" | "print-plist" | "deliver-slack" | "promote" | "clear-baseline" | "show-baseline";
   slackAcceptanceFormat: SlackAcceptanceFormat;
   stabilitySubcommand?: "post-deploy" | "nightly" | "full" | "review-latest" | "fix-draft";
   cadence?: string;
+  routerCapabilityCadence?: RouterCapabilityRefreshCadence;
   extraArgs: string[];
 }
 
@@ -1068,11 +1073,13 @@ export function parseCliArgs(argv: string[]): ParsedCliArgs {
   let nonInteractive = false;
   let autoRemoteJudge = false;
   let cooldownOnly = false;
+  let fromSources = false;
   let lang: "zh" | "en" | undefined;
   let nightlyEvalSubcommand: ParsedCliArgs["nightlyEvalSubcommand"];
   let slackAcceptanceFormat: SlackAcceptanceFormat = "markdown";
   let stabilitySubcommand: ParsedCliArgs["stabilitySubcommand"];
   let cadence: string | undefined;
+  let routerCapabilityCadence: RouterCapabilityRefreshCadence | undefined;
   let rawFormat: string | undefined;
   const positionals: string[] = [];
 
@@ -1338,6 +1345,10 @@ export function parseCliArgs(argv: string[]): ParsedCliArgs {
       cooldownOnly = true;
       continue;
     }
+    if (argument === "--from-sources") {
+      fromSources = true;
+      continue;
+    }
     if (argument === "--lang") {
       lang = parseEnumValue(argv[index + 1], INIT_LANGUAGES, "language");
       index += 1;
@@ -1467,6 +1478,9 @@ export function parseCliArgs(argv: string[]): ParsedCliArgs {
     if (scheduleHour !== undefined && (!Number.isFinite(scheduleHour) || scheduleHour < 0 || scheduleHour > 23)) {
       throw new Error("Invalid --schedule-hour: must be 0-23");
     }
+    if (cadence !== undefined) {
+      routerCapabilityCadence = parseEnumValue(cadence, ROUTER_CAPABILITY_REFRESH_CADENCES, "cadence");
+    }
   }
 
   if (command === "stability") {
@@ -1518,11 +1532,13 @@ export function parseCliArgs(argv: string[]): ParsedCliArgs {
     nonInteractive,
     autoRemoteJudge,
     cooldownOnly,
+    fromSources,
     lang,
     nightlyEvalSubcommand,
     slackAcceptanceFormat,
     stabilitySubcommand,
     cadence,
+    routerCapabilityCadence,
     extraArgs: positionals.slice(1),
   };
 }
@@ -1582,7 +1598,7 @@ export function printUsage(): string {
     "  octoclawctl router score override <model> <tier>=<score>",
     "  octoclawctl router model mark <model> --dispreferred-for <tier>",
     "  octoclawctl router model ban <model> --for <tier>",
-    "  octoclawctl router capability refresh [--output-dir <dir>] [--format json]",
+    "  octoclawctl router capability refresh [--output-dir <dir>] [--format json] [--from-sources]",
     "  octoclawctl router capability list [--input <snapshot.json>] [--format text|json]",
     "  octoclawctl router capability show <model> [--input <snapshot.json>] [--format text|json]",
     "  octoclawctl router capability snapshot show [--input <snapshot.json>] [--format text|json]",
@@ -2318,6 +2334,83 @@ function formatCapabilitySnapshotShow(snapshot: ModelIntelSnapshot, format: "jso
   ].join("\n");
 }
 
+interface OfficialCapabilityManifest {
+  schemaVersion: "octoclaw.capability_manifest/v1";
+  generatedAt: string;
+  snapshotUrl: string;
+  snapshotSha256: string;
+  modelCount: number;
+  summaryUrl?: string;
+}
+
+function parseOfficialCapabilityManifest(value: unknown): OfficialCapabilityManifest {
+  const record = asRecord(value);
+  const schemaVersion = asString(record.schemaVersion);
+  const generatedAt = asString(record.generatedAt);
+  const snapshotUrl = asString(record.snapshotUrl);
+  const snapshotSha256 = asString(record.snapshotSha256);
+  const modelCount = asNumber(record.modelCount);
+  if (schemaVersion !== "octoclaw.capability_manifest/v1") {
+    throw new Error(`official capability manifest schema mismatch: ${schemaVersion || "missing"}`);
+  }
+  if (!generatedAt || Number.isNaN(Date.parse(generatedAt))) {
+    throw new Error("official capability manifest generatedAt is missing or invalid");
+  }
+  if (!snapshotUrl || !/^https?:\/\//u.test(snapshotUrl)) {
+    throw new Error("official capability manifest snapshotUrl is missing or invalid");
+  }
+  if (!/^[a-f0-9]{64}$/iu.test(snapshotSha256)) {
+    throw new Error("official capability manifest snapshotSha256 is missing or invalid");
+  }
+  if (modelCount === undefined || modelCount <= 0) {
+    throw new Error("official capability manifest modelCount is missing or invalid");
+  }
+  return {
+    schemaVersion,
+    generatedAt,
+    snapshotUrl,
+    snapshotSha256: snapshotSha256.toLowerCase(),
+    modelCount,
+    ...(asString(record.summaryUrl) ? { summaryUrl: asString(record.summaryUrl) } : {}),
+  };
+}
+
+async function fetchText(url: string): Promise<string> {
+  const response = await fetch(url, { headers: { accept: "application/json", "user-agent": "octoclawctl-capability-refresh/0.6" } });
+  if (!response.ok) {
+    throw new Error(`fetch failed ${response.status} for ${url}`);
+  }
+  return response.text();
+}
+
+function assertOfficialCapabilitySnapshot(value: unknown): ModelIntelSnapshot {
+  const snapshot = assertModelIntelSnapshot(value, "official capability snapshot");
+  if (snapshot.models.length === 0) {
+    throw new Error("official capability snapshot has no models");
+  }
+  return snapshot;
+}
+
+async function fetchOfficialCapabilitySnapshot(manifestUrl: string): Promise<{ manifest: OfficialCapabilityManifest; snapshot: ModelIntelSnapshot }> {
+  const manifest = parseOfficialCapabilityManifest(parseJsonText(await fetchText(manifestUrl)));
+  const snapshotText = await fetchText(manifest.snapshotUrl);
+  const actualSha256 = await sha256Hex(snapshotText);
+  if (actualSha256 !== manifest.snapshotSha256) {
+    throw new Error(`official capability snapshot sha256 mismatch: expected ${manifest.snapshotSha256}, got ${actualSha256}`);
+  }
+  const snapshot = assertOfficialCapabilitySnapshot(parseJsonText(snapshotText));
+  if (snapshot.models.length !== manifest.modelCount) {
+    throw new Error(`official capability snapshot model count mismatch: manifest=${manifest.modelCount} snapshot=${snapshot.models.length}`);
+  }
+  return { manifest, snapshot };
+}
+
+async function sha256Hex(text: string): Promise<string> {
+  const bytes = new TextEncoder().encode(text);
+  const digest = await globalThis.crypto.subtle.digest("SHA-256", bytes);
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
 function shellQuote(value: string): string {
   return `'${value.replace(/'/g, "'\\''")}'`;
 }
@@ -2332,10 +2425,14 @@ function routerCapabilityRefreshCommands(openclawHome: string, outputDir: string
   };
 }
 
+function routerCapabilityRefreshCron(hour: number, cadence: RouterCapabilityRefreshCadence): string {
+  return cadence === "daily" ? `0 ${hour} * * *` : `0 ${hour} * * 1`;
+}
+
 function buildRouterCapabilityScheduleMessage(openclawHome: string, outputDir: string): string {
   const commands = routerCapabilityRefreshCommands(openclawHome, outputDir);
   return [
-    "你是 OpenClaw cron 的轻量调度壳。只刷新 OctoClaw AutoRouter 本地能力数据，不要修改模型配置，不要投递 IM。",
+    "你是 OpenClaw cron 的轻量调度壳。只从 OctoClaw 官方快照刷新 AutoRouter 本地能力数据，不要修改模型配置，不要投递 IM。",
     "",
     "请在本机按顺序执行下面两条命令：",
     commands.capabilityRefresh,
@@ -2363,11 +2460,13 @@ async function runRouterCapabilityInstallSchedule(input: {
   outputDir: string;
   env: Record<string, string | undefined>;
   scheduleHour?: number;
+  cadence?: RouterCapabilityRefreshCadence;
   format: "json" | "text";
 }): Promise<string> {
   const hour = input.scheduleHour ?? 4;
+  const cadence = input.cadence ?? "weekly";
   validateScheduleHour(hour);
-  const cron = `0 ${hour} * * *`;
+  const cron = routerCapabilityRefreshCron(hour, cadence);
   const commandEnv = openClawHomeEnv(input.openclawHome, input.env);
   const existingList = await runOpenClawJsonCommand(["cron", "list", "--json"], commandEnv);
   const existing = findRouterCapabilityRefreshCronJob(existingList);
@@ -2407,6 +2506,7 @@ async function runRouterCapabilityInstallSchedule(input: {
     action,
     jobId,
     name: ROUTER_CAPABILITY_REFRESH_CRON_NAME,
+    cadence,
     cron,
     tz: "Asia/Shanghai",
     outputDir: input.outputDir,
@@ -2415,6 +2515,7 @@ async function runRouterCapabilityInstallSchedule(input: {
   return [
     `Router capability refresh schedule ${action}: ${ROUTER_CAPABILITY_REFRESH_CRON_NAME}`,
     `jobId=${jobId ?? "unknown"}`,
+    `cadence=${cadence}`,
     `cron=${cron} tz=Asia/Shanghai`,
     `outputDir=${input.outputDir}`,
   ].join("\n");
@@ -3193,10 +3294,38 @@ async function runRouterLiteCommand(parsed: ParsedCliArgs, env: Record<string, s
   }
 
   if (area === "capability" && action === "refresh") {
-    const router = await loadRouter();
     const capabilityOutputDir = resolvePath(parsed.outputDir ?? path.join(openclawHome, "octoclaw", "router-lite"));
     const snapshotPath = path.join(capabilityOutputDir, ROUTER_MODEL_INTEL_SNAPSHOT_FILENAME);
     const fullCatalogPath = path.join(capabilityOutputDir, ROUTER_CAPABILITY_FULL_CATALOG_FILENAME);
+    if (!parsed.fromSources) {
+      const manifestUrl = asString(env.OCTOCLAW_ROUTER_CAPABILITY_MANIFEST_URL).trim() || DEFAULT_ROUTER_CAPABILITY_MANIFEST_URL;
+      const { manifest, snapshot } = await fetchOfficialCapabilitySnapshot(manifestUrl);
+      await writeModelIntelSnapshot(fullCatalogPath, snapshot);
+      await writeModelIntelSnapshot(snapshotPath, snapshot);
+      const counts = countModels(snapshot);
+      if (wantsJson) {
+        return JSON.stringify({
+          source: "official",
+          manifestUrl,
+          snapshotUrl: manifest.snapshotUrl,
+          snapshotPath,
+          fullCatalogPath,
+          snapshotId: snapshot.snapshotId,
+          generatedAt: snapshot.generatedAt,
+          models: snapshot.models.length,
+          ...counts,
+          sourceStatus: snapshot.sourceStatus,
+        }, null, 2);
+      }
+      return [
+        `Official capability snapshot written: ${snapshotPath}`,
+        `manifest=${manifestUrl}`,
+        `models=${snapshot.models.length} configured=${counts.configured} proposalOnly=${counts.proposalOnly}`,
+        `generatedAt=${snapshot.generatedAt}`,
+      ].join("\n");
+    }
+
+    const router = await loadRouter();
     const snapshot = await router.refreshCapability({
       sources: [
         router.createPackagedLeaderboardCapabilitySource(),
@@ -3234,6 +3363,7 @@ async function runRouterLiteCommand(parsed: ParsedCliArgs, env: Record<string, s
       outputDir,
       env,
       scheduleHour: parsed.scheduleHour,
+      cadence: parsed.routerCapabilityCadence,
       format: wantsJson ? "json" : "text",
     });
   }

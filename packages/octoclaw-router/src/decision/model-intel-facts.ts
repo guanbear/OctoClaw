@@ -115,6 +115,17 @@ function splitModelKey(key: string, providerFallback = ""): { provider: string; 
   };
 }
 
+function canonicalFactsKey(modelKey: string): string {
+  const slash = modelKey.indexOf("/");
+  if (slash <= 0) return modelKey.toLowerCase();
+  const provider = modelKey.slice(0, slash).toLowerCase();
+  const model = modelKey.slice(slash + 1);
+  if ((provider === "zhipu" || provider === "zai") && /^glm-/iu.test(model)) {
+    return `zhipu/${model.toLowerCase()}`;
+  }
+  return modelKey.toLowerCase();
+}
+
 function normalizeInputModalities(value: unknown): RouterLiteCapability["input"] {
   const values = asStringArray(value).map((item) => item.toLowerCase());
   const allowed = new Set(["text", "image", "audio", "video"]);
@@ -201,6 +212,8 @@ function scenarioAbilitySourceFromCapabilitySource(source: string): ScenarioAbil
     case "pinchbench": return "pinchbench";
     case "aider": return "aider";
     case "swe_bench": return "swe_bench";
+    case "swe_bench_verified": return "swe_bench";
+    case "swe_bench_pro": return "swe_bench";
     case "bfcl": return "bfcl";
     default: return undefined;
   }
@@ -231,7 +244,7 @@ function parseScenarioData(scenarioData: unknown): Map<string, ScenarioAbilityLi
     if (isRecord(value)) {
       const hasScenarioField = scenarioAbilityKeys().some((field) => isRecord(asRecord(value)[field]));
       if (hasScenarioField) {
-        result.set(key.toLowerCase(), value as unknown as ScenarioAbilityLite);
+        result.set(canonicalFactsKey(key), value as unknown as ScenarioAbilityLite);
       }
     }
   }
@@ -264,11 +277,44 @@ function mergeScenarioAbility(base: ScenarioAbilityLite, incoming?: Partial<Scen
 function inferCodingTier(modelKey: string, rawHint?: unknown): RouterLiteCodingTier {
   const hint = asString(rawHint).toLowerCase();
   const text = `${modelKey} ${hint}`.toLowerCase();
-  if (text.includes("mini") || text.includes("flash") || text.includes("haiku") || hint === "mini") return "mini";
-  if (text.includes("5.5") || text.includes("gpt-5.4") || text.includes("frontier") || text.includes("deep")) return "frontier";
-  if (text.includes("glm-5") || text.includes("sonnet") || hint === "strong") return "strong";
-  if (text.includes("4.7") || text.includes("standard") || hint === "base") return "standard";
+  if (hasCompactModelModifier(text) || hint === "mini") return "mini";
+  if (hasFrontierModelModifier(text) || hasFrontierVersionModifier(text) || hint === "frontier") return "frontier";
+  if (hasStrongModelModifier(text) || hint === "strong") return "strong";
+  if (hasStandardModelModifier(text) || text.includes("standard") || hint === "base") return "standard";
   return "unknown";
+}
+
+function hasCompactModelModifier(text: string): boolean {
+  return /(^|[/._\-\s])(mini|flash|haiku|small|lite|air)([/._\-\s]|$)/.test(text);
+}
+
+function hasFrontierModelModifier(text: string): boolean {
+  return /(^|[/._\-\s])(opus|ultra|frontier)([/._\-\s]|$)/.test(text);
+}
+
+function hasStrongModelModifier(text: string): boolean {
+  if (/(^|[/._\-\s])(pro|max|plus|sonnet)([/._\-\s]|$)/.test(text)) return true;
+  const versions = Array.from(text.matchAll(/(?:^|[/._\-\s]|[a-z])(?:v)?(\d+)(?:[._-](\d+))?/g))
+    .map((match) => Number(match[1]))
+    .filter((major) => Number.isFinite(major));
+  return versions.some((major) => major >= 5);
+}
+
+function hasStandardModelModifier(text: string): boolean {
+  const versions = Array.from(text.matchAll(/(?:^|[/._\-\s]|[a-z])(?:v)?(\d+)(?:[._-](\d+))?/g))
+    .map((match) => Number(match[1]))
+    .filter((major) => Number.isFinite(major));
+  return versions.some((major) => major >= 4);
+}
+
+function hasFrontierVersionModifier(text: string): boolean {
+  const versions = Array.from(text.matchAll(/(?:^|[/._\-\s]|[a-z])(?:v)?(\d+)(?:[._-](\d+))?/g))
+    .map((match) => ({
+      major: Number(match[1]),
+      minor: match[2] === undefined ? 0 : Number(`0.${match[2]}`),
+    }))
+    .filter((version) => Number.isFinite(version.major) && Number.isFinite(version.minor));
+  return versions.some((version) => version.major > 5 || (version.major === 5 && version.minor >= 0.5));
 }
 
 function pricesConflict(a: number | undefined, b: number | undefined): boolean {
@@ -441,6 +487,7 @@ function priceFromCost(cost: unknown, source: string): Partial<RouterLitePrice> 
   const cacheRead = asNumber(record.cacheRead ?? record.cache_read);
   const cacheWrite = asNumber(record.cacheWrite ?? record.cache_write);
   if (input === undefined && output === undefined && cacheRead === undefined && cacheWrite === undefined) return undefined;
+  if ((input ?? 0) === 0 && (output ?? 0) === 0 && (cacheRead ?? 0) === 0 && (cacheWrite ?? 0) === 0) return undefined;
   return {
     inputUsdPerMTok: input,
     outputUsdPerMTok: output,
@@ -731,7 +778,7 @@ function modelSignalEntries(input: unknown): Map<string, JsonRecord> {
 }
 
 function findModelSignal(map: Map<string, JsonRecord>, model: ModelIntelLite): JsonRecord {
-  return asRecord(map.get(model.modelKey) ?? map.get(model.model));
+  return asRecord(map.get(model.modelKey) ?? map.get(canonicalFactsKey(model.modelKey)) ?? map.get(model.model));
 }
 
 function healthFromUsageStatus(status: JsonRecord): Partial<RouterLiteHealth> | undefined {
@@ -795,7 +842,7 @@ function addHealthSnapshotSignals(models: ModelIntelLite[], healthSnapshot: unkn
   const healthByModel = modelSignalEntries(healthSnapshot);
   if (healthByModel.size === 0) return models;
   const normalized = new Map<string, JsonRecord>();
-  for (const [key, value] of healthByModel) normalized.set(key.toLowerCase(), value);
+  for (const [key, value] of healthByModel) normalized.set(canonicalFactsKey(key), value);
 
   return models.map((model) => {
     const health = findRouterHealthSignal(normalized, model);
@@ -957,14 +1004,49 @@ function deriveCapabilityScore(capability: RouterLiteCapability): RouterLiteFuse
   };
 }
 
-function calibrateCapability(capability: RouterLiteCapability): RouterLiteCapability {
+function calibrateCapability(capability: RouterLiteCapability, modelKey = ""): RouterLiteCapability {
   const capabilityScore = capability.capabilityScore ?? deriveCapabilityScore(capability);
+  const baselineTier = maxTier(capability.codingTier, inferCodingTier(modelKey));
   const scoreTier = tierFromCapabilityScore(capabilityScore.score);
+  const isPromotion = TIER_LEVEL[scoreTier] > TIER_LEVEL[baselineTier];
+  const effectiveTier = isPromotion && scoreAllowsTierPromotion(capabilityScore, capability, baselineTier, scoreTier)
+    ? scoreTier
+    : baselineTier;
   return {
     ...capability,
-    codingTier: maxTier(capability.codingTier, scoreTier),
+    codingTier: effectiveTier,
     capabilityScore,
   };
+}
+
+function tierDistance(from: RouterLiteCodingTier, to: RouterLiteCodingTier): number {
+  return Math.abs((TIER_LEVEL[to] ?? 0) - (TIER_LEVEL[from] ?? 0));
+}
+
+function scoreAllowsTierPromotion(
+  score: RouterLiteFusedScore,
+  capability: RouterLiteCapability,
+  fromTier: RouterLiteCodingTier,
+  toTier: RouterLiteCodingTier,
+): boolean {
+  if (toTier === fromTier) return true;
+  const distance = tierDistance(fromTier, toTier);
+  if (TIER_LEVEL[toTier] <= TIER_LEVEL[fromTier]) return false;
+
+  if (score.confidence === "high") return true;
+
+  if (capability.evidence.some((item) => item === "probed" || item === "observed" || item === "operator_override")) {
+    return true;
+  }
+
+  if (score.confidence === "low" || score.confidence === "unknown") {
+    return false;
+  }
+
+  const contributionSources = new Set(score.contributions.map((c) => c.source));
+  const isMultiSource = contributionSources.size >= 2;
+
+  return isMultiSource || distance <= 1;
 }
 
 export function buildModelIntelFactsPlane(input: BuildModelIntelFactsPlaneInput): ModelIntelFactsPlane {
@@ -986,7 +1068,7 @@ export function buildModelIntelFactsPlane(input: BuildModelIntelFactsPlaneInput)
   const merged = new Map<string, ModelIntelLite>();
   for (const partial of partials) {
     const enrichedPartial = { ...partial, freshness: partial.freshness ?? generatedAt };
-    const lowerKey = partial.modelKey.toLowerCase();
+    const lowerKey = canonicalFactsKey(partial.modelKey);
     const existing = merged.get(lowerKey);
     const existingIsConfigured = existing && (existing.configured || existing.tags.includes("configured"));
     const incomingIsConfigured = partial.configured === true || (partial.tags ?? []).includes("configured");
@@ -1007,11 +1089,11 @@ export function buildModelIntelFactsPlane(input: BuildModelIntelFactsPlaneInput)
       ...model.capability,
       confidence: model.capability.evidence.includes("declared") ? maxConfidence([model.capability.confidence, "medium"], "low") : model.capability.confidence,
     },
-    scenarioAbility: model.scenarioAbility ?? (scenarioData.size > 0 ? scenarioData.get(model.modelKey.toLowerCase()) : undefined) ?? inferScenarioAbility(model, model.freshness ?? generatedAt),
+    scenarioAbility: model.scenarioAbility ?? (scenarioData.size > 0 ? scenarioData.get(canonicalFactsKey(model.modelKey)) : undefined) ?? inferScenarioAbility(model, model.freshness ?? generatedAt),
     freshness: mostRecentTimestamp(model.freshness, generatedAt) ?? generatedAt,
   })).map((model) => ({
     ...model,
-    capability: calibrateCapability(model.capability),
+    capability: calibrateCapability(model.capability, model.modelKey),
   }));
   const models = addPriceRatios(addHealthSnapshotSignals(
     addUsageSignals(normalizedModels, input.usageStatus, input.usageCost),

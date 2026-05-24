@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { ModelIntelLite } from "@octoclaw/router";
 import type { ReplayEvent, LaneSample } from "./types.js";
 import {
   classifyRouteQuality,
@@ -17,6 +18,7 @@ import {
   sanitizeSample,
 } from "./classifier.js";
 import { renderMarkdownReport } from "./report.js";
+import { runCapabilityEvidenceSmoke } from "./capability-smoke.js";
 
 function makeEvent(overrides: Partial<ReplayEvent> & { event: string; at: string }): ReplayEvent {
   return {
@@ -284,6 +286,46 @@ describe("route commit ack — real D1 shapes", () => {
 
     expect(lane.total).toBe(1);
     expect(lane.pass).toBe(1);
+    expect(lane.unknown).toBe(0);
+  });
+
+  it("ignores native neutral ACK duplicate suppressions with empty error", () => {
+    const lane = classifyRouteCommitAck([
+      makeEvent({
+        event: "neutral_inbound_ack",
+        at: "2026-04-26T10:00:00.500Z",
+        sent: true,
+        mode: "reaction",
+        reason: "reaction_ack_sent",
+        replyToMessageId: "1700000000.000100",
+        hookName: "message_received",
+        error: "",
+      }),
+      makeEvent({
+        event: "neutral_inbound_ack",
+        at: "2026-04-26T10:00:01.000Z",
+        sent: false,
+        mode: "not_sent",
+        reason: "skipped_duplicate",
+        replyToMessageId: "1700000000.000100",
+        hookName: "before_prompt_build",
+        error: "",
+      }),
+      makeEvent({
+        event: "neutral_inbound_ack",
+        at: "2026-04-26T10:00:02.000Z",
+        sent: false,
+        mode: "not_sent",
+        reason: "skipped_duplicate",
+        replyToMessageId: "1700000000.000100",
+        hookName: "before_prompt_build",
+        error: "",
+      }),
+    ]);
+
+    expect(lane.total).toBe(1);
+    expect(lane.ackSent).toBe(1);
+    expect(lane.ackDuplicate).toBe(0);
     expect(lane.unknown).toBe(0);
   });
 
@@ -1002,3 +1044,123 @@ describe("report rendering", () => {
     expect(parsed.lanes).toHaveLength(5);
   });
 });
+
+describe("capability evidence smoke", () => {
+  it("CEC-010 flags missing watchlist and OpenRouter top20 models as observation-only findings", () => {
+    const result = runCapabilityEvidenceSmoke([], {
+      watchlist: ["zhipu/glm-5.1"],
+      openRouterTop20: ["openrouter/auto", "openai/gpt-5.5"],
+    });
+
+    expect(result.findings).toContainEqual({
+      kind: "missing_evidence",
+      modelKey: "zhipu/glm-5.1",
+      detail: "not in snapshot",
+    });
+    expect(result.findings).toContainEqual({
+      kind: "missing_evidence",
+      modelKey: "openai/gpt-5.5",
+      detail: "openrouter top20 model not in snapshot",
+    });
+    expect(result.openRouterTop20Checked).toBe(1);
+  });
+
+  it("CEC-011 reports low confidence and suspicious compact sibling ordering", () => {
+    const result = runCapabilityEvidenceSmoke([
+      smokeModel("deepseek/deepseek-v4-flash", "mini", 85, "medium"),
+      smokeModel("deepseek/deepseek-v4-pro", "strong", 60, "medium"),
+      smokeModel("zhipu/glm-5.1", "strong", 80, "low"),
+    ], {
+      watchlist: ["deepseek/deepseek-v4-flash", "deepseek/deepseek-v4-pro", "zhipu/glm-5.1"],
+      openRouterTop20: [],
+    });
+
+    expect(result.findings).toContainEqual(expect.objectContaining({
+      kind: "suspicious_ordering",
+      modelKey: "deepseek/deepseek-v4-flash",
+      sibling: "deepseek/deepseek-v4-pro",
+    }));
+    expect(result.findings).toContainEqual(expect.objectContaining({
+      kind: "low_confidence",
+      modelKey: "zhipu/glm-5.1",
+    }));
+  });
+
+  it("computes coverage and does not leak scores or prices in the smoke result", () => {
+    const result = runCapabilityEvidenceSmoke([
+      smokeModel("openai/gpt-5.5", "frontier", 95, "high"),
+      smokeModel("openai/gpt-5.4", "strong", 86, "medium"),
+      smokeModel("openai/gpt-5.4-mini", "mini"),
+    ], {
+      watchlist: ["openai/gpt-5.5", "openai/gpt-5.4", "openai/gpt-5.4-mini"],
+      openRouterTop20: ["openrouter/auto", "openai/gpt-5.5", "openai/gpt-5.4-mini"],
+    });
+
+    expect(result.watchlistCoverage).toBe(0.6667);
+    expect(result.openRouterTop20Coverage).toBe(0.5);
+    const serialized = JSON.stringify(result);
+    expect(serialized).not.toContain("blendedUsdPerMTok");
+    expect(serialized).not.toContain("\"price\"");
+    expect(serialized).not.toContain("\"score\"");
+  });
+
+  it("reports GPT-5.4 versus GLM-5.1 as observation-only", () => {
+    const result = runCapabilityEvidenceSmoke([
+      smokeModel("openai/gpt-5.4", "strong", 76, "high"),
+      smokeModel("zhipu/glm-5.1", "strong", 85, "high"),
+    ], {
+      watchlist: ["openai/gpt-5.4", "zhipu/glm-5.1"],
+      openRouterTop20: [],
+    });
+
+    expect(result.findings).toContainEqual(expect.objectContaining({
+      kind: "observation",
+      modelKey: "openai/gpt-5.4",
+      sibling: "zhipu/glm-5.1",
+    }));
+    expect(result.findings).not.toContainEqual(expect.objectContaining({
+      kind: "suspicious_ordering",
+      modelKey: "openai/gpt-5.4",
+      sibling: "zhipu/glm-5.1",
+    }));
+  });
+});
+
+function smokeModel(
+  modelKey: string,
+  tier: ModelIntelLite["capability"]["codingTier"],
+  score?: number,
+  confidence: ModelIntelLite["capability"]["confidence"] = "high",
+): ModelIntelLite {
+  const [provider, model] = modelKey.split("/");
+  return {
+    provider,
+    model,
+    modelKey,
+    configured: true,
+    available: "yes",
+    proposalOnly: false,
+    tags: [],
+    marketPrice: { blendedUsdPerMTok: 1, confidence: "high", sources: ["test"] },
+    capability: {
+      input: ["text"],
+      toolUse: "yes",
+      structuredOutput: "yes",
+      reasoning: "yes",
+      promptCache: "unknown",
+      codingTier: tier,
+      confidence,
+      evidence: ["declared"],
+      sources: ["test"],
+      ...(score === undefined ? {} : {
+        capabilityScore: { score, confidence, contributions: [], reasonCodes: ["test"] },
+        scoreByScenario: {
+          coding_worker: { score, confidence, contributions: [], reasonCodes: ["test"] },
+        },
+      }),
+    },
+    health: { available: "yes", cooldown: false, quotaPressure: "low", sources: ["test"] },
+    plan: { type: "pay_as_you_go", quotaPressure: "unknown", effectiveCostBand: "unknown", sources: ["test"] },
+    sources: ["test"],
+  };
+}

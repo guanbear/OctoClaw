@@ -102,7 +102,8 @@ const DEFAULT_CASES: SlackAcceptanceCaseConfig[] = [
     ackRequired: false,
     finalRequired: true,
     noSpawnExpected: true,
-    expectFinalAll: ["版本|最新版|release|发布|稳定版|beta", "特性|更新|亮点|改进|修复"],
+    expectFinalAll: ["版本|最新版|release|发布|稳定版|beta|OpenClaw\\s*\\d{4}\\.\\d{1,2}\\.\\d{1,2}", "特性|更新|亮点|改进|修复"],
+    expectFooter: { route: "reply" },
     rejectFinal: ["还没派发成功", "真实执行结果", "没派发成功"],
   },
   {
@@ -299,9 +300,10 @@ function assertText(
   if (expectedAllPatterns.length > 0) {
     const missing = expectedAllPatterns.filter((pattern) => !pattern.test(transcriptText));
     if (missing.length > 0) {
+      const reason = `${required ? "required" : "optional"} expected content missing: ${missing.map((pattern) => pattern.source).join(", ")}`;
       return required
-        ? { status: "fail", reason: "required expected content missing" }
-        : { status: "unknown", reason: "optional expected content not observed" };
+        ? { status: "fail", reason }
+        : { status: "unknown", reason };
     }
   }
   const allMatchedMessage = expectedAllPatterns.length > 0
@@ -310,9 +312,10 @@ function assertText(
   if (expectedAnyPatterns.length > 0) {
     const matched = messages.find((message) => expectedAnyPatterns.some((pattern) => pattern.test(message.text)));
     if (!matched) {
+      const reason = `${required ? "required" : "optional"} expected content missing: ${expectedAnyPatterns.map((pattern) => pattern.source).join(", ")}`;
       return required
-        ? { status: "fail", reason: "required expected content missing" }
-        : { status: "unknown", reason: "optional expected content not observed" };
+        ? { status: "fail", reason }
+        : { status: "unknown", reason };
     }
     return { status: "pass", reason: "matched expected content", matchedText: matched.text };
   }
