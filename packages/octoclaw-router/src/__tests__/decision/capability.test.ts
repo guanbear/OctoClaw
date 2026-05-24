@@ -66,6 +66,50 @@ describe("capability snapshot RT-C-001..007", () => {
     expect(writes).toHaveLength(1);
   });
 
+  it("preserves packaged capability score and benchmark efficiency during refresh", async () => {
+    const sources: CapabilitySource[] = [{
+      name: "packaged_leaderboard",
+      fetch: async () => [{
+        modelKey: "zhipu/glm-5.1",
+        price: 1,
+        tier: "strong",
+        source: "packaged_leaderboard",
+        capabilityScore: {
+          score: 84.2,
+          confidence: "high",
+          contributions: [],
+          reasonCodes: ["global_anchor:artificial_analysis"],
+        },
+        benchmarkEfficiency: {
+          taskCostScore: 88,
+          taskSpeedScore: 61,
+          valueScore: 78.55,
+          sources: ["pinchbench"],
+        },
+      }],
+    }];
+
+    const snapshot = await refreshCapability({
+      sources,
+      now: () => new Date("2026-05-24T00:00:00.000Z").getTime(),
+    });
+
+    expect(snapshot.models[0]).toMatchObject({
+      modelKey: "zhipu/glm-5.1",
+      capability: {
+        capabilityScore: {
+          score: 84.2,
+          confidence: "high",
+          reasonCodes: ["global_anchor:artificial_analysis"],
+        },
+      },
+      benchmarkEfficiency: {
+        valueScore: 78.55,
+        sources: ["pinchbench"],
+      },
+    });
+  });
+
   it("RT-C-004 handles OpenClaw config changes as incremental refresh", async () => {
     const refresh = vi.fn(async () => undefined);
 

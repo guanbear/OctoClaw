@@ -55,6 +55,9 @@ export async function refreshCapability(options: RefreshCapabilityOptions): Prom
       reasoning: first((record) => record.reasoning),
       promptCache: first((record) => record.promptCache),
       source: preferred.source,
+      capabilityScore: first((record) => record.capabilityScore),
+      scoreByScenario: first((record) => record.scoreByScenario),
+      benchmarkEfficiency: first((record) => record.benchmarkEfficiency),
     });
     model.marketPrice.conflict = mergedPrice.conflict;
     model.marketPrice.sources = mergedPrice.sources;

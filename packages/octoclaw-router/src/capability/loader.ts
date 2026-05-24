@@ -25,7 +25,7 @@ export function loadPackagedModelIntelSnapshot(options: SnapshotLoadOptions = {}
   return {
     schemaVersion: "octoclaw.router_lite.model_intel_snapshot/v1",
     snapshotId: leaderboard.snapshotVersion,
-    generatedAt: "2026-05-13T00:00:00.000Z",
+    generatedAt: leaderboard.generatedAt ?? "2026-05-13T00:00:00.000Z",
     sourceStatus: leaderboard.sources.map((source) => ({ source, status: "ok" })),
     models,
   };

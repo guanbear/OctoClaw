@@ -1,6 +1,7 @@
 import type {
   ModelIntelLite,
   ModelIntelSnapshot,
+  RouterLiteBenchmarkEfficiency,
   RouterLiteCodingTier,
   RouterLiteConfidence,
   RouterLiteFusedScore,
@@ -129,7 +130,9 @@ export function modelFromLeaderboard(modelKey: string, snapshot: LeaderboardSnap
     source: "packaged_leaderboard",
     freshness: record.lastVerifiedAt,
     configured: false,
+    capabilityScore: record.capabilityScore,
     scoreByScenario: record.scoreByScenario,
+    benchmarkEfficiency: record.benchmarkEfficiency,
   });
 }
 
@@ -154,7 +157,9 @@ export function modelFromSourceRecord(record: CapabilitySourceRecord, fallbackSo
     source: record.source ?? fallbackSource,
     freshness: record.lastVerifiedAt,
     configured: false,
+    capabilityScore: record.capabilityScore,
     scoreByScenario: record.scoreByScenario,
+    benchmarkEfficiency: record.benchmarkEfficiency,
   });
 }
 
@@ -195,7 +200,9 @@ function createModelIntel(input: {
   source: string;
   freshness?: string;
 	  configured?: boolean;
+    capabilityScore?: RouterLiteFusedScore;
 	  scoreByScenario?: RouterLiteScoreByScenario;
+    benchmarkEfficiency?: RouterLiteBenchmarkEfficiency;
 	}): ModelIntelLite {
   const [provider = "unknown", model = input.modelKey] = input.modelKey.split("/");
   const configured = input.configured ?? false;
@@ -228,6 +235,7 @@ function createModelIntel(input: {
 	      confidence: input.confidence,
 	      evidence: [input.source === "heuristic" ? "heuristic" : "declared"],
 	      sources: [input.source],
+        capabilityScore: input.capabilityScore,
 	      scoreByScenario: input.scoreByScenario,
 	    },
     health: {
@@ -244,5 +252,6 @@ function createModelIntel(input: {
     },
     freshness: input.freshness,
     sources: [input.source],
+    benchmarkEfficiency: input.benchmarkEfficiency,
   };
 }

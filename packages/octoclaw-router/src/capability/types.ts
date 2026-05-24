@@ -1,4 +1,12 @@
-import type { ModelIntelLite, ModelIntelSnapshot, RouterLiteCodingTier, RouterLiteConfidence, RouterLiteScoreByScenario } from "../decision/contracts.js";
+import type {
+  ModelIntelLite,
+  ModelIntelSnapshot,
+  RouterLiteBenchmarkEfficiency,
+  RouterLiteCodingTier,
+  RouterLiteConfidence,
+  RouterLiteFusedScore,
+  RouterLiteScoreByScenario,
+} from "../decision/contracts.js";
 
 export interface LeaderboardScore {
   score: number;
@@ -13,13 +21,16 @@ export interface LeaderboardModelRecord {
     research?: LeaderboardScore;
     agentic?: LeaderboardScore;
   };
+  capabilityScore?: RouterLiteFusedScore;
   scoreByScenario?: RouterLiteScoreByScenario;
+  benchmarkEfficiency?: RouterLiteBenchmarkEfficiency;
   lastVerifiedAt?: string;
 }
 
 export interface LeaderboardSnapshot {
   snapshotVersion: string;
   schemaVersion: "1.0";
+  generatedAt?: string;
   sources: string[];
   models: Record<string, LeaderboardModelRecord>;
 }
@@ -43,7 +54,9 @@ export interface CapabilitySourceRecord {
   available?: "yes" | "no" | "unknown";
   lastVerifiedAt?: string;
   source?: string;
+  capabilityScore?: RouterLiteFusedScore;
   scoreByScenario?: RouterLiteScoreByScenario;
+  benchmarkEfficiency?: RouterLiteBenchmarkEfficiency;
 }
 
 export interface CapabilitySource {

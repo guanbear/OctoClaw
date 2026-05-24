@@ -111,6 +111,9 @@ export function createPackagedLeaderboardCapabilitySource(): CapabilitySource {
       available: model.available,
       lastVerifiedAt: model.freshness,
       source: "packaged_leaderboard",
+      capabilityScore: model.capability.capabilityScore,
+      scoreByScenario: model.capability.scoreByScenario,
+      benchmarkEfficiency: model.benchmarkEfficiency,
     })),
   };
 }
