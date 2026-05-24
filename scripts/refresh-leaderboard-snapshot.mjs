@@ -842,6 +842,7 @@ function versionSeries(modelKey) {
   if (!match) return undefined;
   const prefix = match[1].replace(/[-_.]+$/u, "");
   const major = Number(match[2]);
+  if (match[3] !== undefined && match[3].length > 2) return undefined;
   const minor = match[3] === undefined ? 0 : Number(match[3]);
   if (!prefix || !Number.isFinite(major) || !Number.isFinite(minor)) return undefined;
   return { key: `${provider}/${prefix}`, version: [major, minor], role: roleRank(modelKey) };

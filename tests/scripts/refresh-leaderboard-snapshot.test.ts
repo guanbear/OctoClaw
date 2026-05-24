@@ -207,6 +207,50 @@ describe("refresh-leaderboard-snapshot script", () => {
     }
   });
 
+  it("does not treat date-like build suffixes as semantic minor versions for sibling ceilings", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "octoclaw-refresh-leaderboard-"));
+    const output = path.join(tempDir, "leaderboard-snapshot.json");
+    try {
+      await execFileAsync("node", ["scripts/refresh-leaderboard-snapshot.mjs", "--output", output], {
+        cwd: path.resolve("."),
+        env: {
+          ...process.env,
+          OCTOCLAW_ROUTER_SOURCE_FIXTURE_JSON: JSON.stringify({
+            openrouter: { data: [] },
+            pinchbench: { leaderboard: [] },
+            aider: "[]",
+            bfcl: [],
+            artificialAnalysis: {
+              data: [{
+                model_name: "Kimi K2.6",
+                artificial_analysis_intelligence_index: 70,
+                artificial_analysis_coding_index: 72,
+              }, {
+                model_name: "Kimi K2 0905",
+                artificial_analysis_intelligence_index: 32,
+                artificial_analysis_coding_index: 34,
+              }],
+            },
+            lmarenaText: {
+              rows: [
+                { row: { model_name: "kimi-k2.6", organization: "moonshotai", rating: 1500, category: "overall", vote_count: 1000, leaderboard_publish_date: "2026-05-21" } },
+                { row: { model_name: "kimi-k2-0905", organization: "moonshotai", rating: 900, category: "overall", vote_count: 500, leaderboard_publish_date: "2026-05-21" } },
+              ],
+            },
+          }),
+        },
+      });
+
+      const snapshot = JSON.parse(await fs.readFile(output, "utf8"));
+      const kimi = snapshot.models["moonshotai/kimi-k2.6"].capabilityScore;
+
+      expect(kimi.score).toBeGreaterThan(65);
+      expect(kimi.reasonCodes).not.toContain("newer_version_ceiling:moonshotai/kimi-k2-0905");
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("parses LM Arena latest rows as research evidence without requiring parquet dependencies", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "octoclaw-refresh-leaderboard-"));
     const output = path.join(tempDir, "leaderboard-snapshot.json");
