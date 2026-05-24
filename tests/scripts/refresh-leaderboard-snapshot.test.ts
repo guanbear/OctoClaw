@@ -487,6 +487,56 @@ describe("refresh-leaderboard-snapshot script", () => {
     }
   });
 
+  it("does not let compact research-only spikes outrank balanced pro models", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "octoclaw-refresh-leaderboard-"));
+    const output = path.join(tempDir, "leaderboard-snapshot.json");
+    try {
+      await execFileAsync("node", ["scripts/refresh-leaderboard-snapshot.mjs", "--output", output], {
+        cwd: path.resolve("."),
+        env: {
+          ...process.env,
+          OCTOCLAW_ROUTER_SOURCE_FIXTURE_JSON: JSON.stringify({
+            openrouter: { data: [] },
+            pinchbench: {
+              leaderboard: [{
+                model: "example/cosmos-3.5-flash",
+                best_score_percentage: 0.76,
+                submission_count: 8,
+              }],
+            },
+            aider: "[]",
+            bfcl: [],
+            sweBenchVerified: [{ modelId: "example/Atlas-3.5-Pro", value: 86 }],
+            sweBenchPro: [{ modelId: "example/Atlas-3.5-Pro", value: 84 }],
+            lmarenaText: {
+              rows: [
+                { row: { model_name: "cosmos-3.5-flash", organization: "example", rating: 95, category: "overall", vote_count: 1000, leaderboard_publish_date: "2026-05-21" } },
+                { row: { model_name: "atlas-3.5-pro", organization: "example", rating: 77, category: "overall", vote_count: 1000, leaderboard_publish_date: "2026-05-21" } },
+              ],
+            },
+            lmarenaWebdev: {
+              rows: [
+                { row: { model_name: "cosmos-3.5-flash", organization: "example", rating: 86, category: "overall", vote_count: 1000, leaderboard_publish_date: "2026-05-21" } },
+                { row: { model_name: "atlas-3.5-pro", organization: "example", rating: 80, category: "overall", vote_count: 1000, leaderboard_publish_date: "2026-05-21" } },
+              ],
+            },
+          }),
+        },
+      });
+
+      const snapshot = JSON.parse(await fs.readFile(output, "utf8"));
+      const compact = snapshot.models["example/cosmos-3.5-flash"].capabilityScore;
+      const balanced = snapshot.models["example/atlas-3.5-pro"].capabilityScore;
+
+      expect(compact.score).toBeLessThan(balanced.score);
+      expect(compact.reasonCodes).toContain("compact_missing_agentic_cap");
+      expect(snapshot.models["example/cosmos-3.5-flash"].scoreByScenario.agentic).toBeUndefined();
+      expect(snapshot.models["example/cosmos-3.5-flash"].scoreByScenario.global).toBeUndefined();
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("prefers balanced overall capability over a single high scenario spike", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "octoclaw-refresh-leaderboard-"));
     const output = path.join(tempDir, "leaderboard-snapshot.json");

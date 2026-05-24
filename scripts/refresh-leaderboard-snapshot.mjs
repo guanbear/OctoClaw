@@ -1034,7 +1034,7 @@ function applySiblingCalibrations(models) {
     const agentic = scenarioScoreValue(model, "agentic");
     if (score === undefined || research === undefined || coding === undefined || agentic !== undefined || roleRank(modelKey) !== 0) continue;
     if (score <= 84 || research - coding < 10 || score <= coding + 1.5) continue;
-    adjusted[modelKey] = capModelGlobalCapability(model, coding, "compact_missing_agentic_cap");
+    adjusted[modelKey] = capModelGlobalCapability(model, coding - 4, "compact_missing_agentic_cap");
   }
 
   return adjusted;
