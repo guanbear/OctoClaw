@@ -110,6 +110,40 @@ describe("capability snapshot RT-C-001..007", () => {
     });
   });
 
+  it("calibrates published coding tier from capability score during refresh", async () => {
+    const sources: CapabilitySource[] = [{
+      name: "packaged_leaderboard",
+      fetch: async () => [{
+        modelKey: "qwen/qwen-3.vl-8b-instruct",
+        price: 1,
+        tier: "frontier",
+        source: "packaged_leaderboard",
+        capabilityScore: {
+          score: 13.46,
+          confidence: "medium",
+          contributions: [{ source: "artificial_analysis", rawScore: 13.46, baseWeight: 1, freshnessFactor: 1, sourceHealth: 1, effectiveWeight: 1 }],
+          reasonCodes: ["global_anchor:artificial_analysis"],
+        },
+      }],
+    }];
+
+    const snapshot = await refreshCapability({
+      sources,
+      now: () => new Date("2026-05-24T00:00:00.000Z").getTime(),
+    });
+
+    expect(snapshot.models[0]).toMatchObject({
+      modelKey: "qwen/qwen-3.vl-8b-instruct",
+      capability: {
+        codingTier: "unknown",
+        capabilityScore: {
+          score: 13.46,
+          confidence: "medium",
+        },
+      },
+    });
+  });
+
   it("RT-C-004 handles OpenClaw config changes as incremental refresh", async () => {
     const refresh = vi.fn(async () => undefined);
 

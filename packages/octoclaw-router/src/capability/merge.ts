@@ -109,6 +109,34 @@ export function mergePriceData(
   return { price, conflict, sources: sources.map((source) => source.source) };
 }
 
+const CODING_TIER_LEVEL: Record<RouterLiteCodingTier, number> = {
+  frontier: 4,
+  strong: 3,
+  standard: 2,
+  mini: 1,
+  unknown: 0,
+};
+
+function tierFromCapabilityScore(score: number): RouterLiteCodingTier {
+  if (score >= 90) return "frontier";
+  if (score >= 75) return "strong";
+  if (score >= 60) return "standard";
+  if (score >= 45) return "mini";
+  return "unknown";
+}
+
+function calibrateCodingTier(
+  tier: RouterLiteCodingTier,
+  capabilityScore: RouterLiteFusedScore | undefined,
+): RouterLiteCodingTier {
+  if (!capabilityScore || (capabilityScore.confidence !== "high" && capabilityScore.confidence !== "medium")) {
+    return tier;
+  }
+
+  const scoreTier = tierFromCapabilityScore(capabilityScore.score);
+  return CODING_TIER_LEVEL[scoreTier] < CODING_TIER_LEVEL[tier] ? scoreTier : tier;
+}
+
 export function computeFreshness(lastVerifiedAt: string | undefined, now = Date.now()): "fresh" | "stale" | "very_stale" {
   const timestamp = Date.parse(lastVerifiedAt ?? "");
   if (Number.isNaN(timestamp)) return "very_stale";
@@ -206,6 +234,7 @@ function createModelIntel(input: {
 	}): ModelIntelLite {
   const [provider = "unknown", model = input.modelKey] = input.modelKey.split("/");
   const configured = input.configured ?? false;
+  const codingTier = calibrateCodingTier(input.tier, input.capabilityScore);
   return {
     provider,
     model,
@@ -231,7 +260,7 @@ function createModelIntel(input: {
       structuredOutput: input.structuredOutput ?? "yes",
       reasoning: input.reasoning ?? "yes",
       promptCache: input.promptCache ?? "unknown",
-      codingTier: input.tier,
+      codingTier,
 	      confidence: input.confidence,
 	      evidence: [input.source === "heuristic" ? "heuristic" : "declared"],
 	      sources: [input.source],
