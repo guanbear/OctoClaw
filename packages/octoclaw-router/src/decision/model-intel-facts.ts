@@ -1,6 +1,7 @@
 import type {
   ModelIntelLite,
   ModelIntelSnapshot,
+  RouterLiteBenchmarkEfficiency,
   RouterLiteCapability,
   RouterLiteCapabilityEvidence,
   RouterLiteCodingTier,
@@ -51,6 +52,7 @@ interface PartialModelIntel {
   capability?: Partial<RouterLiteCapability>;
   health?: Partial<RouterLiteHealth>;
   plan?: Partial<RouterLitePlan>;
+  benchmarkEfficiency?: RouterLiteBenchmarkEfficiency;
   scenarioAbility?: ScenarioAbilityLite;
   freshness?: string;
   sources: string[];
@@ -474,6 +476,7 @@ function mergeModel(base: ModelIntelLite | undefined, incoming: PartialModelInte
     capability: mergeCapability(next.capability, incoming.capability),
     health: mergeHealth(next.health, incoming.health),
     plan: mergePlan(next.plan, incoming.plan),
+    benchmarkEfficiency: incoming.benchmarkEfficiency ?? next.benchmarkEfficiency,
     scenarioAbility: mergeScenarioAbility(next.scenarioAbility ?? emptyScenarioAbility(), incoming.scenarioAbility),
     freshness: mostRecentTimestamp(next.freshness, incoming.freshness),
     sources: unique([...next.sources, ...incoming.sources]),
@@ -720,6 +723,18 @@ function partialObject<T>(value: unknown): Partial<T> | undefined {
   return Object.keys(record).length > 0 ? record as Partial<T> : undefined;
 }
 
+function benchmarkEfficiencyFromRecord(value: unknown): RouterLiteBenchmarkEfficiency | undefined {
+  const record = asRecord(value);
+  const valueScore = asNumber(record.valueScore ?? record.value_score);
+  if (valueScore === undefined) return undefined;
+  return {
+    taskCostScore: asNumber(record.taskCostScore ?? record.task_cost_score),
+    taskSpeedScore: asNumber(record.taskSpeedScore ?? record.task_speed_score),
+    valueScore,
+    sources: asStringArray(record.sources),
+  };
+}
+
 function modelsFromModelIntelSnapshot(snapshot: unknown): PartialModelIntel[] {
   const rawModels = asRecord(snapshot).models;
   if (!Array.isArray(rawModels)) return [];
@@ -741,6 +756,7 @@ function modelsFromModelIntelSnapshot(snapshot: unknown): PartialModelIntel[] {
       capability: partialObject<RouterLiteCapability>(record.capability),
       health: partialObject<RouterLiteHealth>(record.health),
       plan: partialObject<RouterLitePlan>(record.plan),
+      benchmarkEfficiency: benchmarkEfficiencyFromRecord(record.benchmarkEfficiency),
       scenarioAbility: partialObject<ScenarioAbilityLite>(record.scenarioAbility) as ScenarioAbilityLite | undefined,
       freshness: asString(record.freshness) || asString(asRecord(snapshot).generatedAt) || undefined,
       sources: unique([...asStringArray(record.sources), "packaged_model_intel"]),

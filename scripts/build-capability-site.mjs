@@ -48,14 +48,54 @@ function capabilityConfidence(model) {
   return model?.capability?.capabilityScore?.confidence ?? model?.capabilityScore?.confidence ?? model?.capability?.confidence ?? "unknown";
 }
 
+function capabilitySources(model) {
+  const sources = model?.capability?.capabilityScore?.sources ?? model?.capabilityScore?.sources ?? [];
+  return Array.isArray(sources) ? sources : [];
+}
+
+function capabilityTier(model) {
+  return model?.capability?.codingTier ?? model?.tier ?? "unknown";
+}
+
+function benchmarkValueScore(model) {
+  const value = model?.benchmarkEfficiency?.valueScore ?? model?.capability?.benchmarkEfficiency?.valueScore;
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+const WATCHED_MODEL_PATTERNS = [
+  /^openai\/gpt-/u,
+  /^anthropic\/claude-/u,
+  /(^|\/)glm-/u,
+  /kimi-/u,
+  /deepseek-/u,
+  /qwen/u,
+  /minimax/u,
+  /gemini-/u,
+];
+
+function summaryEntry(model) {
+  const score = capabilityScore(model);
+  if (score === undefined) return undefined;
+  return {
+    modelKey: model.modelKey,
+    score,
+    confidence: capabilityConfidence(model),
+    tier: capabilityTier(model),
+    sources: capabilitySources(model),
+    ...(benchmarkValueScore(model) !== undefined ? { valueScore: benchmarkValueScore(model) } : {}),
+  };
+}
+
 function buildSummary(snapshot, models) {
   const scored = models
     .flatMap((model) => {
-      const score = capabilityScore(model);
-      if (score === undefined) return [];
-      return [{ modelKey: model.modelKey, score, confidence: capabilityConfidence(model) }];
+      const entry = summaryEntry(model);
+      return entry === undefined ? [] : [entry];
     })
     .sort((a, b) => b.score - a.score || a.modelKey.localeCompare(b.modelKey));
+  const watchedModels = scored.filter((model) =>
+    WATCHED_MODEL_PATTERNS.some((pattern) => pattern.test(model.modelKey)),
+  );
   return {
     schemaVersion: "octoclaw.capability_summary/v1",
     snapshotId: snapshot.snapshotId ?? "leaderboard-snapshot",
@@ -63,13 +103,20 @@ function buildSummary(snapshot, models) {
     modelCount: models.length,
     sourceStatus: snapshot.sourceStatus ?? {},
     topModels: scored.slice(0, 20),
+    watchedModels,
+    models: scored,
   };
 }
 
-function html(summary) {
-  const rows = summary.topModels.map((model) =>
-    `<tr><td>${escapeHtml(model.modelKey)}</td><td>${model.score}</td><td>${escapeHtml(model.confidence)}</td></tr>`,
+function tableRows(models) {
+  return models.map((model) =>
+    `<tr><td>${escapeHtml(model.modelKey)}</td><td>${model.score}</td><td>${escapeHtml(model.confidence)}</td><td>${escapeHtml(model.tier)}</td><td>${escapeHtml(model.sources.join(", "))}</td><td>${model.valueScore ?? ""}</td></tr>`,
   ).join("");
+}
+
+function html(summary) {
+  const rows = tableRows(summary.topModels);
+  const watchedRows = tableRows(summary.watchedModels.slice(0, 80));
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -91,8 +138,14 @@ function html(summary) {
     <a href="./leaderboard-summary.json">leaderboard-summary.json</a>
     <a href="./leaderboard-snapshot.json">leaderboard-snapshot.json</a>
   </p>
+  <h2>Watched Models</h2>
   <table>
-    <thead><tr><th>Model</th><th>Score</th><th>Confidence</th></tr></thead>
+    <thead><tr><th>Model</th><th>Score</th><th>Confidence</th><th>Tier</th><th>Sources</th><th>Value</th></tr></thead>
+    <tbody>${watchedRows}</tbody>
+  </table>
+  <h2>Top Models</h2>
+  <table>
+    <thead><tr><th>Model</th><th>Score</th><th>Confidence</th><th>Tier</th><th>Sources</th><th>Value</th></tr></thead>
     <tbody>${rows}</tbody>
   </table>
 </body>

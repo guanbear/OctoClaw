@@ -2,27 +2,36 @@
   "schemaVersion": "octoclaw.router.source_weights/v1",
   "weights": {
     "coding_worker": {
-      "aider": 0.18,
-      "swe_bench_verified": 0.18,
-      "swe_bench_pro": 0.18,
-      "lmarena_webdev": 0.18,
-      "artificial_analysis": 0.14,
-      "pinchbench": 0.09,
+      "artificial_analysis": 0.28,
+      "aider": 0.17,
+      "swe_bench_verified": 0.17,
+      "swe_bench_pro": 0.14,
+      "lmarena_webdev": 0.12,
+      "pinchbench": 0.07,
       "bfcl": 0.05
     },
     "research": {
-      "lmarena_text": 0.35,
-      "lmarena_search": 0.25,
-      "artificial_analysis": 0.25,
-      "pinchbench": 0.15
+      "artificial_analysis": 0.38,
+      "lmarena_text": 0.32,
+      "lmarena_search": 0.22,
+      "pinchbench": 0.08
     },
     "agentic": {
-      "bfcl": 0.45,
+      "bfcl": 0.36,
+      "artificial_analysis": 0.24,
       "swe_bench_verified": 0.12,
-      "swe_bench_pro": 0.12,
-      "lmarena_webdev": 0.12,
-      "artificial_analysis": 0.12,
-      "pinchbench": 0.07
+      "swe_bench_pro": 0.10,
+      "lmarena_webdev": 0.10,
+      "pinchbench": 0.08
+    },
+    "global": {
+      "artificial_analysis": 0.5,
+      "lmarena_text": 0.2,
+      "aider": 0.08,
+      "swe_bench_verified": 0.08,
+      "swe_bench_pro": 0.06,
+      "bfcl": 0.04,
+      "pinchbench": 0.04
     }
   }
 }

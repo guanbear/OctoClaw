@@ -123,6 +123,13 @@ export interface RouterLitePlan {
   sources: string[];
 }
 
+export interface RouterLiteBenchmarkEfficiency {
+  taskCostScore?: number;
+  taskSpeedScore?: number;
+  valueScore: number;
+  sources: string[];
+}
+
 export interface ModelIntelLite {
   provider: string;
   model: string;
@@ -136,6 +143,7 @@ export interface ModelIntelLite {
   capability: RouterLiteCapability;
   health: RouterLiteHealth;
   plan: RouterLitePlan;
+  benchmarkEfficiency?: RouterLiteBenchmarkEfficiency;
   scenarioAbility?: ScenarioAbilityLite;
   freshness?: string;
   sources: string[];

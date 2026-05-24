@@ -28,8 +28,9 @@ describe("build-capability-site script", () => {
         { source: "lmarena_text", status: "ok" },
       ],
       models: [
-        { modelKey: "openai/gpt-5.5", capability: { codingTier: "frontier", capabilityScore: { score: 86.28, confidence: "high" } } },
-        { modelKey: "google/gemini-3.5-flash", capability: { codingTier: "strong", capabilityScore: { score: 78.5, confidence: "medium" } } },
+        { modelKey: "openai/gpt-5.5", capability: { codingTier: "frontier", capabilityScore: { score: 86.28, confidence: "high", sources: ["artificial_analysis"] } } },
+        { modelKey: "google/gemini-3.5-flash", capability: { codingTier: "strong", capabilityScore: { score: 78.5, confidence: "medium", sources: ["lmarena_text"] } } },
+        { modelKey: "zhipu/glm-5.1", capability: { codingTier: "strong", capabilityScore: { score: 80, confidence: "medium", sources: ["artificial_analysis"] } }, benchmarkEfficiency: { valueScore: 76, sources: ["pinchbench"] } },
       ],
     };
     await fs.writeFile(snapshotPath, JSON.stringify(snapshot, null, 2));
@@ -55,20 +56,27 @@ describe("build-capability-site script", () => {
         generatedAt: "2026-05-24T00:00:00.000Z",
         snapshotUrl: "https://octoclaw.github.io/OctoClaw/capability/leaderboard-snapshot.json",
         summaryUrl: "https://octoclaw.github.io/OctoClaw/capability/leaderboard-summary.json",
-        modelCount: 2,
+        modelCount: 3,
         minOctoClawVersion: "0.6.0",
       });
       expect(manifest.snapshotSha256).toBe(createHash("sha256").update(publishedSnapshotText).digest("hex"));
       expect(summary).toMatchObject({
         snapshotId: "official-test",
-        modelCount: 2,
+        modelCount: 3,
         sourceStatus: snapshot.sourceStatus,
         topModels: [
           { modelKey: "openai/gpt-5.5", score: 86.28, confidence: "high" },
+          { modelKey: "zhipu/glm-5.1", score: 80, confidence: "medium" },
           { modelKey: "google/gemini-3.5-flash", score: 78.5, confidence: "medium" },
         ],
       });
+      expect(summary.watchedModels).toEqual(expect.arrayContaining([
+        expect.objectContaining({ modelKey: "openai/gpt-5.5", tier: "frontier", sources: ["artificial_analysis"] }),
+        expect.objectContaining({ modelKey: "zhipu/glm-5.1", tier: "strong", valueScore: 76 }),
+      ]));
+      expect(summary.models).toHaveLength(3);
       expect(index).toContain("OctoClaw Capability Snapshot");
+      expect(index).toContain("Watched Models");
       expect(index).toContain("leaderboard-manifest.json");
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true });

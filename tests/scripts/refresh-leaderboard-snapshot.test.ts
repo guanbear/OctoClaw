@@ -444,6 +444,61 @@ describe("refresh-leaderboard-snapshot script", () => {
     }
   });
 
+  it("uses Artificial Analysis overall as the primary global capability anchor", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "octoclaw-refresh-leaderboard-"));
+    const output = path.join(tempDir, "leaderboard-snapshot.json");
+    try {
+      await execFileAsync("node", ["scripts/refresh-leaderboard-snapshot.mjs", "--output", output], {
+        cwd: path.resolve("."),
+        env: {
+          ...process.env,
+          OCTOCLAW_ROUTER_SOURCE_FIXTURE_JSON: JSON.stringify({
+            openrouter: { data: [] },
+            pinchbench: {
+              leaderboard: [{
+                model: "coding-spike",
+                best_score_percentage: 0.98,
+                average_cost_usd: 10,
+                best_cost_usd: 4,
+                average_execution_time_seconds: 120,
+                best_execution_time_seconds: 80,
+                submission_count: 8,
+              }],
+            },
+            aider: "[]",
+            bfcl: [],
+            artificialAnalysis: {
+              data: [{
+                model_name: "Broad Winner",
+                artificial_analysis_intelligence_index: 90,
+                artificial_analysis_coding_index: 72,
+              }, {
+                model_name: "Coding Spike",
+                artificial_analysis_intelligence_index: 70,
+                artificial_analysis_coding_index: 98,
+              }],
+            },
+          }),
+        },
+      });
+
+      const snapshot = JSON.parse(await fs.readFile(output, "utf8"));
+      const broad = snapshot.models["broad-winner"].capabilityScore;
+      const spike = snapshot.models["coding-spike"].capabilityScore;
+
+      expect(broad.score).toBeGreaterThan(spike.score);
+      expect(broad.sources).toContain("artificial_analysis");
+      expect(broad.reasonCodes).toContain("global_anchor:artificial_analysis");
+      expect(spike.reasonCodes).toContain("global_anchor:artificial_analysis");
+      expect(snapshot.models["coding-spike"].benchmarkEfficiency).toMatchObject({
+        sources: ["pinchbench"],
+      });
+      expect(snapshot.models["coding-spike"].benchmarkEfficiency.valueScore).toBeGreaterThan(0);
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("parses current BFCL CSV rows as agentic evidence", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "octoclaw-refresh-leaderboard-"));
     const output = path.join(tempDir, "leaderboard-snapshot.json");

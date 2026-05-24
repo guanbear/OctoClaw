@@ -517,9 +517,10 @@ function parseArtificialAnalysis(raw, fetchedAt) {
         ...(intelligence === undefined ? [] : [{
           source: "artificial_analysis",
           modelKey,
-          scenario: "research",
+          scenario: "global",
           rawScore: intelligence,
           lastVerifiedAt: fetchedAt,
+          reasonCodes: ["global_anchor:artificial_analysis"],
         }]),
         ...(coding === undefined ? [] : [{
           source: "artificial_analysis",
@@ -634,6 +635,29 @@ function scoreFromPercentage(value) {
   return Math.round(parsed <= 1 ? parsed * 100 : parsed);
 }
 
+function efficiencyScoreFromValues(values, lowerIsBetter = true) {
+  const parsed = values.map(asNumber).filter((value) => value !== undefined && Number.isFinite(value) && value > 0);
+  if (parsed.length === 0) return undefined;
+  const best = lowerIsBetter ? Math.min(...parsed) : Math.max(...parsed);
+  return Math.max(0, Math.min(100, Math.round((100 / (1 + Math.log10(1 + best))) * 100) / 100));
+}
+
+function buildBenchmarkEfficiency(pinchEntry) {
+  if (!pinchEntry) return undefined;
+  const costScore = efficiencyScoreFromValues([pinchEntry.best_cost_usd, pinchEntry.average_cost_usd]);
+  const speedScore = efficiencyScoreFromValues([pinchEntry.best_execution_time_seconds, pinchEntry.average_execution_time_seconds]);
+  if (costScore === undefined && speedScore === undefined) return undefined;
+  const valueScore = costScore !== undefined && speedScore !== undefined
+    ? Math.round((costScore * 0.65 + speedScore * 0.35) * 100) / 100
+    : costScore ?? speedScore;
+  return {
+    ...(costScore !== undefined ? { taskCostScore: costScore } : {}),
+    ...(speedScore !== undefined ? { taskSpeedScore: speedScore } : {}),
+    valueScore,
+    sources: ["pinchbench"],
+  };
+}
+
 function heuristicScoreForTier(tier) {
   if (tier === "frontier") return 90;
   if (tier === "strong") return 76;
@@ -643,6 +667,52 @@ function heuristicScoreForTier(tier) {
 }
 
 function buildCapabilityScore(scoreByScenario) {
+  const globalScore = scoreByScenario.global;
+  if (globalScore && globalScore.confidence !== "unknown") {
+    const scenarioSupplements = [
+      ["coding_worker", 0.12],
+      ["agentic", 0.06],
+      ["research", 0.06],
+    ];
+    let totalScore = globalScore.score * 0.76;
+    const observedScenarioValues = [globalScore.score];
+    const sources = new Set();
+    const sourceFamilies = new Set();
+    const reasonCodes = new Set(globalScore.reasonCodes ?? []);
+    for (const contribution of globalScore.contributions ?? []) {
+      if ((contribution.effectiveWeight ?? 0) > 0) sources.add(contribution.source);
+      if ((contribution.effectiveWeight ?? 0) > 0) sourceFamilies.add(sourceFamily(contribution.source));
+    }
+    for (const [scenario, weight] of scenarioSupplements) {
+      const score = scoreByScenario[scenario];
+      if (score === undefined || score.confidence === "unknown") {
+        totalScore += globalScore.score * weight;
+        reasonCodes.add(`global_anchor_missing_scenario:${scenario}`);
+        continue;
+      }
+      totalScore += score.score * weight;
+      observedScenarioValues.push(score.score);
+      for (const contribution of score.contributions ?? []) {
+        if ((contribution.effectiveWeight ?? 0) > 0) sources.add(contribution.source);
+        if ((contribution.effectiveWeight ?? 0) > 0) sourceFamilies.add(sourceFamily(contribution.source));
+      }
+      for (const reason of score.reasonCodes ?? []) reasonCodes.add(reason);
+    }
+    const spread = Math.max(...observedScenarioValues) - Math.min(...observedScenarioValues);
+    if (spread > 18) {
+      totalScore -= (spread - 18) * 0.25;
+      reasonCodes.add("global_single_scenario_spike_penalty");
+    }
+    return {
+      score: Math.round(totalScore * 100) / 100,
+      confidence: globalScore.confidence,
+      sources: [...sources].sort(),
+      evidenceCount: sources.size,
+      evidenceFamilyCount: sourceFamilies.size,
+      reasonCodes: [...reasonCodes].sort(),
+    };
+  }
+
   const fusedScores = Object.values(scoreByScenario);
   const usableScores = fusedScores.filter((score) => score.confidence !== "unknown");
   if (usableScores.length === 0) return undefined;
@@ -705,6 +775,7 @@ function buildModelRecord(modelKey, openrouterModel, pinchEntry, leaderboardReco
 	  const score = scoreFromPercentage(pinchEntry?.best_score_percentage) ?? heuristicScoreForTier(tier);
 	  const confidence = pinchEntry ? confidenceFromSampleCount(pinchEntry.submission_count) : "low";
 	  const scenarioContributions = {
+      global: leaderboardRecords.filter((entry) => entry.scenario === "global"),
 	    coding_worker: [
 	      ...(pinchEntry ? [{ source: "pinchbench", rawScore: score, lastVerifiedAt: generatedAt }] : []),
 	      ...leaderboardRecords.filter((entry) => entry.scenario === "coding_worker"),
@@ -720,6 +791,7 @@ function buildModelRecord(modelKey, openrouterModel, pinchEntry, leaderboardReco
 	    }
 	  }
   const capabilityScore = buildCapabilityScore(scoreByScenario);
+  const benchmarkEfficiency = buildBenchmarkEfficiency(pinchEntry);
 	  return {
 	    tier,
 	    ...(price !== undefined ? { price } : {}),
@@ -730,6 +802,7 @@ function buildModelRecord(modelKey, openrouterModel, pinchEntry, leaderboardReco
 	    },
 	    ...(capabilityScore ? { capabilityScore } : {}),
 	    ...(Object.keys(scoreByScenario).length > 0 ? { scoreByScenario } : {}),
+      ...(benchmarkEfficiency ? { benchmarkEfficiency } : {}),
 	    lastVerifiedAt: generatedAt,
 	  };
 	}

@@ -99,6 +99,62 @@ describe("ModelIntelFactsPlane", () => {
     });
   });
 
+  it("preserves packaged benchmark efficiency for published capability pages", () => {
+    const facts = buildModelIntelFactsPlane({
+      generatedAt: "2026-05-22T00:00:00.000Z",
+      packagedSnapshot: {
+        schemaVersion: "octoclaw.router_lite.model_intel_snapshot/v1",
+        snapshotId: "packaged",
+        generatedAt: "2026-05-22T00:00:00.000Z",
+        models: [
+          {
+            provider: "zhipu",
+            model: "glm-5.1",
+            modelKey: "zhipu/glm-5.1",
+            configured: false,
+            available: "yes",
+            marketPrice: {
+              blendedUsdPerMTok: 1,
+              confidence: "high",
+              sources: ["packaged_leaderboard"],
+            },
+            capability: {
+              input: ["text"],
+              toolUse: "yes",
+              structuredOutput: "yes",
+              reasoning: "yes",
+              promptCache: "unknown",
+              codingTier: "strong",
+              confidence: "high",
+              evidence: ["declared"],
+              sources: ["packaged_leaderboard"],
+              capabilityScore: {
+                score: 82,
+                confidence: "high",
+                contributions: [],
+                reasonCodes: ["global_anchor:artificial_analysis"],
+              },
+            },
+            benchmarkEfficiency: {
+              taskCostScore: 88,
+              taskSpeedScore: 61,
+              valueScore: 78.55,
+              sources: ["pinchbench"],
+            },
+            sources: ["packaged_leaderboard"],
+          },
+        ],
+      },
+    });
+
+    expect(facts.models.find((model) => model.modelKey === "zhipu/glm-5.1")).toMatchObject({
+      benchmarkEfficiency: {
+        valueScore: 78.55,
+        sources: ["pinchbench"],
+      },
+    });
+  });
+
   it("ignores all-zero local config prices so external API prices do not conflict with plan placeholders", () => {
     const facts = buildModelIntelFactsPlane({
       generatedAt: "2026-05-22T00:00:00.000Z",

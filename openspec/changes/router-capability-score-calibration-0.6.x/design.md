@@ -54,7 +54,8 @@ health `0.0`; refresh must not throw solely because one source changed.
 
 The score is derived in priority order:
 
-1. Medium/high confidence capability benchmark evidence.
+1. Medium/high confidence global capability benchmark evidence, especially
+   Artificial Analysis Intelligence Index.
 2. Existing fused `capability.scoreByScenario` values that already contain
    evidence metadata.
 3. Existing `scenarioAbility.*.score`, when present with source metadata.
@@ -66,18 +67,24 @@ sources are never weighted into capability.
 
 Default source weights:
 
-| Source | coding worker | agentic/tool | general/research |
-| --- | ---: | ---: | ---: |
-| Aider | 0.25 | 0.00 | 0.00 |
-| PinchBench | 0.15 | 0.10 | 1.00 |
-| BFCL | 0.10 | 0.60 | 0.00 |
-| SWE-bench Verified | 0.25 | 0.15 | 0.00 |
-| SWE-bench Pro | 0.25 | 0.15 | 0.00 |
+| Source | global | coding worker | agentic/tool | general/research |
+| --- | ---: | ---: | ---: | ---: |
+| Artificial Analysis | 0.50 | 0.28 | 0.24 | 0.38 |
+| LM Arena text | 0.20 | 0.00 | 0.00 | 0.32 |
+| LM Arena webdev | 0.00 | 0.12 | 0.10 | 0.00 |
+| LM Arena search | 0.00 | 0.00 | 0.00 | 0.22 |
+| Aider | 0.08 | 0.17 | 0.00 | 0.00 |
+| SWE-bench Verified | 0.08 | 0.17 | 0.12 | 0.00 |
+| SWE-bench Pro | 0.06 | 0.14 | 0.10 | 0.00 |
+| BFCL | 0.04 | 0.05 | 0.36 | 0.00 |
+| PinchBench | 0.04 | 0.07 | 0.08 | 0.08 |
 
-Sources such as LiveCodeBench, Artificial Analysis, and LM Arena remain
-approved future capability sources, but are not active weights until refresh
-has a structured, tested parser for them. OpenRouter rankings remain
-observation-only.
+Artificial Analysis Intelligence Index is the primary global anchor. Its
+coding index may contribute to `coding_worker`, but the overall index drives
+the default `capabilityScore`. PinchBench remains a low-weight capability
+source and also contributes separate benchmark-efficiency metadata from its
+cost and runtime fields. OpenRouter rankings remain observation-only; OpenRouter
+API data is used for catalog, context, pricing, and smoke watchlists.
 
 Weights are normalized over sources that are present and healthy. A source may
 be absent from a local refresh; absence lowers evidence coverage but does not
@@ -161,6 +168,14 @@ diagnostics:
         "reasonCodes": ["single_source_cap:medium"]
       },
       "scoreByScenario": {
+        "global": {
+          "score": 88,
+          "confidence": "high",
+          "contributions": [
+            {"source": "artificial_analysis", "rawScore": 88, "effectiveWeight": 1}
+          ],
+          "reasonCodes": ["global_anchor:artificial_analysis"]
+        },
         "coding_worker": {
           "score": 86.2,
           "confidence": "medium",
@@ -169,6 +184,12 @@ diagnostics:
           ],
           "reasonCodes": ["fusion_sources:1"]
         }
+      },
+      "benchmarkEfficiency": {
+        "taskCostScore": 82,
+        "taskSpeedScore": 58,
+        "valueScore": 73.6,
+        "sources": ["pinchbench"]
       }
     }
   },
