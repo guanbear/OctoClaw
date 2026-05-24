@@ -28,13 +28,14 @@ describe("build-capability-site script", () => {
         { source: "lmarena_text", status: "ok" },
       ],
       models: [
-        { modelKey: "openai/gpt-5.5", capability: { codingTier: "frontier", capabilityScore: { score: 86.28, confidence: "high", sources: ["artificial_analysis"] } } },
+        { modelKey: "openai/gpt-5.5", available: "yes", marketPrice: { confidence: "high" }, capability: { codingTier: "frontier", capabilityScore: { score: 86.28, confidence: "high", sources: ["artificial_analysis"] } } },
         { modelKey: "openai/gpt-5.5-xhigh--codex-harness", capability: { codingTier: "frontier", capabilityScore: { score: 96, confidence: "medium", sources: ["lmarena_webdev"] } } },
         { modelKey: "openai/gpt-5.5-high", capability: { codingTier: "frontier", capabilityScore: { score: 95, confidence: "medium", sources: ["lmarena_text"] } } },
         { modelKey: "example/single-source-spike", capability: { codingTier: "standard", capabilityScore: { score: 94, confidence: "medium", sources: ["lmarena_text"] } } },
         { modelKey: "anthropic/claude-sonnet-4.5-20250929-fc", capability: { codingTier: "strong", capabilityScore: { score: 93, confidence: "medium", sources: ["bfcl"] } } },
         { modelKey: "google/gemini-3.5-flash", available: "yes", marketPrice: { confidence: "medium" }, capability: { codingTier: "strong", capabilityScore: { score: 78.5, confidence: "medium", sources: ["lmarena_text", "pinchbench"] } } },
-        { modelKey: "zhipu/glm-5.1", capability: { codingTier: "strong", capabilityScore: { score: 80, confidence: "medium", sources: ["artificial_analysis"] } }, benchmarkEfficiency: { valueScore: 76, sources: ["pinchbench"] } },
+        { modelKey: "meta/muse-spark", capability: { codingTier: "standard", capabilityScore: { score: 90, confidence: "medium", sources: ["artificial_analysis"] } } },
+        { modelKey: "zhipu/glm-5.1", available: "yes", marketPrice: { confidence: "medium" }, capability: { codingTier: "strong", capabilityScore: { score: 80, confidence: "medium", sources: ["artificial_analysis"] } }, benchmarkEfficiency: { valueScore: 76, sources: ["pinchbench"] } },
       ],
     };
     await fs.writeFile(snapshotPath, JSON.stringify(snapshot, null, 2));
@@ -60,13 +61,13 @@ describe("build-capability-site script", () => {
         generatedAt: "2026-05-24T00:00:00.000Z",
         snapshotUrl: "https://octoclaw.github.io/OctoClaw/capability/leaderboard-snapshot.json",
         summaryUrl: "https://octoclaw.github.io/OctoClaw/capability/leaderboard-summary.json",
-        modelCount: 7,
+        modelCount: 8,
         minOctoClawVersion: "0.6.0",
       });
       expect(manifest.snapshotSha256).toBe(createHash("sha256").update(publishedSnapshotText).digest("hex"));
       expect(summary).toMatchObject({
         snapshotId: "official-test",
-        modelCount: 7,
+        modelCount: 8,
         primaryModelCount: 3,
         sourceStatus: snapshot.sourceStatus,
         topModels: [
@@ -82,6 +83,7 @@ describe("build-capability-site script", () => {
         expect.objectContaining({ modelKey: "openai/gpt-5.5-xhigh--codex-harness", leaderboardClass: "benchmark_variant" }),
         expect.objectContaining({ modelKey: "openai/gpt-5.5-high", leaderboardClass: "benchmark_variant" }),
         expect.objectContaining({ modelKey: "example/single-source-spike", leaderboardClass: "observation_only" }),
+        expect.objectContaining({ modelKey: "meta/muse-spark", leaderboardClass: "observation_only" }),
         expect.objectContaining({ modelKey: "anthropic/claude-sonnet-4.5-20250929-fc", leaderboardClass: "benchmark_variant" }),
       ]));
       expect(summary.watchedModels).toEqual(expect.arrayContaining([

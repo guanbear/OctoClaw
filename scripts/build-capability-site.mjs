@@ -76,8 +76,7 @@ function marketPriceConfidence(model) {
 function isRouteableEvidence(model) {
   const priceConfidence = marketPriceConfidence(model);
   return model?.configured === true ||
-    model?.available === "yes" && priceConfidence !== "unknown" ||
-    capabilitySources(model).includes("artificial_analysis");
+    model?.available === "yes" && priceConfidence !== "unknown";
 }
 
 function leaderboardClass(model, entry) {
