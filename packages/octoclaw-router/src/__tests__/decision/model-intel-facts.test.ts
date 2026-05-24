@@ -99,6 +99,60 @@ describe("ModelIntelFactsPlane", () => {
     });
   });
 
+  it("keeps low-scoring name-prior frontier models out of the frontier tier", () => {
+    const facts = buildModelIntelFactsPlane({
+      generatedAt: "2026-05-22T00:00:00.000Z",
+      packagedSnapshot: {
+        schemaVersion: "octoclaw.router_lite.model_intel_snapshot/v1",
+        snapshotId: "packaged",
+        generatedAt: "2026-05-22T00:00:00.000Z",
+        models: [
+          {
+            provider: "qwen",
+            model: "qwen-3.vl-8b-instruct",
+            modelKey: "qwen/qwen-3.vl-8b-instruct",
+            configured: false,
+            available: "yes",
+            marketPrice: {
+              blendedUsdPerMTok: 1,
+              confidence: "high",
+              sources: ["packaged_leaderboard"],
+            },
+            capability: {
+              input: ["text"],
+              toolUse: "yes",
+              structuredOutput: "yes",
+              reasoning: "yes",
+              promptCache: "unknown",
+              codingTier: "frontier",
+              confidence: "medium",
+              evidence: ["declared"],
+              sources: ["packaged_leaderboard"],
+              capabilityScore: {
+                score: 13.46,
+                confidence: "medium",
+                contributions: [{ source: "artificial_analysis", rawScore: 13.46, baseWeight: 1, freshnessFactor: 1, sourceHealth: 1, effectiveWeight: 1 }],
+                reasonCodes: ["global_anchor:artificial_analysis"],
+              },
+            },
+            sources: ["packaged_leaderboard"],
+          },
+        ],
+      },
+    });
+
+    expect(facts.models.find((model) => model.modelKey === "qwen/qwen-3.vl-8b-instruct")).toMatchObject({
+      capability: {
+        codingTier: "unknown",
+        capabilityScore: {
+          score: 13.46,
+          confidence: "medium",
+          reasonCodes: expect.arrayContaining(["global_anchor:artificial_analysis"]),
+        },
+      },
+    });
+  });
+
   it("preserves packaged benchmark efficiency for published capability pages", () => {
     const facts = buildModelIntelFactsPlane({
       generatedAt: "2026-05-22T00:00:00.000Z",

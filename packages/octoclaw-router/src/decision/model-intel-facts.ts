@@ -1024,8 +1024,11 @@ function calibrateCapability(capability: RouterLiteCapability, modelKey = ""): R
   const capabilityScore = capability.capabilityScore ?? deriveCapabilityScore(capability);
   const baselineTier = maxTier(capability.codingTier, inferCodingTier(modelKey));
   const scoreTier = tierFromCapabilityScore(capabilityScore.score);
+  const isDemotion = TIER_LEVEL[scoreTier] < TIER_LEVEL[baselineTier];
   const isPromotion = TIER_LEVEL[scoreTier] > TIER_LEVEL[baselineTier];
-  const effectiveTier = isPromotion && scoreAllowsTierPromotion(capabilityScore, capability, baselineTier, scoreTier)
+  const effectiveTier = isDemotion && scoreAllowsTierDemotion(capabilityScore)
+    ? scoreTier
+    : isPromotion && scoreAllowsTierPromotion(capabilityScore, capability, baselineTier, scoreTier)
     ? scoreTier
     : baselineTier;
   return {
@@ -1033,6 +1036,10 @@ function calibrateCapability(capability: RouterLiteCapability, modelKey = ""): R
     codingTier: effectiveTier,
     capabilityScore,
   };
+}
+
+function scoreAllowsTierDemotion(score: RouterLiteFusedScore): boolean {
+  return score.confidence === "high" || score.confidence === "medium";
 }
 
 function tierDistance(from: RouterLiteCodingTier, to: RouterLiteCodingTier): number {
