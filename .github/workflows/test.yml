@@ -7,6 +7,7 @@ on:
   pull_request:
 
 env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   OCTOCLAW_POLICY_JUDGE_DISABLE_NETWORK: "1"
 
 jobs:

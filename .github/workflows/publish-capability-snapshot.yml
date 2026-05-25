@@ -14,6 +14,9 @@ concurrency:
   group: pages-capability-snapshot
   cancel-in-progress: false
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
 jobs:
   publish:
     name: Build and publish capability snapshot
