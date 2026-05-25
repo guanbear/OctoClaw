@@ -1226,6 +1226,65 @@ describe("budgeted_main_then_delegate runtime budget", () => {
     policyState.clearState(key);
   });
 
+  it("NFSV2-BUDGET-002: after budget escalation, dispatch is not blocked by missing route hint before admission", async () => {
+    const handlers = new Map<string, Function>();
+    plugin.register({
+      on: (event, handler) => handlers.set(event, handler),
+      registerTool: () => {},
+      registerCommand: () => {},
+      logger: {},
+    });
+
+    const key = "agent:main:slack:channel:c0as4dappu3:thread:t-budget-no-hint-dispatch";
+    const now = Date.now();
+    const pendingBudget = budgetedMainState(now - BUDGETED_MAIN_MAX_WALL_MS - 1_000, {
+      escalatedPending: true,
+      escalated_pending: true,
+      reason: "wall_time_over_budget",
+    });
+    policyState.setState(key, {
+      prompt: "整理这轮 SR-P1 evidence",
+      decision: {
+        ...budgetedMainDecision(),
+        route_hint_policy: { required: true, submitted: false },
+        tool_policy: {
+          allow_direct_tools: false,
+          must_delegate_via: "octoclaw_dispatch",
+          allowed_control_tools: ["octoclaw_status", "octoclaw_route_hint"],
+        },
+      },
+      routeHintSubmitted: false,
+      budgetedMain: pendingBudget,
+      budgeted_main: pendingBudget,
+      createdAt: now - 35_000,
+      updatedAt: now,
+    });
+
+    const beforeToolCall = handlers.get("before_tool_call");
+    expect(beforeToolCall).toBeTruthy();
+    const result = await beforeToolCall!(
+      { toolName: "octoclaw_dispatch", params: { task: "整理这轮 SR-P1 evidence" } },
+      { sessionKey: key, sessionId: "session-budget-no-hint-dispatch", agentId: "main" },
+    );
+
+    expect(result).toBeUndefined();
+    expect(policyState.getState(key)?.decision?.route_decision).toMatchObject({
+      route: "delegate",
+      route_source: "budgeted_main_escalation",
+      is_new_work: true,
+    });
+    await waitForFireAndForget();
+    expect(readReplayEvents()).toContainEqual(expect.objectContaining({
+      event: "budgeted_main_escalated",
+      reason: "wall_time_over_budget",
+    }));
+    expect(readReplayEvents()).not.toContainEqual(expect.objectContaining({
+      event: "tool_blocked_before_route_hint",
+      toolName: "octoclaw_dispatch",
+    }));
+    policyState.clearState(key);
+  });
+
   it("promotes budgeted-main dispatch past a sealed reply WorkContract", async () => {
     const handlers = new Map<string, Function>();
     plugin.register({

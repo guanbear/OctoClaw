@@ -146,6 +146,63 @@ describe("buildRuntimeTaskProjection", () => {
     });
   });
 
+  it("NFSV2-TRUTH-003: does not treat native refs alone as accepted spawn evidence", () => {
+    const evidence = runtimeStatusEvidence({
+      id: "wc-native-refs-only",
+      route: "delegate",
+      status: "queued",
+      dispatchExecuted: true,
+      runId: "run-ref-only",
+      childSessionKey: "child-ref-only",
+    });
+
+    expect(evidence).toMatchObject({
+      hasDispatchEvidence: true,
+      hasSpawnEvidence: false,
+      runId: "run-ref-only",
+      childSessionKey: "child-ref-only",
+    });
+  });
+
+  it("NFSV2-TRUTH-005: legacy spawn boolean alone does not promote lifecycle to running", () => {
+    const view = buildRuntimeTaskProjection({
+      id: "wc-legacy-spawn-boolean-only",
+      route: "delegate",
+      status: "running",
+      dispatchExecuted: true,
+      spawnExecuted: true,
+      updated_at: "2026-05-12T12:09:00.000Z",
+    }, {
+      nowMs,
+    });
+
+    expect(view.status).toBe("queued");
+    expect(view.statusReason).toBe("dispatch_materialized_but_no_spawn_evidence");
+  });
+
+  it("projects delivered terminal results even when legacy spawn booleans are not lifecycle authority", () => {
+    const view = buildRuntimeTaskProjection({
+      id: "wc-delivered-with-legacy-spawn-only",
+      route: "delegate",
+      status: "completed",
+      dispatchExecuted: true,
+      spawnExecuted: true,
+      resultMaterialized: true,
+      delivery_status: "delivered",
+      delivery: {
+        status: "delivered",
+        messageId: "1778573724.032469",
+      },
+      completed_at: "2026-05-12T12:09:00.000Z",
+    }, {
+      nowMs,
+    });
+
+    expect(view.status).toBe("delivered");
+    expect(view.statusReason).toBe("delivered_with_ack");
+    expect(view.resultLocation).toBe("delivered:1778573724.032469");
+  });
+
   it("does not treat assistant delivery text as delivered result evidence", () => {
     const view = buildRuntimeTaskProjection({
       id: "wc-no-native-delivery",

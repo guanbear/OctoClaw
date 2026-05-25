@@ -9,28 +9,20 @@ import {
 } from "../resolve/session.js";
 import {
   isControlObserverDecision,
-  isDelegatedRoute,
   isSessionControlDecision,
-  matchesBlockedPattern,
   observerControlTools,
   preHintAllowedTools,
   routeHintRequired,
   sessionControlTools,
   stringifyParamsForPolicy,
-  workflowEnforcementRule,
 } from "../replay/policy-utils.js";
 import { recordAckReplay, recordPolicyReplay } from "../replay/replay.js";
 import { policyState, type PolicyStateEntry } from "../state/policy-state.js";
-import { evaluateNativeSessionsSendGate, evaluateNativeSpawnGate } from "../delegate/native-spawn-gate.js";
 import { nativeSpawnIntentStore } from "../delegate/native-spawn-intent-store.js";
 import { isPlannerAllowedForSession, resolveSpawnBackend, resolveSpeculativePreloadEnabled } from "../config/index.js";
 import {
   buildBudgetedMainState,
-  budgetedMainSpawnIntentId,
   budgetedMainVisibleStartAt,
-  budgetedMainWorkContractId,
-  budgetedMainToolEscalationReason,
-  classifyBudgetedMainTool,
   escalateBudgetedMainForTool,
   hasBudgetedMainEscalationEvidence,
   promoteBudgetedMainDispatch,
@@ -38,7 +30,6 @@ import {
   recordBudgetedMainEvent,
   scheduleBudgetedMainTimeout,
   updateBudgetedMainForContext,
-  updateBudgetedMainToolState,
 } from "../budgeted-main.js";
 import { explicitDelegateDispatchRequest } from "../dispatch-admission.js";
 import {
@@ -46,22 +37,59 @@ import {
   readSpeculativePreloadState,
   serializeSpeculativePreloadState,
 } from "../delegate/speculative-preload.js";
+import { evaluateActiveBudgetedMainGate, evaluateReplyToolBudgetGate } from "./budgeted-main-gate.js";
+import { evaluateNativeSessionsSendHookGate, evaluateNativeSpawnHookGate } from "./native-spawn-gate-runner.js";
+import { evaluateRouteHintGate, shouldBindRouteHintPrompt } from "./route-hint-gate.js";
+import { evaluateNativeAnnounceDeliveryGate, evaluateSessionControlGate } from "./session-control-gate.js";
+import type { ToolGateResult } from "./tool-gate-types.js";
 import { type UnknownRecord, asRecord } from "../util/type-coercion.js";
 import type { PluginInterface } from "../extension-entry-shared.js";
 import { stringArray, stringValue } from "../extension-entry-shared.js";
 import {
   getPolicyStateForContext,
   updatePolicyState,
-  isNativeAnnounceBlockedState,
-  isNativeAnnounceDeliveryState,
-  NATIVE_ANNOUNCE_BLOCKED_TOOLS,
   bindRouteHintPromptToCurrentContext,
   stateWorkContractId,
 } from "../extension-entry.js";
+import { evaluateDelegationWorkflowGuard } from "./delegation-workflow-guard.js";
 
 export interface BeforeToolCallDeps {
   pi: PluginInterface;
   currentPluginConfig: () => UnknownRecord;
+}
+
+function mergeGateStatePatch(current: PolicyStateEntry, patch: UnknownRecord): PolicyStateEntry {
+  const blockedTools = Array.isArray(patch.blockedTools)
+    ? [...(Array.isArray(current.blockedTools) ? current.blockedTools.slice(-7) : []), ...patch.blockedTools].filter(Boolean)
+    : undefined;
+  return {
+    ...current,
+    ...patch,
+    ...(blockedTools ? { blockedTools } : {}),
+  };
+}
+
+function applyToolGateResult(input: {
+  result: ToolGateResult;
+  stateKey: string;
+  logger: unknown;
+  decision: UnknownRecord;
+}): void {
+  if (input.result.statePatch) {
+    updatePolicyState(input.stateKey, (current) => mergeGateStatePatch(current, input.result.statePatch ?? {}));
+  }
+  for (const replayEvent of input.result.replayEvents ?? []) {
+    void recordPolicyReplay(
+      replayEvent.event,
+      replayEvent.payload,
+      input.logger,
+      replayEvent.decision === "none" ? undefined : input.decision,
+    ).catch(() => {});
+  }
+}
+
+function toolGateHookReturn(result: ToolGateResult): { block: true; blockReason: string } | undefined {
+  return result.kind === "block" ? { block: true, blockReason: result.blockReason } : undefined;
 }
 
 export function makeBeforeToolCallHook(deps: BeforeToolCallDeps) {
@@ -69,97 +97,74 @@ export function makeBeforeToolCallHook(deps: BeforeToolCallDeps) {
     if (!isManagedAgentContext(ctx)) return;
     const toolName = stringValue(event.toolName || ctx.toolName);
     const toolParams = asRecord(event.params || event.arguments || event.input);
-    if (toolName === "octoclaw_route_hint") {
+    if (shouldBindRouteHintPrompt(toolName)) {
       bindRouteHintPromptToCurrentContext(ctx, toolParams);
     }
     let { key: stateKey, state } = getPolicyStateForContext(ctx);
-    if (state && isNativeAnnounceBlockedState(state) && toolName === "octoclaw_dispatch") {
-      void recordPolicyReplay(
-        "native_announce_blocker_redispatch_allowed",
-        {
-          sessionKey: stateKey || "",
-          sessionId: stringValue(ctx.sessionId),
-          toolName,
-          workContractId: stringValue(asRecord(state).workContractId || asRecord(state).work_contract_id),
-          blocker: stringValue(asRecord(state).nativeAnnounceBlocker || asRecord(state).native_announce_blocker),
-        },
-        deps.pi.logger,
-        asRecord(state.decision),
-      ).catch(() => {});
-      return;
-    }
-    if (state && isNativeAnnounceDeliveryState(state) && NATIVE_ANNOUNCE_BLOCKED_TOOLS.has(toolName)) {
-      updatePolicyState(stateKey, (current) => ({
-        ...current,
-        blockedTools: [...(Array.isArray(current.blockedTools) ? current.blockedTools.slice(-7) : []), toolName].filter(Boolean),
-      }));
-      void recordPolicyReplay(
-        "tool_blocked_native_announce_completion",
-        {
-          sessionKey: stateKey || "",
-          sessionId: stringValue(ctx.sessionId),
-          toolName,
-          workContractId: stringValue(asRecord(state).workContractId || asRecord(state).work_contract_id),
-          reason: "native_announce_completion_delivery",
-        },
-        deps.pi.logger,
-        asRecord(state.decision),
-      ).catch(() => {});
-      return {
-        block: true,
-        blockReason: "OctoClaw is delivering an existing native subagent completion; do not dispatch or spawn new work for this inter-session announce.",
-      };
+    const nativeAnnounceGate = evaluateNativeAnnounceDeliveryGate({
+      toolName,
+      state,
+      stateKey,
+      sessionId: stringValue(ctx.sessionId),
+    });
+    if (nativeAnnounceGate.kind !== "allow" || nativeAnnounceGate.stop) {
+      applyToolGateResult({
+        result: nativeAnnounceGate,
+        stateKey,
+        logger: deps.pi.logger,
+        decision: asRecord(state?.decision),
+      });
+      return toolGateHookReturn(nativeAnnounceGate);
     }
     let budgetDecision = asRecord(state?.decision);
     let budgetedMainHandledTool = false;
     const budgetState = readBudgetedMainState(asRecord(state));
     if (budgetState?.active && !budgetState.completedAt && !budgetState.escalatedAt) {
-      const classification = classifyBudgetedMainTool(toolName, toolParams);
       const now = Date.now();
-      if (toolName === "octoclaw_dispatch") {
-        const reason = budgetState.escalatedPending || now - budgetState.startedAt >= budgetState.maxWallMs
-          ? "wall_time_over_budget"
-          : "main_agent_called_dispatch";
+      const activeBudgetGate = evaluateActiveBudgetedMainGate({
+        toolName,
+        toolParams,
+        budgetState,
+        now,
+      });
+      if (activeBudgetGate.kind === "escalate_dispatch" && activeBudgetGate.reason) {
         const escalated = await escalateBudgetedMainForTool({
           stateKey,
           ctx,
           state: asRecord(state),
           decision: budgetDecision,
-          budgetState,
-          reason,
+          budgetState: activeBudgetGate.budgetState ?? budgetState,
+          reason: activeBudgetGate.reason,
           logger: deps.pi.logger,
         });
         state = escalated.state as PolicyStateEntry | null;
         budgetDecision = escalated.decision;
-      } else if (classification.counted) {
+      } else if (activeBudgetGate.kind === "block" && activeBudgetGate.reason && activeBudgetGate.budgetState) {
+        budgetedMainHandledTool = activeBudgetGate.budgetedMainHandledTool;
+        const escalated = await escalateBudgetedMainForTool({
+          stateKey,
+          ctx,
+          state: asRecord(state),
+          decision: budgetDecision,
+          budgetState: activeBudgetGate.budgetState,
+          reason: activeBudgetGate.reason,
+          logger: deps.pi.logger,
+        });
+        state = escalated.state as PolicyStateEntry | null;
+        applyToolGateResult({
+          result: activeBudgetGate,
+          stateKey,
+          logger: deps.pi.logger,
+          decision: budgetDecision,
+        });
+        return toolGateHookReturn(activeBudgetGate);
+      } else if (activeBudgetGate.budgetedMainHandledTool && activeBudgetGate.budgetState) {
         budgetedMainHandledTool = true;
-        const updatedBudget = updateBudgetedMainToolState(budgetState, classification);
-        const escalationReason = budgetedMainToolEscalationReason(updatedBudget, classification);
-        if (escalationReason) {
-          const escalated = await escalateBudgetedMainForTool({
-            stateKey,
-            ctx,
-            state: asRecord(state),
-            decision: budgetDecision,
-            budgetState: updatedBudget,
-            reason: escalationReason,
-            logger: deps.pi.logger,
-          });
-          state = escalated.state as PolicyStateEntry | null;
-          updatePolicyState(stateKey, (current) => ({
-            ...current,
-            blockedTools: [...(Array.isArray(current.blockedTools) ? current.blockedTools.slice(-7) : []), toolName].filter(Boolean),
-          }));
-          return {
-            block: true,
-            blockReason: `OctoClaw budgeted main execution escalated (${escalationReason}). This tool call did not execute. Call octoclaw_dispatch with the original task; do not use ordinary tools or claim the task has started before dispatch_confirm.`,
-          };
-        }
         state = updateBudgetedMainForContext({
           stateKey,
           ctx,
           state: asRecord(state),
-          budgetState: updatedBudget,
+          budgetState: activeBudgetGate.budgetState,
         }) as PolicyStateEntry | null;
       }
     }
@@ -351,28 +356,26 @@ export function makeBeforeToolCallHook(deps: BeforeToolCallDeps) {
           }, deps.pi.logger, decision).catch(() => {});
           return;
         }
-        const gate = evaluateNativeSpawnGate({ sessionKeys, args: toolParams as { task: string; [key: string]: unknown }, decision });
-        if (!gate.allowed) {
-          updatePolicyState(stateKey, (current) => ({
-            ...current,
-            blockedTools: [...(Array.isArray(current.blockedTools) ? current.blockedTools.slice(-7) : []), toolName].filter(Boolean),
-          }));
-          void recordPolicyReplay("sessions_spawn_intent_blocked", {
-            sessionKey: stateKey || "",
-            sessionId: stringValue(ctx.sessionId),
-            route: stringValue(asRecord(decision.route_decision).route),
-            toolName,
-            reason: gate.reason,
-            spawn_intent_id: gate.intent?.spawnIntentId ?? null,
-            expected_hash: gate.expectedHash ?? null,
-            actual_hash: gate.actualHash ?? null,
-          }, deps.pi.logger).catch(() => {});
-          return {
-            block: true,
-            blockReason: gate.reason === "args_hash_mismatch"
-              ? "OctoClaw blocked sessions_spawn because the arguments do not match the pending native spawn intent. Retry sessions_spawn with the exact sessionsSpawnArgs from the most recent octoclaw_dispatch result; do not call octoclaw_dispatch again."
-              : "OctoClaw blocked sessions_spawn because no current pending native spawn intent exists. Call octoclaw_dispatch first.",
-          };
+        const spawnHookGate = evaluateNativeSpawnHookGate({
+          toolName,
+          sessionKeys,
+          args: toolParams as { task: string; [key: string]: unknown },
+          decision,
+          stateKey,
+          sessionId: stringValue(ctx.sessionId),
+        });
+        if (spawnHookGate.kind === "block") {
+          applyToolGateResult({
+            result: spawnHookGate,
+            stateKey,
+            logger: deps.pi.logger,
+            decision,
+          });
+          return toolGateHookReturn(spawnHookGate);
+        }
+        const gate = spawnHookGate.nativeGate;
+        if (!gate?.allowed) {
+          return;
         }
         updatePolicyState(stateKey, (current) => ({
           ...current,
@@ -505,28 +508,26 @@ export function makeBeforeToolCallHook(deps: BeforeToolCallDeps) {
       const route = stringValue(asRecord(decision.route_decision).route);
       const speculativeSendExpected = plannerGateEnabled && route === "delegate";
       if (speculativeSendExpected) {
-        const gate = evaluateNativeSessionsSendGate({ sessionKeys, args: toolParams as { task: string; [key: string]: unknown }, decision });
-        if (!gate.allowed) {
-          updatePolicyState(stateKey, (current) => ({
-            ...current,
-            blockedTools: [...(Array.isArray(current.blockedTools) ? current.blockedTools.slice(-7) : []), toolName].filter(Boolean),
-          }));
-          void recordPolicyReplay("sessions_send_intent_blocked", {
-            sessionKey: stateKey || "",
-            sessionId: stringValue(ctx.sessionId),
-            route,
-            toolName,
-            reason: gate.reason,
-            spawn_intent_id: gate.intent?.spawnIntentId ?? null,
-            expected_hash: gate.expectedHash ?? null,
-            actual_hash: gate.actualHash ?? null,
-          }, deps.pi.logger, decision).catch(() => {});
-          return {
-            block: true,
-            blockReason: gate.reason === "args_hash_mismatch"
-              ? "OctoClaw blocked sessions_send because the arguments do not match the pending speculative send intent. Retry sessions_send with the exact sessionsSendArgs from the most recent octoclaw_dispatch result; do not call octoclaw_dispatch again."
-              : "OctoClaw blocked sessions_send because no current pending speculative send intent exists. Call octoclaw_dispatch first.",
-          };
+        const sendHookGate = evaluateNativeSessionsSendHookGate({
+          toolName,
+          sessionKeys,
+          args: toolParams as { task: string; [key: string]: unknown },
+          decision,
+          stateKey,
+          sessionId: stringValue(ctx.sessionId),
+        });
+        if (sendHookGate.kind === "block") {
+          applyToolGateResult({
+            result: sendHookGate,
+            stateKey,
+            logger: deps.pi.logger,
+            decision,
+          });
+          return toolGateHookReturn(sendHookGate);
+        }
+        const gate = sendHookGate.nativeGate;
+        if (!gate?.allowed) {
+          return;
         }
         updatePolicyState(stateKey, (current) => ({
           ...current,
@@ -560,76 +561,59 @@ export function makeBeforeToolCallHook(deps: BeforeToolCallDeps) {
       && toolName
       && !toolName.startsWith("octoclaw_")
     ) {
-      const classification = classifyBudgetedMainTool(toolName, toolParams);
-      if (!budgetedMainHandledTool && classification.counted) {
-        const now = Date.now();
-        const stateRecord = asRecord(state);
-        const existingBudget = readBudgetedMainState(stateRecord);
-        const startedBudget = existingBudget?.active && !existingBudget.completedAt && !existingBudget.escalatedAt
-          ? existingBudget
-          : {
-              ...buildBudgetedMainState({
-                now,
-                decision,
-                visibleStartAt: budgetedMainVisibleStartAt(stateRecord, now),
-                budgetStartSource: "main_reply_tool_guard",
-                workContractId: budgetedMainWorkContractId(stateRecord, decision),
-                spawnIntentId: budgetedMainSpawnIntentId(stateRecord),
-              }),
-              reason: "main_reply_tool_observed",
-              decisionBucket: stringValue(asRecord(decision.route_decision).decision_bucket || decision._decision_bucket || "main_reply_tool_guard"),
-            };
-        const updatedBudget = updateBudgetedMainToolState(startedBudget, classification);
-        const escalationReason = budgetedMainToolEscalationReason(updatedBudget, classification);
-        if (escalationReason) {
-          const escalated = await escalateBudgetedMainForTool({
-            stateKey,
-            ctx,
-            state: stateRecord,
-            decision,
-            budgetState: updatedBudget,
-            reason: escalationReason,
-            logger: deps.pi.logger,
-          });
-          state = escalated.state as PolicyStateEntry | null;
-          updatePolicyState(stateKey, (current) => ({
-            ...current,
-            blockedTools: [...(Array.isArray(current.blockedTools) ? current.blockedTools.slice(-7) : []), toolName].filter(Boolean),
-          }));
-          return {
-            block: true,
-            blockReason: `OctoClaw main reply tool budget escalated (${escalationReason}). This tool call did not execute. Call octoclaw_dispatch with the original task; do not continue ordinary tool execution in the main agent.`,
-          };
-        }
+      const stateRecord = asRecord(state);
+      const replyBudgetGate = evaluateReplyToolBudgetGate({
+        toolName,
+        toolParams,
+        state: stateRecord,
+        decision,
+        budgetedMainHandledTool,
+        stateKey,
+        sessionId: stringValue(ctx.sessionId),
+        now: Date.now(),
+      });
+      if (replyBudgetGate.kind === "block" && replyBudgetGate.reason && replyBudgetGate.budgetState) {
+        const escalated = await escalateBudgetedMainForTool({
+          stateKey,
+          ctx,
+          state: stateRecord,
+          decision,
+          budgetState: replyBudgetGate.budgetState,
+          reason: replyBudgetGate.reason,
+          logger: deps.pi.logger,
+        });
+        state = escalated.state as PolicyStateEntry | null;
+        applyToolGateResult({
+          result: replyBudgetGate,
+          stateKey,
+          logger: deps.pi.logger,
+          decision,
+        });
+        return toolGateHookReturn(replyBudgetGate);
+      }
+      if (replyBudgetGate.kind === "observe" && replyBudgetGate.budgetState) {
         state = updateBudgetedMainForContext({
           stateKey,
           ctx,
           state: stateRecord,
-          budgetState: updatedBudget,
+          budgetState: replyBudgetGate.budgetState,
         }) as PolicyStateEntry | null;
-        scheduleBudgetedMainTimeout({
+        if (replyBudgetGate.scheduleTimeout) {
+          scheduleBudgetedMainTimeout({
+            stateKey,
+            ctx,
+            state: stateRecord,
+            decision,
+            budgetState: replyBudgetGate.budgetState,
+            logger: deps.pi.logger,
+          });
+        }
+        applyToolGateResult({
+          result: replyBudgetGate,
           stateKey,
-          ctx,
-          state: stateRecord,
-          decision,
-          budgetState: updatedBudget,
           logger: deps.pi.logger,
-        });
-        void recordPolicyReplay(
-          "main_reply_tool_guard_observed",
-          {
-            sessionKey: stateKey || "",
-            sessionId: stringValue(ctx.sessionId),
-            route: stringValue(asRecord(decision.route_decision).route),
-            decision_bucket: updatedBudget.decisionBucket,
-            toolName,
-            toolCount: updatedBudget.toolCount,
-            readOnlyToolCount: updatedBudget.readOnlyToolCount,
-            budgetStartSource: updatedBudget.budgetStartSource,
-          },
-          deps.pi.logger,
           decision,
-        ).catch(() => {});
+        });
       }
       updateAckTrackingState(stateKey, { tool_active: true });
       const latencyAck = await maybeSendLatencyAck(decision, metadata, stateKey, asRecord(state), ctx, deps.pi.logger ?? {}, toolName);
@@ -681,56 +665,22 @@ export function makeBeforeToolCallHook(deps: BeforeToolCallDeps) {
       ).catch(() => {});
     }
 
-    if (isControlObserverDecision(decision)) {
-      if (allowedObserverTools.has(toolName)) {
-        return;
-      }
-      updatePolicyState(stateKey, (current) => ({
-        ...current,
-        blockedTools: [...(Array.isArray(current.blockedTools) ? current.blockedTools.slice(-7) : []), toolName].filter(Boolean),
-      }));
-      void recordPolicyReplay(
-        "tool_blocked_control_observer",
-        {
-          sessionKey: stateKey || "",
-          sessionId: stringValue(ctx.sessionId),
-          route: stringValue(asRecord(decision.route_decision).route),
-          toolName,
-          allowedTools: [...allowedObserverTools],
-        },
-        deps.pi.logger,
+    const sessionControlGate = evaluateSessionControlGate({
+      toolName,
+      decision,
+      allowedObserverTools,
+      allowedSessionTools,
+      stateKey,
+      sessionId: stringValue(ctx.sessionId),
+    });
+    if (sessionControlGate.kind !== "allow" || sessionControlGate.stop) {
+      applyToolGateResult({
+        result: sessionControlGate,
+        stateKey,
+        logger: deps.pi.logger,
         decision,
-      ).catch(() => {});
-      return {
-        block: true,
-        blockReason: `OctoClaw control/observer request must use control tools only: ${[...allowedObserverTools].join(", ")}.`,
-      };
-    }
-
-    if (isSessionControlDecision(decision)) {
-      if (allowedSessionTools.has(toolName)) {
-        return;
-      }
-      updatePolicyState(stateKey, (current) => ({
-        ...current,
-        blockedTools: [...(Array.isArray(current.blockedTools) ? current.blockedTools.slice(-7) : []), toolName].filter(Boolean),
-      }));
-      void recordPolicyReplay(
-        "tool_blocked_session_control",
-        {
-          sessionKey: stateKey || "",
-          sessionId: stringValue(ctx.sessionId),
-          route: stringValue(asRecord(decision.route_decision).route),
-          toolName,
-          allowedTools: [...allowedSessionTools],
-        },
-        deps.pi.logger,
-        decision,
-      ).catch(() => {});
-      return {
-        block: true,
-        blockReason: `OctoClaw current-session control request must use session control tools only: ${[...allowedSessionTools].join(", ")}.`,
-      };
+      });
+      return toolGateHookReturn(sessionControlGate);
     }
 
     const routeAllowsDirectTools = stringValue(asRecord(decision.route_decision).route) === "reply"
@@ -738,42 +688,25 @@ export function makeBeforeToolCallHook(deps: BeforeToolCallDeps) {
     const directReplyToolsAllowed = routeAllowsDirectTools
       && !isControlObserverDecision(decision)
       && !isSessionControlDecision(decision);
-    if (routeHintIsRequired && !routeHintAlreadySubmitted && !directReplyToolsAllowed && !allowedPreHintTools.has(toolName)) {
-      if (toolName === "octoclaw_dispatch") {
-        void recordPolicyReplay(
-          "route_hint_dispatch_advisory",
-          {
-            sessionKey: stateKey || "",
-            sessionId: stringValue(ctx.sessionId),
-            route: stringValue(asRecord(decision.route_decision).route),
-            toolName,
-            requiredTool: routeHintTool,
-          },
-          deps.pi.logger,
-          decision,
-        ).catch(() => {});
-      } else {
-        updatePolicyState(stateKey, (current) => ({
-          ...current,
-          blockedTools: [...(Array.isArray(current.blockedTools) ? current.blockedTools.slice(-7) : []), toolName].filter(Boolean),
-        }));
-        void recordPolicyReplay(
-          "tool_blocked_before_route_hint",
-          {
-            sessionKey: stateKey || "",
-            sessionId: stringValue(ctx.sessionId),
-            route: stringValue(asRecord(decision.route_decision).route),
-            toolName,
-            requiredTool: routeHintTool,
-          },
-          deps.pi.logger,
-          decision,
-        ).catch(() => {});
-        return {
-          block: true,
-          blockReason: `OctoClaw runtime policy requires ${routeHintTool} before using other tools.`,
-        };
-      }
+    const routeHintGate = evaluateRouteHintGate({
+      toolName,
+      decision,
+      routeHintTool,
+      routeHintIsRequired,
+      routeHintAlreadySubmitted,
+      directReplyToolsAllowed,
+      allowedPreHintTools,
+      stateKey,
+      sessionId: stringValue(ctx.sessionId),
+    });
+    if (routeHintGate.kind !== "allow" || routeHintGate.stop) {
+      applyToolGateResult({
+        result: routeHintGate,
+        stateKey,
+        logger: deps.pi.logger,
+        decision,
+      });
+      return toolGateHookReturn(routeHintGate);
     }
 
     const workContractProjection = asRecord(decision.work_contract);
@@ -790,43 +723,6 @@ export function makeBeforeToolCallHook(deps: BeforeToolCallDeps) {
         cachedDecision: decision,
         dispatchCallImpliesDelegateObjection: true,
       }).requested;
-    if (forbiddenContractTools.has(toolName) && !isDeterministicFallbackToDelegate && !isBudgetedMainDispatch && !isExplicitDelegateDispatch) {
-      if (toolName === "octoclaw_dispatch") {
-        void recordPolicyReplay(
-          "work_contract_forbidden_dispatch_advisory",
-          {
-            sessionKey: stateKey || "",
-            sessionId: stringValue(ctx.sessionId),
-            route: stringValue(workContractProjection.route || asRecord(decision.route_decision).route),
-            toolName,
-            workContractId: stringValue(workContractProjection.workContractId || workContractProjection.work_contract_id),
-          },
-          deps.pi.logger,
-          decision,
-        ).catch(() => {});
-      } else {
-        updatePolicyState(stateKey, (current) => ({
-          ...current,
-          blockedTools: [...(Array.isArray(current.blockedTools) ? current.blockedTools.slice(-7) : []), toolName].filter(Boolean),
-        }));
-        void recordPolicyReplay(
-          "tool_blocked_work_contract_forbidden",
-          {
-            sessionKey: stateKey || "",
-            sessionId: stringValue(ctx.sessionId),
-            route: stringValue(workContractProjection.route || asRecord(decision.route_decision).route),
-            toolName,
-            workContractId: stringValue(workContractProjection.workContractId || workContractProjection.work_contract_id),
-          },
-          deps.pi.logger,
-          decision,
-        ).catch(() => {});
-        return {
-          block: true,
-          blockReason: `OctoClaw WorkContract forbids ${toolName} for this turn.`,
-        };
-      }
-    }
     if (isExplicitDelegateDispatch) {
       updatePolicyState(stateKey, (current) => ({
         ...current,
@@ -836,36 +732,21 @@ export function makeBeforeToolCallHook(deps: BeforeToolCallDeps) {
       updateAckTrackingState(stateKey, { delegated_running: true, tool_active: false });
       return;
     }
-    const blockedPatterns = Array.isArray(toolPolicy.block_tool_patterns)
-      ? toolPolicy.block_tool_patterns.map((item) => stringValue(item)).filter(Boolean)
-      : [];
-    const delegateTool = stringValue(toolPolicy.must_delegate_via || "octoclaw_dispatch");
-    const isPolicyControlTool = toolName.startsWith("octoclaw_") || toolName === routeHintTool || toolName === delegateTool;
-    const currentRouteIsDelegated = isDelegatedRoute(decision);
-    if (currentRouteIsDelegated && !isPolicyControlTool && matchesBlockedPattern(stringifyParamsForPolicy(event.params), blockedPatterns)) {
-      void recordPolicyReplay(
-        "tool_blocked_manual_delegation",
-        {
-          sessionKey: stateKey || "",
-          sessionId: stringValue(ctx.sessionId),
-          route: stringValue(asRecord(decision.route_decision).route),
-          toolName,
-        },
-        deps.pi.logger,
-        decision,
-      ).catch(() => {});
-      return {
-        block: true,
-        blockReason: `OctoClaw runtime policy blocked a manual delegation pattern. Use ${stringValue(toolPolicy.must_delegate_via || "octoclaw_dispatch")} instead.`,
-      };
-    }
-
-    if (!delegationEnforcementEnabled) {
-      return;
-    }
-
-    const workflowRule = workflowEnforcementRule(decision, toolName, routeHintTool);
-    if (!workflowRule.block && workflowRule.delegateTool && toolName === workflowRule.delegateTool) {
+    const delegationGuard = evaluateDelegationWorkflowGuard({
+      toolName,
+      paramsText: stringifyParamsForPolicy(event.params),
+      decision,
+      toolPolicy,
+      routeHintTool,
+      delegationEnforcementEnabled,
+      stateKey,
+      sessionId: stringValue(ctx.sessionId),
+      forbiddenContractTools,
+      isDeterministicFallbackToDelegate,
+      isBudgetedMainDispatch,
+      isExplicitDelegateDispatch,
+    });
+    if (delegationGuard.kind === "delegate_tool") {
       updatePolicyState(stateKey, (current) => ({
         ...current,
         delegated: true,
@@ -874,49 +755,15 @@ export function makeBeforeToolCallHook(deps: BeforeToolCallDeps) {
       updateAckTrackingState(stateKey, { delegated_running: true, tool_active: false });
       return;
     }
-    if (!workflowRule.block) {
-      return;
+    if (delegationGuard.kind !== "allow" || delegationGuard.stop) {
+      applyToolGateResult({
+        result: delegationGuard,
+        stateKey,
+        logger: deps.pi.logger,
+        decision,
+      });
+      return toolGateHookReturn(delegationGuard);
     }
-
-    if (toolName === "octoclaw_dispatch") {
-      void recordPolicyReplay(
-        "workflow_enforcement_dispatch_advisory",
-        {
-          sessionKey: stateKey || "",
-          sessionId: stringValue(ctx.sessionId),
-          route: stringValue(workflowRule.route || asRecord(decision.route_decision).route),
-          toolName,
-          allowedTools: workflowRule.allowedTools,
-        },
-        deps.pi.logger,
-        state?.decision as Record<string, unknown> | null,
-      ).catch(() => {});
-      return;
-    }
-
-    updatePolicyState(stateKey, (current) => ({
-      ...current,
-      blockedTools: [...(Array.isArray(current.blockedTools) ? current.blockedTools.slice(-7) : []), toolName].filter(Boolean),
-    }));
-    const workflowRoute = stringValue(workflowRule.route || asRecord(decision.route_decision).route);
-    const observerOnly = Boolean(asRecord(asRecord(decision.hook_interface).before_tool_call).observe_only);
-    void recordPolicyReplay(
-      observerOnly ? "tool_blocked_runner_policy" : "tool_blocked_delegation_policy",
-      {
-        sessionKey: stateKey || "",
-        sessionId: stringValue(ctx.sessionId),
-        route: workflowRoute,
-        toolName,
-        allowedTools: workflowRule.allowedTools,
-      },
-      deps.pi.logger,
-      state?.decision as Record<string, unknown> | null,
-    ).catch(() => {});
-    return {
-      block: true,
-        blockReason: observerOnly
-          ? `OctoClaw runtime policy route=delegate with role=observer_probe requires the observe workflow. Use ${workflowRule.delegateTool || "octoclaw_dispatch"} first. Allowed workflow tools: ${workflowRule.allowedTools.join(", ") || "octoclaw_dispatch"}.`
-          : `OctoClaw runtime policy route=${stringValue(asRecord(decision.route_decision).route || "reply")} requires delegation. Use ${workflowRule.delegateTool || "octoclaw_dispatch"} first. Allowed control tools: ${workflowRule.allowedTools.join(", ") || "octoclaw_dispatch"}.`,
-    };
+    return;
   };
 }

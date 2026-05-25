@@ -60,6 +60,38 @@ export function resolveSpeculativePreloadEnabled(pluginConfig: Record<string, un
   return raw === "1" || raw === "true" || raw === "enabled";
 }
 
+function resolveBooleanFeatureFlag(
+  envName: string,
+  configValues: unknown[],
+): boolean {
+  const envRaw = String(process.env[envName] ?? "").trim();
+  const rawValue = envRaw || String(configValues.find((value) => value !== undefined) ?? "");
+  const raw = rawValue.trim().toLowerCase();
+  return raw === "1" || raw === "true" || raw === "enabled" || raw === "on" || raw === "yes";
+}
+
+export function resolveRouteHintHardPreconditionEnabled(pluginConfig: Record<string, unknown> | undefined = undefined): boolean {
+  return resolveBooleanFeatureFlag("OCTOCLAW_ROUTE_HINT_HARD_PRECONDITION", [
+    pluginConfig?.routeHintHardPrecondition,
+    pluginConfig?.route_hint_hard_precondition,
+  ]);
+}
+
+export function resolveAutomaticRetryAutomationEnabled(pluginConfig: Record<string, unknown> | undefined = undefined): boolean {
+  return resolveBooleanFeatureFlag("OCTOCLAW_AUTOMATIC_RETRY_AUTOMATION", [
+    pluginConfig?.automaticRetryAutomation,
+    pluginConfig?.automatic_retry_automation,
+  ]);
+}
+
+export type BudgetedMainWallTimeMode = "observe_only" | "escalate";
+
+export function resolveBudgetedMainWallTimeMode(pluginConfig: Record<string, unknown> | undefined = undefined): BudgetedMainWallTimeMode {
+  const configured = pluginConfig?.budgetedMainWallTimeMode ?? pluginConfig?.budgeted_main_wall_time_mode;
+  const raw = String(process.env.OCTOCLAW_BUDGETED_MAIN_WALL_TIME_MODE || configured || "").trim().toLowerCase();
+  return raw === "escalate" ? "escalate" : "observe_only";
+}
+
 export interface PlannerSpawnConfig {
   spawnBackend: SpawnBackend;
   plannerAllowlist: string[];

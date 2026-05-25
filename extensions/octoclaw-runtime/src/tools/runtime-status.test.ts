@@ -135,6 +135,39 @@ describe("runtime status lifecycle projection", () => {
     expect(view.resultLocation).toBe("delivered:1778573724.032469");
   });
 
+  it("NFSV2-TRUTH-001: native running beats stale completed cache", () => {
+    const view = buildRuntimeStatusTaskView(
+      task({
+        status: "completed",
+        completed_at: "2026-05-12T12:04:00.000Z",
+        report_path: "/tmp/stale-cache-result.md",
+      }),
+      nowMs,
+      native("running"),
+    );
+
+    expect(["running", "running_slow", "stalled"]).toContain(view.status);
+    expect(view.status).not.toBe("completed");
+    expect(view.status).not.toBe("delivered");
+    expect(view.statusReason).not.toBe("completed_with_result");
+  });
+
+  it("NFSV2-TRUTH-002: native completed with result beats stale failed cache", () => {
+    const view = buildRuntimeStatusTaskView(
+      task({
+        status: "failed",
+        failed_at: "2026-05-12T12:04:00.000Z",
+        report_path: "/tmp/native-completed-result.md",
+      }),
+      nowMs,
+      native("completed"),
+    );
+
+    expect(view.status).toBe("completed");
+    expect(view.statusReason).toBe("completed_with_result");
+    expect(view.rawStatus).toBe("completed");
+  });
+
   it("marks a native-running task past expected deadline without progress as stalled", () => {
     const view = buildRuntimeStatusTaskView(task(), nowMs, native("running"));
 

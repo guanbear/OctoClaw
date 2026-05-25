@@ -5,15 +5,23 @@ import {
   isPlannerAllowedForSession,
   resolvePlannerAllowlist,
   resolvePlannerSpawnConfig,
+  resolveAutomaticRetryAutomationEnabled,
+  resolveBudgetedMainWallTimeMode,
+  resolveRouteHintHardPreconditionEnabled,
   resolveRuntimeConfig,
   resolveSpawnBackend,
   resolveSpawnIntentTtlMs,
+  resolveSpeculativePreloadEnabled,
 } from "./index.js";
 
 const ENV_KEYS = [
   "OCTOCLAW_SPAWN_BACKEND",
   "OCTOCLAW_PLANNER_ALLOWLIST",
   "OCTOCLAW_SPAWN_INTENT_TTL_MS",
+  "OCTOCLAW_SPECULATIVE_PRELOAD",
+  "OCTOCLAW_ROUTE_HINT_HARD_PRECONDITION",
+  "OCTOCLAW_AUTOMATIC_RETRY_AUTOMATION",
+  "OCTOCLAW_BUDGETED_MAIN_WALL_TIME_MODE",
 ] as const;
 
 let originalEnv: typeof process.env;
@@ -180,5 +188,39 @@ describe("runtime convergence target invariants (WP-A)", () => {
 
   it("keeps planner spawn config free of legacy runtime ledger mode (P6-001)", () => {
     expect(resolvePlannerSpawnConfig()).not.toHaveProperty("legacyRuntimeLedgerMode");
+  });
+});
+
+describe("NFSV2 default feature profile", () => {
+  it("keeps speculative preload default-off unless env or plugin config opts in", () => {
+    expect(resolveSpeculativePreloadEnabled()).toBe(false);
+    expect(resolveSpeculativePreloadEnabled({ speculativePreload: true })).toBe(true);
+
+    process.env.OCTOCLAW_SPECULATIVE_PRELOAD = "enabled";
+    expect(resolveSpeculativePreloadEnabled()).toBe(true);
+  });
+
+  it("keeps route hint hard precondition default-off unless explicitly enabled", () => {
+    expect(resolveRouteHintHardPreconditionEnabled()).toBe(false);
+    expect(resolveRouteHintHardPreconditionEnabled({ routeHintHardPrecondition: true })).toBe(true);
+
+    process.env.OCTOCLAW_ROUTE_HINT_HARD_PRECONDITION = "1";
+    expect(resolveRouteHintHardPreconditionEnabled()).toBe(true);
+  });
+
+  it("keeps automatic retry/amendment automation default-off", () => {
+    expect(resolveAutomaticRetryAutomationEnabled()).toBe(false);
+    expect(resolveAutomaticRetryAutomationEnabled({ automaticRetryAutomation: true })).toBe(true);
+
+    process.env.OCTOCLAW_AUTOMATIC_RETRY_AUTOMATION = "true";
+    expect(resolveAutomaticRetryAutomationEnabled()).toBe(true);
+  });
+
+  it("keeps budgeted-main wall-time default observation-only", () => {
+    expect(resolveBudgetedMainWallTimeMode()).toBe("observe_only");
+    expect(resolveBudgetedMainWallTimeMode({ budgetedMainWallTimeMode: "escalate" })).toBe("escalate");
+
+    process.env.OCTOCLAW_BUDGETED_MAIN_WALL_TIME_MODE = "escalate";
+    expect(resolveBudgetedMainWallTimeMode()).toBe("escalate");
   });
 });

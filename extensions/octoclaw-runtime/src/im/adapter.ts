@@ -5,6 +5,7 @@ export type IMCapabilityLevel = "L0" | "L1" | "L2";
 export interface IMProjectionFooter {
   route: "reply" | "delegate";
   model: string;
+  mode?: "compact" | "debug";
   via?: string;
   workerPool?: string;
   workContractId?: string;

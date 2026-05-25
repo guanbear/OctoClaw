@@ -24,6 +24,7 @@ describe("SlackAdapter", () => {
     expect(adapter.renderProjectionFooter("北京天气很好。", {
       route: "reply",
       model: "zhipu/GLM-5.1",
+      mode: "debug",
       complexityBand: "deep",
       via: "judge",
       workerPool: "octoclaw-main",
@@ -77,8 +78,25 @@ describe("SlackAdapter", () => {
     expect(renderSlackProjectionFooter("done", {
       route: "delegate",
       model: "zai/glm-4.7",
+      mode: "debug",
       healthNote: "downgraded: rate_limit_429 on zhipu/glm-5.1",
     })).toContain("health=downgraded: rate_limit_429 on zhipu/glm-5.1");
+  });
+
+  it("NFSV2-FOOTER-001B: compact footer does not include debug-only IDs", () => {
+    const rendered = renderSlackProjectionFooter("done", {
+      route: "reply",
+      model: "zhipu/GLM-5.1",
+      workerPool: "octoclaw-main",
+      workContractId: "wc-debug-123456",
+      healthNote: "downgraded: rate_limit_429",
+    });
+
+    expect(rendered).toContain("route=reply | model=zhipu/GLM-5.1");
+    expect(rendered).not.toContain("wc-debug-123456");
+    expect(rendered).not.toContain("wc=wc-debug");
+    expect(rendered).not.toContain("worker=");
+    expect(rendered).not.toContain("health=");
   });
 
   it("sends Slack messages through Slack Web API", async () => {

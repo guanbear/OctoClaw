@@ -7,6 +7,8 @@ import {
 import { captureTmuxEvidence, isTmuxEvidenceEnabled, type TmuxEvidenceSnapshot, type TmuxPaneMapping } from "../runtime-ledger/tmux-evidence.js";
 import { truncateText } from "../resolve/env.js";
 import { normalizeLiveRoute } from "../resolve/route-helpers.js";
+import { buildNativeExecutionSnapshot, isNativeLifecycleAuthoritative } from "../status/native-execution-snapshot.js";
+import { buildTaskProjectionInput, projectionCacheFromRecord } from "../status/task-projection-input.js";
 import { runtimeTruthVerdict, type NativeStatusProjection, type NativeStatusProjectorInput } from "../state/native-status-projector.js";
 import { asBoolean, asRecord, asString, type UnknownRecord } from "../util/type-coercion.js";
 import {
@@ -14,7 +16,6 @@ import {
   formatElapsed,
   formatTimeAgo,
   firstTimestamp,
-  hasExplicitFalse,
   hasExplicitTrue,
   optionalString,
   timestampMs,
@@ -174,16 +175,6 @@ export function runtimeStatusEvidence(record: RuntimeTaskProjectionRecord): {
     evidence.runId,
     evidence.run_id,
   ) ?? "";
-  const childSessionId = optionalString(
-    record.childSessionId,
-    record.child_session_id,
-    delegateAttempt.childSessionId,
-    delegateAttempt.child_session_id,
-    continuity.childSessionId,
-    continuity.child_session_id,
-    evidence.childSessionId,
-    evidence.child_session_id,
-  ) ?? "";
   const hasDispatchEvidence = asBoolean(record.dispatchExecuted)
     || asBoolean(record.dispatch_executed)
     || asBoolean(evidence.dispatchExecuted)
@@ -192,25 +183,38 @@ export function runtimeStatusEvidence(record: RuntimeTaskProjectionRecord): {
     || asBoolean(delegateAttempt.dispatch_executed)
     || Boolean(asString(nativeBinding.nativeFlowId || nativeTaskBinding.nativeFlowId))
     || Boolean(asString(record.flow_id));
-  const nativeFlowId = optionalString(
-    nativeBinding.nativeFlowId,
-    nativeBinding.native_flow_id,
-    nativeTaskBinding.nativeFlowId,
-    nativeTaskBinding.native_flow_id,
-    record.flowId,
-    record.flow_id,
-  ) ?? "";
   const spawnSignals = [
-    record.spawnExecuted,
-    record.spawn_executed,
-    evidence.spawnExecuted,
-    evidence.spawn_executed,
     delegateAttempt.spawnExecuted,
     delegateAttempt.spawn_executed,
+    nativeBinding.spawnExecuted,
+    nativeBinding.spawn_executed,
+    nativeTaskBinding.spawnExecuted,
+    nativeTaskBinding.spawn_executed,
   ];
+  const acceptedRunId = optionalString(
+    nativeTaskBinding.runId,
+    nativeTaskBinding.run_id,
+    nativeTaskBinding.childRunId,
+    nativeTaskBinding.child_run_id,
+    nativeBinding.runId,
+    nativeBinding.run_id,
+    nativeBinding.childRunId,
+    nativeBinding.child_run_id,
+    delegateAttempt.runId,
+    delegateAttempt.run_id,
+    delegateAttempt.childRunId,
+    delegateAttempt.child_run_id,
+  ) ?? "";
+  const acceptedChildSessionId = optionalString(
+    nativeTaskBinding.childSessionId,
+    nativeTaskBinding.child_session_id,
+    nativeBinding.childSessionId,
+    nativeBinding.child_session_id,
+    delegateAttempt.childSessionId,
+    delegateAttempt.child_session_id,
+  ) ?? "";
   const hasSpawnEvidence = hasExplicitTrue(spawnSignals)
-    || Boolean(runId || childSessionId)
-    || (!hasExplicitFalse(spawnSignals) && Boolean(nativeFlowId && childSessionKey));
+    || Boolean(acceptedRunId || acceptedChildSessionId);
   const resultMaterialized = asBoolean(record.resultMaterialized)
     || asBoolean(record.result_materialized)
     || asBoolean(evidence.resultMaterialized)
@@ -287,20 +291,18 @@ export function nativeStatusInputForTask(record: RuntimeTaskProjectionRecord, ct
   const telemetry = asRecord(contract.telemetry);
   const continuity = asRecord(contract.continuity);
   const evidence = runtimeStatusEvidence(record);
-  return {
-    ctx,
-    sessionKey: optionalString(record.session_key, record.sessionKey, contract.sessionKey),
-    workContractId: optionalString(record.workContractId, record.work_contract_id, contract.workContractId, record.id),
-    openclawRunId: optionalString(nativeRefs.openclawRunId, record.openclawRunId, record.runId, record.run_id, nativeBinding.runId, telemetry.openclawRunId, evidence.runId),
-    openclawTaskId: optionalString(nativeRefs.openclawTaskId, record.openclawTaskId, record.nativeTaskId, record.native_task_id, nativeBinding.nativeTaskId),
-    openclawFlowId: optionalString(nativeRefs.openclawFlowId, record.openclawFlowId, record.nativeFlowId, record.native_flow_id, record.flowId, record.flow_id, nativeBinding.flowId, telemetry.nativeFlowId),
-    childSessionKey: optionalString(nativeRefs.childSessionKey, record.childSessionKey, record.child_session_key, nativeBinding.childSessionKey, continuity.preferredChildSessionKey, evidence.childSessionKey),
-    cache: {
-      status: asString(record.status),
-      rawStatus: asString(record.rawStatus || record.raw_status),
-      summary: asString(record.summary),
+  return buildTaskProjectionInput({
+    native: {
+      ctx,
+      sessionKey: optionalString(record.session_key, record.sessionKey, contract.sessionKey),
+      workContractId: optionalString(record.workContractId, record.work_contract_id, contract.workContractId, record.id),
+      openclawRunId: optionalString(nativeRefs.openclawRunId, record.openclawRunId, record.runId, record.run_id, nativeBinding.runId, telemetry.openclawRunId, evidence.runId),
+      openclawTaskId: optionalString(nativeRefs.openclawTaskId, record.openclawTaskId, record.nativeTaskId, record.native_task_id, nativeBinding.nativeTaskId),
+      openclawFlowId: optionalString(nativeRefs.openclawFlowId, record.openclawFlowId, record.nativeFlowId, record.native_flow_id, record.flowId, record.flow_id, nativeBinding.flowId, telemetry.nativeFlowId),
+      childSessionKey: optionalString(nativeRefs.childSessionKey, record.childSessionKey, record.child_session_key, nativeBinding.childSessionKey, continuity.preferredChildSessionKey, evidence.childSessionKey),
     },
-  };
+    cache: projectionCacheFromRecord(record),
+  });
 }
 
 function workContractMainContext(record: RuntimeTaskProjectionRecord): UnknownRecord {
@@ -375,7 +377,14 @@ function lifecycleStatusFromNativeProjection(
   nativeProjection: NativeStatusProjection | undefined,
   terminalStatus: string,
   rawStatus: string,
+  nativeAuthoritative = false,
 ): NativeLifecycleStatus {
+  if (nativeAuthoritative) {
+    if (nativeProjection?.status === "completed") return "completed";
+    if (nativeProjection?.status === "failed") return "failed";
+    if (nativeProjection?.status === "timed_out") return "timed_out";
+    if (nativeProjection?.status === "running") return "running";
+  }
   if (terminalStatus === "completed") return "completed";
   if (terminalStatus === "failed") return "failed";
   if (terminalStatus === "timed_out") return "timed_out";
@@ -585,6 +594,12 @@ export function projectRuntimeStatus(
     ? normalizedRawStatus === "done" || normalizedRawStatus === "succeeded" ? "completed" : normalizedRawStatus === "cancelled" ? "canceled" : normalizedRawStatus
     : "";
   const resultEvidence = runtimeResultEvidence(record, evidence);
+  const nativeSnapshot = buildNativeExecutionSnapshot(nativeProjection, {
+    finalResultExists: Object.values(resultEvidence).some(Boolean),
+    nativeAnnounceDelivered: resultEvidence.hasDeliveryAck,
+    observedAt: new Date(nowMs).toISOString(),
+  });
+  const nativeAuthoritative = isNativeLifecycleAuthoritative(nativeSnapshot);
   const completionStatus = asString(asRecord(record.completion).status).toLowerCase();
 
   const reconcileResult = asRecord(record.lifecycle_reconcile_result);
@@ -595,15 +610,24 @@ export function projectRuntimeStatus(
       return { status: reconcileResult.status, reason: asString(reconcileResult.reason, "lifecycle_reducer") };
     }
   }
-  if (["failure", "failed", "error"].includes(completionStatus)) return { status: "failed", reason: "failure_receipt" };
-  if (["timed_out", "timeout", "expired"].includes(completionStatus)) return { status: "timed_out", reason: "timeout_receipt" };
+  if (!nativeAuthoritative && ["failure", "failed", "error"].includes(completionStatus)) return { status: "failed", reason: "failure_receipt" };
+  if (!nativeAuthoritative && ["timed_out", "timeout", "expired"].includes(completionStatus)) return { status: "timed_out", reason: "timeout_receipt" };
+  if (nativeProjection?.status === "degraded" && nativeProjection.reason === "native_registry_unavailable" && !terminalStatus) {
+    return { status: "degraded", reason: nativeProjection.reason };
+  }
+  if (nativeProjection?.status === "lost" && !terminalStatus) {
+    return { status: "lost", reason: nativeProjection.reason };
+  }
+  if (nativeProjection?.status === "canceled" && (nativeAuthoritative || !terminalStatus)) {
+    return { status: "canceled", reason: nativeProjection.reason };
+  }
 
   if (route === "delegate") {
     if (evidence.dispatchRejected && evidence.mainFallbackExecuted) {
       return { status: "main_fallback", reason: "dispatch_rejected_main_fallback" };
     }
-    if (!evidence.hasDispatchEvidence) return { status: "registered", reason: "no_dispatch_evidence" };
-    if (!evidence.hasSpawnEvidence && !["failed", "canceled", "blocked", "timed_out"].includes(terminalStatus)) {
+    if (!evidence.hasDispatchEvidence && !nativeAuthoritative) return { status: "registered", reason: "no_dispatch_evidence" };
+    if (!evidence.hasSpawnEvidence && !nativeAuthoritative && !["completed", "failed", "canceled", "blocked", "timed_out"].includes(terminalStatus)) {
       return { status: "queued", reason: "dispatch_materialized_but_no_spawn_evidence" };
     }
     if (normalizedRawStatus === "deliverable_ready") {
@@ -613,21 +637,17 @@ export function projectRuntimeStatus(
     }
   }
 
-  if (nativeProjection?.status === "degraded" && nativeProjection.reason === "native_registry_unavailable" && !terminalStatus) {
-    return { status: "degraded", reason: nativeProjection.reason };
-  }
-  if (nativeProjection?.status === "canceled" && !terminalStatus) {
-    return { status: "canceled", reason: nativeProjection.reason };
-  }
-
-  if (terminalStatus && !["completed", "failed", "timed_out"].includes(terminalStatus)) {
+  if (terminalStatus && !nativeAuthoritative && !["completed", "failed", "timed_out"].includes(terminalStatus)) {
     return { status: terminalStatus, reason: "terminal_or_explicit_status" };
   }
 
-  const nativeStatus = lifecycleStatusFromNativeProjection(nativeProjection, terminalStatus, normalizedRawStatus);
+  const nativeStatus = lifecycleStatusFromNativeProjection(nativeProjection, terminalStatus, normalizedRawStatus, nativeAuthoritative);
   const deadlines = runtimeLifecycleDeadlines(record, nativeStatus);
+  const currentStatus = nativeAuthoritative
+    ? (nativeProjection?.status ?? rawStatus)
+    : terminalStatus || rawStatus;
   const reconciled = reduceCanonicalStatus({
-    currentStatus: terminalStatus || rawStatus,
+    currentStatus,
     nativeStatus,
     ...resultEvidence,
     expectedAt: deadlines.expectedAt,
@@ -666,8 +686,9 @@ export function buildRuntimeTaskProjection(
   const fallbackProjection = projectRuntimeStatus(record, nowMs, nativeProjection);
   const nativeTruthVerdict = nativeProjection ? runtimeTruthVerdict(nativeProjection) : null;
   const fallbackTerminal = ["completed", "failed", "canceled"].includes(fallbackProjection.status);
+  const nativeSnapshot = buildNativeExecutionSnapshot(nativeProjection);
   const nativeProjectionAuthoritative = Boolean(nativeProjection && (
-    ["run", "flow", "latest"].includes(nativeProjection.source)
+    isNativeLifecycleAuthoritative(nativeSnapshot)
     || (!fallbackTerminal && (
       nativeProjection.reason === "native_id_known_but_registry_missing"
       || nativeProjection.reason === "native_registry_lookup_failed"

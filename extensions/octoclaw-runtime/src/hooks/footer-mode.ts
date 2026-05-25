@@ -307,18 +307,7 @@ export function appendReplyProjectionFooter(content: string, state: UnknownRecor
   const routeDecision = asRecord(decision.route_decision);
   const projectedRoute = stringValue(workContract.route || routeDecision.route || state.route || snapshot.route || "reply") === "delegate"
     ? "delegate" : "reply";
-  const delegateExecutionObserved = state.dispatchExecuted === true
-    || state.dispatch_executed === true
-    || state.spawnExecuted === true
-    || state.spawn_executed === true
-    || decision.dispatchExecuted === true
-    || decision.dispatch_executed === true
-    || decision.spawnExecuted === true
-    || decision.spawn_executed === true
-    || asRecord(workContract.telemetry).dispatchExecuted === true
-    || asRecord(workContract.telemetry).dispatch_executed === true
-    || asRecord(workContract.telemetry).spawnExecuted === true
-    || asRecord(workContract.telemetry).spawn_executed === true;
+  const delegateExecutionObserved = hasAcceptedDelegateFooterEvidence(state, decision, workContract);
   const route = projectedRoute === "delegate" && delegateExecutionObserved ? "delegate" : "reply";
 
   const debug = footerDebugEnabled();
@@ -328,6 +317,7 @@ export function appendReplyProjectionFooter(content: string, state: UnknownRecor
   const projection: IMProjectionFooter = {
     route,
     model: resolveDisplayModel(state, event, ctx),
+    mode: debug ? "debug" : "compact",
     complexityBand: resolveFooterComplexityBand(state),
     via: resolveRouteSource(state),
     thread: hasThreadProjection(event, ctx),
@@ -343,6 +333,28 @@ export function appendReplyProjectionFooter(content: string, state: UnknownRecor
     sessionKey: stringValue(ctx.sessionKey || event.sessionKey || event.session_key),
     channel: resolveProjectionChannel(event, ctx),
   });
+}
+
+function hasAcceptedDelegateFooterEvidence(state: UnknownRecord, decision: UnknownRecord, workContract: UnknownRecord): boolean {
+  if (state.delegated === true || state.dispatchRoute === "delegate" || state.dispatch_route === "delegate") return true;
+  const nativeRefs = asRecord(workContract.nativeSpawnRefs || workContract.native_spawn_refs);
+  const nativeBinding = asRecord(asRecord(workContract.delegate).nativeBinding || asRecord(workContract.delegate).native_binding);
+  return Boolean(
+    stringValue(workContract.openclawRunId || workContract.openclaw_run_id)
+    || stringValue(workContract.childSessionKey || workContract.child_session_key)
+    || stringValue(workContract.spawnIntentId || workContract.spawn_intent_id)
+    || stringValue(state.runId || state.run_id)
+    || stringValue(state.childRunId || state.child_run_id)
+    || stringValue(state.childSessionKey || state.child_session_key)
+    || stringValue(state.spawnIntentId || state.spawn_intent_id)
+    || stringValue(nativeRefs.openclawRunId || nativeRefs.openclaw_run_id)
+    || stringValue(nativeRefs.childSessionKey || nativeRefs.child_session_key)
+    || stringValue(nativeRefs.spawnIntentId || nativeRefs.spawn_intent_id)
+    || stringValue(nativeBinding.runId || nativeBinding.run_id)
+    || stringValue(nativeBinding.childRunId || nativeBinding.child_run_id)
+    || stringValue(nativeBinding.childSessionKey || nativeBinding.child_session_key)
+    || stringValue(asRecord(decision.runtime_truth).nativeRunId || asRecord(decision.runtime_truth).native_run_id)
+  );
 }
 
 function replaceRawProviderStatusError(content: string): string {

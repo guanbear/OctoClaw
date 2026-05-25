@@ -47,4 +47,19 @@ describe("classifyBudgetedMainTool", () => {
     expect(classification.unknownToolRiskDetected).toBe(true);
     expect(classification.escalationReason).toBe("tool_risk_unknown");
   });
+
+  describe("NFSV2-BUDGET-004: native session tools are not ordinary budgeted-main tools", () => {
+    for (const toolName of ["sessions_spawn", "sessions_send", "sessions_yield", "session_status"]) {
+      it(`does not count ${toolName} as an ordinary budgeted-main tool`, () => {
+        const classification = classifyBudgetedMainTool(toolName, {});
+
+        expect(classification.counted).toBe(false);
+        expect(classification.escalationReason).toBe("");
+        expect(classification.writeToolDetected).toBe(false);
+        expect(classification.longToolDetected).toBe(false);
+        expect(classification.multiStepToolDetected).toBe(false);
+        expect(classification.unknownToolRiskDetected).toBe(false);
+      });
+    }
+  });
 });

@@ -171,13 +171,19 @@ function projectStatus(input: TaskStatusProjectionInput): TaskProjectionStatus {
   const staleAfterMs = input.staleAfterMs ?? 5 * 60 * 1000;
   if (heartbeat !== undefined && now - heartbeat >= staleAfterMs) return "timed_out";
   if (contract.status === "blocked") return "blocked";
-  return "running";
+  const nativeStatus = contract.delegate?.nativeBinding?.status;
+  if (contract.status === "running" || nativeStatus === "running" || heartbeat !== undefined) return "running";
+  return "queued";
 }
 
 function statusReason(status: TaskProjectionStatus, input: TaskStatusProjectionInput): string {
   if (status === "registered") return "work_contract_registered_without_dispatch_evidence";
   if (status === "materializing") return "native_flow_exists_without_dispatch_evidence";
-  if (status === "queued") return "dispatch_executed_without_spawn_evidence";
+  if (status === "queued") {
+    return input.contract.telemetry.spawnExecuted
+      ? "spawn_evidence_without_native_progress"
+      : "dispatch_executed_without_spawn_evidence";
+  }
   if (status === "running") {
     return input.heartbeatAt || input.lastProgressAt
       ? "spawn_evidence_with_fresh_progress"

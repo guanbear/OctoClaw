@@ -106,6 +106,7 @@ function buildNativeAnnounceFinalMessage(input: {
     projection: {
       route: "delegate",
       model: resolveNativeAnnounceDisplayModel(input.contract, input.state, input.event, input.ctx),
+      mode: footerDebugEnabled() ? "debug" : "compact",
       complexityBand,
       via: "native_announce",
       thread: Boolean(input.replyToMessageId || slackThreadFromSessionKey(input.sessionKey)),

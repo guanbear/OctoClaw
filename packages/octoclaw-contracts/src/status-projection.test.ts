@@ -506,3 +506,40 @@ describe("PC6: nativeSpawnRefs are metadata-only", () => {
     expect(projection.spawnMode).toBeUndefined();
   });
 });
+
+describe("NFSV2-TRUTH-005: legacy execution booleans are not lifecycle truth", () => {
+  const now = "2026-04-25T00:10:00.000Z";
+
+  it("dispatchExecuted=true alone does not promote status beyond queued", () => {
+    const projection = buildTaskStatusProjection({
+      contract: contract({ telemetry: { dispatchExecuted: true, spawnExecuted: false } }),
+      now,
+    });
+
+    expect(projection.status).toBe("queued");
+    expect(projection.success).toBe(false);
+  });
+
+  it("spawnExecuted=true alone does not prove running without native progress evidence", () => {
+    const projection = buildTaskStatusProjection({
+      contract: contract({ telemetry: { dispatchExecuted: true, spawnExecuted: true } }),
+      now,
+    });
+
+    expect(projection.status).not.toBe("running");
+    expect(projection.statusReason).not.toBe("spawn_evidence_without_progress_timestamp");
+  });
+
+  it("legacy execution booleans do not prove completion without result or delivery evidence", () => {
+    const projection = buildTaskStatusProjection({
+      contract: contract({ telemetry: { dispatchExecuted: true, spawnExecuted: true } }),
+      deliveryAcknowledged: false,
+      finalResultExists: false,
+      now,
+    });
+
+    expect(projection.status).not.toBe("completed");
+    expect(projection.status).not.toBe("deliverable_ready");
+    expect(projection.success).toBe(false);
+  });
+});

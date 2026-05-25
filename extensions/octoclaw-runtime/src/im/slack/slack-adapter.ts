@@ -222,6 +222,7 @@ function envelopeProjectionFooter(envelope: MessageDeliveryEnvelope): IMProjecti
   return {
     route: envelope.provenance.route === "delegate" ? "delegate" : "reply",
     model: firstDisplayModel(envelope.provenance.model, envelope.provenance.modelId, "direct_main"),
+    mode: "debug",
     via: envelope.provenance.via,
     complexityBand: envelope.provenance.complexityBand,
     workContractId: envelope.provenance.workContractId,
@@ -255,13 +256,13 @@ export function renderSlackProjectionFooter(message: string, projection: IMProje
     `model=${model}`,
     difficulty && `difficulty=${difficulty}`,
   ].filter(Boolean).join(" | ") + (projection.thread ? " · thread" : "");
-  const debugParts = [
+  const debugParts = projection.mode === "debug" ? [
     stringValue(projection.workerPool) && `worker=${stringValue(projection.workerPool)}`,
     stringValue(projection.workContractId) && `wc=${stringValue(projection.workContractId).slice(0, 8)}`,
-  ].filter(Boolean).join(" | ");
+  ].filter(Boolean).join(" | ") : "";
   const detailFooter = [
     stringValue(projection.via) && `via=${stringValue(projection.via)}`,
-    stringValue(projection.healthNote) && `health=${stringValue(projection.healthNote)}`,
+    projection.mode === "debug" && stringValue(projection.healthNote) && `health=${stringValue(projection.healthNote)}`,
     debugParts,
   ].filter(Boolean).join(" | ");
   const footer = [primaryFooter, detailFooter].filter(Boolean).join(" | ");
@@ -460,15 +461,18 @@ export class SlackAdapter implements IMAdapter {
     }
 
     const timeoutMs = Math.max(500, Number(params.timeoutMs || 5000));
-    let message = params.suppressProjectionFooter || !params.projectionFooter
+    const footerMode = params.footerMode ?? (params.projectionFooter && !params.suppressProjectionFooter ? "debug" : "off");
+    const projectionFooter = params.projectionFooter
+      ? { ...params.projectionFooter, mode: footerMode === "debug" ? "debug" as const : params.projectionFooter.mode }
+      : undefined;
+    let message = params.suppressProjectionFooter || !projectionFooter
       ? params.message
-      : this.renderProjectionFooter(params.message, params.projectionFooter);
+      : this.renderProjectionFooter(params.message, projectionFooter);
     if (message.length > SLACK_CAPABILITIES.maxMessageLength) {
       message = message.slice(0, SLACK_CAPABILITIES.maxMessageLength);
     }
     const replyToMessageId = normalizeSlackMessageTs(params.replyToMessageId);
     const source = params.deliveryTargetSource ?? slackTargetSource({ replyToMessageId, threadTs: target.threadTs });
-    const footerMode = params.footerMode ?? (params.projectionFooter && !params.suppressProjectionFooter ? "debug" : "off");
     const result = await this.sendText({
       kind: params.deliveryKind ?? (params.suppressProjectionFooter ? "neutral_ack" : "legacy_fallback"),
       channel: "slack",

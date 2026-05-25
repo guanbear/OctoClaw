@@ -155,6 +155,30 @@ describe("guardOutboundMessageForPolicyState", () => {
     policyState.clearState(key);
   });
 
+  it("NFSV2-FOOTER-001: legacy dispatch boolean alone does not make compact footer claim delegate", () => {
+    const now = Date.now();
+    const key = "agent:main:slack:channel:c0as4dappu3";
+    policyState.setState(key, {
+      decision: { route_decision: { route: "delegate" }, request: { metadata: { message_id: "1777368519.770700" } } },
+      delegated: false,
+      dispatchExecuted: true,
+      spawnExecuted: false,
+      inboundMessageTs: "1777368519.770700",
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    const guarded = guardOutboundMessageForPolicyState(
+      { to: "C0AS4DAPPU3", replyToMessageId: "1777368519.770700", content: "这是主 agent 的最终回复。" },
+      { channelId: "slack", inboundMessageTs: "1777368519.770700" },
+      now,
+    );
+
+    expect(guarded?.content).toContain("route=reply | model=");
+    expect(guarded?.content).not.toContain("route=delegate | model=");
+    policyState.clearState(key);
+  });
+
   it("does not rewrite Slack outbound when dispatch evidence exists", () => {
     const now = Date.now();
     const key = "agent:main:slack:channel:c0as4dappu3";

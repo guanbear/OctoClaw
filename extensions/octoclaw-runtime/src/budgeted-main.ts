@@ -422,6 +422,7 @@ export function classifyBudgetedMainTool(toolNameInput: unknown, paramsInput: un
   const params = asRecord(paramsInput);
   const isControl = toolName.startsWith("octoclaw_")
     || toolName === "sessions_spawn"
+    || toolName === "sessions_send"
     || toolName === "sessions_yield"
     || toolName === "session_status";
   if (!toolName || isControl) {
