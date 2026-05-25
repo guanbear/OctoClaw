@@ -182,6 +182,21 @@ describe("ack-decision: decideAckAction", () => {
     expect(selectAckTemplate(input)).toEqual(selectAckTemplate(input));
   });
 
+  it("does not select vague stale progress text", () => {
+    const input = {
+      stage: "tier2" as const,
+      channel: "chat" as const,
+      tone: "neutral" as const,
+      taskClass: "long_running" as const,
+      modality: "text" as const,
+      threadBindingKey: "slack:channel:C123",
+      turnId: "turn-stale",
+      recentKeys: [],
+    };
+
+    expect(selectAckTemplate(input)?.text).not.toMatch(/还在跑，稍等|还没好|处理中\.\.\./);
+  });
+
   it("suppresses at highest priority when final response is streaming", () => {
     const decision = decideAckAction(packet({
       nowMs: 2_500,
