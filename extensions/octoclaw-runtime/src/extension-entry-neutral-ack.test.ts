@@ -9,6 +9,7 @@ import { registerIMAdapter } from "./im/index.js";
 import { fetchLatestUserMessageTsForSessionKey } from "./im/slack-thread-anchor.js";
 import { envOverrides } from "./resolve/env.js";
 import { plugin } from "./extension-entry.js";
+import { policyState } from "./state/policy-state.js";
 
 vi.mock("./im/slack-thread-anchor.js", () => ({
   fetchLatestUserMessageTsForSessionKey: vi.fn(async () => "1777770000.333333"),
@@ -139,6 +140,79 @@ describe("neutral Slack ACK hook dedupe", () => {
     const neutralAckEvents = readReplayEvents().filter((entry) => entry.event === "neutral_inbound_ack");
     expect(neutralAckEvents.some((entry) => entry.sent === true && entry.replyToMessageId === "1777770000.000002")).toBe(true);
     expect(neutralAckEvents.some((entry) => entry.replyToMessageId === "1777770000.000002" && entry.reason === "reaction_ack_already_sent")).toBe(false);
+  });
+
+  it("starts a fresh turn when a new Slack DM arrives during an active delegate", async () => {
+    const handlers = new Map<string, Function>();
+    plugin.register({
+      pluginConfig: {},
+      on: (event, handler) => handlers.set(event, handler),
+      registerTool: () => {},
+      registerCommand: () => {},
+      logger: {},
+    });
+
+    const messageReceived = handlers.get("message_received");
+    expect(messageReceived).toBeTruthy();
+    const sessionKey = "agent:main:slack:default:direct:u0turnfresh";
+    policyState.setState(sessionKey, {
+      prompt: "本机部署下rsshub",
+      decision: {
+        route_decision: { route: "delegate", route_source: "judge" },
+        work_contract: {
+          workContractId: "wc-rsshub-old",
+          route: "delegate",
+          childSessionKey: "agent:main:subagent:rsshub-old",
+        },
+        routeSeal: { turnId: "turn-rsshub-old" },
+      },
+      delegated: true,
+      dispatchExecuted: true,
+      dispatch_executed: true,
+      spawnExecuted: true,
+      spawn_executed: true,
+      workContractId: "wc-rsshub-old",
+      work_contract_id: "wc-rsshub-old",
+      childSessionKey: "agent:main:subagent:rsshub-old",
+      child_session_key: "agent:main:subagent:rsshub-old",
+      inboundMessageTs: "1779717980.000001",
+      replyToMessageId: "1779717980.000001",
+      message_id: "1779717980.000001",
+      deliveryTarget: { replyToMessageId: "1779717980.000001" },
+      delivery_target: { replyToMessageId: "1779717980.000001" },
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    });
+
+    messageReceived!(
+      {
+        content: "Reddit API key 怎么申请",
+        metadata: {
+          messageId: "1779718007.000002",
+          originatingChannel: "slack",
+          originatingTo: "user:U0TURNFRESH",
+        },
+      },
+      {
+        sessionKey,
+        channelId: "slack",
+        conversationId: "user:U0TURNFRESH",
+      },
+    );
+    await waitForFireAndForget();
+
+    expect(policyState.getState(sessionKey)).toMatchObject({
+      inboundMessageTs: "1779718007.000002",
+      replyToMessageId: "1779718007.000002",
+      message_id: "1779718007.000002",
+    });
+    const nextState = policyState.getState(sessionKey) ?? {};
+    expect(nextState.decision).toBeUndefined();
+    expect(nextState.delegated).toBe(false);
+    expect(nextState.dispatchExecuted).toBeUndefined();
+    expect(nextState.spawnExecuted).toBeUndefined();
+    expect(nextState.workContractId).toBeUndefined();
+    expect(nextState.childSessionKey).toBeUndefined();
   });
 
   it("does not suppress a new inbound Slack message because a previous message had a visible formal reply", async () => {

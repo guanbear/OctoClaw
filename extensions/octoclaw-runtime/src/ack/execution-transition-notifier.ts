@@ -254,6 +254,9 @@ export function projectTransitionText(
   projection: TaskStatusProjection,
   language: "zh" | "en" = "zh",
 ): string {
+  const rawTaskTitle = asString(projection.title || projection.taskSummary || projection.summary).replace(/\s+/g, " ").trim();
+  const taskTitle = rawTaskTitle.length > 48 ? `${rawTaskTitle.slice(0, 45)}...` : rawTaskTitle;
+  const withTask = (text: string): string => taskTitle ? `${taskTitle}：${text}` : text;
   const textByKind: Record<ExecutionTransitionKind, { zh: string; en: string }> = {
     dispatch_materialized: { zh: "任务已派发，排队中。", en: "Task dispatched, queuing." },
     materialized_no_spawn: { zh: "任务已登记，尚未启动。", en: "Task registered, not yet started." },
@@ -267,9 +270,9 @@ export function projectTransitionText(
   };
 
   if (transitionKind === "spawn_started" && !projection.spawnExecuted) {
-    return textByKind.materialized_no_spawn[language];
+    return withTask(textByKind.materialized_no_spawn[language]);
   }
-  return textByKind[transitionKind][language];
+  return withTask(textByKind[transitionKind][language]);
 }
 
 export function buildExecTransitionKey(input: {

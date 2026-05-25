@@ -179,6 +179,64 @@ describe("guardOutboundMessageForPolicyState", () => {
     policyState.clearState(key);
   });
 
+  it("does not project stale delegate footer onto a later Slack DM reply", () => {
+    const previousProjectionFooterMode = process.env.OCTOCLAW_PROJECTION_FOOTER_MODE;
+    process.env.OCTOCLAW_PROJECTION_FOOTER_MODE = "debug";
+    const now = Date.now();
+    const key = "agent:main:slack:default:direct:u0turnfooter";
+    policyState.setState(key, {
+      prompt: "本机部署下rsshub",
+      decision: {
+        route_decision: { route: "delegate", route_source: "native_announce", worker_pool: "octoclaw-research" },
+        work_contract: {
+          workContractId: "wc-rsshub-old",
+          route: "delegate",
+          childSessionKey: "agent:main:subagent:rsshub-old",
+        },
+      },
+      delegated: true,
+      dispatchExecuted: true,
+      dispatch_executed: true,
+      spawnExecuted: true,
+      spawn_executed: true,
+      workContractId: "wc-rsshub-old",
+      work_contract_id: "wc-rsshub-old",
+      childSessionKey: "agent:main:subagent:rsshub-old",
+      child_session_key: "agent:main:subagent:rsshub-old",
+      inboundMessageTs: "1779717980.000001",
+      replyToMessageId: "1779717980.000001",
+      message_id: "1779717980.000001",
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    try {
+      const guarded = guardOutboundMessageForPolicyState(
+        {
+          to: "U0TURNFOOTER",
+          replyToMessageId: "1779718007.000002",
+          content: "Reddit API key 一般在 Reddit developer portal 创建 app 后获取。",
+        },
+        {
+          sessionKey: key,
+          channelId: "slack",
+          inboundMessageTs: "1779718007.000002",
+          model: "gpt-5.5",
+        },
+        now,
+      );
+
+      expect(guarded?.content).toContain("Reddit API key");
+      expect(guarded?.content).toContain("route=reply");
+      expect(guarded?.content).not.toContain("route=delegate");
+      expect(guarded?.content).not.toContain("wc=wc-rsshub-old");
+    } finally {
+      if (previousProjectionFooterMode === undefined) delete process.env.OCTOCLAW_PROJECTION_FOOTER_MODE;
+      else process.env.OCTOCLAW_PROJECTION_FOOTER_MODE = previousProjectionFooterMode;
+      policyState.clearState(key);
+    }
+  });
+
   it("does not rewrite Slack outbound when dispatch evidence exists", () => {
     const now = Date.now();
     const key = "agent:main:slack:channel:c0as4dappu3";

@@ -14,6 +14,7 @@ export interface RouteCommitAckPacket {
   routeSealId: string;
   turnId: string;
   sessionKey: string;
+  taskTitle?: string;
   hasValidThreadTarget: boolean;
   channelTone: "chat" | "work" | "cli" | "unknown";
   taskClass: string;
@@ -107,6 +108,32 @@ function detectDecisionBucket(decision: Record<string, unknown>): string {
   );
 }
 
+function compactTaskTitle(value: unknown): string {
+  const text = asString(value).replace(/\s+/g, " ").trim();
+  if (!text) return "";
+  return text.length > 48 ? `${text.slice(0, 45)}...` : text;
+}
+
+function detectTaskTitle(decision: Record<string, unknown>): string {
+  const workContract = readRecord(decision.work_contract);
+  const request = readRecord(decision.request);
+  const requestMetadata = readRecord(request.metadata);
+  const mainContext = readRecord(workContract.mainContext || workContract.main_context);
+  const delegate = readRecord(workContract.delegate);
+  return compactTaskTitle(
+    workContract.userAsk
+      || workContract.user_ask
+      || mainContext.summary
+      || mainContext.title
+      || delegate.taskBrief
+      || delegate.task_brief
+      || request.prompt
+      || request.userAsk
+      || request.user_ask
+      || requestMetadata.prompt,
+  );
+}
+
 function parseThreadBindingKey(sessionKey: string): string {
   const parts = sessionKey.split(":");
   const threadIndex = parts.indexOf("thread");
@@ -139,6 +166,7 @@ function buildRouteCommitAckPacketInternal(
     routeSealId,
     turnId: asString(routeSeal.turnId || workContract.turnId),
     sessionKey,
+    taskTitle: detectTaskTitle(decision),
     hasValidThreadTarget,
     channelTone: detectChannelTone(decision, state),
     taskClass: asString(routeDecision.task_class),
@@ -247,11 +275,12 @@ export function buildRouteCommitAckPacket(
 }
 
 export function projectRouteCommitAckText(packet: RouteCommitAckPacket): RouteCommitAckText {
+  const task = packet.taskTitle;
   if (packet.route === "delegate") {
     return {
       text: packet.language === "en"
-        ? "Got it, working on it. You can check status later."
-        : "收到，正在处理。稍后可查看状态。",
+        ? `Got it${task ? `: ${task}` : ""}. Working on it; you can check status later.`
+        : `收到${task ? `：${task}` : ""}。正在后台处理，稍后可查看状态。`,
       route: "delegate",
       truthful: true,
     };

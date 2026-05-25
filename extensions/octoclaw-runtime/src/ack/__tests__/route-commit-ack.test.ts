@@ -85,17 +85,19 @@ describe("route commit ACK", () => {
   });
 
   it("projects truthful zh delegate text without execution claims", () => {
-    const result = projectRouteCommitAckText(packet({ route: "delegate", language: "zh" }));
+    const result = projectRouteCommitAckText(packet({ route: "delegate", language: "zh", taskTitle: "RSSHub 部署" }));
 
     expect(result.text).not.toMatch(/运行|已启动|完成|委派|派发/);
-    expect(result.text).toMatch(/收到|处理|状态/);
+    expect(result.text).toContain("RSSHub 部署");
+    expect(result.text).toMatch(/收到|处理|状态|后台/);
     expect(result.truthful).toBe(true);
   });
 
   it("projects truthful en delegate text without execution claims", () => {
-    const result = projectRouteCommitAckText(packet({ route: "delegate", language: "en" }));
+    const result = projectRouteCommitAckText(packet({ route: "delegate", language: "en", taskTitle: "RSSHub deploy" }));
 
     expect(result.text.toLowerCase()).not.toMatch(/running|started|completed|delegation|delegated|dispatch/);
+    expect(result.text).toContain("RSSHub deploy");
     expect(result.text.toLowerCase()).toMatch(/got it|working|status/);
     expect(result.truthful).toBe(true);
   });
@@ -132,12 +134,15 @@ describe("route commit ACK", () => {
   });
 
   it("builds route commit ACK packet from decision", () => {
-    const result = buildRouteCommitAckPacket(decision(), "session-1", true);
+    const result = buildRouteCommitAckPacket(decision({
+      work_contract: { workContractId: "wc-123", turnId: "turn-789", userAsk: "本机部署 RSSHub" },
+    }), "session-1", true);
 
     expect(result?.routeCommitId).toBe("wc-123");
     expect(result?.route).toBe("delegate");
     expect(result?.routeSealId).toBe("req-seal-456");
     expect(result?.decisionBucket).toBe("must_delegate");
+    expect(result?.taskTitle).toBe("本机部署 RSSHub");
   });
 
   it("returns null when route commit packet fields are missing", () => {
@@ -553,7 +558,7 @@ describe("route commit ACK", () => {
     expect(result.reason).toBe("reaction_ack_failed_text_fallback");
     expect(imAdapter.react).toHaveBeenCalledOnce();
     expect(mockSendIMMessage).toHaveBeenCalledWith(expect.objectContaining({
-      message: "收到，正在处理。稍后可查看状态。",
+      message: "收到。正在后台处理，稍后可查看状态。",
       replyToMessageId: "1700000000.000100",
     }));
     expect(runCommandSpy).not.toHaveBeenCalled();

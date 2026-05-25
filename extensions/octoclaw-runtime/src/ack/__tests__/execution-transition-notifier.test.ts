@@ -85,11 +85,15 @@ describe("execution transition notifier", () => {
   });
 
   it("labels spawn_started ACK as a child task start", () => {
-    expect(projectTransitionText("spawn_started", projection({
+    const text = projectTransitionText("spawn_started", projection({
+      title: "RSSHub 部署",
+      taskSummary: "RSSHub 部署",
       status: "running",
       dispatchExecuted: true,
       spawnExecuted: true,
-    }))).toContain("子任务");
+    }));
+    expect(text).toContain("RSSHub 部署");
+    expect(text).toContain("子任务");
   });
 
   it("emits stale heartbeat notification before final timeout", async () => {
@@ -106,7 +110,9 @@ describe("execution transition notifier", () => {
 
     expect(result.sent).toBe(true);
     expect(result.transitionKind).toBe("heartbeat_stale");
-    expect(deliveredText(findReplayPayload(replaySpy))).toMatch(/停滞|超时/);
+    const text = deliveredText(findReplayPayload(replaySpy));
+    expect(text).toContain("Test task");
+    expect(text).toMatch(/停滞|超时/);
   });
 
   it("emits result ready / delivery pending notification", async () => {

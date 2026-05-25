@@ -147,7 +147,25 @@ export function makeMessageReceivedHook(deps: Pick<MessageLifecycleDeps, "pi" | 
     if (anchor.ts) {
       const now = Date.now();
       updatePolicyState(stateKey, (current) => ({
-        ...(current ?? {}),
+        ...(() => {
+          const currentRecord = asRecord(current);
+          const previousAnchor = stringValue(
+            currentRecord.inboundMessageTs
+            || currentRecord.message_id
+            || currentRecord.messageId
+            || currentRecord.replyToMessageId
+            || currentRecord.reply_to_id,
+          );
+          if (!previousAnchor || previousAnchor === anchor.ts) return current ?? {};
+          return {
+            canonicalSessionKey: stringValue(currentRecord.canonicalSessionKey || currentRecord.canonical_session_key),
+            canonical_session_key: stringValue(currentRecord.canonicalSessionKey || currentRecord.canonical_session_key),
+            ackGuardKey: stringValue(currentRecord.ackGuardKey || currentRecord.ack_guard_key),
+            ack_guard_key: stringValue(currentRecord.ackGuardKey || currentRecord.ack_guard_key),
+            channelTone: stringValue(currentRecord.channelTone || currentRecord.channel_tone),
+            channel_tone: stringValue(currentRecord.channelTone || currentRecord.channel_tone),
+          };
+        })(),
         canonicalSessionKey: stateKey,
         ackGuardKey: sessionKey,
         inboundMessageTs: anchor.ts,
