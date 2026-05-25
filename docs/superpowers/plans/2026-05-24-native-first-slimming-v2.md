@@ -65,12 +65,25 @@ Keep existing files where behavior already lives:
 - Test: `extensions/octoclaw-runtime/src/regression-round4.test.ts`
 - Test: `packages/octoclaw-contracts/src/status-projection.test.ts`
 
-- [ ] Add or confirm BDD scenarios `NFSV2-*` from the OpenSpec BDD file.
+- [x] Add or confirm BDD scenarios `NFSV2-*` from the OpenSpec BDD file.
+  - Closeout audit: current regression tests cover the completed NFSV2 truth,
+    gate, budget, hint, and footer scenarios. Tests are distributed across
+    `extension-entry-policy-route-hint.test.ts`, `regression-round4.test.ts`,
+    `status-projection.test.ts`, gate tests, outbound guard tests, and Slack
+    adapter tests.
 - [ ] Add a failing regression test proving route hint is advisory by default and does not block `octoclaw_dispatch`.
+  - Process evidence gap: final regression coverage exists, but the initial
+    red-phase output was not preserved.
 - [ ] Add a failing regression test proving budgeted-main tool escalation allows the following `octoclaw_dispatch`.
+  - Process evidence gap: final regression coverage exists, but the initial
+    red-phase output was not preserved.
 - [ ] Add a failing projection test proving stale task-state terminal cache cannot override native running/completed status.
+  - Process evidence gap: final regression coverage exists, but the initial
+    red-phase output was not preserved.
 - [ ] Add a failing footer test proving final result footer is compact by default while ACK/status card sends remain off.
-- [ ] Run targeted tests and confirm the new tests fail for the expected reason:
+  - Process evidence gap: final regression coverage exists, but the initial
+    red-phase output was not preserved.
+- [x] Run targeted tests and confirm the final regression coverage:
 
 ```bash
 pnpm vitest run \
@@ -79,7 +92,9 @@ pnpm vitest run \
   packages/octoclaw-contracts/src/status-projection.test.ts
 ```
 
-Expected: only newly added guard tests fail.
+Closeout result: final regression suites pass. The original expected-failure
+phase is not recoverable from current artifacts and is intentionally not marked
+complete.
 
 ## Task 2: Make Advanced Defaults Explicit
 
@@ -90,17 +105,22 @@ Expected: only newly added guard tests fail.
 - Test: `extensions/octoclaw-runtime/src/config/index.test.ts`
 - Test: `extensions/octoclaw-runtime/src/resolve/policy-routing-helpers.test.ts`
 
-- [ ] Run GitNexus impact analysis for every edited resolver/config symbol.
-- [ ] Add tests for defaults:
+- [x] Run GitNexus impact analysis for every edited resolver/config symbol.
+  - Closeout audit: `resolveSpeculativePreloadEnabled` post-change impact is
+    LOW. Earlier slice impact checks covered `makeBeforeToolCallHook`,
+    `projectionFooterMode`, `appendReplyProjectionFooter`, and
+    `SlackAdapter.send`. `projectionFooterMode` remains CRITICAL blast radius
+    and is covered by focused footer/outbound/adapter tests.
+- [x] Add tests for defaults:
   - speculative preload remains default-off through `resolveSpeculativePreloadEnabled()`
   - route hint hard precondition default-off
   - automatic retry/amendment/respawn default-off if such automation exists
   - explicit `octoclaw_task_action retry` still works
   - wall-time escalation default observation-only
   - final result footer default compact, non-final sends off
-- [ ] Implement or adjust config defaults without changing advanced opt-in behavior.
-- [ ] If a needed advanced flag does not exist, add one named in the design rather than overloading route hints or WorkContract fields.
-- [ ] Verify:
+- [x] Implement or adjust config defaults without changing advanced opt-in behavior.
+- [x] If a needed advanced flag does not exist, add one named in the design rather than overloading route hints or WorkContract fields.
+- [x] Verify:
 
 ```bash
 pnpm vitest run \
@@ -108,7 +128,7 @@ pnpm vitest run \
   extensions/octoclaw-runtime/src/resolve/policy-routing-helpers.test.ts
 ```
 
-Expected: defaults are explicit and advanced opt-in tests still pass.
+Expected/current result: defaults are explicit and advanced opt-in tests pass.
 
 ## Task 3: Convert Wall-Time Budget to Default Observation
 
@@ -118,14 +138,17 @@ Expected: defaults are explicit and advanced opt-in tests still pass.
 - Test: `extensions/octoclaw-runtime/src/budgeted-main.test.ts`
 - Test: `extensions/octoclaw-runtime/src/__tests__/extension-entry-policy-route-hint.test.ts`
 
-- [ ] Run GitNexus impact analysis for `scheduleBudgetedMainTimeout`, `maybeStartBudgetedMain`, `escalateBudgetedMainForTool`, and any edited hook symbol.
-- [ ] Add tests:
+- [x] Run GitNexus impact analysis for `scheduleBudgetedMainTimeout`, `maybeStartBudgetedMain`, `escalateBudgetedMainForTool`, and any edited hook symbol.
+  - Closeout audit: moved hook logic is covered by the recorded
+    `makeBeforeToolCallHook` LOW impact check and focused
+    `BudgetedMainGate` tests.
+- [x] Add tests:
   - timeout records observation/pending evidence only under default config
   - timeout does not mutate route to delegate by itself under default config
   - tool-risk escalation still blocks the risky ordinary tool
   - a subsequent `octoclaw_dispatch` is admitted with budget evidence
-- [ ] Implement default observation-only wall-time behavior.
-- [ ] Preserve advanced opt-in wall-time escalation behind a named config flag if existing behavior must remain available.
+- [x] Implement default observation-only wall-time behavior.
+- [x] Preserve advanced opt-in wall-time escalation behind a named config flag if existing behavior must remain available.
 - [x] Verify targeted tests.
 
 ## Task 4: Introduce Native Execution Truth Adapter
@@ -140,7 +163,8 @@ Expected: defaults are explicit and advanced opt-in tests still pass.
 - Test: `packages/octoclaw-contracts/src/status-projection.test.ts`
 - Test: `extensions/octoclaw-runtime/src/tools/runtime-status.test.ts`
 
-- [ ] Run GitNexus impact analysis for `buildTaskStatusProjection` and runtime status projection builders.
+- [x] Run GitNexus impact analysis for `buildTaskStatusProjection` and runtime status projection builders.
+  - Closeout audit: `buildTaskStatusProjection` post-change impact is LOW.
 - [x] Add tests:
   - native running beats stale cache completed
   - native completed beats stale cache failed
@@ -177,17 +201,21 @@ export interface NativeExecutionSnapshot {
 - Test: `extensions/octoclaw-runtime/src/__tests__/extension-entry-outbound-guards.test.ts`
 - Test: `extensions/octoclaw-runtime/src/im/slack/slack-adapter.test.ts`
 
-- [ ] Run GitNexus impact analysis for `projectionFooterMode`, `replyProjectionFooterEnabled`, and edited adapter footer functions.
-- [ ] Add tests:
+- [x] Run GitNexus impact analysis for `projectionFooterMode`, `replyProjectionFooterEnabled`, and edited adapter footer functions.
+  - Closeout audit: `projectionFooterMode` is CRITICAL blast radius, affecting
+    native announce delivery, outbound guard, and register flows. The footer
+    migration is therefore guarded by focused outbound guard, Slack adapter,
+    status card, neutral ACK, onboarding, and full-suite tests.
+- [x] Add tests:
   - final assistant result gets compact footer by default when evidence exists
   - neutral ACK sends keep `footerMode=off`
   - status cards keep `footerMode=off`
   - native announce footer requires final native delivery evidence
   - delegate compact footer requires accepted dispatch/spawn/native evidence, not only cache booleans
   - debug-only IDs do not appear in compact mode
-- [ ] Update footer types only as needed. If IM adapter `footerMode` gains `compact`, verify Slack/Telegram/Discord behavior.
-- [ ] Use a sanitized compact footer projection for compact mode. Do not pass debug fields and rely on adapters to drop them.
-- [ ] Verify targeted tests.
+- [x] Update footer types only as needed. If IM adapter `footerMode` gains `compact`, verify Slack/Telegram/Discord behavior.
+- [x] Use a sanitized compact footer projection for compact mode. Do not pass debug fields and rely on adapters to drop them.
+- [x] Verify targeted tests.
 
 ## Task 5: Add Shared Tool Gate Interface
 
@@ -195,15 +223,15 @@ export interface NativeExecutionSnapshot {
 - Create: `extensions/octoclaw-runtime/src/hooks/tool-gate-types.ts`
 - Test: `extensions/octoclaw-runtime/src/hooks/tool-gate-types.test.ts`
 
-- [ ] Define `ToolGateInput`, `ToolGateResult`, `ToolGateReplayEvent`, and helper constructors for `allow`, `block`, and `observe`.
-- [ ] Ensure gate result can carry state patches and replay events without each gate importing the full hook orchestrator.
-- [ ] Verify:
+- [x] Define `ToolGateInput`, `ToolGateResult`, `ToolGateReplayEvent`, and helper constructors for `allow`, `block`, and `observe`.
+- [x] Ensure gate result can carry state patches and replay events without each gate importing the full hook orchestrator.
+- [x] Verify:
 
 ```bash
 pnpm vitest run extensions/octoclaw-runtime/src/hooks/tool-gate-types.test.ts
 ```
 
-Expected: type/helper tests pass.
+Expected/current result: type/helper behavior is covered by gate tests.
 
 ## Task 6: Extract SessionControlGate
 
@@ -213,13 +241,14 @@ Expected: type/helper tests pass.
 - Test: `extensions/octoclaw-runtime/src/hooks/session-control-gate.test.ts`
 - Test: `extensions/octoclaw-runtime/src/regression-round4.test.ts`
 
-- [ ] Run GitNexus impact analysis for `makeBeforeToolCallHook` and helper symbols being moved.
-- [ ] Move native announce delivery block and session/status/provenance control checks into `SessionControlGate`.
-- [ ] Preserve behavior:
+- [x] Run GitNexus impact analysis for `makeBeforeToolCallHook` and helper symbols being moved.
+  - Closeout audit: `makeBeforeToolCallHook` post-change impact is LOW.
+- [x] Move native announce delivery block and session/status/provenance control checks into `SessionControlGate`.
+- [x] Preserve behavior:
   - native announce completion blocks duplicate dispatch/spawn
   - status/provenance follow-up does not start new work
   - `octoclaw_status` and `octoclaw_task_action` bookkeeping remains
-- [ ] Verify targeted tests.
+- [x] Verify targeted tests.
 
 ## Task 7: Extract NativeSpawnGate Runner
 
@@ -357,7 +386,7 @@ pnpm vitest run \
 
 Expected/current result: 5 files, 133 tests passed.
 
-- [ ] Run broader verification:
+- [x] Run broader verification:
 
 ```bash
 pnpm vitest run \
@@ -368,7 +397,9 @@ pnpm vitest run \
 pnpm check
 ```
 
-Expected: targeted suites and typecheck pass.
+Expected/current result: targeted suites and typecheck passed in the completed
+implementation slice. Closeout audit reran 8 focused files with 149 tests
+passed and 1 todo.
 
 ## Task 12: Full Verification and Closeout
 
@@ -376,7 +407,7 @@ Expected: targeted suites and typecheck pass.
 - Modify: `openspec/changes/native-first-slimming-v2-0.6.x/tasks.md`
 - Modify: implementation notes if created by worker
 
-- [ ] Run full test suite:
+- [x] Run full test suite:
 
 ```bash
 pnpm test
@@ -385,8 +416,11 @@ git diff --check
 npx gitnexus detect-changes --repo OctoClaw
 ```
 
-- [ ] Confirm BDD scenarios in `openspec/changes/native-first-slimming-v2-0.6.x/bdd.md` are covered by tests.
-- [ ] Confirm no advanced feature became default-on.
-- [ ] Confirm no new lifecycle engine or runner pool was introduced.
-- [ ] Confirm `NativeSpawnGate` still blocks missing/mismatched spawn intent.
-- [ ] Commit only expected files.
+- [x] Confirm BDD scenarios in `openspec/changes/native-first-slimming-v2-0.6.x/bdd.md` are covered by tests.
+- [x] Confirm no advanced feature became default-on.
+- [x] Confirm no new lifecycle engine or runner pool was introduced.
+- [x] Confirm `NativeSpawnGate` still blocks missing/mismatched spawn intent.
+- [x] Commit only expected files.
+  - Closeout target: docs-only follow-up commit plus existing implementation
+    commit. Local untracked `.omx/` and `.octoclaw-work-packets/` remain
+    excluded from commits.
