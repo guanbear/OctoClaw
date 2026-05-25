@@ -287,10 +287,11 @@ Expected: type/helper tests pass.
 
 - [ ] Ensure `before-tool-call.ts` only orchestrates gates and shared side effects.
   - Current status: partially complete. The hook is down from the V2 baseline
-    of 922 lines to 706 lines after extracting `SpeculativePreloadGate` and
+    of 922 lines to 653 lines after extracting `SpeculativePreloadGate`,
     moving `sessions_yield` pending-intent blocking into
-    `NativeSpawnGate runner`, but it still contains shared side-effect and
-    budget/native session orchestration code.
+    `NativeSpawnGate runner`, and moving reply direct-tool latency/replay side
+    effects into `ReplyDirectToolRunner`. It still contains shared side-effect
+    and budget/native session orchestration code.
 - [ ] Confirm gate order is:
   - `SessionControlGate`
   - `NativeSpawnGate` runner
@@ -300,8 +301,8 @@ Expected: type/helper tests pass.
 - [x] Record before/after LOC:
   - V2 baseline `before-tool-call.ts`: 922 lines.
   - After first native-first gate extraction: 769 lines.
-  - After current slimming slice: 706 lines.
-  - Net reduction from V2 baseline: 216 lines.
+  - After current slimming slice: 653 lines.
+  - Net reduction from V2 baseline: 269 lines.
 
 ```bash
 wc -l extensions/octoclaw-runtime/src/hooks/before-tool-call.ts
@@ -317,6 +318,18 @@ pnpm vitest run \
 ```
 
 Expected/current result: 2 files, 6 tests passed.
+
+- [x] Run focused reply direct-tool extraction tests:
+
+```bash
+pnpm vitest run \
+  extensions/octoclaw-runtime/src/hooks/reply-direct-tool-runner.test.ts \
+  extensions/octoclaw-runtime/src/hooks/budgeted-main-gate.test.ts \
+  extensions/octoclaw-runtime/src/__tests__/extension-entry-policy-route-hint.test.ts \
+  extensions/octoclaw-runtime/src/regression-round4.test.ts
+```
+
+Expected/current result: 4 files, 133 tests passed.
 
 - [ ] Run broader verification:
 

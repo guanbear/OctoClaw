@@ -127,11 +127,12 @@ pnpm vitest run \
       `NativeSpawnGate` runner, `BudgetedMainGate`, `RouteHintGate`,
       `DelegationWorkflowGuard`.
 - [x] Record after LOC.
-      - `before-tool-call.ts` is 706 lines as of the current slimming slice.
-      - Net change from V2 baseline: 922 -> 706, down 216 lines.
+      - `before-tool-call.ts` is 653 lines as of the current slimming slice.
+      - Net change from V2 baseline: 922 -> 653, down 269 lines.
       - New/expanded gate modules in this slice:
         `speculative-preload-gate.ts`,
-        `native-spawn-gate-runner.ts`.
+        `native-spawn-gate-runner.ts`,
+        `reply-direct-tool-runner.ts`.
 - [x] Confirm each extracted gate has targeted tests.
       - `session-control-gate.test.ts`
       - `native-spawn-gate-runner.test.ts`
@@ -139,6 +140,7 @@ pnpm vitest run \
       - `route-hint-gate.test.ts`
       - `delegation-workflow-guard.test.ts`
       - `speculative-preload-gate.test.ts`
+      - `reply-direct-tool-runner.test.ts`
 - [ ] Confirm no gate imports more broad dependencies than needed.
 
 ## Verification
@@ -164,7 +166,7 @@ pnpm vitest run \
       - `pnpm --filter @octoclaw/runtime run check`: passed.
       - Focused slimming regression suite: 10 files, 200 tests passed.
       - `pnpm check`: passed.
-      - `pnpm test`: 167 files passed; 2286 passed, 1 skipped, 1 todo.
+      - `pnpm test`: 168 files passed; 2287 passed, 1 skipped, 1 todo.
       - `git diff --check`: passed.
       - `npx gitnexus detect-changes --repo OctoClaw --scope all`: returned
         `No changes detected` despite local diffs; treated as a GitNexus
@@ -192,8 +194,11 @@ npx gitnexus detect-changes --repo OctoClaw
         `native-spawn-gate-runner.ts`,
         `native-spawn-gate-runner.test.ts`,
         `speculative-preload-gate.ts`,
-        `speculative-preload-gate.test.ts`.
+        `speculative-preload-gate.test.ts`,
+        `reply-direct-tool-runner.ts`,
+        `reply-direct-tool-runner.test.ts`.
       - Removed from `before-tool-call.ts`: speculative preload candidate
-        scanning/patching and `sessions_yield` pending-intent block assembly.
+        scanning/patching, `sessions_yield` pending-intent block assembly, and
+        reply direct-tool latency ACK/replay side-effect assembly.
       - Remaining S10 work: make the main hook closer to pure orchestration and
         review broad imports after the next extraction boundary is proven.

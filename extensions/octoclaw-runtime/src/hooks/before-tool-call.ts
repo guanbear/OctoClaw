@@ -1,7 +1,4 @@
-import {
-  maybeSendLatencyAck,
-  updateAckTrackingState,
-} from "../ack/ack-guard.js";
+import { maybeSendLatencyAck, updateAckTrackingState } from "../ack/ack-guard.js";
 import {
   buildPolicyMetadata,
   isManagedAgentContext,
@@ -31,13 +28,14 @@ import {
   updateBudgetedMainForContext,
 } from "../budgeted-main.js";
 import { explicitDelegateDispatchRequest } from "../dispatch-admission.js";
-import { evaluateActiveBudgetedMainGate, evaluateReplyToolBudgetGate } from "./budgeted-main-gate.js";
+import { evaluateActiveBudgetedMainGate } from "./budgeted-main-gate.js";
 import {
   evaluateNativeSessionsSendHookGate,
   evaluateNativeSessionsYieldHookGate,
   evaluateNativeSpawnHookGate,
 } from "./native-spawn-gate-runner.js";
 import { evaluateRouteHintGate, shouldBindRouteHintPrompt } from "./route-hint-gate.js";
+import { runReplyDirectToolGate } from "./reply-direct-tool-runner.js";
 import { evaluateNativeAnnounceDeliveryGate, evaluateSessionControlGate } from "./session-control-gate.js";
 import type { ToolGateResult } from "./tool-gate-types.js";
 import { type UnknownRecord, asRecord } from "../util/type-coercion.js";
@@ -491,115 +489,64 @@ export function makeBeforeToolCallHook(deps: BeforeToolCallDeps) {
 
     if (!hookConfig.enabled) return;
 
-    if (
-      stringValue(asRecord(decision.route_decision).route) === "reply"
-      && !isControlObserverDecision(decision)
-      && !isSessionControlDecision(decision)
-      && toolName
-      && !toolName.startsWith("octoclaw_")
-    ) {
-      const stateRecord = asRecord(state);
-      const replyBudgetGate = evaluateReplyToolBudgetGate({
+    const replyDirectToolGate = await runReplyDirectToolGate({
         toolName,
         toolParams,
-        state: stateRecord,
         decision,
-        budgetedMainHandledTool,
-        stateKey,
-        sessionId: stringValue(ctx.sessionId),
-        now: Date.now(),
-      });
-      if (replyBudgetGate.kind === "block" && replyBudgetGate.reason && replyBudgetGate.budgetState) {
-        const escalated = await escalateBudgetedMainForTool({
-          stateKey,
-          ctx,
-          state: stateRecord,
-          decision,
-          budgetState: replyBudgetGate.budgetState,
-          reason: replyBudgetGate.reason,
-          logger: deps.pi.logger,
-        });
-        state = escalated.state as PolicyStateEntry | null;
-        applyToolGateResult({
-          result: replyBudgetGate,
-          stateKey,
-          logger: deps.pi.logger,
-          decision,
-        });
-        return toolGateHookReturn(replyBudgetGate);
-      }
-      if (replyBudgetGate.kind === "observe" && replyBudgetGate.budgetState) {
-        state = updateBudgetedMainForContext({
-          stateKey,
-          ctx,
-          state: stateRecord,
-          budgetState: replyBudgetGate.budgetState,
-        }) as PolicyStateEntry | null;
-        if (replyBudgetGate.scheduleTimeout) {
-          scheduleBudgetedMainTimeout({
-            stateKey,
-            ctx,
-            state: stateRecord,
-            decision,
-            budgetState: replyBudgetGate.budgetState,
-            logger: deps.pi.logger,
-          });
-        }
-        applyToolGateResult({
-          result: replyBudgetGate,
-          stateKey,
-          logger: deps.pi.logger,
-          decision,
-        });
-      }
-      updateAckTrackingState(stateKey, { tool_active: true });
-      const latencyAck = await maybeSendLatencyAck(decision, metadata, stateKey, asRecord(state), ctx, deps.pi.logger ?? {}, toolName);
-      updatePolicyState(stateKey, (current) => ({
-        ...current,
-        directToolsSeen: Array.from(new Set([...(Array.isArray(current?.directToolsSeen) ? current.directToolsSeen : []), toolName])),
-      }));
-      await recordAckReplay({
-        decision,
+        state: asRecord(state),
         stateKey,
         ctx,
+        metadata,
         logger: deps.pi.logger,
-        kind: "latency",
-        phase: "direct_tool",
-        result: latencyAck,
-        toolName,
+        budgetedMainHandledTool,
+        isControlObserverDecision: isControlObserverDecision(decision),
+        isSessionControlDecision: isSessionControlDecision(decision),
+      }, {
+        now: Date.now,
+        escalateBudgetedMainForTool: async (input) => {
+          const escalated = await escalateBudgetedMainForTool({
+            ...input,
+            logger: deps.pi.logger,
+          });
+          return {
+            ...escalated,
+            state: escalated.state as unknown as UnknownRecord | null,
+          };
+        },
+        updateBudgetedMainForContext: (input) => updateBudgetedMainForContext(input) as unknown as UnknownRecord | null,
+        scheduleBudgetedMainTimeout: (input) => scheduleBudgetedMainTimeout({
+          ...input,
+          logger: deps.pi.logger,
+        }),
+        updateAckTrackingState,
+        maybeSendLatencyAck: (nextDecision, nextMetadata, nextStateKey, nextState, nextCtx, _logger, nextToolName) => maybeSendLatencyAck(
+          nextDecision,
+          nextMetadata,
+          nextStateKey,
+          nextState,
+          nextCtx,
+          deps.pi.logger ?? {},
+          nextToolName,
+        ),
+        updatePolicyState: (nextStateKey, updater) => updatePolicyState(
+          nextStateKey,
+          (current) => updater(asRecord(current)) as PolicyStateEntry,
+        ),
+        recordAckReplay,
+        recordPolicyReplay,
       });
-      void recordPolicyReplay(
-        "direct_tool_called",
-        {
-          sessionKey: stateKey || "",
-          sessionId: stringValue(ctx.sessionId),
-          route: stringValue(asRecord(decision.route_decision).route),
-          taskClass: stringValue(asRecord(decision.route_decision).task_class),
-          protectedLane: stringValue(asRecord(decision.route_decision).protected_lane),
-          toolName,
-          latencyAckRequired: Boolean(asRecord(decision.latency_ack).required),
-          latencyAckSent: Boolean(latencyAck?.sent),
-          latencyAckReason: stringValue(latencyAck?.reason),
-        },
-        deps.pi.logger,
+    if (replyDirectToolGate.kind === "block") {
+      state = replyDirectToolGate.state as PolicyStateEntry | null;
+      applyToolGateResult({
+        result: replyDirectToolGate.result,
+        stateKey,
+        logger: deps.pi.logger,
         decision,
-      ).catch(() => {});
-      void recordPolicyReplay(
-        "tool_used",
-        {
-          sessionKey: stateKey || "",
-          sessionId: stringValue(ctx.sessionId),
-          route: stringValue(asRecord(decision.route_decision).route),
-          taskClass: stringValue(asRecord(decision.route_decision).task_class),
-          protectedLane: stringValue(asRecord(decision.route_decision).protected_lane),
-          toolName,
-          latencyAckRequired: Boolean(asRecord(decision.latency_ack).required),
-          latencyAckSent: Boolean(latencyAck?.sent),
-          latencyAckReason: stringValue(latencyAck?.reason),
-        },
-        deps.pi.logger,
-        decision,
-      ).catch(() => {});
+      });
+      return toolGateHookReturn(replyDirectToolGate.result);
+    }
+    if (replyDirectToolGate.kind === "handled") {
+      state = replyDirectToolGate.state as PolicyStateEntry | null;
     }
 
     const sessionControlGate = evaluateSessionControlGate({
