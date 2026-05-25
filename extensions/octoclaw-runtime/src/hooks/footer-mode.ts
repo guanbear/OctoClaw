@@ -337,7 +337,6 @@ export function appendReplyProjectionFooter(content: string, state: UnknownRecor
 }
 
 function hasAcceptedDelegateFooterEvidence(state: UnknownRecord, decision: UnknownRecord, workContract: UnknownRecord): boolean {
-  if (state.delegated === true || state.dispatchRoute === "delegate" || state.dispatch_route === "delegate") return true;
   const nativeRefs = asRecord(workContract.nativeSpawnRefs || workContract.native_spawn_refs);
   const nativeBinding = asRecord(asRecord(workContract.delegate).nativeBinding || asRecord(workContract.delegate).native_binding);
   return Boolean(

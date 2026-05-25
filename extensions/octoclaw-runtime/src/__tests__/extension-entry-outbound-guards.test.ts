@@ -237,7 +237,7 @@ describe("guardOutboundMessageForPolicyState", () => {
     }
   });
 
-  it("does not rewrite Slack outbound when dispatch evidence exists", () => {
+  it("does not claim delegate footer from legacy dispatch booleans without native spawn refs", () => {
     const now = Date.now();
     const key = "agent:main:slack:channel:c0as4dappu3";
     policyState.setState(key, {
@@ -257,8 +257,41 @@ describe("guardOutboundMessageForPolicyState", () => {
     );
 
     expect(guarded?.content).toContain("刚才的子 agent 已经跑完了");
-    expect(guarded?.content).toContain("route=delegate | model=");
+    expect(guarded?.content).toContain("route=reply | model=");
+    expect(guarded?.content).not.toContain("route=delegate | model=");
     expect(guarded?.content).toContain("· thread");
+    policyState.clearState(key);
+  });
+
+  it("keeps budgeted main escalation footer on reply route until native spawn refs exist", () => {
+    const now = Date.now();
+    const key = "agent:main:slack:channel:c0budgetednostart";
+    policyState.setState(key, {
+      decision: {
+        route_decision: {
+          route: "delegate",
+          route_source: "budgeted_main_escalation",
+          decision_bucket: "budgeted_main_then_delegate",
+        },
+        request: { metadata: { message_id: "1777380007.000001" } },
+      },
+      delegated: true,
+      dispatchExecuted: true,
+      spawnExecuted: false,
+      inboundMessageTs: "1777380007.000001",
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    const guarded = guardOutboundMessageForPolicyState(
+      { to: "C0BUDGETEDNOSTART", content: "当前 Gateway 运行正常。", metadata: { channelId: "C0BUDGETEDNOSTART", threadTs: "1777380007.000001" } },
+      { channelId: "slack", model: "cliproxyapi/gpt-5.5" },
+      now,
+    );
+
+    expect(guarded?.content).toContain("route=reply | model=cliproxyapi/gpt-5.5");
+    expect(guarded?.content).toContain("via=budgeted_main_escalation");
+    expect(guarded?.content).not.toContain("route=delegate");
     policyState.clearState(key);
   });
 
