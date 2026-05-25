@@ -4,6 +4,7 @@ import {
   type NativeSessionsSendGateDecision,
   type NativeSpawnGateDecision,
 } from "../delegate/native-spawn-gate.js";
+import { nativeSpawnIntentStore } from "../delegate/native-spawn-intent-store.js";
 import { asRecord, type UnknownRecord } from "../util/type-coercion.js";
 import { stringValue } from "../extension-entry-shared.js";
 import { gateAllow, gateBlock, type ToolGateResult } from "./tool-gate-types.js";
@@ -15,6 +16,8 @@ export type NativeSpawnHookGateResult = ToolGateResult & {
 export type NativeSessionsSendHookGateResult = ToolGateResult & {
   nativeGate?: NativeSessionsSendGateDecision;
 };
+
+export type NativeSessionsYieldHookGateResult = ToolGateResult;
 
 function blockedToolsPatch(toolName: string): UnknownRecord {
   return { blockedTools: [toolName].filter(Boolean) };
@@ -96,4 +99,46 @@ export function evaluateNativeSessionsSendHookGate(input: {
       }],
     },
   );
+}
+
+export function evaluateNativeSessionsYieldHookGate(input: {
+  toolName: string;
+  sessionKeys: string[];
+  decision: UnknownRecord;
+  stateKey?: string;
+  sessionId?: string;
+}): NativeSessionsYieldHookGateResult {
+  if (input.toolName !== "sessions_yield") return gateAllow();
+  let pendingIntent: ReturnType<typeof nativeSpawnIntentStore.findPendingForSession> | null = null;
+  for (const key of Array.from(new Set(input.sessionKeys.map((value) => stringValue(value)).filter(Boolean)))) {
+    try {
+      pendingIntent = nativeSpawnIntentStore.findPendingForSession(key, { dispatchMode: "new_spawn" })
+        ?? nativeSpawnIntentStore.findPendingForSession(key, { dispatchMode: "send_to_speculative" });
+    } catch {
+      pendingIntent = null;
+    }
+    if (pendingIntent) break;
+  }
+  if (!pendingIntent) return gateAllow();
+
+  const nextTool = pendingIntent.dispatchMode === "send_to_speculative" ? "sessions_send" : "sessions_spawn";
+  return gateBlock([
+    "OctoClaw blocked sessions_yield because a native spawn intent is pending but the child session has not started.",
+    `Call ${nextTool} exactly with the args from the latest octoclaw_dispatch result before waiting.`,
+    "Do not wait for a child that has not started.",
+  ].join(" "), {
+    statePatch: blockedToolsPatch(input.toolName),
+    replayEvents: [{
+      event: "sessions_yield_blocked_pending_native_spawn",
+      payload: {
+        sessionKey: input.stateKey || pendingIntent.sessionKey || "",
+        sessionId: input.sessionId || "",
+        route: stringValue(asRecord(input.decision.route_decision).route),
+        toolName: input.toolName,
+        spawn_intent_id: pendingIntent.spawnIntentId,
+        work_contract_id: pendingIntent.workContractId,
+        dispatch_mode: pendingIntent.dispatchMode || "new_spawn",
+      },
+    }],
+  });
 }

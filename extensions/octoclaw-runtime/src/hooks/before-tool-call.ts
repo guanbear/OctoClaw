@@ -18,7 +18,6 @@ import {
 } from "../replay/policy-utils.js";
 import { recordAckReplay, recordPolicyReplay } from "../replay/replay.js";
 import { policyState, type PolicyStateEntry } from "../state/policy-state.js";
-import { nativeSpawnIntentStore } from "../delegate/native-spawn-intent-store.js";
 import { isPlannerAllowedForSession, resolveSpawnBackend, resolveSpeculativePreloadEnabled } from "../config/index.js";
 import {
   buildBudgetedMainState,
@@ -32,13 +31,12 @@ import {
   updateBudgetedMainForContext,
 } from "../budgeted-main.js";
 import { explicitDelegateDispatchRequest } from "../dispatch-admission.js";
-import {
-  isMatchingSpeculativePreloadSpawn,
-  readSpeculativePreloadState,
-  serializeSpeculativePreloadState,
-} from "../delegate/speculative-preload.js";
 import { evaluateActiveBudgetedMainGate, evaluateReplyToolBudgetGate } from "./budgeted-main-gate.js";
-import { evaluateNativeSessionsSendHookGate, evaluateNativeSpawnHookGate } from "./native-spawn-gate-runner.js";
+import {
+  evaluateNativeSessionsSendHookGate,
+  evaluateNativeSessionsYieldHookGate,
+  evaluateNativeSpawnHookGate,
+} from "./native-spawn-gate-runner.js";
 import { evaluateRouteHintGate, shouldBindRouteHintPrompt } from "./route-hint-gate.js";
 import { evaluateNativeAnnounceDeliveryGate, evaluateSessionControlGate } from "./session-control-gate.js";
 import type { ToolGateResult } from "./tool-gate-types.js";
@@ -52,6 +50,11 @@ import {
   stateWorkContractId,
 } from "../extension-entry.js";
 import { evaluateDelegationWorkflowGuard } from "./delegation-workflow-guard.js";
+import {
+  evaluateSpeculativePreloadDispatchGate,
+  evaluateSpeculativePreloadSpawnGate,
+  type SpeculativePreloadSpawnGateResult,
+} from "./speculative-preload-gate.js";
 
 export interface BeforeToolCallDeps {
   pi: PluginInterface;
@@ -90,6 +93,22 @@ function applyToolGateResult(input: {
 
 function toolGateHookReturn(result: ToolGateResult): { block: true; blockReason: string } | undefined {
   return result.kind === "block" ? { block: true, blockReason: result.blockReason } : undefined;
+}
+
+function applySpeculativeStatePatches(input: {
+  result: SpeculativePreloadSpawnGateResult;
+  toolName: string;
+}): void {
+  for (const [key, patch] of Object.entries(input.result.statePatchesByKey ?? {})) {
+    updatePolicyState(key, (current) => ({
+      ...current,
+      ...patch,
+      controlToolsSeen: Array.from(new Set([
+        ...(Array.isArray(current.controlToolsSeen) ? current.controlToolsSeen : []),
+        input.toolName,
+      ])),
+    }));
+  }
 }
 
 export function makeBeforeToolCallHook(deps: BeforeToolCallDeps) {
@@ -230,59 +249,33 @@ export function makeBeforeToolCallHook(deps: BeforeToolCallDeps) {
       metadata.message_id = storedInboundTs;
     }
 
-    if (
-      speculativeDispatchGuardEnabled
-    ) {
-      const decisionRoute = stringValue(asRecord(decision.route_decision).route);
+    if (speculativeDispatchGuardEnabled) {
       const expectedWorkContractId = stateWorkContractId(state);
-      const deferredCandidates: Array<{
-        key: string;
-        speculative: NonNullable<ReturnType<typeof readSpeculativePreloadState>>;
-        spawnArgs: UnknownRecord;
-      }> = [];
-      const addDeferredCandidate = (key: string, candidateState: unknown): void => {
-        const candidateKey = stringValue(key);
-        if (!candidateKey || deferredCandidates.some((candidate) => candidate.key === candidateKey)) return;
-        const candidateRecord = asRecord(candidateState);
-        if (expectedWorkContractId && stateWorkContractId(candidateRecord) !== expectedWorkContractId) return;
-        const candidateSpeculative = readSpeculativePreloadState(candidateRecord);
-        const candidateSpawnArgs = asRecord(candidateSpeculative?.spawnArgs);
-        if (candidateSpeculative?.status !== "hinted" || Object.keys(candidateSpawnArgs).length === 0) return;
-        deferredCandidates.push({ key: candidateKey, speculative: candidateSpeculative, spawnArgs: candidateSpawnArgs });
-      };
-      for (const key of Array.from(new Set([
+      const candidateKeys = Array.from(new Set([
         stateKey,
         stringValue(ctx.sessionKey),
         stringValue(ctx.canonicalSessionKey),
         stringValue(asRecord(decision.request).session_key),
         ...resolvePolicyStateKeys(ctx),
-      ].map((value) => stringValue(value)).filter(Boolean)))) {
-        addDeferredCandidate(key, policyState.get(key));
-      }
-      if (stateKey) addDeferredCandidate(stateKey, state);
-      if (deferredCandidates.length === 0 && expectedWorkContractId) {
-        for (const entry of policyState.entries()) addDeferredCandidate(entry.key, entry.state);
-      }
-      const deferred = deferredCandidates[0];
-      if (decisionRoute === "delegate" && deferred) {
-        void recordPolicyReplay("speculative_preload_dispatch_deferred", {
-          sessionKey: stringValue(asRecord(decision.request).session_key) || deferred.key || stateKey || "",
-          sessionId: stringValue(ctx.sessionId),
-          route: decisionRoute,
-          toolName,
-          label: deferred.speculative.label,
-          reason: "standby_spawn_required",
-          alias_count: deferredCandidates.length,
-        }, deps.pi.logger, decision).catch(() => {});
-        return {
-          block: true,
-          blockReason: [
-            "OctoClaw speculative preload is active for this delegated route.",
-            `First call sessions_spawn exactly with these runtime-generated args: ${JSON.stringify(deferred.spawnArgs)}.`,
-            "After sessions_spawn returns, call octoclaw_dispatch with the original task.",
-            "If sessions_spawn is rejected or unavailable, call octoclaw_dispatch after the failed result so OctoClaw can fall back to new_spawn.",
-          ].join(" "),
-        };
+      ].map((value) => stringValue(value)).filter(Boolean)));
+      const dispatchGate = evaluateSpeculativePreloadDispatchGate({
+        toolName,
+        decision,
+        stateKey,
+        state,
+        ctx,
+        statesByKey: new Map(policyState.entries().map((entry) => [entry.key, entry.state])),
+        candidateKeys,
+        expectedWorkContractId,
+      });
+      if (dispatchGate.kind !== "allow" || dispatchGate.stop) {
+        applyToolGateResult({
+          result: dispatchGate,
+          stateKey,
+          logger: deps.pi.logger,
+          decision,
+        });
+        return toolGateHookReturn(dispatchGate);
       }
     }
 
@@ -297,64 +290,27 @@ export function makeBeforeToolCallHook(deps: BeforeToolCallDeps) {
       const plannerGateEnabled = resolveSpawnBackend() === "planner"
         && sessionKeys.some((sessionKey) => isPlannerAllowedForSession(sessionKey));
       if (plannerGateEnabled) {
-        const speculativeMatches: Array<{ key: string; state: UnknownRecord; speculative: NonNullable<ReturnType<typeof readSpeculativePreloadState>> }> = [];
-        for (const key of Array.from(new Set(sessionKeys.map((value) => stringValue(value)).filter(Boolean)))) {
-          const candidateState = asRecord(policyState.get(key));
-          const candidateSpeculative = readSpeculativePreloadState(candidateState);
-          if (candidateSpeculative?.status !== "hinted") continue;
-          if (!isMatchingSpeculativePreloadSpawn(candidateState, toolParams)) continue;
-          speculativeMatches.push({ key, state: candidateState, speculative: candidateSpeculative });
-        }
-        const directSpeculative = readSpeculativePreloadState(state);
-        if (
-          stateKey
-          && speculativeMatches.every((match) => match.key !== stateKey)
-          && directSpeculative?.status === "hinted"
-          && isMatchingSpeculativePreloadSpawn(state, toolParams)
-        ) {
-          speculativeMatches.push({ key: stateKey, state: asRecord(state), speculative: directSpeculative });
-        }
-        if (speculativeMatches.length === 0) {
-          for (const entry of policyState.entries()) {
-            const candidateState = asRecord(entry.state);
-            const candidateSpeculative = readSpeculativePreloadState(candidateState);
-            if (candidateSpeculative?.status !== "hinted") continue;
-            if (!isMatchingSpeculativePreloadSpawn(candidateState, toolParams)) continue;
-            speculativeMatches.push({ key: entry.key, state: candidateState, speculative: candidateSpeculative });
-          }
-        }
-        if (resolveSpeculativePreloadEnabled(deps.currentPluginConfig()) && speculativeMatches.length > 0) {
-          const now = Date.now();
-          for (const match of speculativeMatches) {
-            const nextSpeculative = serializeSpeculativePreloadState({
-              ...match.speculative,
-              status: "spawn_call_started",
-              updatedAt: now,
-            });
-            updatePolicyState(match.key, (current) => ({
-              ...current,
-              speculativePreload: nextSpeculative,
-              speculative_preload: nextSpeculative,
-              controlToolsSeen: Array.from(new Set([...(Array.isArray(current.controlToolsSeen) ? current.controlToolsSeen : []), toolName])),
-            }));
-          }
-          const preferredReplayKeys = new Set([
-            stringValue(ctx.sessionKey),
-            stringValue(ctx.canonicalSessionKey),
-            stringValue(asRecord(decision.request).session_key),
-            stringValue(stateKey),
-          ].filter(Boolean));
-          const replayMatch = speculativeMatches.find((match) => preferredReplayKeys.has(match.key)) || speculativeMatches[0];
-          const replaySessionKey = stringValue(ctx.sessionKey) || stringValue(ctx.canonicalSessionKey) || replayMatch.key || stateKey || "";
-          void recordPolicyReplay("speculative_preload_spawn_allowed", {
-            sessionKey: replaySessionKey,
-            sessionId: stringValue(ctx.sessionId),
-            route: stringValue(asRecord(decision.route_decision).route),
+        if (resolveSpeculativePreloadEnabled(deps.currentPluginConfig())) {
+          const speculativeSpawnGate = evaluateSpeculativePreloadSpawnGate({
             toolName,
-            label: replayMatch.speculative.label || stringValue(toolParams.label),
-            alias_count: speculativeMatches.length,
-          }, deps.pi.logger, decision).catch(() => {});
-          return;
+            toolParams,
+            decision,
+            stateKey,
+            state,
+            ctx,
+            statesByKey: new Map(policyState.entries().map((entry) => [entry.key, entry.state])),
+            sessionKeys,
+          });
+          if (speculativeSpawnGate.kind !== "allow") {
+            applySpeculativeStatePatches({ result: speculativeSpawnGate, toolName });
+            applyToolGateResult({
+              result: speculativeSpawnGate,
+              stateKey,
+              logger: deps.pi.logger,
+              decision,
+            });
+            return;
+          }
         }
         const spawnHookGate = evaluateNativeSpawnHookGate({
           toolName,
@@ -458,40 +414,21 @@ export function makeBeforeToolCallHook(deps: BeforeToolCallDeps) {
       const plannerGateEnabled = resolveSpawnBackend() === "planner"
         && sessionKeys.some((sessionKey) => isPlannerAllowedForSession(sessionKey));
       if (plannerGateEnabled) {
-        const keys = Array.from(new Set(sessionKeys.map((value) => stringValue(value)).filter(Boolean)));
-        let pendingIntent: ReturnType<typeof nativeSpawnIntentStore.findPendingForSession> | null = null;
-        for (const key of keys) {
-          try {
-            pendingIntent = nativeSpawnIntentStore.findPendingForSession(key, { dispatchMode: "new_spawn" })
-              ?? nativeSpawnIntentStore.findPendingForSession(key, { dispatchMode: "send_to_speculative" });
-          } catch {
-            pendingIntent = null;
-          }
-          if (pendingIntent) break;
-        }
-        if (pendingIntent) {
-          updatePolicyState(stateKey, (current) => ({
-            ...current,
-            blockedTools: [...(Array.isArray(current.blockedTools) ? current.blockedTools.slice(-7) : []), toolName].filter(Boolean),
-          }));
-          const nextTool = pendingIntent.dispatchMode === "send_to_speculative" ? "sessions_send" : "sessions_spawn";
-          void recordPolicyReplay("sessions_yield_blocked_pending_native_spawn", {
-            sessionKey: stateKey || pendingIntent.sessionKey || "",
-            sessionId: stringValue(ctx.sessionId),
-            route: stringValue(asRecord(decision.route_decision).route),
-            toolName,
-            spawn_intent_id: pendingIntent.spawnIntentId,
-            work_contract_id: pendingIntent.workContractId,
-            dispatch_mode: pendingIntent.dispatchMode || "new_spawn",
-          }, deps.pi.logger, decision).catch(() => {});
-          return {
-            block: true,
-            blockReason: [
-              "OctoClaw blocked sessions_yield because a native spawn intent is pending but the child session has not started.",
-              `Call ${nextTool} exactly with the args from the latest octoclaw_dispatch result before waiting.`,
-              "Do not wait for a child that has not started.",
-            ].join(" "),
-          };
+        const yieldHookGate = evaluateNativeSessionsYieldHookGate({
+          toolName,
+          sessionKeys,
+          decision,
+          stateKey,
+          sessionId: stringValue(ctx.sessionId),
+        });
+        if (yieldHookGate.kind === "block") {
+          applyToolGateResult({
+            result: yieldHookGate,
+            stateKey,
+            logger: deps.pi.logger,
+            decision,
+          });
+          return toolGateHookReturn(yieldHookGate);
         }
       }
     }

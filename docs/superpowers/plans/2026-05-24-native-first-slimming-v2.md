@@ -286,20 +286,39 @@ Expected: type/helper tests pass.
 - Modify: docs if behavior changed: `README.md`, `docs/octoclaw-runtime-gate-convergence-design-2026-05-12.md`
 
 - [ ] Ensure `before-tool-call.ts` only orchestrates gates and shared side effects.
+  - Current status: partially complete. The hook is down from the V2 baseline
+    of 922 lines to 706 lines after extracting `SpeculativePreloadGate` and
+    moving `sessions_yield` pending-intent blocking into
+    `NativeSpawnGate runner`, but it still contains shared side-effect and
+    budget/native session orchestration code.
 - [ ] Confirm gate order is:
   - `SessionControlGate`
   - `NativeSpawnGate` runner
   - `BudgetedMainGate`
   - `RouteHintGate`
   - `DelegationWorkflowGuard`
-- [ ] Record before/after LOC:
+- [x] Record before/after LOC:
+  - V2 baseline `before-tool-call.ts`: 922 lines.
+  - After first native-first gate extraction: 769 lines.
+  - After current slimming slice: 706 lines.
+  - Net reduction from V2 baseline: 216 lines.
 
 ```bash
 wc -l extensions/octoclaw-runtime/src/hooks/before-tool-call.ts
 find extensions/octoclaw-runtime/src/hooks -maxdepth 1 -type f -name '*gate*.ts' -print0 | xargs -0 wc -l
 ```
 
-- [ ] Run:
+- [x] Run focused gate tests for the current extraction slice:
+
+```bash
+pnpm vitest run \
+  extensions/octoclaw-runtime/src/hooks/speculative-preload-gate.test.ts \
+  extensions/octoclaw-runtime/src/hooks/native-spawn-gate-runner.test.ts
+```
+
+Expected/current result: 2 files, 6 tests passed.
+
+- [ ] Run broader verification:
 
 ```bash
 pnpm vitest run \

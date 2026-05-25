@@ -1,8 +1,32 @@
-import { describe, expect, it } from "vitest";
+import fsSync from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { evaluateNativeSessionsSendHookGate, evaluateNativeSpawnHookGate } from "./native-spawn-gate-runner.js";
+import { nativeSpawnIntentStore } from "../delegate/native-spawn-intent-store.js";
+import { envOverrides } from "../resolve/env.js";
+import {
+  evaluateNativeSessionsSendHookGate,
+  evaluateNativeSessionsYieldHookGate,
+  evaluateNativeSpawnHookGate,
+} from "./native-spawn-gate-runner.js";
 
 describe("NativeSpawnGate runner", () => {
+  let tempWorkspace = "";
+
+  beforeEach(() => {
+    tempWorkspace = fsSync.mkdtempSync(path.join(os.tmpdir(), "octoclaw-native-spawn-runner-"));
+    envOverrides.workspaceRoot = tempWorkspace;
+    nativeSpawnIntentStore.clearForTests();
+  });
+
+  afterEach(() => {
+    nativeSpawnIntentStore.clearForTests();
+    envOverrides.workspaceRoot = "";
+    if (tempWorkspace) fsSync.rmSync(tempWorkspace, { recursive: true, force: true });
+    tempWorkspace = "";
+  });
+
   it("blocks sessions_spawn without a pending intent using the existing reason", () => {
     const result = evaluateNativeSpawnHookGate({
       toolName: "sessions_spawn",
@@ -43,6 +67,39 @@ describe("NativeSpawnGate runner", () => {
       blockReason: "OctoClaw blocked sessions_send because no current pending speculative send intent exists. Call octoclaw_dispatch first.",
       replayEvents: [expect.objectContaining({ event: "sessions_send_intent_blocked" })],
       statePatch: { blockedTools: ["sessions_send"] },
+    });
+  });
+
+  it("blocks sessions_yield while a native child start is still pending", () => {
+    const intent = nativeSpawnIntentStore.create({
+      workContractId: "wc-yield",
+      sessionKey: "session-yield",
+      sessionsSpawnArgs: { task: "child task" },
+      dispatchMode: "send_to_speculative",
+      ttlMs: 60_000,
+      now: Date.now(),
+    });
+
+    const result = evaluateNativeSessionsYieldHookGate({
+      toolName: "sessions_yield",
+      sessionKeys: ["session-yield"],
+      decision: { route_decision: { route: "delegate" } },
+      stateKey: "session-yield",
+      sessionId: "runtime-session",
+    });
+
+    expect(result).toMatchObject({
+      kind: "block",
+      block: true,
+      blockReason: expect.stringContaining("Call sessions_send exactly"),
+      replayEvents: [expect.objectContaining({
+        event: "sessions_yield_blocked_pending_native_spawn",
+        payload: expect.objectContaining({
+          spawn_intent_id: intent.spawnIntentId,
+          dispatch_mode: "send_to_speculative",
+        }),
+      })],
+      statePatch: { blockedTools: ["sessions_yield"] },
     });
   });
 });

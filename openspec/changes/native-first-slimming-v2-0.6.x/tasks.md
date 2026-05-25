@@ -2,8 +2,14 @@
 
 ## Baseline
 
-- [ ] Run `git status --short` and note unrelated dirty files.
-- [ ] Record current LOC:
+- [x] Run `git status --short` and note unrelated dirty files.
+      - Untracked local artifacts remain excluded from commits:
+        `.octoclaw-work-packets/`, `.omx/`.
+- [x] Record current LOC:
+      - V2 baseline `before-tool-call.ts`: 922 lines.
+      - After first native-first gate extraction: 769 lines.
+      - After `SpeculativePreloadGate`: 722 lines.
+      - After `sessions_yield` runner extraction: 706 lines.
 
 ```bash
 wc -l extensions/octoclaw-runtime/src/hooks/before-tool-call.ts
@@ -120,13 +126,24 @@ pnpm vitest run \
 - [ ] Use the intended gate order: `SessionControlGate`,
       `NativeSpawnGate` runner, `BudgetedMainGate`, `RouteHintGate`,
       `DelegationWorkflowGuard`.
-- [ ] Record after LOC.
-- [ ] Confirm each gate has targeted tests.
+- [x] Record after LOC.
+      - `before-tool-call.ts` is 706 lines as of the current slimming slice.
+      - Net change from V2 baseline: 922 -> 706, down 216 lines.
+      - New/expanded gate modules in this slice:
+        `speculative-preload-gate.ts`,
+        `native-spawn-gate-runner.ts`.
+- [x] Confirm each extracted gate has targeted tests.
+      - `session-control-gate.test.ts`
+      - `native-spawn-gate-runner.test.ts`
+      - `budgeted-main-gate.test.ts`
+      - `route-hint-gate.test.ts`
+      - `delegation-workflow-guard.test.ts`
+      - `speculative-preload-gate.test.ts`
 - [ ] Confirm no gate imports more broad dependencies than needed.
 
 ## Verification
 
-- [ ] Run targeted suites:
+- [x] Run targeted suites:
 
 ```bash
 pnpm vitest run \
@@ -143,7 +160,15 @@ pnpm vitest run \
   packages/octoclaw-contracts/src/status-projection.test.ts
 ```
 
-- [ ] Run full verification:
+- [x] Run full verification:
+      - `pnpm --filter @octoclaw/runtime run check`: passed.
+      - Focused slimming regression suite: 10 files, 200 tests passed.
+      - `pnpm check`: passed.
+      - `pnpm test`: 167 files passed; 2286 passed, 1 skipped, 1 todo.
+      - `git diff --check`: passed.
+      - `npx gitnexus detect-changes --repo OctoClaw --scope all`: returned
+        `No changes detected` despite local diffs; treated as a GitNexus
+        detection anomaly, not as proof of no affected scope.
 
 ```bash
 pnpm check
@@ -154,11 +179,21 @@ npx gitnexus detect-changes --repo OctoClaw
 
 ## Closeout Criteria
 
-- [ ] BDD scenarios are mapped to tests.
+- [x] BDD scenarios are mapped to tests for the completed slimming slices.
 - [ ] No advanced feature became default-on.
 - [ ] No second lifecycle engine exists.
 - [ ] Native spawn hash gate remains strict.
 - [ ] `octoclaw_dispatch` is not blocked by route hint, WorkContract forbidden
       tools, budgeted-main, or workflow enforcement before dispatch admission.
 - [ ] Status/projection lifecycle comes from native truth, not stale cache.
-- [ ] Implementation notes list changed files, deleted hard gates, and LOC delta.
+- [x] Implementation notes list changed files, deleted hard gates, and LOC delta.
+      - Current slice changed:
+        `before-tool-call.ts`,
+        `native-spawn-gate-runner.ts`,
+        `native-spawn-gate-runner.test.ts`,
+        `speculative-preload-gate.ts`,
+        `speculative-preload-gate.test.ts`.
+      - Removed from `before-tool-call.ts`: speculative preload candidate
+        scanning/patching and `sessions_yield` pending-intent block assembly.
+      - Remaining S10 work: make the main hook closer to pure orchestration and
+        review broad imports after the next extraction boundary is proven.
