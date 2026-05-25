@@ -6,6 +6,18 @@ import { buildDelegationTicketDryRun } from "../runtime-ledger/ticket-dry-run.js
 import { resetCooldownForTests } from "./judge-cooldown.js";
 import { buildPolicyMetadata } from "./session.js";
 
+let originalRuntimeLedger: string | undefined;
+
+beforeEach(() => {
+  originalRuntimeLedger = process.env.OCTOCLAW_RUNTIME_LEDGER;
+  process.env.OCTOCLAW_RUNTIME_LEDGER = "off";
+});
+
+afterEach(() => {
+  if (originalRuntimeLedger === undefined) delete process.env.OCTOCLAW_RUNTIME_LEDGER;
+  else process.env.OCTOCLAW_RUNTIME_LEDGER = originalRuntimeLedger;
+});
+
 const localJudgeConfig = {
   enabled: true,
   shadowMode: false,

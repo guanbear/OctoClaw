@@ -535,13 +535,26 @@ describe("octoclawctl cli", () => {
   });
 
   it("runs init non-interactively without runtime data", async () => {
+    const tmpDir = path.join(os.homedir(), ".octoclawctl-test-tmp", `init-no-runtime-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    const fakeBin = path.join(tmpDir, "bin");
     const capture = createIo();
-    const exitCode = await main(["init", "--non-interactive", "--lang", "en"], {}, capture.io);
+    try {
+      await fs.mkdir(fakeBin, { recursive: true });
+      await fs.writeFile(path.join(fakeBin, "openclaw"), "#!/bin/sh\necho 'OpenClaw 2026.5.12'\n", "utf8");
+      await runTestCommand("chmod", ["755", path.join(fakeBin, "openclaw")]);
 
-    expect(exitCode).toBe(0);
-    expect(capture.stdout[0]).toContain("Initialization complete");
-    expect(capture.stdout[0]).not.toMatch(/[\u3400-\u9fff]/u);
-    expect(capture.stderr).toEqual([]);
+      const exitCode = await main(["init", "--non-interactive", "--lang", "en"], {
+        PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
+        OCTOCLAW_HOME: path.join(tmpDir, ".openclaw"),
+      }, capture.io);
+
+      expect(exitCode).toBe(0);
+      expect(capture.stdout[0]).toContain("Initialization complete");
+      expect(capture.stdout[0]).not.toMatch(/[\u3400-\u9fff]/u);
+      expect(capture.stderr).toEqual([]);
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
   });
 
   it("format json produces JSON output", async () => {
