@@ -30,6 +30,15 @@ Acceptance:
 - Publish Capability Snapshot must be manually dispatched once after the change,
   because that workflow is schedule/dispatch only and is not triggered by push.
 
+Evidence:
+
+- Push CI passed on commit `73c4fd61cb`.
+- GitHub Actions annotated the run with
+  `Node 20 actions are being forced to run on Node 24`, proving the workflow
+  opt-in is active.
+- Publish Capability Snapshot was manually confirmed green after the workflow
+  change.
+
 ## Automated Runtime Smoke
 
 Command:
@@ -58,7 +67,13 @@ Run this when Slack acceptance credentials and a target channel/thread are
 configured:
 
 ```bash
-node tools/octoclawctl/dist/cli.js stability post-deploy --output-dir ~/.openclaw/reports --format json
+set -a
+source ~/.openclaw/octoclaw-slack-acceptance.env
+set +a
+node tools/octoclawctl/dist/cli.js stability post-deploy \
+  --config ~/.openclaw/octoclaw-slack-acceptance-config.json \
+  --output-dir ~/.openclaw/reports \
+  --format json
 ```
 
 Required live case expectations:
@@ -88,8 +103,51 @@ Pass criteria:
 - No `native_spawn_redispatch_after_mismatch`.
 - No `environment_unhealthy` failures.
 
+Evidence from the 2026-05-25 live Slack run:
+
+- Report:
+  `/Users/guanbear/.openclaw/reports/stability-smoke-v2/2026-05-25-13-42-24-stability-report.json`
+- Summary:
+  `/Users/guanbear/.openclaw/reports/stability-smoke-v2/2026-05-25-13-42-24-stability-summary.txt`
+- Overall gate: `pass`
+- Failure count: `0`
+- Lanes: `slack_delivery=pass`, `synthetic_fixtures=pass`,
+  `provider_resilience=pass`
+- Passed live cases: `reply_core.simple_chat`, `streaming_core.long_reply`,
+  `delegate_core.native_final`, `footer_truth.current_model`,
+  `status_core.read_only`
+
+## Operator Quick Check
+
+After deploy, the minimum operator read is:
+
+```bash
+node tools/octoclawctl/dist/cli.js stability review-latest \
+  --output-dir ~/.openclaw/reports
+```
+
+Expected green shape:
+
+```text
+Review: ~/.openclaw/reports/stability-smoke-v2/<timestamp>-stability-report.json
+Gate: pass
+Lanes: slack_delivery=pass synthetic_fixtures=pass provider_resilience=pass
+Failures (0):
+```
+
+If a deploy used `--restart`, also check the deploy output includes:
+
+- `Post-deploy stability: gate=pass`
+- `Report: ~/.openclaw/reports/stability-smoke-v2/<timestamp>-stability-report.json`
+- No `Skipped live:` line when Slack credentials were intentionally supplied.
+
+The JSON report is the durable artifact. The summary text is the human-readable
+operator handoff and is safe to paste into Slack because stability artifacts are
+sanitized.
+
 ## Current Residual Gap
 
-The local closeout has automated evidence for synthetic/provider lanes and unit
-coverage for footer/gate/native truth behavior. It does not prove live Slack
-delivery because this environment reported `missing_slack_env`.
+No Slimming V2 runtime smoke gap remains after the 2026-05-25 live Slack pass.
+The remaining operational requirement is to keep Slack acceptance credentials
+available only in the operator environment and rotate any token that was pasted
+into chat or shell history.

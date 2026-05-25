@@ -12,6 +12,46 @@
 
 All commands accept `--output-dir <dir>` (required for run commands), `--config <config>`, and `--format json`. Run commands write three artifacts under `stability-smoke-v2/`: a full JSON report, a Markdown report, and a compact sanitized summary text file for scheduled Slack delivery.
 
+## Operator One-Screen Check
+
+Use this sequence after deploy, scheduled smoke, or any CI/deploy handoff:
+
+```bash
+# 1. Inspect the latest stability result without running another smoke.
+octoclawctl stability review-latest --output-dir ~/.openclaw/reports
+
+# 2. If Slack credentials are available, run the real post-deploy lane.
+set -a
+source ~/.openclaw/octoclaw-slack-acceptance.env
+set +a
+octoclawctl stability post-deploy \
+  --config ~/.openclaw/octoclaw-slack-acceptance-config.json \
+  --output-dir ~/.openclaw/reports \
+  --format json
+```
+
+Green operator shape:
+
+```text
+Gate: pass
+Lanes: slack_delivery=pass synthetic_fixtures=pass provider_resilience=pass
+Failures (0):
+```
+
+The generated JSON report is the machine-readable truth for CI or deploy
+handoff. The matching `*-stability-summary.txt` file is the sanitized
+human-readable status card.
+
+For a `deploy --restart` run, the deploy output should include:
+
+- `Post-deploy stability: gate=pass`
+- `Report: <output-dir>/stability-smoke-v2/<timestamp>-stability-report.json`
+- no `Skipped live:` line when Slack credentials were intentionally supplied
+
+If `Skipped live: missing_slack_env` appears, the deploy only proves the
+non-live lanes. Re-run `stability post-deploy` after loading the Slack
+acceptance env before treating the deploy as user-visible green.
+
 ## OpenClaw Scheduled Task Setup
 
 ### 1. Nightly

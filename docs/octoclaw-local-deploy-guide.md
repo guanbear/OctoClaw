@@ -29,7 +29,7 @@ git add -A && git commit -m "..." && git push
 # 2. 更新 canonical 仓库
 cd /Users/guanbear/workspace/OctoClaw
 git stash  # 如果有本地修改
-git pull --ff-only origin v0.5.0
+git pull --ff-only origin v0.6.0
 
 # 3. Install + Build
 pnpm install
@@ -46,7 +46,7 @@ node tools/octoclawctl/dist/cli.js deploy --skip-build --restart \
 bash bin/update-openclaw-macmini.sh \
   --repo-root /Users/guanbear/workspace/OctoClaw \
   --openclaw-home /Users/guanbear/.openclaw \
-  --branch v0.5.0
+  --branch v0.6.0
 ```
 
 ## 关键环境变量
@@ -76,11 +76,24 @@ npx vitest run \
 
 # Ledger 模块测试
 npx vitest run extensions/octoclaw-runtime/src/runtime-ledger/__tests__/
+
+# 部署后稳定性报告复查
+node tools/octoclawctl/dist/cli.js stability review-latest \
+  --output-dir /Users/guanbear/.openclaw/reports
+
+# 有 Slack acceptance 凭据时，跑真实 post-deploy smoke
+set -a
+source /Users/guanbear/.openclaw/octoclaw-slack-acceptance.env
+set +a
+node tools/octoclawctl/dist/cli.js stability post-deploy \
+  --config /Users/guanbear/.openclaw/octoclaw-slack-acceptance-config.json \
+  --output-dir /Users/guanbear/.openclaw/reports \
+  --format json
 ```
 
 ## 当前分支
 
-`v0.5.0`
+`v0.6.0`
 
 ## 关键文件
 

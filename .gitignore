@@ -26,3 +26,7 @@ runner-results/
 .graphifyignore
 .sisyphus/
 graphify-out/
+
+# Local operator/agent runtime artifacts
+.omx/
+.octoclaw-work-packets/
