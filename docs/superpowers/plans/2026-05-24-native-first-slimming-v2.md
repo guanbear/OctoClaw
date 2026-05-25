@@ -285,14 +285,15 @@ Expected: type/helper tests pass.
 - Modify: `extensions/octoclaw-runtime/src/hooks/before-tool-call.ts`
 - Modify: docs if behavior changed: `README.md`, `docs/octoclaw-runtime-gate-convergence-design-2026-05-12.md`
 
-- [ ] Ensure `before-tool-call.ts` only orchestrates gates and shared side effects.
-  - Current status: partially complete. The hook is down from the V2 baseline
-    of 922 lines to 653 lines after extracting `SpeculativePreloadGate`,
-    moving `sessions_yield` pending-intent blocking into
-    `NativeSpawnGate runner`, and moving reply direct-tool latency/replay side
-    effects into `ReplyDirectToolRunner`. It still contains shared side-effect
-    and budget/native session orchestration code.
-- [ ] Confirm gate order is:
+- [x] Ensure `before-tool-call.ts` only orchestrates gates and shared side effects.
+  - Current status: complete for slimming v2. The hook is down from the V2
+    baseline of 922 lines to 469 lines after extracting
+    `SpeculativePreloadGate`, moving `sessions_yield` pending-intent blocking
+    into `NativeSpawnGate runner`, moving reply direct-tool latency/replay side
+    effects into `ReplyDirectToolRunner`, and moving native
+    `sessions_spawn`/`sessions_send`/`sessions_yield` planner orchestration
+    into `NativeSessionToolRunner`.
+- [x] Confirm gate order is:
   - `SessionControlGate`
   - `NativeSpawnGate` runner
   - `BudgetedMainGate`
@@ -301,8 +302,9 @@ Expected: type/helper tests pass.
 - [x] Record before/after LOC:
   - V2 baseline `before-tool-call.ts`: 922 lines.
   - After first native-first gate extraction: 769 lines.
-  - After current slimming slice: 653 lines.
-  - Net reduction from V2 baseline: 269 lines.
+  - After reply direct-tool extraction: 653 lines.
+  - After native session tool runner extraction: 469 lines.
+  - Net reduction from V2 baseline: 453 lines.
 
 ```bash
 wc -l extensions/octoclaw-runtime/src/hooks/before-tool-call.ts
@@ -330,6 +332,30 @@ pnpm vitest run \
 ```
 
 Expected/current result: 4 files, 133 tests passed.
+
+- [x] Run focused native session runner extraction tests:
+
+```bash
+pnpm vitest run \
+  extensions/octoclaw-runtime/src/hooks/native-session-tool-runner.test.ts \
+  extensions/octoclaw-runtime/src/hooks/native-spawn-gate-runner.test.ts \
+  extensions/octoclaw-runtime/src/delegate/native-spawn-gate-confirm.test.ts
+```
+
+Expected/current result: 3 files, 33 tests passed.
+
+- [x] Run focused footer default migration tests:
+
+```bash
+pnpm vitest run \
+  extensions/octoclaw-runtime/src/__tests__/extension-entry-outbound-guards.test.ts \
+  extensions/octoclaw-runtime/src/im/slack/slack-adapter.test.ts \
+  extensions/octoclaw-runtime/src/tools/registration-status-card.test.ts \
+  extensions/octoclaw-runtime/src/extension-entry-neutral-ack.test.ts \
+  extensions/octoclaw-runtime/src/router-onboarding.test.ts
+```
+
+Expected/current result: 5 files, 133 tests passed.
 
 - [ ] Run broader verification:
 

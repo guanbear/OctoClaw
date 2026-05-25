@@ -15,10 +15,8 @@ import {
 } from "../replay/policy-utils.js";
 import { recordAckReplay, recordPolicyReplay } from "../replay/replay.js";
 import { policyState, type PolicyStateEntry } from "../state/policy-state.js";
-import { isPlannerAllowedForSession, resolveSpawnBackend, resolveSpeculativePreloadEnabled } from "../config/index.js";
+import { resolveSpawnBackend, resolveSpeculativePreloadEnabled } from "../config/index.js";
 import {
-  buildBudgetedMainState,
-  budgetedMainVisibleStartAt,
   escalateBudgetedMainForTool,
   hasBudgetedMainEscalationEvidence,
   promoteBudgetedMainDispatch,
@@ -29,11 +27,7 @@ import {
 } from "../budgeted-main.js";
 import { explicitDelegateDispatchRequest } from "../dispatch-admission.js";
 import { evaluateActiveBudgetedMainGate } from "./budgeted-main-gate.js";
-import {
-  evaluateNativeSessionsSendHookGate,
-  evaluateNativeSessionsYieldHookGate,
-  evaluateNativeSpawnHookGate,
-} from "./native-spawn-gate-runner.js";
+import { runNativeSessionToolGate } from "./native-session-tool-runner.js";
 import { evaluateRouteHintGate, shouldBindRouteHintPrompt } from "./route-hint-gate.js";
 import { runReplyDirectToolGate } from "./reply-direct-tool-runner.js";
 import { evaluateNativeAnnounceDeliveryGate, evaluateSessionControlGate } from "./session-control-gate.js";
@@ -50,7 +44,6 @@ import {
 import { evaluateDelegationWorkflowGuard } from "./delegation-workflow-guard.js";
 import {
   evaluateSpeculativePreloadDispatchGate,
-  evaluateSpeculativePreloadSpawnGate,
   type SpeculativePreloadSpawnGateResult,
 } from "./speculative-preload-gate.js";
 
@@ -277,214 +270,37 @@ export function makeBeforeToolCallHook(deps: BeforeToolCallDeps) {
       }
     }
 
-    if (toolName === "sessions_spawn") {
-      const sessionKeys = [
+    const nativeSessionToolGate = await runNativeSessionToolGate({
+      toolName,
+      toolParams,
+      decision,
+      state,
+      stateKey,
+      ctx,
+      currentPluginConfig: deps.currentPluginConfig(),
+      logger: deps.pi.logger,
+      resolvePolicyStateKeys,
+    }, {
+      statesByKey: new Map(policyState.entries().map((entry) => [entry.key, entry.state])),
+      updatePolicyState,
+      updateBudgetedMainForContext: (input) => updateBudgetedMainForContext(input) as PolicyStateEntry | null,
+      recordBudgetedMainEvent,
+      recordPolicyReplay,
+      applySpeculativeStatePatches,
+      now: Date.now,
+    });
+    if (nativeSessionToolGate.kind === "block") {
+      applyToolGateResult({
+        result: nativeSessionToolGate.result,
         stateKey,
-        stringValue(ctx.sessionKey),
-        stringValue(ctx.canonicalSessionKey),
-        stringValue(asRecord(decision.request).session_key),
-        ...resolvePolicyStateKeys(ctx),
-      ];
-      const plannerGateEnabled = resolveSpawnBackend() === "planner"
-        && sessionKeys.some((sessionKey) => isPlannerAllowedForSession(sessionKey));
-      if (plannerGateEnabled) {
-        if (resolveSpeculativePreloadEnabled(deps.currentPluginConfig())) {
-          const speculativeSpawnGate = evaluateSpeculativePreloadSpawnGate({
-            toolName,
-            toolParams,
-            decision,
-            stateKey,
-            state,
-            ctx,
-            statesByKey: new Map(policyState.entries().map((entry) => [entry.key, entry.state])),
-            sessionKeys,
-          });
-          if (speculativeSpawnGate.kind !== "allow") {
-            applySpeculativeStatePatches({ result: speculativeSpawnGate, toolName });
-            applyToolGateResult({
-              result: speculativeSpawnGate,
-              stateKey,
-              logger: deps.pi.logger,
-              decision,
-            });
-            return;
-          }
-        }
-        const spawnHookGate = evaluateNativeSpawnHookGate({
-          toolName,
-          sessionKeys,
-          args: toolParams as { task: string; [key: string]: unknown },
-          decision,
-          stateKey,
-          sessionId: stringValue(ctx.sessionId),
-        });
-        if (spawnHookGate.kind === "block") {
-          applyToolGateResult({
-            result: spawnHookGate,
-            stateKey,
-            logger: deps.pi.logger,
-            decision,
-          });
-          return toolGateHookReturn(spawnHookGate);
-        }
-        const gate = spawnHookGate.nativeGate;
-        if (!gate?.allowed) {
-          return;
-        }
-        updatePolicyState(stateKey, (current) => ({
-          ...current,
-          delegated: false,
-          spawnIntentId: gate.intent.spawnIntentId,
-          workContractId: gate.intent.workContractId,
-          dispatchStatus: "spawn_call_started",
-          controlToolsSeen: Array.from(new Set([...(Array.isArray(current.controlToolsSeen) ? current.controlToolsSeen : []), toolName])),
-        }));
-        const decisionBucket = stringValue(asRecord(decision.route_decision).decision_bucket || decision._decision_bucket || asRecord(asRecord(decision.route_decision).startup_cost_policy).decision_bucket);
-        if (decisionBucket === "budgeted_main_then_delegate") {
-          const now = Date.now();
-          const stateRecord = asRecord(state);
-          const liveBudget = readBudgetedMainState(stateRecord);
-          if (!liveBudget?.escalatedAt) {
-            const startedBudget = liveBudget ?? buildBudgetedMainState({
-              now,
-              decision,
-              visibleStartAt: budgetedMainVisibleStartAt(stateRecord, now),
-              budgetStartSource: "sessions_spawn_gate_fallback",
-              workContractId: gate.intent.workContractId,
-              spawnIntentId: gate.intent.spawnIntentId,
-            });
-            const reason = liveBudget?.escalatedPending || now - startedBudget.startedAt >= startedBudget.maxWallMs
-              ? "wall_time_over_budget"
-              : "main_agent_called_dispatch";
-            const escalatedBudget = {
-              ...startedBudget,
-              active: false,
-              escalatedAt: now,
-              escalatedPending: false,
-              reason,
-              workContractId: gate.intent.workContractId,
-              spawnIntentId: gate.intent.spawnIntentId,
-            };
-            updateBudgetedMainForContext({
-              stateKey: stateKey || gate.intent.sessionKey,
-              ctx,
-              state: stateRecord,
-              budgetState: escalatedBudget,
-              extra: {
-                budgeted_main_escalated: true,
-                budgeted_main_escalated_at: new Date(now).toISOString(),
-              },
-            });
-            await recordBudgetedMainEvent({
-              event: "budgeted_main_escalated",
-              stateKey: stateKey || gate.intent.sessionKey,
-              ctx,
-              state: stateRecord,
-              decision,
-              budgetState: escalatedBudget,
-              reason,
-              logger: deps.pi.logger,
-              now,
-            }).catch(() => {});
-          }
-        }
-        void recordPolicyReplay("sessions_spawn_intent_allowed", {
-          sessionKey: stateKey || gate.intent.sessionKey,
-          sessionId: stringValue(ctx.sessionId),
-          route: stringValue(asRecord(decision.route_decision).route),
-          decision_bucket: decisionBucket,
-          decisionBucket,
-          toolName,
-          spawn_intent_id: gate.intent.spawnIntentId,
-          work_contract_id: gate.intent.workContractId,
-        }, deps.pi.logger).catch(() => {});
-        return;
-      }
+        logger: deps.pi.logger,
+        decision,
+      });
+      return toolGateHookReturn(nativeSessionToolGate.result);
     }
-    if (toolName === "sessions_yield") {
-      const sessionKeys = [
-        stateKey,
-        stringValue(ctx.sessionKey),
-        stringValue(ctx.canonicalSessionKey),
-        stringValue(asRecord(decision.request).session_key),
-        ...resolvePolicyStateKeys(ctx),
-      ];
-      const plannerGateEnabled = resolveSpawnBackend() === "planner"
-        && sessionKeys.some((sessionKey) => isPlannerAllowedForSession(sessionKey));
-      if (plannerGateEnabled) {
-        const yieldHookGate = evaluateNativeSessionsYieldHookGate({
-          toolName,
-          sessionKeys,
-          decision,
-          stateKey,
-          sessionId: stringValue(ctx.sessionId),
-        });
-        if (yieldHookGate.kind === "block") {
-          applyToolGateResult({
-            result: yieldHookGate,
-            stateKey,
-            logger: deps.pi.logger,
-            decision,
-          });
-          return toolGateHookReturn(yieldHookGate);
-        }
-      }
-    }
-    if (toolName === "sessions_send") {
-      const sessionKeys = [
-        stateKey,
-        stringValue(ctx.sessionKey),
-        stringValue(ctx.canonicalSessionKey),
-        stringValue(asRecord(decision.request).session_key),
-        ...resolvePolicyStateKeys(ctx),
-      ];
-      const plannerGateEnabled = resolveSpawnBackend() === "planner"
-        && sessionKeys.some((sessionKey) => isPlannerAllowedForSession(sessionKey));
-      const route = stringValue(asRecord(decision.route_decision).route);
-      const speculativeSendExpected = plannerGateEnabled && route === "delegate";
-      if (speculativeSendExpected) {
-        const sendHookGate = evaluateNativeSessionsSendHookGate({
-          toolName,
-          sessionKeys,
-          args: toolParams as { task: string; [key: string]: unknown },
-          decision,
-          stateKey,
-          sessionId: stringValue(ctx.sessionId),
-        });
-        if (sendHookGate.kind === "block") {
-          applyToolGateResult({
-            result: sendHookGate,
-            stateKey,
-            logger: deps.pi.logger,
-            decision,
-          });
-          return toolGateHookReturn(sendHookGate);
-        }
-        const gate = sendHookGate.nativeGate;
-        if (!gate?.allowed) {
-          return;
-        }
-        updatePolicyState(stateKey, (current) => ({
-          ...current,
-          delegated: false,
-          spawnIntentId: gate.intent.spawnIntentId,
-          workContractId: gate.intent.workContractId,
-          dispatchStatus: "spawn_call_started",
-          controlToolsSeen: Array.from(new Set([...(Array.isArray(current.controlToolsSeen) ? current.controlToolsSeen : []), toolName])),
-        }));
-        void recordPolicyReplay("sessions_send_intent_allowed", {
-          sessionKey: stateKey || gate.intent.sessionKey,
-          sessionId: stringValue(ctx.sessionId),
-          route,
-          decision_bucket: stringValue(asRecord(decision.route_decision).decision_bucket),
-          toolName,
-          spawn_intent_id: gate.intent.spawnIntentId,
-          work_contract_id: gate.intent.workContractId,
-          dispatch_mode: gate.intent.dispatchMode || "send_to_speculative",
-          speculative_session_label: gate.intent.speculativeSessionLabel || "",
-        }, deps.pi.logger).catch(() => {});
-        return;
-      }
+    if (nativeSessionToolGate.kind === "handled") {
+      state = nativeSessionToolGate.state ?? state;
+      return;
     }
 
     if (!hookConfig.enabled) return;

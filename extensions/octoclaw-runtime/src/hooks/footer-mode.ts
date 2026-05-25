@@ -31,9 +31,10 @@ export function projectionFooterMode(): "off" | "compact" | "debug" {
   const legacyDebug = stringValue(process.env.OCTOCLAW_FOOTER_DEBUG).toLowerCase();
   if (legacyDebug && !["0", "false", "off", "no"].includes(legacyDebug)) return "debug";
   const legacy = stringValue(process.env.OCTOCLAW_REPLY_PROJECTION_FOOTER).toLowerCase();
+  if (["0", "false", "off", "no"].includes(legacy)) return "off";
   if (["1", "true", "on", "yes", "compact"].includes(legacy)) return "compact";
   if (legacy === "debug") return "debug";
-  return "off";
+  return "compact";
 }
 
 export function replyProjectionFooterEnabled(): boolean {

@@ -403,7 +403,7 @@ describe("guardOutboundMessageForPolicyState", () => {
     policyState.clearState(followupKey);
   });
 
-  it("defaults outbound projection footer off without explicit env", () => {
+  it("defaults outbound projection footer to compact without explicit env", () => {
     delete process.env.OCTOCLAW_PROJECTION_FOOTER_MODE;
     delete process.env.OCTOCLAW_REPLY_PROJECTION_FOOTER;
     const now = Date.now();
@@ -417,11 +417,14 @@ describe("guardOutboundMessageForPolicyState", () => {
 
     const guarded = guardOutboundMessageForPolicyState(
       { to: "C0AS4DAPPU3", replyToMessageId: "1777368521.770689", content: "好的。" },
-      { channelId: "slack", inboundMessageTs: "1777368521.770689" },
+      { channelId: "slack", inboundMessageTs: "1777368521.770689", model: "model-a" },
       now,
     );
 
-    expect(guarded).toBeUndefined();
+    expect(guarded?.content).toContain("好的。");
+    expect(guarded?.content).toContain("route=reply | model=model-a");
+    expect(guarded?.content).not.toContain("wc=");
+    expect(guarded?.content).not.toContain("worker=");
     policyState.clearState(key);
   });
 

@@ -33,7 +33,7 @@ export interface IMSendParams {
   deliveryKind?: MessageDeliveryKind;
   deliveryTargetSource?: MessageDeliveryTargetSource;
   deliveryProvenance?: MessageDeliveryProvenance;
-  footerMode?: "off" | "debug";
+  footerMode?: "off" | "compact" | "debug";
   dedupeKey?: string;
 }
 

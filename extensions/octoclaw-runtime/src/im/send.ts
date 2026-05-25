@@ -15,7 +15,7 @@ export interface SendIMParams {
   deliveryKind?: MessageDeliveryKind;
   deliveryTargetSource?: MessageDeliveryTargetSource;
   deliveryProvenance?: MessageDeliveryProvenance;
-  footerMode?: "off" | "debug";
+  footerMode?: "off" | "compact" | "debug";
   dedupeKey?: string;
 }
 

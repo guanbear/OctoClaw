@@ -61,6 +61,35 @@ describe("SlackAdapter", () => {
     expect(result.transport).toBe("slack_api");
   });
 
+  it("defaults adapter projection footers to compact mode", async () => {
+    process.env.SLACK_BOT_TOKEN = "xoxb-test";
+    const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      expect(String(url)).toBe("https://slack.com/api/chat.postMessage");
+      const body = JSON.parse(String(init?.body));
+      expect(body.text).toContain("route=delegate | model=zhipu/GLM-5.1 | via=native_announce");
+      expect(body.text).not.toContain("wc=wc-debug");
+      expect(body.text).not.toContain("worker=");
+      return { json: async () => ({ ok: true, ts: "1700000000.000301" }) } as Response;
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const adapter = new SlackAdapter();
+
+    const result = await adapter.send({
+      sessionKey: "agent:main:slack:channel:C123abcdef",
+      message: "done",
+      projectionFooter: {
+        route: "delegate",
+        model: "zhipu/GLM-5.1",
+        via: "native_announce",
+        workerPool: "octoclaw-research",
+        workContractId: "wc-debug-123456",
+      },
+    });
+
+    expect(result.sent).toBe(true);
+    expect(result.footerSource).toBe("adapter");
+  });
+
   it("does not expose runtime model profile labels in projection footers", () => {
     const adapter = new SlackAdapter();
     const rendered = adapter.renderProjectionFooter("收到。", {
@@ -251,6 +280,48 @@ describe("SlackAdapter", () => {
       ok: true,
       transport: "slack_api_stream",
       targetSource: "inbound_anchor",
+      footerSource: "envelope",
+    });
+  });
+
+  it("renders compact footer from delivery envelope provenance", async () => {
+    process.env.SLACK_BOT_TOKEN = "xoxb-test";
+    const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      if (String(url) === "https://slack.com/api/chat.stopStream") {
+        return { json: async () => ({ ok: true, ts: "1700000000.000221" }) } as Response;
+      }
+      expect(String(url)).toBe("https://slack.com/api/chat.startStream");
+      const body = JSON.parse(String(init?.body));
+      expect(body.markdown_text).toContain("done");
+      expect(body.markdown_text).toContain("route=delegate | model=zhipu/GLM-5.1 | difficulty=deep · thread | via=native_announce");
+      expect(body.markdown_text).not.toContain("wc=wc-12345");
+      expect(body.markdown_text).not.toContain("worker=");
+      return { json: async () => ({ ok: true, ts: "1700000000.000221" }) } as Response;
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const adapter = new SlackAdapter();
+    const result = await adapter.sendText({
+      kind: "native_child_final",
+      channel: "slack",
+      target: {
+        to: "C123ABCDEF",
+        replyToMessageId: "1700000000.000100",
+        source: "inbound_anchor",
+      },
+      content: "done",
+      provenance: {
+        route: "delegate",
+        model: "zhipu/GLM-5.1",
+        via: "native_announce",
+        complexityBand: "deep",
+        workContractId: "wc-1234567890",
+      },
+      footerMode: "compact",
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
       footerSource: "envelope",
     });
   });

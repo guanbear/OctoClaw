@@ -218,14 +218,15 @@ function slackTargetSource(params: { replyToMessageId?: string; threadTs?: strin
 }
 
 function envelopeProjectionFooter(envelope: MessageDeliveryEnvelope): IMProjectionFooter | null {
-  if (envelope.footerMode !== "debug" || !envelope.provenance) return null;
+  if (envelope.footerMode === "off" || !envelope.provenance) return null;
+  const debug = envelope.footerMode === "debug";
   return {
     route: envelope.provenance.route === "delegate" ? "delegate" : "reply",
     model: firstDisplayModel(envelope.provenance.model, envelope.provenance.modelId, "direct_main"),
-    mode: "debug",
+    mode: debug ? "debug" : "compact",
     via: envelope.provenance.via,
     complexityBand: envelope.provenance.complexityBand,
-    workContractId: envelope.provenance.workContractId,
+    ...(debug ? { workContractId: envelope.provenance.workContractId } : {}),
     thread: Boolean(normalizeSlackMessageTs(envelope.target.replyToMessageId || envelope.target.threadTs)),
   };
 }
@@ -235,7 +236,7 @@ function applyEnvelopeFooter(envelope: MessageDeliveryEnvelope): { content: stri
   if (!projection) {
     return {
       content: envelope.content,
-      footerSource: envelope.footerMode === "debug" && hasProjectionFooter(envelope.content) ? "adapter" : "none",
+      footerSource: envelope.footerMode !== "off" && hasProjectionFooter(envelope.content) ? "adapter" : "none",
     };
   }
   const rendered = renderSlackProjectionFooter(envelope.content, projection);
@@ -461,7 +462,7 @@ export class SlackAdapter implements IMAdapter {
     }
 
     const timeoutMs = Math.max(500, Number(params.timeoutMs || 5000));
-    const footerMode = params.footerMode ?? (params.projectionFooter && !params.suppressProjectionFooter ? "debug" : "off");
+    const footerMode = params.footerMode ?? (params.projectionFooter && !params.suppressProjectionFooter ? "compact" : "off");
     const projectionFooter = params.projectionFooter
       ? { ...params.projectionFooter, mode: footerMode === "debug" ? "debug" as const : params.projectionFooter.mode }
       : undefined;
@@ -515,7 +516,7 @@ export class SlackAdapter implements IMAdapter {
         error: ERROR_CODES.IM_UNRESOLVABLE_TARGET,
         transport: "slack_api",
         targetSource: envelope.target.source,
-        footerSource: envelope.footerMode === "debug" ? "envelope" : "none",
+        footerSource: envelope.footerMode !== "off" ? "envelope" : "none",
       };
     }
 

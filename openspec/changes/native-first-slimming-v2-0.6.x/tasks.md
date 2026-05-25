@@ -41,7 +41,7 @@ pnpm vitest run \
 - [ ] Make retry/amendment automation default-off if it is currently automatic.
 - [ ] Preserve explicit `octoclaw_task_action retry`.
 - [ ] Make wall-time budget route mutation default-off; preserve observation.
-- [ ] Make final-result compact footer default-on while keeping ACK/status
+- [x] Make final-result compact footer default-on while keeping ACK/status
       cards/onboarding/native delivery internals footer-free.
 - [ ] Keep advanced opt-in flags explicit and tested.
 
@@ -64,14 +64,14 @@ pnpm vitest run \
 
 ## S3B: Footer Default Migration
 
-- [ ] Normalize final result footer behavior across outbound guard and IM
+- [x] Normalize final result footer behavior across outbound guard and IM
       adapters.
-- [ ] Keep compact footer free of debug IDs.
-- [ ] Build compact footer from a compact-sanitized projection, not from a
+- [x] Keep compact footer free of debug IDs.
+- [x] Build compact footer from a compact-sanitized projection, not from a
       debug-shaped projection with fields hidden by adapter convention.
-- [ ] Keep neutral ACK, route commit ACK, status card direct sends, onboarding,
+- [x] Keep neutral ACK, route commit ACK, status card direct sends, onboarding,
       and native delivery internals on `footerMode=off`.
-- [ ] Prove `via=native_announce` appears only after final native delivery.
+- [x] Prove `via=native_announce` appears only after final native delivery.
 
 ## S4: Gate Interface
 
@@ -122,17 +122,18 @@ pnpm vitest run \
 
 ## S10: Orchestrator Slimming
 
-- [ ] Reduce `before-tool-call.ts` to orchestration and shared side effects.
-- [ ] Use the intended gate order: `SessionControlGate`,
+- [x] Reduce `before-tool-call.ts` to orchestration and shared side effects.
+- [x] Use the intended gate order: `SessionControlGate`,
       `NativeSpawnGate` runner, `BudgetedMainGate`, `RouteHintGate`,
       `DelegationWorkflowGuard`.
 - [x] Record after LOC.
-      - `before-tool-call.ts` is 653 lines as of the current slimming slice.
-      - Net change from V2 baseline: 922 -> 653, down 269 lines.
+      - `before-tool-call.ts` is 469 lines as of the current slimming slice.
+      - Net change from V2 baseline: 922 -> 469, down 453 lines.
       - New/expanded gate modules in this slice:
         `speculative-preload-gate.ts`,
         `native-spawn-gate-runner.ts`,
-        `reply-direct-tool-runner.ts`.
+        `reply-direct-tool-runner.ts`,
+        `native-session-tool-runner.ts`.
 - [x] Confirm each extracted gate has targeted tests.
       - `session-control-gate.test.ts`
       - `native-spawn-gate-runner.test.ts`
@@ -141,7 +142,8 @@ pnpm vitest run \
       - `delegation-workflow-guard.test.ts`
       - `speculative-preload-gate.test.ts`
       - `reply-direct-tool-runner.test.ts`
-- [ ] Confirm no gate imports more broad dependencies than needed.
+      - `native-session-tool-runner.test.ts`
+- [x] Confirm no gate imports more broad dependencies than needed.
 
 ## Verification
 
@@ -166,11 +168,17 @@ pnpm vitest run \
       - `pnpm --filter @octoclaw/runtime run check`: passed.
       - Focused slimming regression suite: 10 files, 200 tests passed.
       - `pnpm check`: passed.
-      - `pnpm test`: 168 files passed; 2287 passed, 1 skipped, 1 todo.
+      - `pnpm test`: 169 files passed; 2290 passed, 1 skipped, 1 todo.
       - `git diff --check`: passed.
       - `npx gitnexus detect-changes --repo OctoClaw --scope all`: returned
         `No changes detected` despite local diffs; treated as a GitNexus
         detection anomaly, not as proof of no affected scope.
+      - Current slice focused tests:
+        native session runner/native spawn/route-hint/regression: 168 tests
+        passed across the focused commands.
+      - Footer migration focused tests:
+        outbound guards, Slack adapter, status card, neutral ACK, and onboarding:
+        133 tests passed.
 
 ```bash
 pnpm check
@@ -193,12 +201,24 @@ npx gitnexus detect-changes --repo OctoClaw
         `before-tool-call.ts`,
         `native-spawn-gate-runner.ts`,
         `native-spawn-gate-runner.test.ts`,
+        `native-session-tool-runner.ts`,
+        `native-session-tool-runner.test.ts`,
         `speculative-preload-gate.ts`,
         `speculative-preload-gate.test.ts`,
         `reply-direct-tool-runner.ts`,
-        `reply-direct-tool-runner.test.ts`.
+        `reply-direct-tool-runner.test.ts`,
+        `footer-mode.ts`,
+        `im/adapter.ts`,
+        `im/delivery-port.ts`,
+        `im/send.ts`,
+        `im/slack/slack-adapter.ts`,
+        `extension-entry-outbound-guards.test.ts`,
+        `im/slack/slack-adapter.test.ts`.
       - Removed from `before-tool-call.ts`: speculative preload candidate
         scanning/patching, `sessions_yield` pending-intent block assembly, and
-        reply direct-tool latency ACK/replay side-effect assembly.
-      - Remaining S10 work: make the main hook closer to pure orchestration and
-        review broad imports after the next extraction boundary is proven.
+        reply direct-tool latency ACK/replay side-effect assembly, plus native
+        `sessions_spawn`/`sessions_send`/`sessions_yield` planner orchestration.
+      - Footer migration: final user-visible outbound footer defaults to compact,
+        explicit off still disables it, compact mode omits debug IDs, and
+        ACK/status/onboarding/internal native delivery sends keep
+        `footerMode=off`.

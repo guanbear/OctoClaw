@@ -38,7 +38,7 @@ export interface MessageDeliveryEnvelope {
   content: string;
   interactiveBlocks?: Array<Record<string, unknown>>;
   provenance?: MessageDeliveryProvenance;
-  footerMode?: "off" | "debug";
+  footerMode?: "off" | "compact" | "debug";
   dedupeKey?: string;
 }
 
