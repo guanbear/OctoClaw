@@ -1,21 +1,33 @@
+import fsSync from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { resolvePolicyDecisionForContext, resolveStatelessPolicyDecision } from "./policy-resolver.js";
+import { envOverrides } from "./env.js";
 import { policyState } from "../state/policy-state.js";
 import { buildDelegationTicketDryRun } from "../runtime-ledger/ticket-dry-run.js";
 import { resetCooldownForTests } from "./judge-cooldown.js";
 import { buildPolicyMetadata } from "./session.js";
 
 let originalRuntimeLedger: string | undefined;
+const tempWorkspaceRoots: string[] = [];
 
 beforeEach(() => {
   originalRuntimeLedger = process.env.OCTOCLAW_RUNTIME_LEDGER;
   process.env.OCTOCLAW_RUNTIME_LEDGER = "off";
+  const workspaceRoot = fsSync.mkdtempSync(path.join(os.tmpdir(), "octoclaw-policy-resolver-"));
+  tempWorkspaceRoots.push(workspaceRoot);
+  envOverrides.workspaceRoot = workspaceRoot;
 });
 
 afterEach(() => {
   if (originalRuntimeLedger === undefined) delete process.env.OCTOCLAW_RUNTIME_LEDGER;
   else process.env.OCTOCLAW_RUNTIME_LEDGER = originalRuntimeLedger;
+  envOverrides.workspaceRoot = "";
+  for (const workspaceRoot of tempWorkspaceRoots.splice(0)) {
+    fsSync.rmSync(workspaceRoot, { recursive: true, force: true });
+  }
 });
 
 const localJudgeConfig = {

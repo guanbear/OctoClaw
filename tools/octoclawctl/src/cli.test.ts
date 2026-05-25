@@ -537,14 +537,16 @@ describe("octoclawctl cli", () => {
   it("runs init non-interactively without runtime data", async () => {
     const tmpDir = path.join(os.homedir(), ".octoclawctl-test-tmp", `init-no-runtime-${Date.now()}-${Math.random().toString(36).slice(2)}`);
     const fakeBin = path.join(tmpDir, "bin");
+    const originalPath = process.env.PATH;
     const capture = createIo();
     try {
       await fs.mkdir(fakeBin, { recursive: true });
       await fs.writeFile(path.join(fakeBin, "openclaw"), "#!/bin/sh\necho 'OpenClaw 2026.5.12'\n", "utf8");
       await runTestCommand("chmod", ["755", path.join(fakeBin, "openclaw")]);
+      process.env.PATH = `${fakeBin}:${process.env.PATH ?? ""}`;
 
       const exitCode = await main(["init", "--non-interactive", "--lang", "en"], {
-        PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
+        PATH: process.env.PATH,
         OCTOCLAW_HOME: path.join(tmpDir, ".openclaw"),
       }, capture.io);
 
@@ -553,6 +555,8 @@ describe("octoclawctl cli", () => {
       expect(capture.stdout[0]).not.toMatch(/[\u3400-\u9fff]/u);
       expect(capture.stderr).toEqual([]);
     } finally {
+      if (originalPath === undefined) delete process.env.PATH;
+      else process.env.PATH = originalPath;
       await fs.rm(tmpDir, { recursive: true, force: true });
     }
   });

@@ -264,6 +264,7 @@ describe("octoclaw_dispatch honesty", () => {
     for (const key of ENV_KEYS) {
       previousEnv[key] = process.env[key];
     }
+    useTempWorkContractLedger();
     process.env.OCTOCLAW_SPAWN_BACKEND = "legacy";
     process.env.OCTOCLAW_RUNTIME_LEDGER = "off";
     delete process.env.OCTOCLAW_PLANNER_ALLOWLIST;
