@@ -1121,6 +1121,36 @@ describe("guardOutboundMessageForPolicyState", () => {
     expect(guarded).toEqual({ cancel: true });
   });
 
+  it("message_sending cancels leaked NO_REPLY transcript with internal tool routing", () => {
+    const guarded = guardOutboundMessageForPolicyState(
+      {
+        to: "C0AS4DAPPU3",
+        content: "NO_REPLY to=functions.subagents 查下 slack 日志",
+        metadata: { channelId: "C0AS4DAPPU3", threadTs: "1777709667.918049" },
+      },
+      { channelId: "slack" },
+      Date.now(),
+    );
+
+    expect(guarded).toEqual({ cancel: true });
+  });
+
+  it("message_sending keeps normal explanatory text that mentions NO_REPLY", () => {
+    const guarded = guardOutboundMessageForPolicyState(
+      {
+        to: "C0AS4DAPPU3",
+        content: "NO_REPLY 是内部哨兵，不应该发给用户。",
+        metadata: { channelId: "C0AS4DAPPU3", threadTs: "1777709667.918049" },
+      },
+      { channelId: "slack", model: "GLM-5.1" },
+      Date.now(),
+    );
+
+    expect(guarded?.cancel).toBeUndefined();
+    expect(guarded?.content).toContain("NO_REPLY 是内部哨兵");
+    expect(guarded?.content).toContain("route=reply | model=GLM-5.1 · thread");
+  });
+
   it("reply_dispatch wraps Slack monitor final payloads before delivery", () => {
     const handlers = new Map<string, Function>();
     plugin.register({

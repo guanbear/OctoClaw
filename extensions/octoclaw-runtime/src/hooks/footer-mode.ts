@@ -395,10 +395,20 @@ export function resolveProjectionChannel(event: UnknownRecord, ctx: UnknownRecor
   return direct;
 }
 
+function isLeakedNoReplyTranscript(content: string): boolean {
+  const normalized = content.trim();
+  if (!/^NO_REPLY\b/iu.test(normalized)) return false;
+  if (normalized.toUpperCase() === "NO_REPLY") return true;
+  return /\bto=functions\.[a-z0-9_]+\b/iu.test(normalized)
+    || /\b(?:tool_calls|tool_use|tooluse)\b/iu.test(normalized)
+    || /\bfunctions\.[a-z0-9_]+\b/iu.test(normalized)
+    || /\b(?:subagent|subagents|subagent_announce)\b/iu.test(normalized);
+}
+
 export function guardOutboundMessageForPolicyState(event: UnknownRecord, ctx: UnknownRecord, now = Date.now()): { content?: string; message?: UnknownRecord; cancel?: boolean } | undefined {
   const content = outboundDeliveryContent(event);
   if (!content) return undefined;
-  if (content.toUpperCase() === "NO_REPLY") return { cancel: true };
+  if (isLeakedNoReplyTranscript(content)) return { cancel: true };
   const visibleDelivery = outboundLooksLikeVisibleDeliveryHook(event, ctx);
   const match = findRecentOutboundPolicyState(resolveOutboundPolicyTarget(event, ctx), event, ctx, now, {
     allowUnanchoredDelivery: visibleDelivery,
