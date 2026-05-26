@@ -55,6 +55,8 @@ bash bin/update-openclaw-macmini.sh \
 |------|-----|------|
 | `OCTOCLAW_RUNTIME_LEDGER` | `off` / `shadow` / `enforce` | Runtime ledger 模式 |
 | `OCTOCLAW_SCHEDULER_ENABLED` | `true` / `false` | 调度器开关 |
+| `OCTOCLAW_NATIVE_RUNS_SQLITE_PATH` | SQLite 路径 | 覆盖 OpenClaw `tasks/runs.sqlite`，用于 Gateway 重启后的 native result 补投递 |
+| `OCTOCLAW_DELIVERY_OUTBOX_PATH` | JSON 路径 | 覆盖 OctoClaw restart delivery outbox 路径 |
 
 ## 验证
 
@@ -80,6 +82,11 @@ npx vitest run extensions/octoclaw-runtime/src/runtime-ledger/__tests__/
 # 部署后稳定性报告复查
 node tools/octoclawctl/dist/cli.js stability review-latest \
   --output-dir /Users/guanbear/.openclaw/reports
+
+# 确认部署产物包含 Gateway restart recovery hook
+rg -n "gateway_start|recoverNativeRunsOnGatewayStart" \
+  /Users/guanbear/.openclaw/extensions/octoclaw-runtime/dist/extension-entry.js \
+  /Users/guanbear/.openclaw/extensions/octoclaw-runtime/dist/resolve/native-run-startup-recovery.js
 
 # 有 Slack acceptance 凭据时，跑真实 post-deploy smoke
 set -a

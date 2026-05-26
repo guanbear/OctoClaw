@@ -124,7 +124,7 @@ The main context stays small, so turn 50 is still fast and still cheap.
 
 - **ACK0 (instant)** — a 300 ms reaction emoji on Slack, or a short text within 2.5 s
 - **Progress tiers (non-streaming channels only)** — "still working" nudges at 12 s / 30 s / 90 s
-- **Final delivery** — handled by OpenClaw's native announce/channel delivery; OctoClaw doesn't rebuild the transport
+- **Final delivery** — handled by OpenClaw's native announce/channel delivery; OctoClaw only keeps a small restart-recovery outbox for native results that completed before IM delivery
 
 On Slack (native streaming), progress tiers are automatically skipped because the user is already watching text arrive live.
 

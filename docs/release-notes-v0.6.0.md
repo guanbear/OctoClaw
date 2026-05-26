@@ -43,6 +43,10 @@ Covered cases include:
 - parallel child spawn/status evidence
 - repeated dispatch before spawn, which now reuses the pending native planner intent instead of issuing a second ticket
 
+### Gateway Restart Recovery
+
+OctoClaw now registers a `gateway_start` recovery hook. After Gateway restart it scans OpenClaw `tasks/runs.sqlite` for native child runs with `status=succeeded` and `delivery_status=pending`, persists a restart delivery outbox item, re-sends the terminal result through the existing IM delivery path, and marks the native row delivered only after send success.
+
 ### Slack Stability Smoke v2
 
 The release gate uses `octoclawctl stability full` to exercise:
@@ -109,7 +113,7 @@ It excludes:
 Latest inspected tarball size:
 
 ```text
-194K
+205.7 kB
 ```
 
 ## Verification Snapshot
@@ -128,8 +132,8 @@ node tools/octoclawctl/dist/cli.js stability full --format json
 Observed full test result:
 
 ```text
-156 test files passed
-2162 tests passed
+173 test files passed
+2311 tests passed
 1 skipped
 1 todo
 ```
@@ -147,7 +151,7 @@ warn: Feishu not configured on this Slack-only machine
 - WeChat, Telegram, and Discord adapters have contract tests but not the same live harness depth as Slack.
 - Auto Router leaderboard/capability data is a cold-start prior; local routing and shadow evidence remain higher authority.
 - Multi-agent topologies beyond scoped sub-agents are intentionally not enabled by default.
-- Gateway restart during an active turn can still interrupt that turn; the correct recovery is to retry after readiness returns.
+- Gateway restart recovery replays completed pending native results; it does not auto-rerun failed/lost child tasks.
 
 ## Upgrade Notes
 
@@ -173,4 +177,3 @@ octoclawctl init --auto-remote-judge
 ```text
 docs/release-checklist.md
 ```
-
