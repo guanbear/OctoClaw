@@ -14,6 +14,7 @@ import { contractNativeIds, deliverNativeAnnounceCompletion, markNativeAnnounceC
 import { applyNativeAnnounceCompletionState } from "./native-announce-state.js";
 import { buildLegacyHeuristicFallbackEvent, legacyHeuristicVerdict } from "../state/legacy-heuristics.js";
 import { normalizeNativeDeliveryToSnapshot } from "../runtime-host/openclaw-adapter.js";
+import { createFileDeliveryOutbox, resolveDeliveryOutboxPath, type DeliveryOutbox, type DeliveryOutboxItem } from "./delivery-outbox.js";
 
 export { NATIVE_ANNOUNCE_BLOCKED_TOOLS } from "./native-announce-types.js";
 export type { NativeAnnounceBlocker, NativeAnnounceCompletion, NativeAnnounceSendMessage } from "./native-announce-types.js";
@@ -116,6 +117,7 @@ export async function handleNativeAnnounceCompletion(input: {
   logger?: unknown;
   cwd?: string;
   sendMessage?: NativeAnnounceSendMessage;
+  deliveryOutbox?: DeliveryOutbox;
 }): Promise<{
   completion: NativeAnnounceCompletion;
   matched: boolean;
@@ -172,6 +174,17 @@ export async function handleNativeAnnounceCompletion(input: {
   const blocker = extractNativeAnnounceBlocker(nativeAnnounceCompletion);
   const currentState = asRecord(getPolicyStateForContext(input.ctx).state);
   const directDeliveryAttempted = !blocker && !alreadyDelivered && directDeliveryEnabled;
+  const now = Date.now();
+  const nowIso = new Date(now).toISOString();
+  const outboxItem = !blocker && !alreadyDelivered
+    ? recordNativeAnnounceDeliveryOutbox({
+        outbox: input.deliveryOutbox,
+        contract: matchedContract,
+        completion: nativeAnnounceCompletion,
+        ctx: input.ctx,
+        now: nowIso,
+      })
+    : null;
   const directDelivery: SendIMResult & { sessionKey: string; replyToMessageId: string } = !blocker && !alreadyDelivered && directDeliveryEnabled
     ? await deliverNativeAnnounceCompletion({
         contract: matchedContract,
@@ -203,8 +216,6 @@ export async function handleNativeAnnounceCompletion(input: {
     nativeResultExists: true,
     relayResultHash: alreadyDelivered ? nativeAnnounceCompletion.resultHash : "",
   });
-  const now = Date.now();
-  const nowIso = new Date(now).toISOString();
   const updatedContract = markNativeAnnounceCompletionOnContract(
     matchedContract.workContractId,
     nativeAnnounceCompletion,
@@ -213,6 +224,9 @@ export async function handleNativeAnnounceCompletion(input: {
     blocker,
     directDelivery,
   ) ?? matchedContract;
+  if (delivered && outboxItem) {
+    markNativeAnnounceOutboxDelivered(input.deliveryOutbox, outboxItem, nowIso);
+  }
   applyNativeAnnounceCompletionState({
     ctx: input.ctx,
     stateKey: preStateKey,
@@ -297,6 +311,7 @@ export async function handleNativeSubagentEndedCompletion(input: {
   logger?: unknown;
   cwd?: string;
   sendMessage?: NativeAnnounceSendMessage;
+  deliveryOutbox?: DeliveryOutbox;
 }): Promise<void> {
   const childSessionKey = stringValue(input.event.targetSessionKey || input.ctx.childSessionKey);
   const runId = stringValue(input.event.runId || input.ctx.runId);
@@ -340,6 +355,15 @@ export async function handleNativeSubagentEndedCompletion(input: {
   const stateKey = resolvePolicyStateKey(stateCtx);
   const currentState = asRecord(getPolicyStateForContext(stateCtx).state);
   const directDeliveryEnabled = nativeAnnounceDirectDeliveryEnabled(input.pluginConfig);
+  const now = Date.now();
+  const nowIso = new Date(now).toISOString();
+  const outboxItem = recordNativeAnnounceDeliveryOutbox({
+    outbox: input.deliveryOutbox,
+    contract: matchedContract,
+    completion,
+    ctx: stateCtx,
+    now: nowIso,
+  });
   const directDelivery: SendIMResult & { sessionKey: string; replyToMessageId: string } = directDeliveryEnabled
     ? await deliverNativeAnnounceCompletion({
         contract: matchedContract,
@@ -365,8 +389,6 @@ export async function handleNativeSubagentEndedCompletion(input: {
     nativeDelivery: nativeDeliverySnapshot,
     nativeResultExists: true,
   });
-  const now = Date.now();
-  const nowIso = new Date(now).toISOString();
   const updatedContract = markNativeAnnounceCompletionOnContract(
     matchedContract.workContractId,
     completion,
@@ -375,6 +397,9 @@ export async function handleNativeSubagentEndedCompletion(input: {
     null,
     directDelivery,
   ) ?? matchedContract;
+  if (delivered && outboxItem) {
+    markNativeAnnounceOutboxDelivered(input.deliveryOutbox, outboxItem, nowIso);
+  }
   applyNativeAnnounceCompletionState({
     ctx: stateCtx,
     stateKey,
@@ -439,4 +464,48 @@ export async function handleNativeSubagentEndedCompletion(input: {
       null,
     ).catch(() => {});
   }
+}
+
+function nativeAnnounceOutbox(input?: DeliveryOutbox): DeliveryOutbox {
+  return input ?? createFileDeliveryOutbox(resolveDeliveryOutboxPath());
+}
+
+function recordNativeAnnounceDeliveryOutbox(input: {
+  outbox?: DeliveryOutbox;
+  contract: WorkContract;
+  completion: NativeAnnounceCompletion;
+  ctx: UnknownRecord;
+  now: string;
+}): DeliveryOutboxItem {
+  const ids = contractNativeIds(input.contract);
+  const nativeRefs = asRecord(input.contract.nativeSpawnRefs);
+  const delegate = asRecord(input.contract.delegate);
+  const requesterSessionKey = stringValue(input.contract.sessionKey)
+    || stringValue(nativeRefs.requesterSessionKey)
+    || stringValue(input.ctx.sessionKey)
+    || stringValue(input.ctx.canonicalSessionKey);
+  return nativeAnnounceOutbox(input.outbox).upsertPendingResult({
+    taskId: stringValue(nativeRefs.openclawTaskId) || ids.runId || input.contract.workContractId,
+    runId: ids.runId || stringValue(nativeRefs.openclawRunId),
+    childSessionKey: ids.childSessionKey || input.completion.sourceSessionKey,
+    requesterSessionKey,
+    requesterOrigin: {
+      sessionKey: requesterSessionKey,
+      channel: stringValue(input.ctx.channelId || input.ctx.channel),
+      accountId: stringValue(input.ctx.accountId),
+      threadId: stringValue(input.ctx.threadId || input.ctx.thread_ts),
+      replyToMessageId: stringValue(input.ctx.replyToMessageId || input.ctx.reply_to_id),
+    },
+    workContractId: input.contract.workContractId,
+    delegateTaskId: stringValue(delegate.delegateTaskId) || input.contract.workContractId,
+    attemptId: stringValue(delegate.currentAttemptId) || ids.runId || input.contract.workContractId,
+    resultText: input.completion.resultText,
+    now: input.now,
+  });
+}
+
+function markNativeAnnounceOutboxDelivered(outbox: DeliveryOutbox | undefined, item: DeliveryOutboxItem, now: string): void {
+  try {
+    nativeAnnounceOutbox(outbox).markDelivered(item.outboxId, now);
+  } catch (_) {}
 }

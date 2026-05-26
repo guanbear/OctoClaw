@@ -96,6 +96,28 @@ describe("execution transition notifier", () => {
     expect(text).toContain("子任务");
   });
 
+  it("labels restart and recovery transitions for affected child work", () => {
+    expect(projectTransitionText("restart_draining" as never, projection({
+      title: "Brave Search 配置",
+      status: "running",
+      dispatchExecuted: true,
+      spawnExecuted: true,
+    }))).toContain("Gateway 正在重启");
+    expect(projectTransitionText("restart_recovered" as never, projection({
+      title: "Brave Search 配置",
+      status: "deliverable_ready",
+      dispatchExecuted: true,
+      spawnExecuted: true,
+      resultMaterialized: true,
+    }))).toContain("Gateway 已恢复");
+    expect(projectTransitionText("interrupted_by_restart" as never, projection({
+      title: "Brave Search 配置",
+      status: "failed",
+      dispatchExecuted: true,
+      spawnExecuted: true,
+    }))).toContain("重启打断");
+  });
+
   it("emits stale heartbeat notification before final timeout", async () => {
     const { replaySpy } = await mockDelivery();
 

@@ -17,7 +17,10 @@ export type ExecutionTransitionKind =
   | "heartbeat_stale"
   | "timed_out"
   | "result_ready"
-  | "delivery_failed";
+  | "delivery_failed"
+  | "restart_draining"
+  | "restart_recovered"
+  | "interrupted_by_restart";
 
 export interface ExecutionTransitionNotification {
   sent: boolean;
@@ -267,6 +270,9 @@ export function projectTransitionText(
     timed_out: { zh: "任务超时。", en: "Task timed out." },
     result_ready: { zh: "任务完成，等待投递。", en: "Task completed, pending delivery." },
     delivery_failed: { zh: "任务结果投递失败。", en: "Task result delivery failed." },
+    restart_draining: { zh: "Gateway 正在重启，正在保护子任务；完成结果会在恢复后补投递。", en: "Gateway is restarting and protecting child work; completed results will be delivered after recovery." },
+    restart_recovered: { zh: "Gateway 已恢复，正在检查子任务结果。", en: "Gateway recovered and is checking child task results." },
+    interrupted_by_restart: { zh: "Gateway 重启打断了子任务，结果未生成；可以重试。", en: "Gateway restart interrupted the child task before a result was produced; retry is available." },
   };
 
   if (transitionKind === "spawn_started" && !projection.spawnExecuted) {
@@ -281,7 +287,7 @@ export function buildExecTransitionKey(input: {
   transitionKind: string;
   workContractId?: string;
 }): string {
-  const stableTerminalAttemptId = ["delivery_failed", "timed_out"].includes(input.transitionKind)
+  const stableTerminalAttemptId = ["delivery_failed", "timed_out", "interrupted_by_restart"].includes(input.transitionKind)
     ? asString(input.workContractId) || input.taskId
     : input.attemptId;
   return `exec_transition:${input.taskId}:${stableTerminalAttemptId}:${input.transitionKind}`;

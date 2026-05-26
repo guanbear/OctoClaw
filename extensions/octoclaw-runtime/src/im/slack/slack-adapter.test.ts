@@ -236,6 +236,25 @@ describe("SlackAdapter", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
+  it("returns a failed send result when Slack channel resolution rejects", async () => {
+    process.env.SLACK_BOT_TOKEN = "xoxb-test";
+    const fetchMock = vi.fn(async (url: string | URL | Request) => {
+      expect(String(url)).toBe("https://slack.com/api/conversations.open");
+      throw new DOMException("This operation was aborted", "AbortError");
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const adapter = new SlackAdapter();
+    const result = await adapter.send({
+      sessionKey: "agent:main:slack:default:direct:u123abcdef",
+      message: "dm ack",
+    });
+
+    expect(result.sent).toBe(false);
+    expect(result.error).toContain("AbortError");
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
   it("renders debug footer from delivery envelope provenance", async () => {
     process.env.SLACK_BOT_TOKEN = "xoxb-test";
     const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {

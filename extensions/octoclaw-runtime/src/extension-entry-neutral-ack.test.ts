@@ -83,6 +83,19 @@ afterEach(() => {
 });
 
 describe("neutral Slack ACK hook dedupe", () => {
+  it("registers gateway_start recovery hook", () => {
+    const handlers = new Map<string, Function>();
+
+    plugin.register({
+      on: (event, handler) => handlers.set(event, handler),
+      registerTool: () => {},
+      registerCommand: () => {},
+      logger: {},
+    });
+
+    expect(handlers.get("gateway_start")).toBeTruthy();
+  });
+
   it("does not suppress a new inbound Slack message because a previous message sent a reaction ACK", async () => {
     const handlers = new Map<string, Function>();
     const reactions: IMReactParams[] = [];

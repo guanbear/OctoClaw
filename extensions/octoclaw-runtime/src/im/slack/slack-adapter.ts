@@ -557,7 +557,12 @@ export class SlackAdapter implements IMAdapter {
       return { sent: false, delivered: false, error: ERROR_CODES.IM_TOKEN_MISSING, transport: "slack_api" };
     }
 
-    const channelResult = await this.resolveReactionChannelId(target.target, token, Math.max(500, Math.floor(timeoutMs * 0.35)));
+    let channelResult: { channelId: string; error?: string };
+    try {
+      channelResult = await this.resolveReactionChannelId(target.target, token, Math.max(500, Math.floor(timeoutMs * 0.35)));
+    } catch (error) {
+      return { sent: false, delivered: false, error: String(error), transport: "slack_api" };
+    }
     if (!channelResult.channelId) {
       return { sent: false, delivered: false, error: channelResult.error || ERROR_CODES.IM_CHANNEL_NOT_CONFIGURED, transport: "slack_api" };
     }

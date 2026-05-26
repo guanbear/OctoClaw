@@ -65,6 +65,7 @@ import {
 import { makeBeforeDispatchHook } from "./hooks/before-dispatch.js";
 import { deliveryTargetReplyTo } from "./hooks/footer-mode.js";
 import { handleRouterWizardAction } from "./router-onboarding.js";
+import { recoverNativeRunsOnGatewayStart } from "./resolve/native-run-startup-recovery.js";
 export {
   isAcceptedSpeculativeSpawnResult,
   maybeInjectSpeculativePreload,
@@ -900,6 +901,9 @@ export const plugin = {
     registerLifecycleHook("after_tool_call", makeAfterToolCallHook({ pi, currentPluginConfig }));
     registerLifecycleHook("agent_end", makeAgentEndHook({ pi }), 50);
     registerLifecycleHook("before_message_write", makeBeforeMessageWriteHook({ pi, recordNeutralAckCancellations }), 120);
+    registerLifecycleHook("gateway_start", async () => {
+      await recoverNativeRunsOnGatewayStart({ logger: pi.logger });
+    }, 120);
 
     if (watchdogInterval) {
       clearInterval(watchdogInterval);
