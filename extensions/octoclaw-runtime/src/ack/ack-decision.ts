@@ -98,6 +98,13 @@ export function decideAckAction(packet: AckDecisionPacket): AckDecision {
   const elapsed = elapsedMs(packet);
   const hasAck0 = ack0Sent(packet);
 
+  if (hasAck0 && !workIsActive(packet)) {
+    return {
+      action: "no_action",
+      reason: "no active reply work eligible for tier nudges",
+    };
+  }
+
   if (hasAck0 && packet.tier1Sent && !packet.tier2Sent && elapsed >= ACK_TIMING.tier2_ms) {
     return {
       action: "send_tier_nudge",

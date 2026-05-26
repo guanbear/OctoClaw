@@ -261,4 +261,33 @@ describe("ack-decision: decideAckAction", () => {
     expect(decision.ackStage).toBe("ack0");
     expect(decision.modality).toBe("text");
   });
+
+  it("does not send tier1 stale ACK after ACK0 when no reply work is active", () => {
+    const decision = decideAckAction(packet({
+      nowMs: 12_500,
+      reactionAckSent: true,
+      mainModelActive: false,
+      toolActive: false,
+      delegatedRunning: false,
+      blocked: false,
+    }));
+
+    expect(decision.action).toBe("no_action");
+    expect(decision.reason).toBe("no active reply work eligible for tier nudges");
+  });
+
+  it("does not send tier2 stale ACK after ACK0 when no reply work is active", () => {
+    const decision = decideAckAction(packet({
+      nowMs: 31_000,
+      reactionAckSent: true,
+      tier1Sent: true,
+      mainModelActive: false,
+      toolActive: false,
+      delegatedRunning: false,
+      blocked: false,
+    }));
+
+    expect(decision.action).toBe("no_action");
+    expect(decision.reason).toBe("no active reply work eligible for tier nudges");
+  });
 });
