@@ -12,6 +12,7 @@ import {
   sendNeutralInboundAck,
   startAckGuard,
   threadKeyFromSessionKey as threadKeyFn,
+  updateAckGuardDecision,
   updateAckTrackingState,
 } from "./ack-guard.js";
 import { buildAckKey } from "./ack-dedupe.js";
@@ -284,6 +285,52 @@ describe("ack-guard: decideAckAction runtime wiring", () => {
       emoji: "eyes",
     }));
     expect(adapter.send).not.toHaveBeenCalled();
+  });
+
+  it("keeps reply progress guard after neutral reaction and sends must_reply tier progress", async () => {
+    vi.useFakeTimers();
+    adapter.resolveTarget.mockReturnValue({ target: "C123ABC" });
+    adapter.react.mockResolvedValue({ ok: true });
+    adapter.send.mockResolvedValue({ sent: true, delivered: true, threadTs: "111.222" });
+    const stateKey = `neutral-reaction-progress-state-${Date.now()}`;
+
+    startAckGuard("slack:default:channel:C123ABC", process.cwd(), {
+      stateKey,
+      decision: {},
+      state: {
+        reactionAckSupported: true,
+        reactionAckEnabled: true,
+        reactionAckEmoji: "eyes",
+        channelTone: "chat",
+      },
+      replyToMessageId: "111.222",
+    });
+
+    const neutral = await sendNeutralInboundAck({
+      sessionKey: "slack:default:channel:C123ABC",
+      stateKey,
+      replyToMessageId: "111.222",
+      state: {
+        reactionAckSupported: true,
+        reactionAckEnabled: true,
+        reactionAckEmoji: "eyes",
+        channelTone: "chat",
+      },
+      cwd: process.cwd(),
+    });
+
+    expect(neutral).toEqual({ sent: true, reason: "reaction_ack_sent", mode: "reaction" });
+    expect(ackTimerStateForKey(stateKey)).not.toBeNull();
+
+    updateAckGuardDecision(stateKey, {
+      route_decision: { route: "reply", decision_bucket: "must_reply" },
+    });
+    await vi.advanceTimersByTimeAsync(12_050);
+
+    expect(adapter.send).toHaveBeenCalledWith(expect.objectContaining({
+      replyToMessageId: "111.222",
+      message: expect.any(String),
+    }));
   });
 
   it("dedupes neutral inbound ACKs per Slack target and original message anchor", async () => {

@@ -950,6 +950,9 @@ export function startAckGuard(sessionKey: string, cwd: string, options: UnknownR
     ackOwner: "",
     ack_owner: "",
     _ackTurnTs: turnTs,
+    mainModelActive: true,
+    main_model_active: true,
+    ...(replyToMessageId ? { inboundMessageTs: replyToMessageId, replyToMessageId, message_id: replyToMessageId } : {}),
     reactionAckSent: asBooleanStrict(baseState.reactionAckSent) || asBooleanStrict(existingTrackingState.reactionAckSent),
     reactionAckAttempted: asBooleanStrict(baseState.reactionAckAttempted)
       || asBooleanStrict(baseState.reaction_ack_attempted)
@@ -959,11 +962,12 @@ export function startAckGuard(sessionKey: string, cwd: string, options: UnknownR
     reactionAckEnabled: asBooleanStrict(baseState.reactionAckEnabled),
     channelTone: normalizeChannelTone(baseState.channelTone || baseState.channel_tone),
   });
+  const timerRoutePhase = routePhase === "pre_route" ? "reply" : routePhase;
 
   createAckTimers({
     stateKey,
     sessionKey: normalizedSessionKey,
-    routePhase,
+    routePhase: timerRoutePhase,
     inboundTs: turnTs,
     config: isRecord(options.ackTimingConfig) ? options.ackTimingConfig as Partial<import("./ack-timing.js").AckTimingConfig> : undefined,
     channelStreaming: resolveChannelStreamingForAck(normalizedSessionKey),
@@ -1275,7 +1279,7 @@ export async function sendNeutralInboundAck(params: {
   const result = await attemptAckSend({
     sessionKey,
     stateKey,
-    ackOwner: "latency_ack",
+    ackOwner: "timer_ack",
     ackStage: AckStage.PreRouteSoftAck,
     routePhase: "pre_route",
     message: NEUTRAL_INBOUND_ACK_TEXT,
@@ -1292,7 +1296,7 @@ export async function sendNeutralInboundAck(params: {
     logger: params.logger ?? {},
     timeoutMs: Math.max(500, Number(params.timeoutMs || 5000)),
     ownerTag: "neutral_inbound_ack",
-    markLatencySent: true,
+    markLatencySent: false,
     markMode: useReactionAck ? "reaction" : "channel_message",
     replyToMessageId,
     decision,
