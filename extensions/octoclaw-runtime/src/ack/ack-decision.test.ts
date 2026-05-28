@@ -197,6 +197,27 @@ describe("ack-decision: decideAckAction", () => {
     expect(selectAckTemplate(input)?.text).not.toMatch(/还在跑，稍等|还没好|处理中\.\.\./);
   });
 
+  it("does not select delegated background wording for reply progress tiers", () => {
+    const forbidden = /后台|原线程|任务结果|任务仍在处理|发回/;
+
+    for (const stage of ["tier1", "tier2"] as const) {
+      for (let index = 0; index < 24; index += 1) {
+        const selected = selectAckTemplate({
+          stage,
+          channel: "chat",
+          tone: "neutral",
+          taskClass: "lookup",
+          modality: "text",
+          threadBindingKey: `slack:channel:C123:${index}`,
+          turnId: `turn-${index}`,
+          recentKeys: [],
+        });
+
+        expect(selected?.text).not.toMatch(forbidden);
+      }
+    }
+  });
+
   it("suppresses at highest priority when final response is streaming", () => {
     const decision = decideAckAction(packet({
       nowMs: 2_500,
