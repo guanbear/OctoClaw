@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { selectAckTemplate } from "./ack-templates.js";
+import { ACK_TEMPLATES, selectAckTemplate } from "./ack-templates.js";
 import { decideAckAction, type AckDecisionPacket } from "./ack-decision.js";
 
 function packet(overrides: Partial<AckDecisionPacket> = {}): AckDecisionPacket {
@@ -216,6 +216,14 @@ describe("ack-decision: decideAckAction", () => {
         expect(selected?.text).not.toMatch(forbidden);
       }
     }
+  });
+
+  it("uses neutral reply progress wording for stale progress templates", () => {
+    expect(ACK_TEMPLATES.stale).toEqual([
+      "还在处理这条消息，稍后会在这里回复。",
+      "处理时间稍长，我会继续完成后回复。",
+      "还需要一点时间，结果会直接回复在这里。",
+    ]);
   });
 
   it("suppresses at highest priority when final response is streaming", () => {
