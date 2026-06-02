@@ -23,6 +23,22 @@ function blockedToolsPatch(toolName: string): UnknownRecord {
   return { blockedTools: [toolName].filter(Boolean) };
 }
 
+function nativeSpawnMismatchPatch(toolName: string, gate: NativeSpawnGateDecision | NativeSessionsSendGateDecision): UnknownRecord {
+  const intent = gate.intent;
+  if (gate.reason !== "args_hash_mismatch" || !intent) return blockedToolsPatch(toolName);
+  return {
+    ...blockedToolsPatch(toolName),
+    dispatchStatus: "native_spawn_args_mismatch_blocked",
+    dispatch_status: "native_spawn_args_mismatch_blocked",
+    nativeSpawnArgsMismatchBlocked: true,
+    native_spawn_args_mismatch_blocked: true,
+    spawnIntentId: intent.spawnIntentId,
+    spawn_intent_id: intent.spawnIntentId,
+    workContractId: intent.workContractId,
+    work_contract_id: intent.workContractId,
+  };
+}
+
 export function evaluateNativeSpawnHookGate(input: {
   toolName: string;
   sessionKeys: string[];
@@ -43,7 +59,6 @@ export function evaluateNativeSpawnHookGate(input: {
       ? "OctoClaw blocked sessions_spawn because the arguments do not match the pending native spawn intent. Retry sessions_spawn with the exact sessionsSpawnArgs from the most recent octoclaw_dispatch result; do not call octoclaw_dispatch again."
       : "OctoClaw blocked sessions_spawn because no current pending native spawn intent exists. Call octoclaw_dispatch first.",
     {
-      statePatch: blockedToolsPatch(input.toolName),
       replayEvents: [{
         event: "sessions_spawn_intent_blocked",
         decision: "none",
@@ -54,10 +69,12 @@ export function evaluateNativeSpawnHookGate(input: {
           toolName: input.toolName,
           reason: gate.reason,
           spawn_intent_id: gate.intent?.spawnIntentId ?? null,
+          work_contract_id: gate.intent?.workContractId ?? null,
           expected_hash: gate.expectedHash ?? null,
           actual_hash: gate.actualHash ?? null,
         },
       }],
+      statePatch: nativeSpawnMismatchPatch(input.toolName, gate),
     },
   );
 }
@@ -83,7 +100,6 @@ export function evaluateNativeSessionsSendHookGate(input: {
       ? "OctoClaw blocked sessions_send because the arguments do not match the pending speculative send intent. Retry sessions_send with the exact sessionsSendArgs from the most recent octoclaw_dispatch result; do not call octoclaw_dispatch again."
       : "OctoClaw blocked sessions_send because no current pending speculative send intent exists. Call octoclaw_dispatch first.",
     {
-      statePatch: blockedToolsPatch(input.toolName),
       replayEvents: [{
         event: "sessions_send_intent_blocked",
         payload: {
@@ -93,10 +109,12 @@ export function evaluateNativeSessionsSendHookGate(input: {
           toolName: input.toolName,
           reason: gate.reason,
           spawn_intent_id: gate.intent?.spawnIntentId ?? null,
+          work_contract_id: gate.intent?.workContractId ?? null,
           expected_hash: gate.expectedHash ?? null,
           actual_hash: gate.actualHash ?? null,
         },
       }],
+      statePatch: nativeSpawnMismatchPatch(input.toolName, gate),
     },
   );
 }

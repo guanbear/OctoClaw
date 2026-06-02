@@ -645,6 +645,13 @@ export function budgetedMainSpawnIntentId(state: UnknownRecord): string {
   return stringValue(state.spawnIntentId || state.spawn_intent_id);
 }
 
+function nativeSpawnArgsMismatchConverged(state: UnknownRecord): boolean {
+  const dispatchStatus = stringValue(state.dispatchStatus || state.dispatch_status);
+  return dispatchStatus === "native_spawn_args_mismatch_blocked"
+    || state.nativeSpawnArgsMismatchBlocked === true
+    || state.native_spawn_args_mismatch_blocked === true;
+}
+
 export function budgetedMainVisibleStartAt(state: UnknownRecord, now: number): number {
   const candidate = Number(state.inboundObservedAt || state.inbound_observed_at || state.createdAt || 0);
   return Number.isFinite(candidate) && candidate > 0 ? candidate : now;
@@ -949,6 +956,7 @@ export function maybeStartBudgetedMain(input: {
 }): void {
   if (!input.stateKey || !isBudgetedMainDecision(input.decision)) return;
   const liveState = asRecord(policyState.get(input.stateKey) || input.state);
+  if (nativeSpawnArgsMismatchConverged(liveState)) return;
   const existingBudget = readBudgetedMainState(liveState);
   if (existingBudget?.completedAt || existingBudget?.escalatedAt) return;
   if (existingBudget?.active) {

@@ -44,6 +44,52 @@ describe("NativeSpawnGate runner", () => {
     });
   });
 
+  it("converges sessions_spawn args mismatch on the pending intent instead of allowing repeated guesses", () => {
+    const intent = nativeSpawnIntentStore.create({
+      workContractId: "wc-mismatch",
+      sessionKey: "session-mismatch",
+      sessionsSpawnArgs: { task: "canonical child task", label: "canonical" },
+      ttlMs: 60_000,
+      now: Date.now(),
+    });
+
+    const result = evaluateNativeSpawnHookGate({
+      toolName: "sessions_spawn",
+      sessionKeys: ["session-mismatch"],
+      args: { task: "drifted child task", label: "canonical" },
+      decision: { route_decision: { route: "delegate" } },
+      stateKey: "session-mismatch",
+      sessionId: "runtime-session",
+    });
+
+    expect(result).toMatchObject({
+      kind: "block",
+      block: true,
+      blockReason: expect.stringContaining("arguments do not match"),
+      statePatch: {
+        blockedTools: ["sessions_spawn"],
+        dispatchStatus: "native_spawn_args_mismatch_blocked",
+        dispatch_status: "native_spawn_args_mismatch_blocked",
+        nativeSpawnArgsMismatchBlocked: true,
+        native_spawn_args_mismatch_blocked: true,
+        spawnIntentId: intent.spawnIntentId,
+        spawn_intent_id: intent.spawnIntentId,
+        workContractId: "wc-mismatch",
+        work_contract_id: "wc-mismatch",
+      },
+      replayEvents: [expect.objectContaining({
+        event: "sessions_spawn_intent_blocked",
+        payload: expect.objectContaining({
+          sessionKey: "session-mismatch",
+          sessionId: "runtime-session",
+          reason: "args_hash_mismatch",
+          spawn_intent_id: intent.spawnIntentId,
+          work_contract_id: "wc-mismatch",
+        }),
+      })],
+    });
+  });
+
   it("does not handle non-spawn tools", () => {
     expect(evaluateNativeSpawnHookGate({
       toolName: "octoclaw_dispatch",

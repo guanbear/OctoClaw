@@ -1,5 +1,11 @@
-import { describe, expect, it } from "vitest";
-import { classifyBudgetedMainTool } from "./budgeted-main.js";
+import { afterEach, describe, expect, it } from "vitest";
+import { classifyBudgetedMainTool, maybeStartBudgetedMain, readBudgetedMainState } from "./budgeted-main.js";
+import { policyState } from "./state/policy-state.js";
+import { type UnknownRecord } from "./util/type-coercion.js";
+
+afterEach(() => {
+  policyState.clear("session-mismatch-budget");
+});
 
 describe("classifyBudgetedMainTool", () => {
   it("treats structured OpenClaw gateway status with safe output truncation as read-only", () => {
@@ -61,5 +67,34 @@ describe("classifyBudgetedMainTool", () => {
         expect(classification.unknownToolRiskDetected).toBe(false);
       });
     }
+  });
+});
+
+describe("maybeStartBudgetedMain", () => {
+  it("does not restart budgeted-main after native spawn args mismatch converged the turn", () => {
+    const stateKey = "session-mismatch-budget";
+    const state = {
+      dispatchStatus: "native_spawn_args_mismatch_blocked",
+      dispatch_status: "native_spawn_args_mismatch_blocked",
+      nativeSpawnArgsMismatchBlocked: true,
+      native_spawn_args_mismatch_blocked: true,
+      spawnIntentId: "nsp_mismatch",
+      workContractId: "wc_mismatch",
+    };
+    policyState.set(stateKey, state);
+
+    maybeStartBudgetedMain({
+      stateKey,
+      ctx: { sessionKey: stateKey },
+      state,
+      decision: {
+        route_decision: {
+          route: "reply",
+          decision_bucket: "budgeted_main_then_delegate",
+        },
+      },
+    });
+
+    expect(readBudgetedMainState((policyState.get(stateKey) ?? {}) as UnknownRecord)).toBeNull();
   });
 });
