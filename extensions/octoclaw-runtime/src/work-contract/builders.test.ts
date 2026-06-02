@@ -98,6 +98,35 @@ describe("work contract builders", () => {
     expect(contract.updatedAt).toBe(now.toISOString());
   });
 
+  it("stores an immutable delivery target when provided", () => {
+    const seal = buildWorkDecisionSeal("local_judge", "delegate", ["needs_execution"]);
+    const deliveryTarget = {
+      surface: "slack",
+      sessionKey: "agent:main:slack:default:direct:u0al9t5u89z",
+      session_key: "agent:main:slack:default:direct:u0al9t5u89z",
+      replyToMessageId: "1780384206.903699",
+      reply_to_message_id: "1780384206.903699",
+      threadTs: "1780384206.903699",
+      thread_ts: "1780384206.903699",
+      immutable: true,
+    };
+    const contract = buildWorkContractFromPolicy(
+      "agent:main:slack:default:direct:u0al9t5u89z",
+      "Review current changes",
+      "delegated_work",
+      coverage,
+      seal,
+      {
+        turnId: "turn-delivery-target",
+        status: "sealed",
+        deliveryTarget,
+      },
+    ) as unknown as Record<string, unknown>;
+
+    expect(contract.deliveryTarget).toEqual(deliveryTarget);
+    expect(contract.delivery_target).toEqual(deliveryTarget);
+  });
+
   it("buildWorkContractFromPolicy includes turn entropy to avoid same-prompt id collisions", () => {
     const seal = buildWorkDecisionSeal("local_judge", "delegate", ["needs_execution"], {
       routeSealId: "route-seal-collision",

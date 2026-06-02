@@ -47,6 +47,7 @@ export interface BuildWorkContractFromPolicyOptions {
   reply?: ReplyContract;
   delegate?: DelegateContract;
   decisionOverrides?: Partial<WorkDecisionSeal>;
+  deliveryTarget?: Record<string, unknown>;
 }
 
 export function buildWorkContractFromPolicy(
@@ -90,6 +91,10 @@ export function buildWorkContractFromPolicy(
     continuationMode: decision.route === "delegate" ? "resume_preferred" : "status_only",
   };
 
+  const deliveryTarget = options.deliveryTarget && Object.keys(options.deliveryTarget).length > 0
+    ? options.deliveryTarget
+    : undefined;
+
   return {
     schemaVersion: "octoclaw.work_contract.v1",
     workContractId,
@@ -116,7 +121,11 @@ export function buildWorkContractFromPolicy(
       decisionSource: decisionSeal.source,
       parentContextTokensAdded: 0,
     },
+    ...(deliveryTarget ? {
+      deliveryTarget,
+      delivery_target: deliveryTarget,
+    } : {}),
     createdAt: now,
     updatedAt: now,
-  };
+  } as WorkContract;
 }

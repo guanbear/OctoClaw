@@ -807,7 +807,10 @@ function attachBudgetedMainDelegateWorkContract(input: {
     budgetedMainIntentClass(input.decision),
     coverage,
     decisionSeal,
-    { delegate },
+    {
+      delegate,
+      deliveryTarget: asRecord(input.state.deliveryTarget || input.state.delivery_target),
+    },
   );
   if (!saveWorkContract(contract)) {
     return { decision: input.decision, workContractId: "", contractSessionKey };

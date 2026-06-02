@@ -376,7 +376,10 @@ function attachWorkContractToPolicyDecision(input: {
     intentClass,
     coverageSnapshot,
     decisionSeal,
-    { reply: replyContract },
+    {
+      reply: replyContract,
+      deliveryTarget: asRecord(input.metadata.delivery_target || input.metadata.deliveryTarget),
+    },
   );
   if (!saveWorkContract(contract)) {
     const error = "work_contract_save_failed";

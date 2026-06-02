@@ -68,9 +68,39 @@ function resolveNativeAnnounceDeliverySessionKey(contract: WorkContract, ctx: Un
     || stringValue(ctx.canonicalSessionKey);
 }
 
+function stateMatchesNativeAnnounceContract(contract: WorkContract, state: UnknownRecord): boolean {
+  const decision = asRecord(state.decision);
+  const stateContract = asRecord(decision.work_contract);
+  const stateWorkContractId = stringValue(
+    state.workContractId
+    || state.work_contract_id
+    || stateContract.workContractId
+    || stateContract.work_contract_id,
+  );
+  if (stateWorkContractId) return stateWorkContractId === contract.workContractId;
+  const stateDeliveryTarget = asRecord(state.deliveryTarget || state.delivery_target);
+  const stateAnchor = stringValue(
+    state.replyToMessageId
+    || state.reply_to_id
+    || state.inboundMessageTs
+    || state.message_id
+    || stateDeliveryTarget.replyToMessageId
+    || stateDeliveryTarget.reply_to_message_id
+    || stateDeliveryTarget.threadTs
+    || stateDeliveryTarget.thread_ts,
+  );
+  return !stateAnchor;
+}
+
 function resolveNativeAnnounceReplyToMessageId(contract: WorkContract, ctx: UnknownRecord, state: UnknownRecord): string {
   const contractRecord = contract as unknown as UnknownRecord;
-  const deliveryTarget = asRecord(contractRecord.deliveryTarget || contractRecord.delivery_target || state.deliveryTarget || state.delivery_target);
+  const stateMatchesContract = stateMatchesNativeAnnounceContract(contract, state);
+  const deliveryTarget = asRecord(
+    contractRecord.deliveryTarget
+    || contractRecord.delivery_target
+    || (stateMatchesContract ? state.deliveryTarget : undefined)
+    || (stateMatchesContract ? state.delivery_target : undefined),
+  );
   const sessionKey = resolveNativeAnnounceDeliverySessionKey(contract, ctx);
   return stringValue(
     deliveryTarget.replyToMessageId
@@ -79,12 +109,12 @@ function resolveNativeAnnounceReplyToMessageId(contract: WorkContract, ctx: Unkn
     || deliveryTarget.thread_ts,
   )
     || slackThreadFromSessionKey(sessionKey)
-    || stringValue(state.replyToMessageId || state.reply_to_id || state.inboundMessageTs || state.message_id)
+    || (stateMatchesContract ? stringValue(state.replyToMessageId || state.reply_to_id || state.inboundMessageTs || state.message_id) : "")
     || stringValue(ctx.replyToMessageId || ctx.reply_to_id || ctx.inboundMessageTs || ctx.message_id || ctx.threadTs || ctx.thread_ts);
 }
 
-function shouldResolveSlackDmAnchor(sessionKey: string, replyToMessageId: string): boolean {
-  return !replyToMessageId && /(?:^|:)slack:/u.test(sessionKey.toLowerCase()) && sessionKey.includes(":direct:");
+function shouldResolveSlackDmAnchor(sessionKey: string, replyToMessageId: string, allowLatestAnchor: boolean): boolean {
+  return allowLatestAnchor && !replyToMessageId && /(?:^|:)slack:/u.test(sessionKey.toLowerCase()) && sessionKey.includes(":direct:");
 }
 
 function buildNativeAnnounceFinalMessage(input: {
@@ -181,8 +211,9 @@ export async function deliverNativeAnnounceCompletion(input: {
   const event = asRecord(input.event);
   const state = asRecord(input.state);
   const sessionKey = resolveNativeAnnounceDeliverySessionKey(input.contract, ctx);
+  const stateMatchesContract = stateMatchesNativeAnnounceContract(input.contract, state);
   let replyToMessageId = resolveNativeAnnounceReplyToMessageId(input.contract, ctx, state);
-  if (shouldResolveSlackDmAnchor(sessionKey, replyToMessageId)) {
+  if (shouldResolveSlackDmAnchor(sessionKey, replyToMessageId, stateMatchesContract)) {
     const resolveReplyToMessageId = input.resolveReplyToMessageId ?? ((key: string) => fetchLatestUserMessageTsForSessionKey(key, 1200));
     replyToMessageId = stringValue(await resolveReplyToMessageId(sessionKey));
   }
