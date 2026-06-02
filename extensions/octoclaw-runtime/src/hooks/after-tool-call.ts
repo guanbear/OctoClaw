@@ -10,6 +10,7 @@ import {
 import { isManagedAgentContext, resolvePolicyStateKeys } from "../resolve/session.js";
 import { recordPolicyReplay } from "../replay/replay.js";
 import { policyState } from "../state/policy-state.js";
+import { dispatchReplyToMessageId } from "../tools/dispatch-logic.js";
 import { recordRuntimeHealthCall } from "../router-lite/health-recorder.js";
 import { type UnknownRecord, asRecord } from "../util/type-coercion.js";
 import type { PluginInterface } from "../extension-entry-shared.js";
@@ -82,6 +83,7 @@ async function autoConfirmPlannerSpawn(input: {
     childRunId,
     childSessionKey,
     modelId: firstNonEmptyString(input.resultRecord.model, input.resultRecord.modelId, input.resultRecord.model_id),
+    replyToMessageId: dispatchReplyToMessageId({}, input.state, input.ctx) || undefined,
     cwd: stringValue(input.ctx.cwd) || undefined,
     decision,
   });
