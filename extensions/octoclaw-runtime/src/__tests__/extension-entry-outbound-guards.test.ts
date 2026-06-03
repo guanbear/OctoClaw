@@ -179,6 +179,43 @@ describe("guardOutboundMessageForPolicyState", () => {
     policyState.clearState(key);
   });
 
+  it("does not claim delegate when only spawn intent ids exist without accepted run evidence", () => {
+    const now = Date.now();
+    const key = "agent:main:slack:channel:c0intentonly:thread:t-intent-only";
+    policyState.setState(key, {
+      decision: {
+        route_decision: { route: "delegate", route_source: "native_announce" },
+        request: { metadata: { message_id: "1777368519.770701" } },
+        work_contract: {
+          workContractId: "wc-intent-only",
+          route: "delegate",
+          spawnIntentId: "nsp-intent-only",
+          nativeSpawnRefs: {
+            spawnIntentId: "nsp-intent-only",
+          },
+        },
+      },
+      delegated: true,
+      dispatchExecuted: true,
+      spawnExecuted: false,
+      spawnIntentId: "nsp-intent-only",
+      workContractId: "wc-intent-only",
+      inboundMessageTs: "1777368519.770701",
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    const guarded = guardOutboundMessageForPolicyState(
+      { to: "C0INTENTONLY", replyToMessageId: "1777368519.770701", content: "主 agent 自己完成了这次回复。" },
+      { channelId: "slack", inboundMessageTs: "1777368519.770701" },
+      now,
+    );
+
+    expect(guarded?.content).toContain("route=reply | model=");
+    expect(guarded?.content).not.toContain("route=delegate | model=");
+    policyState.clearState(key);
+  });
+
   it("does not project stale delegate footer onto a later Slack DM reply", () => {
     const previousProjectionFooterMode = process.env.OCTOCLAW_PROJECTION_FOOTER_MODE;
     process.env.OCTOCLAW_PROJECTION_FOOTER_MODE = "debug";

@@ -3803,7 +3803,7 @@ describe("before_tool_call route hint guard", () => {
     nativeSpawnIntentStore.clearForTests();
   });
 
-  it("[invariant-3] sessions_spawn hash mismatch tells the model to retry sessions_spawn, not redispatch", async () => {
+  it("[invariant-3] sessions_spawn hash mismatch is canonicalized by the hook, not retried by the model", async () => {
     nativeSpawnIntentStore.clearForTests();
     const handlers = new Map<string, Function>();
     plugin.register({
@@ -3826,7 +3826,7 @@ describe("before_tool_call route hint guard", () => {
       context: "isolated" as const,
       lightContext: true,
     };
-    nativeSpawnIntentStore.create({
+    const intent = nativeSpawnIntentStore.create({
       workContractId: "wc-mismatch-retry",
       sessionKey: key,
       sessionsSpawnArgs: plannedArgs,
@@ -3836,6 +3836,7 @@ describe("before_tool_call route hint guard", () => {
       decision: {
         request: { session_key: key },
         route_decision: { route: "delegate", decision_bucket: "must_delegate" },
+        work_contract: { workContractId: "wc-mismatch-retry" },
         hook_interface: {
           before_tool_call: {
             enabled: true,
@@ -3859,16 +3860,14 @@ describe("before_tool_call route hint guard", () => {
     expect(beforeToolCall).toBeTruthy();
 
     const result = await beforeToolCall!(
-      { toolName: "sessions_spawn", params: { ...plannedArgs, task: "changed task" } },
+      { toolName: "sessions_spawn", params: { ...plannedArgs, task: "changed task\nworkContractId: wc-mismatch-retry" } },
       { sessionKey: key, agentId: "main" },
-    ) as { block?: boolean; blockReason?: string } | undefined;
+    ) as { block?: boolean; blockReason?: string; params?: Record<string, unknown> } | undefined;
 
-    expect(result?.block).toBe(true);
-    expect(result?.blockReason).toContain("Retry sessions_spawn");
-    expect(result?.blockReason).toContain("most recent octoclaw_dispatch result");
-    expect(result?.blockReason).not.toContain("Call octoclaw_dispatch again");
-    expect(result?.blockReason).not.toContain("retry octoclaw_dispatch");
-    expect(nativeSpawnIntentStore.get(nativeSpawnIntentStore.findPendingForSession(key)?.spawnIntentId || "")?.status).toBe("planned");
+    expect(result?.block).toBeUndefined();
+    expect(result?.blockReason).toBeUndefined();
+    expect(result?.params).toEqual(plannedArgs);
+    expect(nativeSpawnIntentStore.get(intent.spawnIntentId)?.status).toBe("spawn_call_started");
 
     policyState.clearState(key);
     nativeSpawnIntentStore.clearForTests();

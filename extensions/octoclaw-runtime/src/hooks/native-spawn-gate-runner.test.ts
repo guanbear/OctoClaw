@@ -44,7 +44,7 @@ describe("NativeSpawnGate runner", () => {
     });
   });
 
-  it("converges sessions_spawn args mismatch on the pending intent instead of allowing repeated guesses", () => {
+  it("canonicalizes sessions_spawn args mismatch on the pending intent instead of blocking repeated guesses", () => {
     const intent = nativeSpawnIntentStore.create({
       workContractId: "wc-mismatch",
       sessionKey: "session-mismatch",
@@ -56,38 +56,27 @@ describe("NativeSpawnGate runner", () => {
     const result = evaluateNativeSpawnHookGate({
       toolName: "sessions_spawn",
       sessionKeys: ["session-mismatch"],
-      args: { task: "drifted child task", label: "canonical" },
-      decision: { route_decision: { route: "delegate" } },
+      args: { task: "drifted child task\nworkContractId: wc-mismatch", label: "canonical" },
+      decision: { route_decision: { route: "delegate" }, work_contract: { workContractId: "wc-mismatch" } },
       stateKey: "session-mismatch",
       sessionId: "runtime-session",
     });
 
     expect(result).toMatchObject({
-      kind: "block",
-      block: true,
-      blockReason: expect.stringContaining("arguments do not match"),
-      statePatch: {
-        blockedTools: ["sessions_spawn"],
-        dispatchStatus: "native_spawn_args_mismatch_blocked",
-        dispatch_status: "native_spawn_args_mismatch_blocked",
-        nativeSpawnArgsMismatchBlocked: true,
-        native_spawn_args_mismatch_blocked: true,
-        spawnIntentId: intent.spawnIntentId,
-        spawn_intent_id: intent.spawnIntentId,
-        workContractId: "wc-mismatch",
-        work_contract_id: "wc-mismatch",
-      },
+      kind: "allow",
+      params: { task: "canonical child task", label: "canonical" },
       replayEvents: [expect.objectContaining({
-        event: "sessions_spawn_intent_blocked",
+        event: "sessions_spawn_args_canonicalized",
         payload: expect.objectContaining({
           sessionKey: "session-mismatch",
           sessionId: "runtime-session",
-          reason: "args_hash_mismatch",
+          reason: "args_hash_mismatch_canonicalized",
           spawn_intent_id: intent.spawnIntentId,
           work_contract_id: "wc-mismatch",
         }),
       })],
     });
+    expect(nativeSpawnIntentStore.get(intent.spawnIntentId)?.status).toBe("spawn_call_started");
   });
 
   it("does not handle non-spawn tools", () => {
@@ -104,7 +93,7 @@ describe("NativeSpawnGate runner", () => {
       toolName: "sessions_send",
       sessionKeys: ["session-no-send-intent"],
       args: { session: "child", message: "go" },
-      decision: { route_decision: { route: "delegate" } },
+      decision: { route_decision: { route: "delegate" }, work_contract: { workContractId: "wc-send-mismatch" } },
     });
 
     expect(result).toMatchObject({
@@ -114,6 +103,42 @@ describe("NativeSpawnGate runner", () => {
       replayEvents: [expect.objectContaining({ event: "sessions_send_intent_blocked" })],
       statePatch: { blockedTools: ["sessions_send"] },
     });
+  });
+
+  it("canonicalizes sessions_send args mismatch on the pending speculative intent", () => {
+    const intent = nativeSpawnIntentStore.create({
+      workContractId: "wc-send-mismatch",
+      sessionKey: "session-send-mismatch",
+      sessionsSpawnArgs: { task: "canonical send task", message: "canonical message", label: "send" },
+      dispatchMode: "send_to_speculative",
+      ttlMs: 60_000,
+      now: Date.now(),
+    });
+
+    const result = evaluateNativeSessionsSendHookGate({
+      toolName: "sessions_send",
+      sessionKeys: ["session-send-mismatch"],
+      args: { task: "drifted send task", message: "drifted message for wc-send-mismatch", label: "send" },
+      decision: { route_decision: { route: "delegate" }, work_contract: { workContractId: "wc-send-mismatch" } },
+      stateKey: "session-send-mismatch",
+      sessionId: "runtime-session",
+    });
+
+    expect(result).toMatchObject({
+      kind: "allow",
+      params: { task: "canonical send task", message: "canonical message", label: "send" },
+      replayEvents: [expect.objectContaining({
+        event: "sessions_send_args_canonicalized",
+        payload: expect.objectContaining({
+          sessionKey: "session-send-mismatch",
+          sessionId: "runtime-session",
+          reason: "args_hash_mismatch_canonicalized",
+          spawn_intent_id: intent.spawnIntentId,
+          work_contract_id: "wc-send-mismatch",
+        }),
+      })],
+    });
+    expect(nativeSpawnIntentStore.get(intent.spawnIntentId)?.status).toBe("spawn_call_started");
   });
 
   it("blocks sessions_yield while a native child start is still pending", () => {

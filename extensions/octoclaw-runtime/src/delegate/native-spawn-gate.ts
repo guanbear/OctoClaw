@@ -7,10 +7,18 @@ export interface NativeSpawnGateInput {
   args: SessionsSpawnArgs;
   decision?: UnknownRecord | null;
   now?: Date;
+  expectedWorkContractId?: string;
 }
 
 export type NativeSpawnGateDecision =
-  | { allowed: true; intent: NativeSpawnIntent; reason: "matched_pending_intent" }
+  | {
+      allowed: true;
+      intent: NativeSpawnIntent;
+      reason: "matched_pending_intent";
+      canonicalArgs?: SessionsSpawnArgs;
+      expectedHash?: string;
+      actualHash?: string;
+    }
   | {
       allowed: false;
       reason: string;
@@ -20,7 +28,14 @@ export type NativeSpawnGateDecision =
     };
 
 export type NativeSessionsSendGateDecision =
-  | { allowed: true; intent: NativeSpawnIntent; reason: "matched_speculative_send_intent" }
+  | {
+      allowed: true;
+      intent: NativeSpawnIntent;
+      reason: "matched_speculative_send_intent";
+      canonicalArgs?: SessionsSpawnArgs;
+      expectedHash?: string;
+      actualHash?: string;
+    }
   | {
       allowed: false;
       reason: string;
@@ -50,7 +65,8 @@ export function evaluateNativeSessionsSendGate(input: NativeSpawnGateInput): Nat
       continue;
     }
     if (!pending) continue;
-    if (pending.canonicalArgsHash !== actualHash) {
+    const canonicalizedArgs = pending.canonicalArgsHash !== actualHash;
+    if (canonicalizedArgs && !shouldCanonicalizePendingArgsDrift(pending, input.args, input.expectedWorkContractId)) {
       firstMismatch ??= {
         allowed: false,
         reason: "args_hash_mismatch",
@@ -64,14 +80,23 @@ export function evaluateNativeSessionsSendGate(input: NativeSpawnGateInput): Nat
     const started = nativeSpawnIntentStore.transitionToSpawnCallStarted({
       spawnIntentId: pending.spawnIntentId,
       sessionKey,
-      sessionsSpawnArgs: input.args,
+      sessionsSpawnArgs: canonicalizedArgs ? pending.sessionsSpawnArgs : input.args,
       now: input.now,
     });
     if (!started.ok) {
       firstTransitionFailure ??= { allowed: false, reason: started.error || "intent_transition_failed", intent: started.intent ?? pending };
       continue;
     }
-    return { allowed: true, reason: "matched_speculative_send_intent", intent: started.intent };
+    return {
+      allowed: true,
+      reason: "matched_speculative_send_intent",
+      intent: started.intent,
+      ...(canonicalizedArgs ? {
+        canonicalArgs: pending.sessionsSpawnArgs,
+        expectedHash: pending.canonicalArgsHash,
+        actualHash,
+      } : {}),
+    };
   }
 
   return firstTransitionFailure ?? firstMismatch ?? { allowed: false, reason: "missing_pending_intent" };
@@ -226,6 +251,35 @@ function hasRecoverablePlannerArgsDrift(expected: SessionsSpawnArgs, actual: Ses
     || hashSessionsSpawnArgs({ ...actual, task: expectedTask, label: expected.label }) === expectedHash;
 }
 
+function argsTopLevelReferencePendingIntent(actual: SessionsSpawnArgs, pending: NativeSpawnIntent): boolean {
+  const record = asRecord(actual);
+  const exactRefs = [
+    record.spawnIntentId,
+    record.spawn_intent_id,
+    record.workContractId,
+    record.work_contract_id,
+    record.delegateTaskId,
+    record.delegate_task_id,
+    record.attemptId,
+    record.attempt_id,
+  ].map((value) => asString(value)).filter(Boolean);
+  if (exactRefs.includes(pending.spawnIntentId) || exactRefs.includes(pending.workContractId)) return true;
+  if (pending.delegateTaskId && exactRefs.includes(pending.delegateTaskId)) return true;
+  if (pending.attemptId && exactRefs.includes(pending.attemptId)) return true;
+  return false;
+}
+
+function expectedWorkContractMatchesPending(pending: NativeSpawnIntent, expectedWorkContractId: unknown): boolean {
+  const expected = asString(expectedWorkContractId);
+  return Boolean(expected && expected === pending.workContractId);
+}
+
+function shouldCanonicalizePendingArgsDrift(pending: NativeSpawnIntent, actual: SessionsSpawnArgs, expectedWorkContractId?: string): boolean {
+  return hasRecoverablePlannerArgsDrift(pending.sessionsSpawnArgs, actual, pending.canonicalArgsHash)
+    || argsTopLevelReferencePendingIntent(actual, pending)
+    || expectedWorkContractMatchesPending(pending, expectedWorkContractId);
+}
+
 export function evaluateNativeSpawnGate(input: NativeSpawnGateInput): NativeSpawnGateDecision {
   if (executionFollowupBlocked(input.decision)) {
     return { allowed: false, reason: "execution_followup_spawn_blocked" };
@@ -247,9 +301,8 @@ export function evaluateNativeSpawnGate(input: NativeSpawnGateInput): NativeSpaw
       continue;
     }
     if (!pending) continue;
-    const recoverableArgsDrift = pending.canonicalArgsHash !== actualHash
-      && hasRecoverablePlannerArgsDrift(pending.sessionsSpawnArgs, input.args, pending.canonicalArgsHash);
-    if (pending.canonicalArgsHash !== actualHash && !recoverableArgsDrift) {
+    const canonicalizedArgs = pending.canonicalArgsHash !== actualHash;
+    if (canonicalizedArgs && !shouldCanonicalizePendingArgsDrift(pending, input.args, input.expectedWorkContractId)) {
       firstMismatch ??= {
         allowed: false,
         reason: "args_hash_mismatch",
@@ -263,14 +316,23 @@ export function evaluateNativeSpawnGate(input: NativeSpawnGateInput): NativeSpaw
     const started = nativeSpawnIntentStore.transitionToSpawnCallStarted({
       spawnIntentId: pending.spawnIntentId,
       sessionKey,
-      sessionsSpawnArgs: recoverableArgsDrift ? pending.sessionsSpawnArgs : input.args,
+      sessionsSpawnArgs: canonicalizedArgs ? pending.sessionsSpawnArgs : input.args,
       now: input.now,
     });
     if (!started.ok) {
       firstTransitionFailure ??= { allowed: false, reason: started.error || "intent_transition_failed", intent: started.intent ?? pending };
       continue;
     }
-    return { allowed: true, reason: "matched_pending_intent", intent: started.intent };
+    return {
+      allowed: true,
+      reason: "matched_pending_intent",
+      intent: started.intent,
+      ...(canonicalizedArgs ? {
+        canonicalArgs: pending.sessionsSpawnArgs,
+        expectedHash: pending.canonicalArgsHash,
+        actualHash,
+      } : {}),
+    };
   }
 
   return firstTransitionFailure ?? firstMismatch ?? { allowed: false, reason: "missing_pending_intent" };

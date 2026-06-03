@@ -1002,8 +1002,31 @@ export function resolvePolicyStateKey(ctx: UnknownRecord): string {
   return resolvePolicyStateKeys(ctx)[0] || "";
 }
 
+const OPENCLAW_QUEUED_USER_MESSAGE_MARKER =
+  "[Queued user message that arrived while the previous turn was still active]";
+
+function splitOpenClawQueuedUserPrompt(text: string): { queuedMessages: string[]; currentPrompt: string } | null {
+  const normalized = text.replace(/\r\n/gu, "\n");
+  if (!normalized.startsWith(OPENCLAW_QUEUED_USER_MESSAGE_MARKER)) {
+    return null;
+  }
+
+  const body = normalized.slice(OPENCLAW_QUEUED_USER_MESSAGE_MARKER.length).replace(/^\n/u, "");
+  const separatorIndex = body.indexOf("\n\n");
+  const queuedText = (separatorIndex >= 0 ? body.slice(0, separatorIndex) : body).trim();
+  const currentPrompt = (separatorIndex >= 0 ? body.slice(separatorIndex + 2) : "").trim();
+  return {
+    queuedMessages: queuedText ? [queuedText] : [],
+    currentPrompt: currentPrompt || queuedText,
+  };
+}
+
 export function extractQueuedBusyMessages(raw: Record<string, unknown> | string): Record<string, unknown>[] {
   const text = stringValue(typeof raw === "string" ? raw : raw.prompt ?? raw.raw ?? "");
+  const openClawQueued = splitOpenClawQueuedUserPrompt(text);
+  if (openClawQueued) {
+    return openClawQueued.queuedMessages.map((message) => ({ message }));
+  }
   if (!text.startsWith("[Queued messages while agent was busy]")) {
     return [];
   }
@@ -1028,6 +1051,10 @@ export function unwrapQueuedBusyPrompt(raw: Record<string, unknown> | string): s
   const text = stringValue(typeof raw === "string" ? raw : raw.prompt ?? raw.raw ?? "");
   if (!text) {
     return "";
+  }
+  const openClawQueued = splitOpenClawQueuedUserPrompt(text);
+  if (openClawQueued?.currentPrompt) {
+    return openClawQueued.currentPrompt;
   }
 
   const messages = extractQueuedBusyMessages(text)
@@ -1096,6 +1123,16 @@ export function promptLookupCandidates(raw: Record<string, unknown> | string): s
     seen.add(normalized);
     values.push(normalized);
   };
+
+  const openClawQueued = splitOpenClawQueuedUserPrompt(base);
+  if (openClawQueued) {
+    pushValue(openClawQueued.currentPrompt);
+    for (const message of openClawQueued.queuedMessages) {
+      pushValue(message);
+    }
+    pushValue(base);
+    return values;
+  }
 
   const queuedMessages = extractQueuedBusyMessages(base)
     .map((entry) => stringValue(entry.message))

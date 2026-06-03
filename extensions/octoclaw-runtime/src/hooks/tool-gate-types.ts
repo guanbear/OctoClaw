@@ -21,6 +21,7 @@ export interface ToolGateResultBase {
   statePatch?: UnknownRecord;
   replayEvents?: ToolGateReplayEvent[];
   stop?: boolean;
+  params?: UnknownRecord;
 }
 
 export interface ToolGateAllowResult extends ToolGateResultBase {

@@ -39,6 +39,18 @@ function nativeSpawnMismatchPatch(toolName: string, gate: NativeSpawnGateDecisio
   };
 }
 
+function expectedWorkContractIdFromDecision(decision: UnknownRecord): string {
+  const workContract = asRecord(decision.work_contract);
+  return stringValue(
+    decision.workContractId
+    || decision.work_contract_id
+    || workContract.workContractId
+    || workContract.work_contract_id
+    || asRecord(decision.request).workContractId
+    || asRecord(decision.request).work_contract_id,
+  );
+}
+
 export function evaluateNativeSpawnHookGate(input: {
   toolName: string;
   sessionKeys: string[];
@@ -52,8 +64,30 @@ export function evaluateNativeSpawnHookGate(input: {
     sessionKeys: input.sessionKeys,
     args: input.args as { task: string; [key: string]: unknown },
     decision: input.decision,
+    expectedWorkContractId: expectedWorkContractIdFromDecision(input.decision),
   });
-  if (gate.allowed) return { ...gateAllow(), nativeGate: gate };
+  if (gate.allowed) {
+    return {
+      ...gateAllow(gate.canonicalArgs ? {
+        params: gate.canonicalArgs,
+        replayEvents: [{
+          event: "sessions_spawn_args_canonicalized",
+          payload: {
+            sessionKey: input.stateKey || gate.intent.sessionKey || "",
+            sessionId: input.sessionId || "",
+            route: stringValue(asRecord(input.decision.route_decision).route),
+            toolName: input.toolName,
+            reason: "args_hash_mismatch_canonicalized",
+            spawn_intent_id: gate.intent.spawnIntentId,
+            work_contract_id: gate.intent.workContractId,
+            expected_hash: gate.expectedHash ?? null,
+            actual_hash: gate.actualHash ?? null,
+          },
+        }],
+      } : {}),
+      nativeGate: gate,
+    };
+  }
   return gateBlock(
     gate.reason === "args_hash_mismatch"
       ? "OctoClaw blocked sessions_spawn because the arguments do not match the pending native spawn intent. Retry sessions_spawn with the exact sessionsSpawnArgs from the most recent octoclaw_dispatch result; do not call octoclaw_dispatch again."
@@ -93,8 +127,30 @@ export function evaluateNativeSessionsSendHookGate(input: {
     sessionKeys: input.sessionKeys,
     args: input.args as { task: string; [key: string]: unknown },
     decision: input.decision,
+    expectedWorkContractId: expectedWorkContractIdFromDecision(input.decision),
   });
-  if (gate.allowed) return { ...gateAllow(), nativeGate: gate };
+  if (gate.allowed) {
+    return {
+      ...gateAllow(gate.canonicalArgs ? {
+        params: gate.canonicalArgs,
+        replayEvents: [{
+          event: "sessions_send_args_canonicalized",
+          payload: {
+            sessionKey: input.stateKey || gate.intent.sessionKey || "",
+            sessionId: input.sessionId || "",
+            route,
+            toolName: input.toolName,
+            reason: "args_hash_mismatch_canonicalized",
+            spawn_intent_id: gate.intent.spawnIntentId,
+            work_contract_id: gate.intent.workContractId,
+            expected_hash: gate.expectedHash ?? null,
+            actual_hash: gate.actualHash ?? null,
+          },
+        }],
+      } : {}),
+      nativeGate: gate,
+    };
+  }
   return gateBlock(
     gate.reason === "args_hash_mismatch"
       ? "OctoClaw blocked sessions_send because the arguments do not match the pending speculative send intent. Retry sessions_send with the exact sessionsSendArgs from the most recent octoclaw_dispatch result; do not call octoclaw_dispatch again."

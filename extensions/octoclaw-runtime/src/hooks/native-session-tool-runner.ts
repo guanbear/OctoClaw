@@ -25,7 +25,7 @@ import type { ToolGateResult } from "./tool-gate-types.js";
 
 export type NativeSessionToolRunnerResult =
   | { kind: "allow" }
-  | { kind: "handled"; state?: PolicyStateEntry | null }
+  | { kind: "handled"; state?: PolicyStateEntry | null; result?: ToolGateResult }
   | { kind: "block"; result: ToolGateResult };
 
 export interface NativeSessionToolRunnerDeps {
@@ -264,7 +264,7 @@ export async function runNativeSessionToolGate(input: {
       spawn_intent_id: gate.intent.spawnIntentId,
       work_contract_id: gate.intent.workContractId,
     }, input.logger).catch(() => {});
-    return { kind: "handled" };
+    return { kind: "handled", result: spawnHookGate };
   }
 
   if (input.toolName === "sessions_yield") {
@@ -312,7 +312,7 @@ export async function runNativeSessionToolGate(input: {
       dispatch_mode: gate.intent.dispatchMode || "send_to_speculative",
       speculative_session_label: gate.intent.speculativeSessionLabel || "",
     }, input.logger).catch(() => {});
-    return { kind: "handled" };
+    return { kind: "handled", result: sendHookGate };
   }
 
   return { kind: "allow" };

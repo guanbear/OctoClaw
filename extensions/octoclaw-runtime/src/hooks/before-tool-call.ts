@@ -82,8 +82,11 @@ function applyToolGateResult(input: {
   }
 }
 
-function toolGateHookReturn(result: ToolGateResult): { block: true; blockReason: string } | undefined {
-  return result.kind === "block" ? { block: true, blockReason: result.blockReason } : undefined;
+function toolGateHookReturn(result: ToolGateResult): { block: true; blockReason: string; params?: UnknownRecord } | { params: UnknownRecord } | undefined {
+  if (result.kind === "block") {
+    return result.params ? { block: true, blockReason: result.blockReason, params: result.params } : { block: true, blockReason: result.blockReason };
+  }
+  return result.params ? { params: result.params } : undefined;
 }
 
 function applySpeculativeStatePatches(input: {
@@ -300,6 +303,15 @@ export function makeBeforeToolCallHook(deps: BeforeToolCallDeps) {
     }
     if (nativeSessionToolGate.kind === "handled") {
       state = nativeSessionToolGate.state ?? state;
+      if (nativeSessionToolGate.result) {
+        applyToolGateResult({
+          result: nativeSessionToolGate.result,
+          stateKey,
+          logger: deps.pi.logger,
+          decision,
+        });
+        return toolGateHookReturn(nativeSessionToolGate.result);
+      }
       return;
     }
 
