@@ -375,6 +375,7 @@ describe("guardOutboundMessageForPolicyState", () => {
       spawnExecuted: true,
       resultMaterialized: true,
       deliveryStatus: "delivered",
+      deliveryMessageId: "1777368524.770690",
       childRunId: "run-native-delivered",
       childSessionKey: childKey,
     };
@@ -407,6 +408,68 @@ describe("guardOutboundMessageForPolicyState", () => {
       resultMaterialized: true,
       nativeAnnounceDelivered: true,
       deliveryStatus: "delivered",
+      outbound_guard_cancelled: true,
+    });
+    policyState.clearState(key);
+  });
+
+  it("does not cancel Slack outbound when WorkContract only has status-only delivered telemetry", () => {
+    const now = Date.now();
+    const key = "agent:main:slack:channel:c0as4dappu3:thread:1777368524.880689";
+    const childKey = "agent:main:subagent:status-only-native";
+    const contract = buildWorkContractFromPolicy(
+      key,
+      "查证 OpenClaw release 变化",
+      "fresh_live_lookup",
+      coverageSnapshot(),
+      buildWorkDecisionSeal("local_judge", "delegate", ["native_spawn_confirmed"]),
+      { status: "sealed" },
+    );
+    contract.status = "completed";
+    contract.nativeSpawnRefs = {
+      openclawRunId: "run-native-status-only",
+      childSessionKey: childKey,
+      requesterSessionKey: key,
+      spawnIntentId: "nsp-status-only",
+      spawnBackend: "sessions_spawn_planner",
+      spawnMode: "run",
+    };
+    contract.telemetry = {
+      ...contract.telemetry,
+      dispatchExecuted: true,
+      spawnExecuted: true,
+      resultMaterialized: true,
+      deliveryStatus: "delivered",
+      childRunId: "run-native-status-only",
+      childSessionKey: childKey,
+    };
+    saveWorkContract(contract);
+    policyState.setState(key, {
+      decision: {
+        route_decision: { route: "reply", route_source: "policy" },
+        work_contract: { workContractId: contract.workContractId },
+        request: { metadata: { message_id: "1777368524.880689" } },
+      },
+      delegated: true,
+      dispatchExecuted: true,
+      spawnExecuted: true,
+      resultMaterialized: false,
+      deliveryStatus: "",
+      workContractId: contract.workContractId,
+      inboundMessageTs: "1777368524.880689",
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    const guarded = guardOutboundMessageForPolicyState(
+      { to: "C0AS4DAPPU3", replyToMessageId: "1777368524.880689", content: "这是应该继续投递的最终结果。" },
+      { channelId: "slack", inboundMessageTs: "1777368524.880689" },
+      now,
+    );
+
+    expect(guarded?.cancel).not.toBe(true);
+    expect(guarded?.content).toContain("这是应该继续投递的最终结果。");
+    expect(policyState.getState(key)).not.toMatchObject({
       outbound_guard_cancelled: true,
     });
     policyState.clearState(key);

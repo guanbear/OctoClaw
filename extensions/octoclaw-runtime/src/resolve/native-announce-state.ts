@@ -158,12 +158,22 @@ export function isNativeAnnounceBlockedState(state: unknown): boolean {
   return record.nativeAnnounceBlocked === true || record.native_announce_blocked === true;
 }
 
+export function hasNativeAnnounceHardDeliveryEvidence(state: unknown): boolean {
+  const record = asRecord(state);
+  return record.nativeAnnounceDelivered === true
+    || record.native_announce_delivered === true
+    || Boolean(stringValue(record.deliveryMessageId || record.delivery_message_id))
+    || Boolean(stringValue(record.nativeAnnounceDeliveredAt || record.native_announce_delivered_at))
+    || record.directDeliverySent === true
+    || record.direct_delivery_sent === true;
+}
+
 export function isNativeAnnounceAlreadyDelivered(state: unknown): boolean {
   const record = asRecord(state);
   if (!isNativeAnnounceDeliveryState(record)) return false;
-  return record.nativeAnnounceDelivered === true
-    || record.native_announce_delivered === true
-    || stringValue(record.deliveryStatus || record.delivery_status).toLowerCase() === "delivered";
+  if (record.nativeAnnounceDelivered === true || record.native_announce_delivered === true) return true;
+  return stringValue(record.deliveryStatus || record.delivery_status).toLowerCase() === "delivered"
+    && hasNativeAnnounceHardDeliveryEvidence(record);
 }
 
 export function nativeAnnounceDeliveredAtMs(state: UnknownRecord): number {

@@ -7,7 +7,7 @@ import { extractPromptText } from "../extension-entry-helpers.js";
 import { extractInboundMessageTimestamp, findInboundMessageTimestamp, SLACK_MESSAGE_TS_PATTERN } from "../inbound-timestamps.js";
 import { type UnknownRecord, asRecord } from "../util/type-coercion.js";
 import { deliveryTargetReplyTo } from "../hooks/footer-mode.js";
-import { isNativeAnnounceAlreadyDelivered } from "./native-announce.js";
+import { hasNativeAnnounceHardDeliveryEvidence, isNativeAnnounceAlreadyDelivered } from "./native-announce-state.js";
 
 function normalizeOutboundTargetKey(value: unknown): string {
   return stringValue(value)
@@ -269,8 +269,10 @@ export function hydrateOutboundStateWithNativeRefs(state: UnknownRecord): Unknow
   const hasAcceptedNativeRefs = Boolean(runId || childRunId || childSessionKey || telemetry.spawnExecuted === true);
   if (!hasAcceptedNativeRefs) return state;
   const deliveryStatus = stringValue(telemetry.deliveryStatus).toLowerCase();
+  const deliveryMessageId = stringValue(telemetry.deliveryMessageId || telemetry.delivery_message_id);
+  const nativeAnnounceDeliveredAt = stringValue(telemetry.nativeAnnounceDeliveredAt || telemetry.native_announce_delivered_at);
   const resultMaterialized = telemetry.resultMaterialized === true;
-  const delivered = ["delivered", "sent"].includes(deliveryStatus);
+  const delivered = deliveryStatus === "delivered" && hasNativeAnnounceHardDeliveryEvidence(telemetry);
   const decision = asRecord(state.decision);
   const routeDecision = asRecord(decision.route_decision);
   const workContract = asRecord(decision.work_contract);
@@ -304,6 +306,8 @@ export function hydrateOutboundStateWithNativeRefs(state: UnknownRecord): Unknow
     work_contract_id: workContractId,
     ...(resultMaterialized ? { resultMaterialized: true, result_materialized: true } : {}),
     ...(deliveryStatus ? { deliveryStatus, delivery_status: deliveryStatus } : {}),
+    ...(deliveryMessageId ? { deliveryMessageId, delivery_message_id: deliveryMessageId } : {}),
+    ...(nativeAnnounceDeliveredAt ? { nativeAnnounceDeliveredAt, native_announce_delivered_at: nativeAnnounceDeliveredAt } : {}),
     ...(delivered ? {
       nativeAnnounceCompletionPending: false,
       native_announce_completion_pending: false,

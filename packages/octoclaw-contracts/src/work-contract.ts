@@ -388,6 +388,15 @@ export interface WorkContractTelemetry {
   childRunId?: string;
   resultMaterialized?: boolean;
   deliveryStatus?: string;
+  nativeAnnounceResultHash?: string;
+  nativeAnnounceDeliveredAt?: string;
+  nativeAnnounceBlockedHash?: string;
+  deliveryMessageId?: string;
+  deliverySessionKey?: string;
+  deliveryReplyToMessageId?: string;
+  deliveryTransport?: string;
+  deliveryTargetSource?: string;
+  deliveryFooterSource?: string;
   decisionSource?: WorkDecisionSource;
   ackMs?: number;
   routeDecisionMs?: number;
