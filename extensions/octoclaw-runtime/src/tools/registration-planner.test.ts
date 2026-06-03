@@ -382,6 +382,7 @@ describe("octoclaw_dispatch planner backend", () => {
     process.env.OCTOCLAW_SPAWN_BACKEND = "planner";
     process.env.OCTOCLAW_PLANNER_ALLOWLIST = "agent:main:slack:channel:c0as4dappu3";
     const sessionKey = "agent:main:slack:channel:c0as4dappu3:thread:1779257025.427719";
+    const replyToMessageId = "1779257025.427719";
     const task = "查询当前系统运行状态并汇报。";
     const replyContract = buildWorkContractFromPolicy(
       sessionKey,
@@ -459,8 +460,25 @@ describe("octoclaw_dispatch planner backend", () => {
     expect(body.ok, JSON.stringify(body)).toBe(true);
     expect(body.status).toBe("requires_native_spawn");
     expect(body.workContractId).not.toBe(replyContract.workContractId);
-    expect(loadWorkContract(body.workContractId)?.sessionKey).toBe(sessionKey);
+    const updatedContract = loadWorkContract(body.workContractId);
+    const updatedContractRecord = updatedContract as unknown as Record<string, unknown>;
+    expect(updatedContract?.sessionKey).toBe(sessionKey);
+    expect(updatedContractRecord.deliveryTarget).toMatchObject({
+      sessionKey,
+      session_key: sessionKey,
+      replyToMessageId,
+      reply_to_message_id: replyToMessageId,
+      threadTs: replyToMessageId,
+      thread_ts: replyToMessageId,
+      immutable: true,
+    });
     expect(nativeSpawnIntentStore.get(body.spawnIntentId)?.sessionKey).toBe(sessionKey);
+    expect(policyState.get(sessionKey)).toMatchObject({
+      deliveryTarget: expect.objectContaining({
+        replyToMessageId,
+        immutable: true,
+      }),
+    });
     expect(readReplayEvents()).toContainEqual(expect.objectContaining({
       event: "dispatch_planner_intent_created",
       sessionKey,

@@ -39,6 +39,7 @@ import {
   buildSpeculativeSessionsSendArgs,
   serializeSpeculativePreloadState,
 } from "../../delegate/speculative-preload.js";
+import { buildImmutableDeliveryTarget } from "../../hooks/footer-mode.js";
 import { escalateBudgetedMainDecision, hasBudgetedMainEscalationEvidence } from "../../budgeted-main.js";
 import {
   evaluateDispatchAdmission,
@@ -213,6 +214,56 @@ function implicitContractAlreadyAssignedToDispatch(contract: WorkContract | null
     || dispatchStatus === "running"
     || dispatchStatus === "completed"
   );
+}
+
+function dispatchDeliveryTargetReplyTo(target: UnknownRecord): string {
+  return asString(
+    target.replyToMessageId
+    || target.reply_to_message_id
+    || target.threadTs
+    || target.thread_ts,
+  );
+}
+
+function sessionThreadAnchor(sessionKey: string): string {
+  const threadMatch = asString(sessionKey).match(/(?:^|:)thread:([^:]+)/u);
+  return threadMatch?.[1] || "";
+}
+
+function resolveDispatchDeliveryTarget(input: {
+  contract: WorkContract | null;
+  metadata: UnknownRecord;
+  state: UnknownRecord | null | undefined;
+  ctx: UnknownRecord;
+  sessionKey: string;
+}): UnknownRecord {
+  const contractRecord = asRecord(input.contract);
+  const contractTarget = asRecord(contractRecord.deliveryTarget || contractRecord.delivery_target);
+  if (dispatchDeliveryTargetReplyTo(contractTarget)) return contractTarget;
+
+  const sessionKey = asString(input.sessionKey || input.contract?.sessionKey || input.metadata.session_key);
+  const replyToMessageId = dispatchReplyToMessageId(input.metadata, input.state, input.ctx)
+    || asString(input.metadata.session_thread_id)
+    || sessionThreadAnchor(sessionKey);
+  return replyToMessageId && sessionKey
+    ? buildImmutableDeliveryTarget(sessionKey, replyToMessageId)
+    : {};
+}
+
+function freezeDispatchWorkContractDeliveryTarget(contract: WorkContract | null, deliveryTarget: UnknownRecord): WorkContract | null {
+  if (!contract || !dispatchDeliveryTargetReplyTo(deliveryTarget)) return contract;
+  const currentTarget = asRecord((contract as unknown as UnknownRecord).deliveryTarget || (contract as unknown as UnknownRecord).delivery_target);
+  if (dispatchDeliveryTargetReplyTo(currentTarget)) return contract;
+  return updateWorkContract(contract.workContractId, (current) => ({
+    ...current,
+    deliveryTarget,
+    delivery_target: deliveryTarget,
+    updatedAt: new Date().toISOString(),
+  })) ?? {
+    ...contract,
+    deliveryTarget,
+    delivery_target: deliveryTarget,
+  } as WorkContract;
 }
 
 function forceNewDelegatedWorkMetadata(metadata: UnknownRecord, task: unknown): UnknownRecord {
@@ -714,6 +765,22 @@ export async function executeOctoclawDispatch(params: Record<string, unknown>, _
           metadata.expected_at = Date.now() + expectedSeconds * 1000;
         }
 
+        const frozenDeliveryTarget = resolveDispatchDeliveryTarget({
+          contract: dispatchWorkContract,
+          metadata,
+          state,
+          ctx,
+          sessionKey: managedSessionKey || stateKey || asString(params.sessionKey),
+        });
+        if (dispatchDeliveryTargetReplyTo(frozenDeliveryTarget)) {
+          metadata.deliveryTarget = frozenDeliveryTarget;
+          metadata.delivery_target = frozenDeliveryTarget;
+          dispatchWorkContract = freezeDispatchWorkContractDeliveryTarget(dispatchWorkContract, frozenDeliveryTarget);
+          if (dispatchWorkContract) {
+            cachedDecision = decisionFromWorkContract(dispatchWorkContract, cachedDecision);
+          }
+        }
+
         const existingNativePlannerRefs = confirmedNativePlannerRefs(dispatchWorkContract);
         if (isDelegatedRoute && dispatchWorkContract && existingNativePlannerRefs) {
           const replaySessionKey = resolveDispatchSessionKey(ctx, metadata, { stateKey, state, cachedDecision })
@@ -738,6 +805,10 @@ export async function executeOctoclawDispatch(params: Record<string, unknown>, _
             runId: existingNativePlannerRefs.runId,
             workContractId: dispatchWorkContract.workContractId,
             spawnIntentId: existingNativePlannerRefs.spawnIntentId,
+            ...(dispatchDeliveryTargetReplyTo(frozenDeliveryTarget) ? {
+              deliveryTarget: frozenDeliveryTarget,
+              delivery_target: frozenDeliveryTarget,
+            } : {}),
             updatedAt: Date.now(),
           };
           setPolicyStateForContext(ctx, nextState, replaySessionKey || stateKey);
@@ -1078,6 +1149,10 @@ export async function executeOctoclawDispatch(params: Record<string, unknown>, _
                 dispatch_mode: dispatchMode,
                 complexityBand: complexityBand || undefined,
                 complexity_band: complexityBand || undefined,
+                ...(dispatchDeliveryTargetReplyTo(frozenDeliveryTarget) ? {
+                  deliveryTarget: frozenDeliveryTarget,
+                  delivery_target: frozenDeliveryTarget,
+                } : {}),
                 updatedAt: Date.now(),
               };
               setPolicyStateForContext(ctx, nextState, managedSessionKey || stateKey);
@@ -1219,6 +1294,10 @@ export async function executeOctoclawDispatch(params: Record<string, unknown>, _
               dispatch_mode: dispatchMode,
               complexityBand: complexityBand || undefined,
               complexity_band: complexityBand || undefined,
+              ...(dispatchDeliveryTargetReplyTo(frozenDeliveryTarget) ? {
+                deliveryTarget: frozenDeliveryTarget,
+                delivery_target: frozenDeliveryTarget,
+              } : {}),
               ...(useSpeculativeSend && speculative?.label ? {
                 speculativePreload: serializeSpeculativePreloadState({
                   ...speculative,

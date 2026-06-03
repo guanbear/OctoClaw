@@ -12,6 +12,7 @@ import { recordPolicyReplay } from "../replay/replay.js";
 import { policyState } from "../state/policy-state.js";
 import { dispatchReplyToMessageId } from "../tools/dispatch-logic.js";
 import { recordRuntimeHealthCall } from "../router-lite/health-recorder.js";
+import { loadWorkContract } from "../work-contract/store.js";
 import { type UnknownRecord, asRecord } from "../util/type-coercion.js";
 import type { PluginInterface } from "../extension-entry-shared.js";
 import {
@@ -29,6 +30,18 @@ import {
 export interface AfterToolCallDeps {
   pi: PluginInterface;
   currentPluginConfig: () => UnknownRecord;
+}
+
+function workContractReplyToMessageId(workContractId: string): string {
+  const contract = workContractId ? loadWorkContract(workContractId) : null;
+  const contractRecord = asRecord(contract);
+  const deliveryTarget = asRecord(contractRecord.deliveryTarget || contractRecord.delivery_target);
+  return firstNonEmptyString(
+    deliveryTarget.replyToMessageId,
+    deliveryTarget.reply_to_message_id,
+    deliveryTarget.threadTs,
+    deliveryTarget.thread_ts,
+  );
 }
 
 async function autoConfirmPlannerSpawn(input: {
@@ -83,7 +96,9 @@ async function autoConfirmPlannerSpawn(input: {
     childRunId,
     childSessionKey,
     modelId: firstNonEmptyString(input.resultRecord.model, input.resultRecord.modelId, input.resultRecord.model_id),
-    replyToMessageId: dispatchReplyToMessageId({}, input.state, input.ctx) || undefined,
+    replyToMessageId: workContractReplyToMessageId(workContractId)
+      || dispatchReplyToMessageId({}, input.state, input.ctx)
+      || undefined,
     cwd: stringValue(input.ctx.cwd) || undefined,
     decision,
   });
