@@ -17,12 +17,20 @@ const INBOUND_MESSAGE_TS_KEYS = new Set([
 ]);
 
 export function findInboundMessageTimestamp(value: unknown, depth = 0, seen = new Set<object>()): string {
-  if (depth > 5 || value === null || value === undefined) return "";
+  if (value === null || value === undefined) return "";
   if (typeof value === "string") {
     const text = value.trim();
     return SLACK_MESSAGE_TS_PATTERN.test(text) ? text : "";
   }
-  if (typeof value !== "object" || Array.isArray(value)) return "";
+  if (depth > 5) return "";
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const nested = findInboundMessageTimestamp(item, depth + 1, seen);
+      if (nested) return nested;
+    }
+    return "";
+  }
+  if (typeof value !== "object") return "";
   if (seen.has(value)) return "";
   seen.add(value);
   const record = value as UnknownRecord;
@@ -132,7 +140,7 @@ export function resolveSlackMessageReceivedSessionKey(event: UnknownRecord, ctx:
 /** Scan ALL string values in an object tree for a Slack ts pattern.
  * Used as a fallback when the key name is non-standard. */
 function findAnySlackTs(value: unknown, depth = 0, seen = new Set<object>()): string {
-  if (depth > 4 || value === null || value === undefined) return "";
+  if (value === null || value === undefined) return "";
   if (typeof value === "string") {
     // Only match strings that look like a standalone Slack ts (not embedded in a larger number)
     if (SLACK_MESSAGE_TS_PATTERN.test(value.trim())) return value.trim();
@@ -141,7 +149,15 @@ function findAnySlackTs(value: unknown, depth = 0, seen = new Set<object>()): st
     if (m) return m[1];
     return "";
   }
-  if (typeof value !== "object" || Array.isArray(value)) return "";
+  if (depth > 4) return "";
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = findAnySlackTs(item, depth + 1, seen);
+      if (found) return found;
+    }
+    return "";
+  }
+  if (typeof value !== "object") return "";
   if (seen.has(value as object)) return "";
   seen.add(value as object);
   for (const v of Object.values(value as Record<string, unknown>)) {

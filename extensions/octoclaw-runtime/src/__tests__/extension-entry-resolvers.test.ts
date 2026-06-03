@@ -2,7 +2,7 @@ import fsSync from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { buildPromptContextProjection, extractInboundMessageTimestamp, parseOctoClawStatusFastPathCommand, parseOctoClawTaskActionFastPathCommand, resolveDelegationCapability, resolveReactionAckConfig } from "../extension-entry.js";
+import { buildPromptContextProjection, extractInboundMessageTimestamp, extractInboundMessageTimestampWithSource, parseOctoClawStatusFastPathCommand, parseOctoClawTaskActionFastPathCommand, resolveDelegationCapability, resolveReactionAckConfig } from "../extension-entry.js";
 import { extractPromptText } from "../extension-entry-helpers.js";
 import { nativeSpawnIntentStore } from "../delegate/native-spawn-intent-store.js";
 import { policyState } from "../state/policy-state.js";
@@ -213,5 +213,33 @@ describe("extractInboundMessageTimestamp", () => {
       {},
       "",
     )).toBe("1777737951.706329");
+  });
+
+  it("finds Slack timestamps inside OpenClaw before-prompt message arrays", () => {
+    const event = {
+      messages: [{
+        role: "user",
+        content: [{
+          type: "text",
+          text: [
+            "Conversation info (untrusted metadata):",
+            "```json",
+            "{",
+            "  \"message_id\": \"1780479647.749959\",",
+            "  \"reply_to_id\": \"1780479647.749959\"",
+            "}",
+            "```",
+            "",
+            "委派子agent 帮我审计 Macmini 上 OpenClaw/OctoClaw 的后台任务。",
+          ].join("\n"),
+        }],
+      }],
+    };
+
+    expect(extractInboundMessageTimestamp({}, event, "")).toBe("1780479647.749959");
+    expect(extractInboundMessageTimestampWithSource({}, event, "")).toEqual({
+      ts: "1780479647.749959",
+      source: "event",
+    });
   });
 });
