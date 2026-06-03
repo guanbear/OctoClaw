@@ -4,7 +4,7 @@ import {
   guardAssistantMessageForPolicyState,
   replaceAssistantMessageText,
 } from "../replay/message-guard.js";
-import { isManagedAgentContext } from "../resolve/session.js";
+import { isManagedAgentContext, resolvePolicyStateKey } from "../resolve/session.js";
 import { recordPolicyReplay } from "../replay/replay.js";
 import { type UnknownRecord, asRecord } from "../util/type-coercion.js";
 import type { PluginInterface } from "../extension-entry-shared.js";
@@ -126,8 +126,15 @@ export function makeMessageReceivedHook(deps: Pick<MessageLifecycleDeps, "pi" | 
     const prompt = extractPromptText(eventRecord) || stringValue(eventRecord.content);
     const sessionKey = resolveSlackMessageReceivedSessionKey(eventRecord, ctxRecord);
     if (!sessionKey) return;
-    const stateKey = stringValue(ctxRecord.sessionKey || eventRecord.sessionKey) || sessionKey;
     const anchor = extractInboundMessageTimestampWithSource(ctxRecord, eventRecord, prompt);
+    const stateKey = resolvePolicyStateKey({
+      ...eventRecord,
+      ...ctxRecord,
+      sessionKey,
+      inboundMessageTs: anchor.ts,
+      messageId: anchor.ts,
+    }) || stringValue(ctxRecord.sessionKey || eventRecord.sessionKey) || sessionKey;
+    const rootStateKey = stringValue(ctxRecord.sessionKey || eventRecord.sessionKey) || sessionKey;
     void handleRouterWizardAction({
       event: eventRecord,
       sessionKey,
@@ -146,7 +153,9 @@ export function makeMessageReceivedHook(deps: Pick<MessageLifecycleDeps, "pi" | 
     });
     if (anchor.ts) {
       const now = Date.now();
-      updatePolicyState(stateKey, (current) => ({
+      type PolicyStateMutator = Parameters<typeof updatePolicyState>[1];
+      type PolicyStateCurrent = Parameters<PolicyStateMutator>[0];
+      const nextTurnState = (current: PolicyStateCurrent) => ({
         ...(() => {
           const currentRecord = asRecord(current);
           const previousAnchor = stringValue(
@@ -178,7 +187,36 @@ export function makeMessageReceivedHook(deps: Pick<MessageLifecycleDeps, "pi" | 
         channelTone: stringValue(asRecord(current).channelTone || asRecord(current).channel_tone) || "chat",
         createdAt: Number(current?.createdAt || 0) || now,
         updatedAt: now,
-      }));
+      });
+      updatePolicyState(stateKey, nextTurnState);
+      const sessionAliasKey = stringValue(ctxRecord.sessionId || eventRecord.sessionId);
+      if (sessionAliasKey && sessionAliasKey !== stateKey) {
+        updatePolicyState(sessionAliasKey, nextTurnState);
+      }
+      if (rootStateKey && rootStateKey !== stateKey) {
+        updatePolicyState(rootStateKey, (current) => ({
+          ...(() => {
+            const currentRecord = asRecord(current);
+            return {
+              canonicalSessionKey: stringValue(currentRecord.canonicalSessionKey || currentRecord.canonical_session_key || rootStateKey),
+              canonical_session_key: stringValue(currentRecord.canonicalSessionKey || currentRecord.canonical_session_key || rootStateKey),
+              ackGuardKey: sessionKey,
+              ack_guard_key: sessionKey,
+              channelTone: stringValue(currentRecord.channelTone || currentRecord.channel_tone) || "chat",
+              channel_tone: stringValue(currentRecord.channelTone || currentRecord.channel_tone) || "chat",
+            };
+          })(),
+          latestTurnStateKey: stateKey,
+          latest_turn_state_key: stateKey,
+          inboundMessageTs: anchor.ts,
+          replyToMessageId: anchor.ts,
+          message_id: anchor.ts,
+          deliveryTarget: buildImmutableDeliveryTarget(sessionKey, anchor.ts),
+          delivery_target: buildImmutableDeliveryTarget(sessionKey, anchor.ts),
+          createdAt: Number(current?.createdAt || 0) || now,
+          updatedAt: now,
+        }));
+      }
     }
     void recordPolicyReplay("message_received_observed", {
       sessionKey,

@@ -494,6 +494,57 @@ describe("guardOutboundMessageForPolicyState", () => {
     policyState.clearState(followupKey);
   });
 
+  it("does not cancel unanchored Slack reply when the current session alias has reply state", () => {
+    const now = Date.now();
+    const rootKey = "agent:main:slack:default:direct:u0al9t5u89z";
+    const currentSessionId = "a6e8e643-85c2-4bec-b8ac-cb32ebff2acf";
+    vi.useFakeTimers();
+    vi.setSystemTime(now);
+    policyState.setState(rootKey, {
+      decision: {
+        route_decision: { route: "delegate", route_source: "native_announce" },
+        work_contract: { workContractId: "wc-native-delivered", route: "delegate" },
+      },
+      delegated: true,
+      dispatchExecuted: true,
+      spawnExecuted: true,
+      resultMaterialized: true,
+      nativeAnnounceDelivered: true,
+      nativeAnnounceDeliveredAt: now,
+      nativeAnnounceResultHash: "result-hash",
+      deliveryStatus: "delivered",
+      workContractId: "wc-native-delivered",
+      createdAt: now - 30_000,
+      updatedAt: now,
+    });
+    vi.setSystemTime(now + 2_000);
+    policyState.setState(currentSessionId, {
+      decision: {
+        route_decision: { route: "reply", route_source: "policy" },
+        work_contract: { workContractId: "wc-weather-reply", route: "reply" },
+      },
+      canonicalSessionKey: currentSessionId,
+      ackGuardKey: rootKey,
+      deliveryTarget: { sessionKey: rootKey, replyToMessageId: "1780451903.917899", immutable: true },
+      inboundMessageTs: "1780451903.917899",
+      replyToMessageId: "1780451903.917899",
+      workContractId: "wc-weather-reply",
+      createdAt: now + 2_000,
+      updatedAt: now + 2_000,
+    });
+
+    const guarded = guardOutboundMessageForPolicyState(
+      { to: "user:U0AL9T5U89Z", content: "北京今天晴，气温约 18 到 29 度。" },
+      { channelId: "slack", sessionId: currentSessionId },
+      now + 3_000,
+    );
+
+    expect(guarded?.cancel).not.toBe(true);
+    vi.useRealTimers();
+    policyState.clearState(rootKey);
+    policyState.clearState(currentSessionId);
+  });
+
   it("defaults outbound projection footer to compact without explicit env", () => {
     delete process.env.OCTOCLAW_PROJECTION_FOOTER_MODE;
     delete process.env.OCTOCLAW_REPLY_PROJECTION_FOOTER;

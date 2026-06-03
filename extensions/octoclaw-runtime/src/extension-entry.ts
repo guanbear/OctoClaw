@@ -365,24 +365,17 @@ export function collectRecentExecutionReceipts(currentSessionKey: string | null 
 
 export function getPolicyStateForContext(ctx: UnknownRecord): { key: string; state: PolicyStateEntry | null } {
   const keys = resolvePolicyStateKeys(ctx);
-  let best: { key: string; state: PolicyStateEntry; updatedAt: number } | null = null;
   for (const key of keys) {
     const state = policyState.get(key);
     if (!state) continue;
-    const updatedAt = Number(state.updatedAt || state.createdAt || 0);
-    if (!best || updatedAt >= best.updatedAt) {
-      best = { key, state, updatedAt };
-    }
-  }
-  if (best) {
-    const canonicalKey = stringValue(best.state.canonicalSessionKey || best.state.canonical_session_key);
-    if (canonicalKey && canonicalKey !== best.key) {
+    const canonicalKey = stringValue(state.canonicalSessionKey || state.canonical_session_key);
+    if (canonicalKey && canonicalKey !== key) {
       const canonicalState = policyState.get(canonicalKey);
       if (canonicalState) {
         return { key: canonicalKey, state: canonicalState };
       }
     }
-    return { key: best.key, state: best.state };
+    return { key, state };
   }
   const resolved = policyState.resolveForContext(ctx);
   return {

@@ -141,12 +141,36 @@ function stateMatchesOutboundAnchor(key: string, state: PolicyStateEntry, anchor
   return anchors.some((anchor) => candidates.includes(anchor) || key.includes(`:thread:${anchor}`));
 }
 
+function stateMatchesOutboundTarget(state: PolicyStateEntry, targetKey: string): boolean {
+  if (!targetKey) return false;
+  const stateRecord = asRecord(state);
+  const deliveryTarget = asRecord(stateRecord.deliveryTarget || stateRecord.delivery_target);
+  const candidates = [
+    stateRecord.canonicalSessionKey,
+    stateRecord.canonical_session_key,
+    stateRecord.ackGuardKey,
+    stateRecord.ack_guard_key,
+    stateRecord.sessionKey,
+    stateRecord.session_key,
+    deliveryTarget.sessionKey,
+    deliveryTarget.session_key,
+    deliveryTarget.target,
+    deliveryTarget.to,
+    deliveryTarget.channel,
+    deliveryTarget.channelId,
+    deliveryTarget.channel_id,
+  ];
+  return candidates
+    .map(normalizeOutboundTargetKey)
+    .some((candidate) => candidate.includes(targetKey));
+}
+
 function policyStateLooksRelevantForOutbound(key: string, state: PolicyStateEntry, targetKey: string, anchors: string[], now: number): boolean {
   if (!targetKey) return false;
   const stateRecord = asRecord(state);
   const keyLower = key.toLowerCase();
   const anchorMatches = stateMatchesOutboundAnchor(key, state, anchors);
-  const targetMatches = keyLower.includes(targetKey);
+  const targetMatches = keyLower.includes(targetKey) || stateMatchesOutboundTarget(state, targetKey);
   if (!targetMatches && !(anchors.length > 0 && anchorMatches && keyLower.includes(":slack:"))) return false;
   const updatedAt = Number(state.updatedAt || state.createdAt || 0);
   if (!Number.isFinite(updatedAt) || now - updatedAt > 3 * 60 * 1000) return false;

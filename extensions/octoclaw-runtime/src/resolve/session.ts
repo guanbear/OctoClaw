@@ -679,6 +679,41 @@ export function sessionPreferenceRank(raw: string): number {
   return 0;
 }
 
+function policyTurnAnchor(ctx: UnknownRecord): string {
+  const safe = ctx ?? {};
+  const metadata = recordValue(safe.metadata);
+  return stringValue(
+    safe.inboundMessageTs
+    || safe.messageTs
+    || safe.messageId
+    || safe.message_id
+    || safe.replyToMessageId
+    || safe.reply_to_id
+    || safe.threadTs
+    || safe.thread_ts
+    || safe.ts
+    || metadata.inboundMessageTs
+    || metadata.messageTs
+    || metadata.messageId
+    || metadata.message_id
+    || metadata.replyToMessageId
+    || metadata.reply_to_id
+    || metadata.threadTs
+    || metadata.thread_ts
+    || metadata.ts,
+  );
+}
+
+function policyTurnStateKey(baseKey: string, anchor: string): string {
+  const key = stringValue(baseKey);
+  const ts = stringValue(anchor);
+  if (!key || !ts) return "";
+  if (key.includes(`:thread:${ts}`)) return key;
+  if (parseSessionRoute(key).threadSession) return key;
+  if (!parseSessionRoute(key).looksLikeImSession) return "";
+  return `${key}:thread:${ts}`;
+}
+
 export function isManagedAgentContext(ctx: UnknownRecord): boolean {
   const safe = ctx ?? {};
   if (stringValue(process.env.OCTOCLAW_DISABLE_RUNTIME_POLICY) === "1") {
@@ -920,16 +955,42 @@ export function resolvePolicyStateKeys(ctx: UnknownRecord): string[] {
   const safe = ctx ?? {};
   const entries: Array<{ value: string; rank: number; order: number }> = [];
   const boundary = detectSessionBoundary(safe);
+  const anchor = policyTurnAnchor(safe);
+  const canonicalSessionKey = stringValue(boundary.canonicalSessionKey);
+  const rawSessionKey = stringValue(safe.sessionKey);
+  const rawSessionId = stringValue(safe.sessionId);
 
-  for (const raw of [boundary.canonicalSessionKey, safe.sessionKey, safe.sessionId]) {
+  const add = (raw: unknown, rankOverride?: number) => {
     const value = stringValue(raw);
     if (value && !entries.some((entry) => entry.value === value)) {
       entries.push({
         value,
-        rank: sessionPreferenceRank(value),
+        rank: rankOverride ?? sessionPreferenceRank(value),
         order: entries.length,
       });
     }
+  };
+
+  for (const raw of [canonicalSessionKey, rawSessionKey]) {
+    add(policyTurnStateKey(raw, anchor), 80);
+  }
+
+  const hasRootImSession = [canonicalSessionKey, rawSessionKey]
+    .some((raw) => {
+      const parsed = parseSessionRoute(raw);
+      return parsed.looksLikeImSession && !parsed.threadSession;
+    });
+  const preferSessionTurnAlias = Boolean(
+    rawSessionId
+    && hasRootImSession
+    && rawSessionId !== canonicalSessionKey
+    && rawSessionId !== rawSessionKey
+    && !isSubagentSessionRef(rawSessionId),
+  );
+
+  for (const raw of [canonicalSessionKey, rawSessionKey, rawSessionId]) {
+    const value = stringValue(raw);
+    add(value, preferSessionTurnAlias && value === rawSessionId ? 70 : undefined);
   }
 
   entries.sort((left, right) => right.rank - left.rank || left.order - right.order);

@@ -33,6 +33,7 @@ import {
   enrichConversationControlMetadata,
   isManagedAgentContext,
   normalizeInboundPrompt,
+  parseSessionRoute,
   promptsEquivalent,
   resolvePolicyStateKey,
 } from "./session.js";
@@ -1589,6 +1590,19 @@ export async function resolvePolicyDecisionForContext(
   const existing = policyState.resolveForContext(ctx).state as PolicyContextState | null;
   const metadata = applyPendingThreadParentControl(buildPolicyMetadata(ctx, { stateKey }));
   const existingDelegateTaskContext = asRecord(existing?.delegateTaskContext);
+  const mirrorLatestTurnAlias = (entry: PolicyContextState): void => {
+    const aliasKey = asString(ctx.sessionKey);
+    if (!aliasKey || aliasKey === stateKey) return;
+    const parsed = parseSessionRoute(aliasKey);
+    if (!parsed.looksLikeImSession || parsed.threadSession) return;
+    policyState.set(aliasKey, {
+      ...entry,
+      canonicalSessionKey: stateKey,
+      canonical_session_key: stateKey,
+      latestTurnStateKey: stateKey,
+      latest_turn_state_key: stateKey,
+    } as PolicyContextState);
+  };
 
   // Inject judge/delegation config from env vars (bypasses plugin config schema validation)
   const judgeEnvJson = process.env.OCTOCLAW_JUDGE_FAST?.trim();
@@ -1667,6 +1681,14 @@ export async function resolvePolicyDecisionForContext(
       workContractId: nextCachedWorkContractId,
       workContractMaterializationError: workContractMaterializationError || undefined,
       routeSeal,
+    });
+    mirrorLatestTurnAlias({
+      ...existing,
+      decision: cached,
+      workContractId: nextCachedWorkContractId,
+      workContractMaterializationError: workContractMaterializationError || undefined,
+      routeSeal,
+      updatedAt: Date.now(),
     });
     const resolveElapsedMs = Date.now() - resolveStartedAt;
     await recordPolicyReplay(
@@ -1778,6 +1800,7 @@ export async function resolvePolicyDecisionForContext(
     }
 
     policyState.set(stateKey, nextState);
+    mirrorLatestTurnAlias(nextState);
 
     // Build WorkContract from this policy decision. The decision may only
     // expose a dispatchable workContractId after the backing store write succeeds.
@@ -1789,6 +1812,8 @@ export async function resolvePolicyDecisionForContext(
       nextState.workContractId = "";
       nextState.workContractMaterializationError = workContractAttach.error;
     }
+    policyState.set(stateKey, nextState);
+    mirrorLatestTurnAlias(nextState);
 
     const resolveElapsedMs = Date.now() - resolveStartedAt;
     await recordPolicyReplay(

@@ -617,6 +617,100 @@ describe("neutral Slack ACK hook dedupe", () => {
     expect(neutralAckEvents.every((entry) => entry.fallback_used === false)).toBe(true);
   });
 
+  it("keeps concurrent Slack DM turns bound to their own anchors", async () => {
+    const handlers = new Map<string, Function>();
+    const reactions: IMReactParams[] = [];
+    const adapter: IMAdapter = {
+      channel: "slack",
+      capabilityLevel: "L2",
+      canHandle: (sessionKey) => sessionKey.includes("u0mixedthread"),
+      resolveTarget: () => ({ channel: "slack", target: "user:u0mixedthread" }),
+      send: async () => ({ sent: true, delivered: true, messageId: "1780451904.000001" }),
+      react: async (params) => {
+        reactions.push(params);
+        return { ok: true };
+      },
+    };
+    registerIMAdapter(adapter);
+    plugin.register({
+      pluginConfig: { ackReactionEmoji: "eyes" },
+      on: (event, handler) => handlers.set(event, handler),
+      registerTool: () => {},
+      registerCommand: () => {},
+      logger: {},
+    });
+
+    const messageReceived = handlers.get("message_received");
+    const beforeDispatch = handlers.get("before_dispatch");
+    expect(messageReceived).toBeTruthy();
+    expect(beforeDispatch).toBeTruthy();
+
+    const sessionKey = "agent:main:slack:default:direct:u0mixedthread";
+    const sessionA = "51700000-1111-4111-8111-aaaaaaaaaaaa";
+    const sessionB = "a6e8e643-85c2-4bec-b8ac-cb32ebff2acf";
+
+    messageReceived!(
+      {
+        content: "帮我 review 当前 OctoClaw 工作区改动",
+        metadata: {
+          messageId: "1780451897.291019",
+          originatingChannel: "slack",
+          originatingTo: "user:U0MIXEDTHREAD",
+        },
+      },
+      {
+        sessionKey,
+        sessionId: sessionA,
+        channelId: "slack",
+        conversationId: "user:U0MIXEDTHREAD",
+      },
+    );
+    messageReceived!(
+      {
+        content: "今天北京的天气怎样",
+        metadata: {
+          messageId: "1780451903.917899",
+          originatingChannel: "slack",
+          originatingTo: "user:U0MIXEDTHREAD",
+        },
+      },
+      {
+        sessionKey,
+        sessionId: sessionB,
+        channelId: "slack",
+        conversationId: "user:U0MIXEDTHREAD",
+      },
+    );
+
+    beforeDispatch!(
+      { prompt: "帮我 review 当前 OctoClaw 工作区改动" },
+      {
+        sessionKey,
+        sessionId: sessionA,
+        agentId: "main",
+        channelId: "slack",
+        cwd: tempWorkspace,
+      },
+    );
+    await waitForFireAndForget();
+
+    expect(reactions.map((entry) => entry.messageId)).toEqual(expect.arrayContaining([
+      "1780451897.291019",
+      "1780451903.917899",
+    ]));
+    const observedEvents = readReplayEvents().filter((entry) => entry.event === "before_dispatch_observed");
+    expect(observedEvents).toContainEqual(expect.objectContaining({
+      sessionKey,
+      sessionId: sessionA,
+      inboundMessageTs: "1780451897.291019",
+    }));
+    expect(observedEvents).not.toContainEqual(expect.objectContaining({
+      sessionKey,
+      sessionId: sessionA,
+      inboundMessageTs: "1780451903.917899",
+    }));
+  });
+
   it("suppresses delayed neutral text ACK when the formal reply is already visible", async () => {
     process.env.OCTOCLAW_NEUTRAL_ACK_DELAY_MS = "30";
     const handlers = new Map<string, Function>();
