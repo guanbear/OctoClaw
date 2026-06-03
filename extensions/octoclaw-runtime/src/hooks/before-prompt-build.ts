@@ -66,6 +66,10 @@ import {
   collectRecentExecutionReceipts,
 } from "../extension-entry.js";
 import { maybeInjectSpeculativePreload } from "./speculative-preload-handler.js";
+import {
+  promptMatchedInboundAnchor,
+  usableExistingInboundAnchor,
+} from "./inbound-anchor-state.js";
 
 import {
   resolveSlimMainContextEnabled,
@@ -145,27 +149,30 @@ export function makeBeforePromptBuildHook(deps: BeforePromptBuildDeps) {
     );
     let inboundMessageTs = inboundAnchor.ts;
     let inboundMessageTsSource: InboundMessageTimestampSource = inboundAnchor.source;
-
-    // Route C: ctx.channelId is the channel TYPE ("slack"), not the channel ID.
-    // For Slack DMs, derive the real DM channel ID from the session key user ID
-    // via conversations.open, then query conversations.history for the latest ts.
+    let inboundAnchorSessionKey = "";
     if (!inboundMessageTs) {
-      const sessionKey = stringValue(ctx.sessionKey);
-      if (/(?:^|:)slack:/u.test(sessionKey) && sessionKey.includes(":direct:")) {
-        const { fetchLatestUserMessageTsForSessionKey } = await import("../im/slack-thread-anchor.js");
-        inboundMessageTs = await fetchLatestUserMessageTsForSessionKey(sessionKey);
-        inboundMessageTsSource = inboundMessageTs ? "fallback_history" : "none";
-        if (inboundMessageTs && process.env.OCTOCLAW_ACK_DEBUG) {
-          console.error(`[ack-dbg] thread anchor from Route C: sessionKey=${sessionKey.substring(0,60)} ts=${inboundMessageTs}`);
-        }
+      const promptMatch = promptMatchedInboundAnchor(prompt);
+      if (promptMatch) {
+        inboundMessageTs = promptMatch.replyToMessageId;
+        inboundMessageTsSource = "ctx";
+        inboundAnchorSessionKey = promptMatch.sessionKey;
       }
     }
 
-    const existingPreState = asRecord(getPolicyStateForContext(ctx).state);
-    const existingDeliveryReplyTo = deliveryTargetReplyTo(existingPreState);
-    if (existingDeliveryReplyTo) {
-      inboundMessageTs = existingDeliveryReplyTo;
-      inboundMessageTsSource = "ctx";
+    const existingPreStateInfo = getPolicyStateForContext(ctx);
+    const existingPreState = asRecord(existingPreStateInfo.state);
+    if (!inboundMessageTs) {
+      const existingAnchor = usableExistingInboundAnchor({
+        prompt,
+        currentStateKey: preStateKey,
+        resolvedStateKey: existingPreStateInfo.key,
+        state: existingPreState,
+      });
+      if (existingAnchor) {
+        inboundMessageTs = existingAnchor.replyToMessageId;
+        inboundMessageTsSource = "ctx";
+        inboundAnchorSessionKey = existingAnchor.sessionKey;
+      }
     }
     void recordPolicyReplay(
       "before_prompt_build_observed",
@@ -179,10 +186,10 @@ export function makeBeforePromptBuildHook(deps: BeforePromptBuildDeps) {
       deps.pi.logger,
       null,
     ).catch(() => {});
-    const immutableDeliveryTarget = buildImmutableDeliveryTarget(preSessionKey || stringValue(ctx.sessionKey), inboundMessageTs);
+    const immutableDeliveryTarget = buildImmutableDeliveryTarget(inboundAnchorSessionKey || preSessionKey || stringValue(ctx.sessionKey), inboundMessageTs);
     void deps.maybeSendNeutralInboundAckForContext("before_prompt_build", event, ctx, prompt, {
       stateKey: preStateKey,
-      sessionKey: preSessionKey,
+      sessionKey: inboundAnchorSessionKey || preSessionKey,
       inboundMessageTs,
       inboundMessageTsSource,
     }).catch((error) => {

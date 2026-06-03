@@ -172,6 +172,7 @@ export function makeMessageReceivedHook(deps: Pick<MessageLifecycleDeps, "pi" | 
             channel_tone: stringValue(currentRecord.channelTone || currentRecord.channel_tone),
           };
         })(),
+        prompt,
         canonicalSessionKey: stateKey,
         ackGuardKey: sessionKey,
         inboundMessageTs: anchor.ts,
@@ -205,6 +206,7 @@ export function makeMessageReceivedHook(deps: Pick<MessageLifecycleDeps, "pi" | 
           })(),
           latestTurnStateKey: stateKey,
           latest_turn_state_key: stateKey,
+          prompt,
           inboundMessageTs: anchor.ts,
           replyToMessageId: anchor.ts,
           message_id: anchor.ts,

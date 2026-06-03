@@ -17,7 +17,6 @@ import {
   type CanceledNeutralAckTimer,
 } from "./ack/ack-scheduler.js";
 import { sendIMMessage } from "./im/send.js";
-import { fetchLatestUserMessageTsForSessionKey } from "./im/slack-thread-anchor.js";
 import {
   buildPolicyMetadata,
   resolveAckDeliverySessionKey,
@@ -63,7 +62,10 @@ import {
   makeBeforeMessageWriteHook,
 } from "./hooks/message-lifecycle.js";
 import { makeBeforeDispatchHook } from "./hooks/before-dispatch.js";
-import { deliveryTargetReplyTo } from "./hooks/footer-mode.js";
+import {
+  promptMatchedInboundAnchor,
+  usableExistingInboundAnchor,
+} from "./hooks/inbound-anchor-state.js";
 import { handleRouterWizardAction } from "./router-onboarding.js";
 import { recoverNativeRunsOnGatewayStart } from "./resolve/native-run-startup-recovery.js";
 export {
@@ -280,9 +282,6 @@ export async function sendCompactionNotice(event: UnknownRecord, ctx: UnknownRec
   const state = getPolicyStateForContext(ctx).state;
   let replyToMessageId = stringValue(state?.inboundMessageTs || state?.message_id || state?.replyToMessageId || state?.reply_to_id)
     || extractInboundMessageTimestamp(ctx, event, "");
-  if (!replyToMessageId && sessionKey.includes(":slack:") && sessionKey.includes(":direct:")) {
-    replyToMessageId = await fetchLatestUserMessageTsForSessionKey(sessionKey);
-  }
   const result = await sendIMMessage({
     sessionKey,
     message: "上下文压缩中，我会继续处理；不用重复发送。",
@@ -727,7 +726,8 @@ export const plugin = {
       const ctxRecord = asRecord(ctx);
       const mergedCtx = { ...eventRecord, ...ctxRecord };
       const stateKey = stringValue(overrides.stateKey || resolvePolicyStateKey(mergedCtx));
-      const existingState = asRecord(getPolicyStateForContext(mergedCtx).state);
+      const existingStateInfo = getPolicyStateForContext(mergedCtx);
+      const existingState = asRecord(existingStateInfo.state);
       const metadata = buildPolicyMetadata(mergedCtx, { stateKey });
       let sessionKey = stringValue(overrides.sessionKey)
         || resolveAckDeliverySessionKey(metadata, stateKey, existingState, mergedCtx)
@@ -745,17 +745,44 @@ export const plugin = {
         return;
       }
       if (!inboundMessageTs) {
-        const stateAnchor = deliveryTargetReplyTo(existingState)
-          || stringValue(existingState.inboundMessageTs || existingState.replyToMessageId || existingState.message_id || existingState.messageId);
-        if (stateAnchor) {
-          inboundMessageTs = stateAnchor;
+        const existingAnchor = usableExistingInboundAnchor({
+          prompt,
+          currentStateKey: stateKey,
+          resolvedStateKey: existingStateInfo.key,
+          state: existingState,
+        });
+        if (existingAnchor) {
+          inboundMessageTs = existingAnchor.replyToMessageId;
           anchorSource = "ctx";
+          sessionKey = existingAnchor.sessionKey || sessionKey;
         }
       }
       if (!inboundMessageTs) {
-        inboundMessageTs = await fetchLatestUserMessageTsForSessionKey(sessionKey, 1200);
-        anchorSource = inboundMessageTs ? "fallback_history" : "none";
-        fallbackUsed = Boolean(inboundMessageTs);
+        const promptAnchor = promptMatchedInboundAnchor(prompt);
+        if (promptAnchor) {
+          inboundMessageTs = promptAnchor.replyToMessageId;
+          anchorSource = "ctx";
+          sessionKey = promptAnchor.sessionKey || sessionKey;
+        }
+      }
+      if (!inboundMessageTs) {
+        void recordPolicyReplay(
+          "neutral_inbound_ack",
+          {
+            hookName,
+            sessionKey,
+            stateKey: stateKey || sessionKey,
+            replyToMessageId: "",
+            anchor_source: "none",
+            fallback_used: false,
+            sent: false,
+            mode: "not_sent",
+            reason: "missing_current_inbound_anchor",
+          },
+          pi.logger,
+          null,
+        ).catch(() => {});
+        return;
       }
       const effectiveStateKey = stateKey || sessionKey;
       prepareAckTrackingForMessageTurn(effectiveStateKey, `${effectiveStateKey}:${inboundMessageTs}`);

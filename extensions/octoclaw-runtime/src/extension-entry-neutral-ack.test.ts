@@ -445,7 +445,7 @@ describe("neutral Slack ACK hook dedupe", () => {
     expect(observedEvents.some((entry) => entry.anchor_source === "event" && entry.inboundMessageTs === "1777770000.222222")).toBe(true);
   });
 
-  it("uses Slack history fallback only when no inbound anchor exists", async () => {
+  it("skips Slack history fallback when no current inbound anchor exists", async () => {
     const handlers = new Map<string, Function>();
     const sends: IMSendParams[] = [];
     const reactions: IMReactParams[] = [];
@@ -486,12 +486,11 @@ describe("neutral Slack ACK hook dedupe", () => {
     );
     await waitForFireAndForget();
 
-    expect(fetchLatestUserMessageTsForSessionKey).toHaveBeenCalledWith("agent:main:slack:channel:c0ackfallback", 1200);
-    expect(reactions).toHaveLength(1);
-    expect(reactions[0]).toMatchObject({ messageId: "1777770000.333333" });
+    expect(fetchLatestUserMessageTsForSessionKey).not.toHaveBeenCalled();
+    expect(reactions).toHaveLength(0);
     expect(sends).toHaveLength(0);
     const neutralAckEvents = readReplayEvents().filter((entry) => entry.event === "neutral_inbound_ack");
-    expect(neutralAckEvents.some((entry) => entry.sent === true && entry.anchor_source === "fallback_history" && entry.fallback_used === true)).toBe(true);
+    expect(neutralAckEvents.some((entry) => entry.sent === false && entry.anchor_source === "none" && entry.fallback_used === false && entry.reason === "missing_current_inbound_anchor")).toBe(true);
   });
 
   it("does not use Slack history fallback from message_received without an original anchor", async () => {
@@ -709,6 +708,106 @@ describe("neutral Slack ACK hook dedupe", () => {
       sessionId: sessionA,
       inboundMessageTs: "1780451903.917899",
     }));
+  });
+
+  it("binds before_prompt_build to the matching Slack DM inbound anchor when message_received had no sessionId", async () => {
+    const handlers = new Map<string, Function>();
+    const reactions: IMReactParams[] = [];
+    const adapter: IMAdapter = {
+      channel: "slack",
+      capabilityLevel: "L2",
+      canHandle: (sessionKey) => sessionKey.includes("u0promptmatch"),
+      resolveTarget: () => ({ channel: "slack", target: "user:u0promptmatch" }),
+      send: async () => ({ sent: true, delivered: true, messageId: "1780475600.000001" }),
+      react: async (params) => {
+        reactions.push(params);
+        return { ok: true };
+      },
+    };
+    registerIMAdapter(adapter);
+    plugin.register({
+      pluginConfig: { ackReactionEmoji: "eyes" },
+      on: (event, handler) => handlers.set(event, handler),
+      registerTool: () => {},
+      registerCommand: () => {},
+      logger: {},
+    });
+
+    const messageReceived = handlers.get("message_received");
+    const beforePromptBuild = handlers.get("before_prompt_build");
+    expect(messageReceived).toBeTruthy();
+    expect(beforePromptBuild).toBeTruthy();
+
+    const sessionKey = "agent:main:slack:default:direct:u0promptmatch";
+    const sessionA = "8da1c07c-b40a-4629-b3cc-d0e2df56c141";
+    const firstPrompt = "帮我排查今天凌晨 2 点到 3 点 Macmini 上 OpenClaw/OctoClaw 是否有定时任务大量消耗 token";
+    const secondPrompt = "帮我同时分析 OctoClaw 当前工作区的三件事";
+    vi.mocked(fetchLatestUserMessageTsForSessionKey).mockResolvedValue("1780475276.906359");
+
+    messageReceived!(
+      {
+        content: firstPrompt,
+        metadata: {
+          messageId: "1780475270.583089",
+          originatingChannel: "slack",
+          originatingTo: "user:U0PROMPTMATCH",
+        },
+      },
+      {
+        sessionKey,
+        channelId: "slack",
+        conversationId: "user:U0PROMPTMATCH",
+      },
+    );
+    messageReceived!(
+      {
+        content: secondPrompt,
+        metadata: {
+          messageId: "1780475276.906359",
+          originatingChannel: "slack",
+          originatingTo: "user:U0PROMPTMATCH",
+        },
+      },
+      {
+        sessionKey,
+        channelId: "slack",
+        conversationId: "user:U0PROMPTMATCH",
+      },
+    );
+    await waitForFireAndForget();
+
+    await beforePromptBuild!(
+      { prompt: firstPrompt },
+      {
+        sessionKey,
+        sessionId: sessionA,
+        agentId: "main",
+        channelId: "slack",
+        cwd: tempWorkspace,
+      },
+    );
+    await waitForFireAndForget();
+
+    expect(fetchLatestUserMessageTsForSessionKey).not.toHaveBeenCalled();
+    expect(reactions.map((entry) => entry.messageId)).toEqual(expect.arrayContaining([
+      "1780475270.583089",
+      "1780475276.906359",
+    ]));
+    const observedEvents = readReplayEvents().filter((entry) => entry.event === "before_prompt_build_observed");
+    expect(observedEvents).toContainEqual(expect.objectContaining({
+      sessionKey,
+      sessionId: sessionA,
+      inboundMessageTs: "1780475270.583089",
+    }));
+    expect(observedEvents).not.toContainEqual(expect.objectContaining({
+      sessionKey,
+      sessionId: sessionA,
+      inboundMessageTs: "1780475276.906359",
+    }));
+    expect(policyState.getState(sessionA)).toMatchObject({
+      inboundMessageTs: "1780475270.583089",
+      replyToMessageId: "1780475270.583089",
+    });
   });
 
   it("moves the root Slack DM alias to the latest inbound turn before dispatch lacks sessionId", async () => {

@@ -5,11 +5,14 @@ import type { PluginInterface } from "../extension-entry-shared.js";
 import { stringValue } from "../extension-entry-shared.js";
 import { extractPromptText } from "../extension-entry-helpers.js";
 import { extractInboundMessageTimestampWithSource, type InboundMessageTimestampSource } from "../inbound-timestamps.js";
-import { deliveryTargetReplyTo } from "./footer-mode.js";
 import {
   getPolicyStateForContext,
   handleOctoClawControlPlaneFastPath,
 } from "../extension-entry.js";
+import {
+  promptMatchedInboundAnchor,
+  usableExistingInboundAnchor,
+} from "./inbound-anchor-state.js";
 
 export interface BeforeDispatchDeps {
   pi: PluginInterface;
@@ -30,9 +33,17 @@ export function makeBeforeDispatchHook(deps: BeforeDispatchDeps) {
     const mergedCtx = { ...eventRecord, ...ctxRecord };
     const stateKey = resolvePolicyStateKey(mergedCtx);
     const extractedAnchor = extractInboundMessageTimestampWithSource(ctxRecord, eventRecord, prompt);
-    const existingState = asRecord(getPolicyStateForContext(mergedCtx).state);
-    const stateAnchor = deliveryTargetReplyTo(existingState)
-      || stringValue(existingState.inboundMessageTs || existingState.replyToMessageId || existingState.message_id || existingState.messageId);
+    const existingStateInfo = getPolicyStateForContext(mergedCtx);
+    const existingState = asRecord(existingStateInfo.state);
+    const promptAnchor = promptMatchedInboundAnchor(prompt);
+    const existingAnchor = usableExistingInboundAnchor({
+      prompt,
+      currentStateKey: stateKey,
+      resolvedStateKey: existingStateInfo.key,
+      state: existingState,
+    });
+    const stateAnchor = promptAnchor?.replyToMessageId
+      || existingAnchor?.replyToMessageId;
     const anchor = extractedAnchor.ts
       ? extractedAnchor
       : stateAnchor
