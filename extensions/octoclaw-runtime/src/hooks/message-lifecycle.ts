@@ -198,8 +198,8 @@ export function makeMessageReceivedHook(deps: Pick<MessageLifecycleDeps, "pi" | 
           ...(() => {
             const currentRecord = asRecord(current);
             return {
-              canonicalSessionKey: stringValue(currentRecord.canonicalSessionKey || currentRecord.canonical_session_key || rootStateKey),
-              canonical_session_key: stringValue(currentRecord.canonicalSessionKey || currentRecord.canonical_session_key || rootStateKey),
+              canonicalSessionKey: stateKey,
+              canonical_session_key: stateKey,
               ackGuardKey: sessionKey,
               ack_guard_key: sessionKey,
               channelTone: stringValue(currentRecord.channelTone || currentRecord.channel_tone) || "chat",

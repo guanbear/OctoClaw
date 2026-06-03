@@ -711,6 +711,101 @@ describe("neutral Slack ACK hook dedupe", () => {
     }));
   });
 
+  it("moves the root Slack DM alias to the latest inbound turn before dispatch lacks sessionId", async () => {
+    const handlers = new Map<string, Function>();
+    const adapter: IMAdapter = {
+      channel: "slack",
+      capabilityLevel: "L2",
+      canHandle: (sessionKey) => sessionKey.includes("u0rootlatest"),
+      resolveTarget: () => ({ channel: "slack", target: "user:u0rootlatest" }),
+      send: async () => ({ sent: true, delivered: true, messageId: "1780462552.000001" }),
+      react: async () => ({ ok: true }),
+    };
+    registerIMAdapter(adapter);
+    plugin.register({
+      pluginConfig: { ackReactionEmoji: "eyes" },
+      on: (event, handler) => handlers.set(event, handler),
+      registerTool: () => {},
+      registerCommand: () => {},
+      logger: {},
+    });
+
+    const messageReceived = handlers.get("message_received");
+    const beforeDispatch = handlers.get("before_dispatch");
+    expect(messageReceived).toBeTruthy();
+    expect(beforeDispatch).toBeTruthy();
+
+    const sessionKey = "agent:main:slack:default:direct:u0rootlatest";
+    const firstRunAlias = "93dc13ce-da70-4a95-9d21-f4acd7c5b6ad";
+    messageReceived!(
+      {
+        content: "帮我 review 当前 OctoClaw 工作区改动",
+        metadata: {
+          messageId: "1780462512.581489",
+          originatingChannel: "slack",
+          originatingTo: "user:U0ROOTLATEST",
+        },
+      },
+      {
+        sessionKey,
+        channelId: "slack",
+        conversationId: "user:U0ROOTLATEST",
+      },
+    );
+    policyState.setState(firstRunAlias, {
+      canonicalSessionKey: firstRunAlias,
+      ackGuardKey: sessionKey,
+      inboundMessageTs: "1780462512.581489",
+      replyToMessageId: "1780462512.581489",
+      deliveryTarget: { sessionKey, replyToMessageId: "1780462512.581489", immutable: true },
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    });
+    policyState.setState(sessionKey, {
+      ...(policyState.getState(sessionKey) ?? {}),
+      canonicalSessionKey: firstRunAlias,
+      canonical_session_key: firstRunAlias,
+      latestTurnStateKey: firstRunAlias,
+      latest_turn_state_key: firstRunAlias,
+    });
+
+    messageReceived!(
+      {
+        content: "今天北京的天气怎样",
+        metadata: {
+          messageId: "1780462551.461489",
+          originatingChannel: "slack",
+          originatingTo: "user:U0ROOTLATEST",
+        },
+      },
+      {
+        sessionKey,
+        channelId: "slack",
+        conversationId: "user:U0ROOTLATEST",
+      },
+    );
+    beforeDispatch!(
+      { prompt: "今天北京的天气怎样" },
+      {
+        sessionKey,
+        agentId: "main",
+        channelId: "slack",
+        cwd: tempWorkspace,
+      },
+    );
+    await waitForFireAndForget();
+
+    const observedEvents = readReplayEvents().filter((entry) => entry.event === "before_dispatch_observed");
+    expect(observedEvents).toContainEqual(expect.objectContaining({
+      sessionKey,
+      inboundMessageTs: "1780462551.461489",
+    }));
+    expect(observedEvents).not.toContainEqual(expect.objectContaining({
+      sessionKey,
+      inboundMessageTs: "1780462512.581489",
+    }));
+  });
+
   it("suppresses delayed neutral text ACK when the formal reply is already visible", async () => {
     process.env.OCTOCLAW_NEUTRAL_ACK_DELAY_MS = "30";
     const handlers = new Map<string, Function>();
