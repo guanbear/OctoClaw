@@ -39,7 +39,12 @@ import {
   buildSpeculativeSessionsSendArgs,
   serializeSpeculativePreloadState,
 } from "../../delegate/speculative-preload.js";
-import { buildImmutableDeliveryTarget } from "../../hooks/footer-mode.js";
+import {
+  isSlackSessionKey,
+  normalizeDeliveryTarget,
+  resolveDurableDeliveryTarget,
+  slackThreadAnchorFromSessionKey,
+} from "../../resolve/delivery-target.js";
 import { escalateBudgetedMainDecision, hasBudgetedMainEscalationEvidence } from "../../budgeted-main.js";
 import {
   evaluateDispatchAdmission,
@@ -217,17 +222,11 @@ function implicitContractAlreadyAssignedToDispatch(contract: WorkContract | null
 }
 
 function dispatchDeliveryTargetReplyTo(target: UnknownRecord): string {
-  return asString(
-    target.replyToMessageId
-    || target.reply_to_message_id
-    || target.threadTs
-    || target.thread_ts,
-  );
+  return normalizeDeliveryTarget(target)?.replyToMessageId || "";
 }
 
 function sessionThreadAnchor(sessionKey: string): string {
-  const threadMatch = asString(sessionKey).match(/(?:^|:)thread:([^:]+)/u);
-  return threadMatch?.[1] || "";
+  return slackThreadAnchorFromSessionKey(sessionKey);
 }
 
 function resolveDispatchDeliveryTarget(input: {
@@ -236,33 +235,66 @@ function resolveDispatchDeliveryTarget(input: {
   state: UnknownRecord | null | undefined;
   ctx: UnknownRecord;
   sessionKey: string;
+  fallbackSessionKeys?: unknown[];
 }): UnknownRecord {
-  const contractRecord = asRecord(input.contract);
-  const contractTarget = asRecord(contractRecord.deliveryTarget || contractRecord.delivery_target);
-  if (dispatchDeliveryTargetReplyTo(contractTarget)) return contractTarget;
+  const stateRecord = asRecord(input.state);
+  const fallbackSessionKeys = [
+    input.sessionKey,
+    input.metadata.session_key,
+    input.metadata.sessionKey,
+    input.ctx.canonicalSessionKey,
+    input.ctx.canonical_session_key,
+    input.ctx.sessionKey,
+    input.ctx.session_key,
+    stateRecord.canonicalSessionKey,
+    stateRecord.canonical_session_key,
+    stateRecord.ackGuardKey,
+    stateRecord.ack_guard_key,
+    stateRecord.sessionKey,
+    stateRecord.session_key,
+    ...(input.fallbackSessionKeys ?? []),
+  ];
+  const durableResolution = resolveDurableDeliveryTarget({
+    contract: input.contract,
+    state: input.state,
+    ctx: input.ctx,
+    fallbackSessionKeys,
+  });
+  if (durableResolution.target) return durableResolution.target;
+  if (fallbackSessionKeys.some((value) => isSlackSessionKey(asString(value)))) return {};
 
-  const sessionKey = asString(input.sessionKey || input.contract?.sessionKey || input.metadata.session_key);
+  const sessionKey = [
+    input.sessionKey,
+    input.contract?.sessionKey,
+    input.metadata.session_key,
+    ...fallbackSessionKeys,
+  ].map((value) => asString(value)).find(Boolean) || "";
   const replyToMessageId = dispatchReplyToMessageId(input.metadata, input.state, input.ctx)
     || asString(input.metadata.session_thread_id)
     || sessionThreadAnchor(sessionKey);
-  return replyToMessageId && sessionKey
-    ? buildImmutableDeliveryTarget(sessionKey, replyToMessageId)
-    : {};
+  return normalizeDeliveryTarget({ sessionKey, replyToMessageId }, sessionKey) || {};
 }
 
 function freezeDispatchWorkContractDeliveryTarget(contract: WorkContract | null, deliveryTarget: UnknownRecord): WorkContract | null {
-  if (!contract || !dispatchDeliveryTargetReplyTo(deliveryTarget)) return contract;
-  const currentTarget = asRecord((contract as unknown as UnknownRecord).deliveryTarget || (contract as unknown as UnknownRecord).delivery_target);
-  if (dispatchDeliveryTargetReplyTo(currentTarget)) return contract;
+  const normalizedTarget = normalizeDeliveryTarget(deliveryTarget);
+  if (!contract || !normalizedTarget) return contract;
+  const currentTargetRecord = asRecord(
+    (contract as unknown as UnknownRecord).deliveryTarget
+      || (contract as unknown as UnknownRecord).delivery_target,
+  );
+  const currentTarget = Object.keys(currentTargetRecord).length > 0
+    ? normalizeDeliveryTarget(currentTargetRecord, contract.sessionKey)
+    : null;
+  if (currentTarget) return contract;
   return updateWorkContract(contract.workContractId, (current) => ({
     ...current,
-    deliveryTarget,
-    delivery_target: deliveryTarget,
+    deliveryTarget: normalizedTarget,
+    delivery_target: normalizedTarget,
     updatedAt: new Date().toISOString(),
   })) ?? {
     ...contract,
-    deliveryTarget,
-    delivery_target: deliveryTarget,
+    deliveryTarget: normalizedTarget,
+    delivery_target: normalizedTarget,
   } as WorkContract;
 }
 

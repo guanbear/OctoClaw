@@ -128,6 +128,24 @@ function cloneEntry(entry: PolicyStateEntry): PolicyStateEntry {
   return { ...entry };
 }
 
+function entryDeliveryAnchor(entry: PolicyStateEntry): string {
+  const target = isRecord(entry.deliveryTarget)
+    ? entry.deliveryTarget
+    : isRecord(entry.delivery_target) ? entry.delivery_target : {};
+  return String(
+    target.replyToMessageId
+      || target.reply_to_message_id
+      || target.threadTs
+      || target.thread_ts
+      || entry.inboundMessageTs
+      || entry.message_id
+      || entry.messageId
+      || entry.replyToMessageId
+      || entry.reply_to_id
+      || "",
+  ).trim();
+}
+
 function extractDecisionRouteSeal(decision: Record<string, unknown>): RouteSeal | undefined {
   const candidate = decision.routeSeal;
   if (!isRecord(candidate)) {
@@ -414,16 +432,25 @@ export class PolicyStateStore {
     this.prune();
     let best: { key: string; entry: PolicyStateEntry } | null = null;
     let bestUpdatedAt = 0;
+    const matchedAnchors = new Set<string>();
 
     for (const [key, entry] of this._entries.entries()) {
       if (!promptsEquivalent(task, extractPrompt(entry))) {
         continue;
+      }
+      const anchor = entryDeliveryAnchor(entry);
+      if (anchor) {
+        matchedAnchors.add(anchor);
       }
       const updatedAt = entryTimestamp(entry);
       if (!best || updatedAt >= bestUpdatedAt) {
         best = { key, entry: cloneEntry(entry) };
         bestUpdatedAt = updatedAt;
       }
+    }
+
+    if (matchedAnchors.size > 1) {
+      return null;
     }
 
     return best;

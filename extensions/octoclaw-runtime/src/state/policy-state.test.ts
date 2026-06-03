@@ -132,6 +132,35 @@ describe("policyState 4.4 cache boundary", () => {
     expect(store.findByPrompt(wrappedPrompt)?.key).toBe("agent:main:slack:default:direct:u1:thread:1780494854.015599");
   });
 
+  it("does not fuzzy-bind identical Slack prompts when multiple thread anchors match", () => {
+    const store = new PolicyStateStore();
+    const prompt = "帮我 review 当前 OctoClaw 工作区改动，重点看运行时路由和子任务委派有没有回归风险";
+    store.set("agent:main:slack:default:direct:u1:thread:1780494854.015599", {
+      prompt,
+      inboundMessageTs: "1780494854.015599",
+      deliveryTarget: {
+        surface: "slack",
+        sessionKey: "agent:main:slack:default:direct:u1",
+        replyToMessageId: "1780494854.015599",
+        immutable: true,
+      },
+      updatedAt: Date.now(),
+    });
+    store.set("agent:main:slack:default:direct:u1:thread:1780494867.967889", {
+      prompt,
+      inboundMessageTs: "1780494867.967889",
+      deliveryTarget: {
+        surface: "slack",
+        sessionKey: "agent:main:slack:default:direct:u1",
+        replyToMessageId: "1780494867.967889",
+        immutable: true,
+      },
+      updatedAt: Date.now() + 1,
+    });
+
+    expect(store.findByPrompt(prompt)).toBeNull();
+  });
+
   it("prefers a matching queued Slack inbound state over stale active-run delegate state", () => {
     const store = new PolicyStateStore({
       resolveKey: (ctx) => String(ctx.sessionKey || ""),

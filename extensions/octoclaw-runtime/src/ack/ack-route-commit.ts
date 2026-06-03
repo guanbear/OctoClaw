@@ -5,6 +5,7 @@ import { resolveWorkspaceRoot } from "../resolve/env.js";
 import { recordDelivery } from "./ack-dedupe.js";
 import { resolveAckTargetFromSessionKey } from "./ack-guard.js";
 import { recordPolicyReplay } from "../replay/replay.js";
+import { slackDeliveryRequiresAnchor } from "../resolve/delivery-target.js";
 import { isRecord, asString, asBooleanStrict } from "../util/type-coercion.js";
 
 export interface RouteCommitAckPacket {
@@ -485,11 +486,14 @@ export async function sendRouteCommitAck(params: {
     return { sent: false, skipped: true, reason: "target_resolution_failed", routeCommitId: packet.routeCommitId, ackKey: candidateAckKey, ack_target_resolution_state: "target_resolution_failed", ack_delivery_state: "skipped" };
   }
 
-  // If no message anchor (hasMessageAnchor=false), proceed and send as a top-level message.
-  // Route commit ACK is the first (and often only) user-visible signal for delegate routes.
-  // Silently skipping when anchor is absent leaves users with zero feedback.
-  // effectiveReplyToMessageId is already '' when hasMessageAnchor=false — sendRouteCommitAckDirect
-  // will omit --reply-to and send a top-level message instead.
+  if (packet.route === "delegate" && slackDeliveryRequiresAnchor(params.sessionKey, effectiveReplyToMessageId)) {
+    await recordRouteCommitAckReplay(params, packet, candidateAckKey, {
+      ack_target_resolution_state: "missing_inbound_anchor",
+      ack_delivery_state: "skipped",
+      reason: "missing_inbound_anchor",
+    });
+    return { sent: false, skipped: true, reason: "missing_inbound_anchor", routeCommitId: packet.routeCommitId, ackKey: candidateAckKey, ack_target_resolution_state: "missing_inbound_anchor", ack_delivery_state: "skipped" };
+  }
 
   const ackKey = candidateAckKey;
 

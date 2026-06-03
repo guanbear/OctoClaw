@@ -242,7 +242,7 @@ describe("route commit ACK", () => {
     replaySpy.mockRestore();
   });
 
-  it("sends top-level when canonical target resolves but no message anchor", async () => {
+  it("skips Slack delegate route ACK when canonical target resolves but no message anchor", async () => {
     const envModule = await import("../../resolve/env.js");
     const runCommandSpy = vi.spyOn(envModule, "runCommand").mockResolvedValue({
       code: 0,
@@ -262,13 +262,12 @@ describe("route commit ACK", () => {
       state: {},
     });
 
-    expect(result.skipped).toBe(false);
-    expect(result.sent).toBe(true);
-    expect(result.reason).toBe("channel_message_sent");
-    expect(result.ack_target_resolution_state).toBe("resolved");
+    expect(result.skipped).toBe(true);
+    expect(result.sent).toBe(false);
+    expect(result.reason).toBe("missing_inbound_anchor");
+    expect(result.ack_target_resolution_state).toBe("missing_inbound_anchor");
     expect(result.ackKey).toContain("wc-123");
-    expect(mockSendIMMessage).toHaveBeenCalledOnce();
-    expect(mockSendIMMessage.mock.calls[0][0].replyToMessageId).toBeUndefined();
+    expect(mockSendIMMessage).not.toHaveBeenCalled();
 
     expect(replaySpy).toHaveBeenCalledWith(
       "route_commit_ack",
@@ -276,7 +275,9 @@ describe("route commit ACK", () => {
         ackKey: expect.stringContaining("wc-123"),
         routeCommitId: "wc-123",
         decision_bucket: "must_delegate",
-        ackSent: true,
+        ackSent: false,
+        ack_target_resolution_state: "missing_inbound_anchor",
+        ack_delivery_state: "skipped",
       }),
       undefined,
     );

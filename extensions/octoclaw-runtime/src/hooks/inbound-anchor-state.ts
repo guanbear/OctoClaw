@@ -24,6 +24,17 @@ function deliveryTargetSessionKey(state: UnknownRecord): string {
   );
 }
 
+function promptsEquivalent(left: string, right: string): boolean {
+  const normalize = (value: string) => stringValue(value).replace(/\s+/gu, " ").trim().toLowerCase();
+  const leftText = normalize(left);
+  const rightText = normalize(right);
+  if (!leftText || !rightText) return false;
+  if (leftText === rightText) return true;
+  const shorter = leftText.length <= rightText.length ? leftText : rightText;
+  const longer = leftText.length > rightText.length ? leftText : rightText;
+  return shorter.length >= 12 && longer.includes(shorter);
+}
+
 export function inboundAnchorFromState(state: unknown): string {
   const record = asRecord(state);
   return deliveryTargetReplyTo(record)
@@ -53,6 +64,14 @@ export function usableExistingInboundAnchor(input: {
   const replyToMessageId = inboundAnchorFromState(state);
   if (!replyToMessageId) return null;
   if (input.currentStateKey && input.resolvedStateKey === input.currentStateKey) {
+    return {
+      stateKey: input.resolvedStateKey,
+      sessionKey: deliveryTargetSessionKey(state),
+      replyToMessageId,
+      state,
+    };
+  }
+  if (promptsEquivalent(input.prompt, stringValue(state.prompt))) {
     return {
       stateKey: input.resolvedStateKey,
       sessionKey: deliveryTargetSessionKey(state),
