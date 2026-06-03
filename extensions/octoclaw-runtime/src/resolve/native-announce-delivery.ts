@@ -61,8 +61,11 @@ export function slackThreadFromSessionKey(sessionKey: string): string {
 }
 
 function resolveNativeAnnounceDeliverySessionKey(contract: WorkContract, ctx: UnknownRecord): string {
+  const contractRecord = contract as unknown as UnknownRecord;
+  const deliveryTarget = asRecord(contractRecord.deliveryTarget || contractRecord.delivery_target);
   const nativeRefs = asRecord(contract.nativeSpawnRefs);
-  return stringValue(contract.sessionKey)
+  return stringValue(deliveryTarget.sessionKey || deliveryTarget.session_key)
+    || stringValue(contract.sessionKey)
     || stringValue(nativeRefs.requesterSessionKey)
     || stringValue(ctx.sessionKey)
     || stringValue(ctx.canonicalSessionKey);

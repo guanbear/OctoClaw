@@ -118,4 +118,49 @@ describe("native announce delivery anchors", () => {
     expect(result.replyToMessageId).toBe("");
     expect(sentMessages[0]?.replyToMessageId).toBeUndefined();
   });
+
+  it("uses the frozen delivery target session for delegated Slack completions", async () => {
+    const sentMessages: Array<{ sessionKey: string; replyToMessageId?: string }> = [];
+    const frozenSlackKey = "agent:main:slack:default:direct:u0al9t5u89z";
+    const parentRunKey = "e0966c86-14c6-4923-98f7-e1167b40b852";
+    const contract = {
+      ...delegateContract({ workContractId: "wc-frozen-target", sessionKey: parentRunKey }),
+      deliveryTarget: {
+        surface: "slack",
+        sessionKey: frozenSlackKey,
+        replyToMessageId: "1780466905.694059",
+        threadTs: "1780466905.694059",
+        immutable: true,
+      },
+    };
+
+    const result = await deliverNativeAnnounceCompletion({
+      contract,
+      completion: {
+        sourceSessionKey: "agent:main:subagent:child",
+        sourceSessionId: "child-session",
+        sourceTool: "subagent_announce",
+        status: "completed successfully",
+        resultText: "Review completed.",
+        resultHash: "hash-frozen-target",
+      },
+      state: {
+        workContractId: "wc-frozen-target",
+        work_contract_id: "wc-frozen-target",
+      },
+      ctx: { sessionKey: parentRunKey, channelId: "slack" },
+      sendMessage: async (params) => {
+        sentMessages.push(params);
+        return { sent: true, messageId: "1780467000.000001", threadTs: params.replyToMessageId };
+      },
+    });
+
+    expect(result.sent).toBe(true);
+    expect(result.sessionKey).toBe(frozenSlackKey);
+    expect(result.replyToMessageId).toBe("1780466905.694059");
+    expect(sentMessages[0]).toMatchObject({
+      sessionKey: frozenSlackKey,
+      replyToMessageId: "1780466905.694059",
+    });
+  });
 });

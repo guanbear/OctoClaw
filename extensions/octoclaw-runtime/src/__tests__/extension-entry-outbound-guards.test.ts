@@ -1202,6 +1202,68 @@ describe("guardOutboundMessageForPolicyState", () => {
     expect(guarded?.content).toContain("route=reply | model=GLM-5.1 · thread");
   });
 
+  it("does not cancel fallback native announce final before it is visibly sent", () => {
+    const now = Date.now();
+    const parentKey = "agent:main:slack:default:direct:u0al9t5u89z";
+    policyState.setState(parentKey, {
+      canonicalSessionKey: parentKey,
+      ackGuardKey: parentKey,
+      workContractId: "wc-native-fallback-visible",
+      work_contract_id: "wc-native-fallback-visible",
+      decision: { route_decision: { route: "delegate" } },
+      dispatchExecuted: true,
+      spawnExecuted: true,
+      resultMaterialized: true,
+      nativeAnnounceResultHash: "hash-native-fallback-visible",
+      native_announce_result_hash: "hash-native-fallback-visible",
+      deliveryStatus: "pending",
+      delivery_status: "pending",
+      deliveryTarget: {
+        sessionKey: parentKey,
+        replyToMessageId: "1780466905.694059",
+        threadTs: "1780466905.694059",
+        immutable: true,
+      },
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    const handlers = new Map<string, Function>();
+    plugin.register({
+      on: (event, handler) => handlers.set(event, handler),
+      registerTool: () => {},
+      registerCommand: () => {},
+      logger: {},
+    });
+    const beforeMessageWrite = handlers.get("before_message_write");
+    expect(beforeMessageWrite).toBeTruthy();
+    const finalMessage = beforeMessageWrite!(
+      { message: { role: "assistant", content: "Reviewed the current workspace changes." } },
+      {
+        sessionKey: parentKey,
+        sessionId: "parent-session-native-fallback-visible",
+        agentId: "main",
+        channelId: "slack",
+        model: "GLM-5.1",
+        inboundMessageTs: "1780466905.694059",
+      },
+    ) as { message?: { content?: unknown } } | undefined;
+    const finalText = String(finalMessage?.message?.content ?? "");
+    expect(finalText).toContain("Reviewed the current workspace changes.");
+
+    const guarded = guardOutboundMessageForPolicyState(
+      {
+        to: "user:U0AL9T5U89Z",
+        content: finalText,
+        metadata: { channelId: "slack", threadTs: "1780466905.694059" },
+      },
+      { channelId: "slack", sessionKey: parentKey },
+      now + 1000,
+    );
+
+    expect(guarded?.cancel).toBeUndefined();
+  });
+
   it("reply_dispatch wraps Slack monitor final payloads before delivery", () => {
     const handlers = new Map<string, Function>();
     plugin.register({

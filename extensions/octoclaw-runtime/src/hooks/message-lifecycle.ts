@@ -29,8 +29,6 @@ import {
   getPolicyStateForContext,
   hydrateOutboundStateWithNativeRefs,
   isNativeAnnounceAlreadyDelivered,
-  isNativeAnnounceDeliveryState,
-  markNativeAnnounceCompletionOnContract,
   outboundDeliveryContent,
   outboundLooksLikeVisibleDeliveryHook,
   replyDispatchSourceContext,
@@ -38,7 +36,6 @@ import {
   sendCompactionNotice,
   updatePolicyState,
   wrapReplyDispatchFooterProjection,
-  type NativeAnnounceCompletion,
 } from "../extension-entry.js";
 
 export interface MessageLifecycleDeps {
@@ -303,27 +300,6 @@ export function makeBeforeMessageWriteHook(deps: Pick<MessageLifecycleDeps, "pi"
       if (projectedText && projectedText !== contentText) {
         outputMessage = replaceAssistantMessageText(asRecord(visibleMessage), projectedText);
       }
-      if (isNativeAnnounceDeliveryState(stateRecord)) {
-        const deliveredAt = new Date().toISOString();
-        const workContractId = stringValue(stateRecord.workContractId || stateRecord.work_contract_id);
-        const completion: NativeAnnounceCompletion = {
-          sourceSessionKey: stringValue(stateRecord.childSessionKey || stateRecord.child_session_key),
-          sourceSessionId: "",
-          sourceTool: "subagent_announce",
-          status: "completed",
-          resultText: "",
-          resultHash: stringValue(stateRecord.nativeAnnounceResultHash || stateRecord.native_announce_result_hash),
-        };
-        if (workContractId) {
-          markNativeAnnounceCompletionOnContract(workContractId, completion, true, deliveredAt);
-        }
-        void recordPolicyReplay("native_announce_final_delivered", {
-          sessionKey: stateKey,
-          sessionId: stringValue(ctx.sessionId),
-          workContractId,
-          resultHash: completion.resultHash,
-        }, deps.pi.logger, asRecord(stateRecord.decision)).catch(() => {});
-      }
       updateAckTrackingState(stateKey, { formal_reply_visible: true });
       const stateUpdateKeys = Array.from(new Set([
         stateKey,
@@ -336,16 +312,6 @@ export function makeBeforeMessageWriteHook(deps: Pick<MessageLifecycleDeps, "pi"
         updatePolicyState(updateKey, (current) => ({
           ...(current ?? {}),
           formal_reply_visible: true,
-          ...(isNativeAnnounceDeliveryState(stateRecord) ? {
-            nativeAnnounceCompletionPending: false,
-            native_announce_completion_pending: false,
-            nativeAnnounceDelivered: true,
-            native_announce_delivered: true,
-            deliveryStatus: "delivered",
-            delivery_status: "delivered",
-            resultMaterialized: true,
-            result_materialized: true,
-          } : {}),
           outbound_projection_footer_appended: projectedText !== contentText || current?.outbound_projection_footer_appended === true,
           outbound_projection_footer_appended_at: projectedText !== contentText ? new Date().toISOString() : current?.outbound_projection_footer_appended_at,
         }));
