@@ -1,7 +1,6 @@
 import type { TaskStatusProjection } from "@octoclaw/contracts/status-projection";
 import type { AnomalyNotice } from "@octoclaw/contracts/work-contract";
 import { sendIMMessage } from "../im/send.js";
-import { fetchLatestUserMessageTsForSessionKey } from "../im/slack-thread-anchor.js";
 import { resolveWorkspaceRoot } from "../resolve/env.js";
 import { getReceipt, recordDelivery } from "./ack-dedupe.js";
 import { resolveAckTargetFromSessionKey } from "./ack-guard.js";
@@ -110,11 +109,13 @@ function slackThreadReplyAnchor(sessionKey: string, threadId: string): string {
   return /^\d{10}\.\d{6}$/u.test(threadId) ? threadId : "";
 }
 
-function shouldResolveLatestSlackDmAnchor(transitionKind: ExecutionTransitionKind, sessionKey: string, replyToMessageId: string): boolean {
+function requiresExplicitSlackThreadAnchor(transitionKind: ExecutionTransitionKind, sessionKey: string): boolean {
   return transitionKind === "spawn_started"
-    && !replyToMessageId
-    && /(?:^|:)slack:/iu.test(sessionKey)
-    && sessionKey.includes(":direct:");
+    && /(?:^|:)slack:/iu.test(sessionKey);
+}
+
+function hasExplicitSlackThreadAnchor(sessionKey: string, replyToMessageId: string, resolvedThreadId: string): boolean {
+  return Boolean(asString(replyToMessageId) || slackThreadReplyAnchor(sessionKey, resolvedThreadId));
 }
 
 async function sendExecutionTransitionMessage(
@@ -137,14 +138,7 @@ async function sendExecutionTransitionMessage(
     };
   }
 
-  let effectiveReplyToMessageId = asString(replyToMessageId) || slackThreadReplyAnchor(sessionKey, resolved.threadId);
-  if (shouldResolveLatestSlackDmAnchor(transitionKind, sessionKey, effectiveReplyToMessageId)) {
-    try {
-      effectiveReplyToMessageId = slackThreadReplyAnchor(sessionKey, await fetchLatestUserMessageTsForSessionKey(sessionKey, 1200));
-    } catch {
-      effectiveReplyToMessageId = "";
-    }
-  }
+  const effectiveReplyToMessageId = asString(replyToMessageId) || slackThreadReplyAnchor(sessionKey, resolved.threadId);
   const topLevelFallback = !effectiveReplyToMessageId && !resolved.threadId;
   let result: Awaited<ReturnType<typeof sendIMMessage>>;
   try {
@@ -370,6 +364,35 @@ export async function emitExecutionTransitionNotification(params: {
       reason,
       compactParentPacket: packet,
       ackMessage: text,
+    });
+    return {
+      sent: false,
+      skipped: true,
+      reason,
+      transitionKind: params.transitionKind,
+      notificationKey,
+      ack_target_resolution_state: ackTargetResolutionState,
+      ack_delivery_state: "skipped",
+      compactParentPacket: packet,
+    };
+  }
+
+  if (
+    requiresExplicitSlackThreadAnchor(params.transitionKind, params.sessionKey)
+    && !hasExplicitSlackThreadAnchor(params.sessionKey, asString(params.replyToMessageId), targetResolution.threadId)
+  ) {
+    const reason = "missing_inbound_anchor";
+    const ackTargetResolutionState = "missing_inbound_anchor";
+    await recordExecutionTransitionReplay(replayParams, notificationKey, {
+      ack_target_resolution_state: ackTargetResolutionState,
+      ack_delivery_state: "skipped",
+      sent: false,
+      skipped: true,
+      reason,
+      compactParentPacket: packet,
+      ackMessage: text,
+      target: targetResolution.target,
+      threadId: targetResolution.threadId,
     });
     return {
       sent: false,

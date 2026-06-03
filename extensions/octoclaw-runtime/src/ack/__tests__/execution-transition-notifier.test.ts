@@ -243,7 +243,7 @@ describe("execution transition notifier", () => {
     }));
   });
 
-  it("anchors Slack DM spawn_started ACK to the latest user message when OpenClaw omits thread metadata", async () => {
+  it("skips Slack DM spawn_started ACK when OpenClaw omits thread metadata", async () => {
     await mockDelivery();
 
     const result = await emitExecutionTransitionNotification(notification({
@@ -257,15 +257,44 @@ describe("execution transition notifier", () => {
       }),
     }));
 
-    expect(result.sent).toBe(true);
-    expect(mockFetchLatestUserMessageTsForSessionKey).toHaveBeenCalledWith(
-      "agent:main:slack:default:direct:u0al9t5u89z",
-      1200,
-    );
-    expect(mockSendIMMessage).toHaveBeenCalledWith(expect.objectContaining({
-      replyToMessageId: "1779106321.001122",
-      deliveryTargetSource: "inbound_anchor",
+    expect(result).toEqual(expect.objectContaining({
+      sent: false,
+      skipped: true,
+      reason: "missing_inbound_anchor",
+      ack_target_resolution_state: "missing_inbound_anchor",
+      ack_delivery_state: "skipped",
     }));
+    expect(mockFetchLatestUserMessageTsForSessionKey).not.toHaveBeenCalled();
+    expect(mockSendIMMessage).not.toHaveBeenCalled();
+  });
+
+  it("does not collapse concurrent Slack DM spawn_started ACKs onto the latest user message", async () => {
+    await mockDelivery();
+    mockFetchLatestUserMessageTsForSessionKey.mockResolvedValue("1779109999.999999");
+
+    for (const [index, taskId] of ["task-a", "task-b", "task-c", "task-d"].entries()) {
+      const result = await emitExecutionTransitionNotification(notification({
+        sessionKey: "agent:main:slack:default:direct:u0al9t5u89z",
+        replyToMessageId: "",
+        transitionKind: "spawn_started",
+        attemptId: `attempt-${index}`,
+        workContractId: `wc-${index}`,
+        projection: projection({
+          taskId,
+          status: "running",
+          dispatchExecuted: true,
+          spawnExecuted: true,
+        }),
+      }));
+      expect(result).toEqual(expect.objectContaining({
+        sent: false,
+        skipped: true,
+        reason: "missing_inbound_anchor",
+      }));
+    }
+
+    expect(mockFetchLatestUserMessageTsForSessionKey).not.toHaveBeenCalled();
+    expect(mockSendIMMessage).not.toHaveBeenCalled();
   });
 
   it("dedupes transition notification", async () => {

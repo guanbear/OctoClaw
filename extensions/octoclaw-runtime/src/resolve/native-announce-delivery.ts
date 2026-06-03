@@ -1,6 +1,5 @@
 import { type SendIMResult, sendIMMessage } from "../im/send.js";
 import { renderIMProjectionFooter } from "../im/projection-footer.js";
-import { fetchLatestUserMessageTsForSessionKey } from "../im/slack-thread-anchor.js";
 import { resolveWorkspaceRoot } from "./env.js";
 import { updateWorkContract } from "../work-contract/store.js";
 import { type WorkContract } from "@octoclaw/contracts/work-contract";
@@ -116,8 +115,8 @@ function resolveNativeAnnounceReplyToMessageId(contract: WorkContract, ctx: Unkn
     || stringValue(ctx.replyToMessageId || ctx.reply_to_id || ctx.inboundMessageTs || ctx.message_id || ctx.threadTs || ctx.thread_ts);
 }
 
-function shouldResolveSlackDmAnchor(sessionKey: string, replyToMessageId: string, allowLatestAnchor: boolean): boolean {
-  return allowLatestAnchor && !replyToMessageId && /(?:^|:)slack:/u.test(sessionKey.toLowerCase()) && sessionKey.includes(":direct:");
+function requiresNativeAnnounceThreadAnchor(sessionKey: string, replyToMessageId: string): boolean {
+  return !replyToMessageId && /(?:^|:)slack:/u.test(sessionKey.toLowerCase());
 }
 
 function buildNativeAnnounceFinalMessage(input: {
@@ -214,14 +213,12 @@ export async function deliverNativeAnnounceCompletion(input: {
   const event = asRecord(input.event);
   const state = asRecord(input.state);
   const sessionKey = resolveNativeAnnounceDeliverySessionKey(input.contract, ctx);
-  const stateMatchesContract = stateMatchesNativeAnnounceContract(input.contract, state);
-  let replyToMessageId = resolveNativeAnnounceReplyToMessageId(input.contract, ctx, state);
-  if (shouldResolveSlackDmAnchor(sessionKey, replyToMessageId, stateMatchesContract)) {
-    const resolveReplyToMessageId = input.resolveReplyToMessageId ?? ((key: string) => fetchLatestUserMessageTsForSessionKey(key, 1200));
-    replyToMessageId = stringValue(await resolveReplyToMessageId(sessionKey));
-  }
+  const replyToMessageId = resolveNativeAnnounceReplyToMessageId(input.contract, ctx, state);
   if (!sessionKey) {
     return { sent: false, error: "native_announce_missing_delivery_session", sessionKey, replyToMessageId };
+  }
+  if (requiresNativeAnnounceThreadAnchor(sessionKey, replyToMessageId)) {
+    return { sent: false, error: "native_announce_missing_inbound_anchor", sessionKey, replyToMessageId };
   }
   const message = buildNativeAnnounceFinalMessage({
     contract: input.contract,

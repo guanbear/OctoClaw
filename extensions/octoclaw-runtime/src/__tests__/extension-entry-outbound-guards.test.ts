@@ -2206,7 +2206,7 @@ describe("guardOutboundMessageForPolicyState", () => {
     }
   });
 
-  it("anchors native child final delivery for Slack DMs when policy state lost the inbound ts", async () => {
+  it("does not direct-deliver native child final delivery for Slack DMs when policy state lost the inbound ts", async () => {
     const sentMessages: Array<{ sessionKey: string; message: string; replyToMessageId?: string }> = [];
     const parentKey = "agent:main:slack:default:direct:u0al9t5u89z";
     const childKey = "agent:main:subagent:a0a59368-037a-4e8d-8aff-28a191e0312e";
@@ -2253,9 +2253,10 @@ describe("guardOutboundMessageForPolicyState", () => {
       resolveReplyToMessageId: async () => "1779092084.993849",
     });
 
-    expect(result.replyToMessageId).toBe("1779092084.993849");
-    expect(sentMessages).toHaveLength(1);
-    expect(sentMessages[0]?.replyToMessageId).toBe("1779092084.993849");
+    expect(result.sent).toBe(false);
+    expect(result.error).toBe("native_announce_missing_inbound_anchor");
+    expect(result.replyToMessageId).toBe("");
+    expect(sentMessages).toHaveLength(0);
   });
 
   it("keeps child missing-context blockers recoverable by the parent agent", async () => {

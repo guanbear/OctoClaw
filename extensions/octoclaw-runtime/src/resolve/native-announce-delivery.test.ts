@@ -76,9 +76,10 @@ describe("native announce delivery anchors", () => {
       },
     });
 
-    expect(result.sent).toBe(true);
+    expect(result.sent).toBe(false);
+    expect(result.error).toBe("native_announce_missing_inbound_anchor");
     expect(result.replyToMessageId).toBe("");
-    expect(sentMessages[0]?.replyToMessageId).toBeUndefined();
+    expect(sentMessages).toHaveLength(0);
   });
 
   it("does not trust mutable DM policy-state anchors without an explicit work contract match", async () => {
@@ -114,9 +115,45 @@ describe("native announce delivery anchors", () => {
       },
     });
 
-    expect(result.sent).toBe(true);
+    expect(result.sent).toBe(false);
+    expect(result.error).toBe("native_announce_missing_inbound_anchor");
     expect(result.replyToMessageId).toBe("");
-    expect(sentMessages[0]?.replyToMessageId).toBeUndefined();
+    expect(sentMessages).toHaveLength(0);
+  });
+
+  it("does not resolve a latest Slack DM anchor when the contract has no frozen delivery target", async () => {
+    const sentMessages: Array<{ replyToMessageId?: string }> = [];
+    const parentKey = "agent:main:slack:default:direct:u0al9t5u89z";
+    const contract = delegateContract({ workContractId: "wc-no-frozen-target", sessionKey: parentKey });
+    let latestLookupCalled = false;
+
+    const result = await deliverNativeAnnounceCompletion({
+      contract,
+      completion: {
+        sourceSessionKey: "agent:main:subagent:child",
+        sourceSessionId: "child-session",
+        sourceTool: "subagent_announce",
+        status: "completed successfully",
+        resultText: "Review completed.",
+        resultHash: "hash-no-frozen-target",
+      },
+      state: {},
+      ctx: { sessionKey: parentKey, channelId: "slack" },
+      sendMessage: async (params) => {
+        sentMessages.push(params);
+        return { sent: true, messageId: "1780384390.308789", threadTs: params.replyToMessageId };
+      },
+      resolveReplyToMessageId: async () => {
+        latestLookupCalled = true;
+        return "1780384318.416829";
+      },
+    });
+
+    expect(latestLookupCalled).toBe(false);
+    expect(result.sent).toBe(false);
+    expect(result.error).toBe("native_announce_missing_inbound_anchor");
+    expect(result.replyToMessageId).toBe("");
+    expect(sentMessages).toHaveLength(0);
   });
 
   it("uses the frozen delivery target session for delegated Slack completions", async () => {
