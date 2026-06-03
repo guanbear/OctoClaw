@@ -35,6 +35,32 @@ export interface AgentEndDeps {
   pi: PluginInterface;
 }
 
+function currentInboundReplyToMessageId(ctx: UnknownRecord): string {
+  return stringValue(
+    ctx.inboundMessageTs
+    || ctx.inbound_message_ts
+    || ctx.replyToMessageId
+    || ctx.reply_to_message_id
+    || ctx.messageId
+    || ctx.message_id
+    || ctx.threadTs
+    || ctx.thread_ts,
+  );
+}
+
+function agentEndReplyToMessageId(state: UnknownRecord | null | undefined, ctx: UnknownRecord): string {
+  const stateRecord = asRecord(state);
+  return currentInboundReplyToMessageId(ctx)
+    || deliveryTargetReplyTo(stateRecord)
+    || stringValue(
+      stateRecord.inboundMessageTs
+      || stateRecord.inbound_message_ts
+      || stateRecord.replyToMessageId
+      || stateRecord.reply_to_message_id
+      || stateRecord.message_id,
+    );
+}
+
 export function makeSubagentEndedHook(deps: AgentEndDeps) {
   return async (event: UnknownRecord, ctx: UnknownRecord) => {
     await handleNativeSubagentEndedCompletion({
@@ -140,7 +166,7 @@ export function makeAgentEndHook(deps: AgentEndDeps) {
             stateKey,
             decision: asRecord(state?.decision),
             state: asRecord(state),
-            replyToMessageId: deliveryTargetReplyTo(asRecord(state)) || stringValue(ctx.inboundMessageTs || state?.inboundMessageTs),
+            replyToMessageId: agentEndReplyToMessageId(asRecord(state), ctx),
             cwd: resolveWorkspaceRoot(),
             logger: deps.pi.logger,
           });
@@ -177,7 +203,7 @@ export function makeAgentEndHook(deps: AgentEndDeps) {
       const decision = asRecord(state?.decision);
       const routeDecision = asRecord(decision.route_decision);
       const workContract = asRecord(decision.work_contract);
-      const replyToMessageId = deliveryTargetReplyTo(asRecord(state)) || stringValue(state?.inboundMessageTs || state?.replyToMessageId || state?.message_id || ctx.inboundMessageTs);
+      const replyToMessageId = agentEndReplyToMessageId(asRecord(state), ctx);
       const outboundProjection = {
         route: finalReceipt.route,
         model: resolveDisplayModel(asRecord(state), {}, asRecord(ctx)),
