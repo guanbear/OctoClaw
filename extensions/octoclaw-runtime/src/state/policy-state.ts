@@ -194,7 +194,12 @@ function promptsEquivalent(prompt: string, candidatePrompt: string): boolean {
     return false;
   }
 
-  return leftCandidates.some((left) => rightCandidates.includes(left));
+  return leftCandidates.some((left) => rightCandidates.some((right) => {
+    if (left === right) return true;
+    const shorter = left.length <= right.length ? left : right;
+    const longer = left.length > right.length ? left : right;
+    return shorter.length >= 12 && longer.includes(shorter);
+  }));
 }
 
 function entryTimestamp(entry: PolicyStateEntry | null | undefined): number {
@@ -533,6 +538,12 @@ export class PolicyStateStore {
     const direct = this.resolveForContext(ctx);
     if (direct.state && (!prompt || promptsEquivalent(prompt, extractPrompt(direct.state)))) {
       return direct;
+    }
+    if (direct.state && prompt) {
+      const byPrompt = this.findByPrompt(prompt);
+      if (byPrompt) {
+        return { key: byPrompt.key, state: byPrompt.entry };
+      }
     }
     if (
       direct.state

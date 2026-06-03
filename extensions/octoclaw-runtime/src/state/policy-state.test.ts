@@ -107,4 +107,65 @@ describe("policyState 4.4 cache boundary", () => {
 
     expect(resolved).toEqual({ key: "", state: null });
   });
+
+  it("matches Slack inbound prompts wrapped by active-run runtime context", () => {
+    const store = new PolicyStateStore();
+    store.set("agent:main:slack:default:direct:u1:thread:1780494854.015599", {
+      prompt: "帮我 review 当前 OctoClaw 工作区改动，重点看运行时路由和子任务委派有没有回归风险",
+      inboundMessageTs: "1780494854.015599",
+      deliveryTarget: {
+        surface: "slack",
+        sessionKey: "agent:main:slack:default:direct:u1",
+        replyToMessageId: "1780494854.015599",
+        immutable: true,
+      },
+      updatedAt: Date.now(),
+    });
+
+    const wrappedPrompt = [
+      "System (untrusted): [2026-06-03 21:54:15 GMT+8] Slack DM from guanbear:",
+      "帮我 review 当前 OctoClaw 工作区改动，重点看运行时路由和子任务委派有没有回归风险",
+      "",
+      "帮我 review 当前 OctoClaw 工作区改动，重点看运行时路由和子任务委派有没有回归风险",
+    ].join("\n");
+
+    expect(store.findByPrompt(wrappedPrompt)?.key).toBe("agent:main:slack:default:direct:u1:thread:1780494854.015599");
+  });
+
+  it("prefers a matching queued Slack inbound state over stale active-run delegate state", () => {
+    const store = new PolicyStateStore({
+      resolveKey: (ctx) => String(ctx.sessionKey || ""),
+      resolveKeys: (ctx) => [String(ctx.sessionKey || "")],
+    });
+    store.set("active-run-uuid", {
+      prompt: "上一条 active run 里的任务",
+      decision: {
+        request: { session_key: "active-run-uuid" },
+        route_decision: { route: "delegate" },
+      },
+      budgetedMain: { escalatedAt: "2026-06-03T13:54:32.690Z" },
+      updatedAt: Date.now(),
+    });
+    store.set("agent:main:slack:default:direct:u1:thread:1780494887.586889", {
+      prompt: "帮我审计 Macmini 上 OpenClaw/OctoClaw 的后台任务、launchd、cron、gateway 进程和最近一小时 token 调用日志，列出异常项。",
+      inboundMessageTs: "1780494887.586889",
+      deliveryTarget: {
+        surface: "slack",
+        sessionKey: "agent:main:slack:default:direct:u1",
+        replyToMessageId: "1780494887.586889",
+        immutable: true,
+      },
+      updatedAt: Date.now(),
+    });
+
+    const resolved = store.getDispatchPolicyContext(
+      { sessionKey: "active-run-uuid" },
+      "帮我审计 Macmini 上 OpenClaw/OctoClaw 的后台任务、launchd、cron、gateway 进程和最近一小时 token 调用日志，列出异常项。具体步骤：检查 launchd、cron、gateway 和 token 调用日志。",
+    );
+
+    expect(resolved.key).toBe("agent:main:slack:default:direct:u1:thread:1780494887.586889");
+    expect(resolved.state?.deliveryTarget).toMatchObject({
+      replyToMessageId: "1780494887.586889",
+    });
+  });
 });
