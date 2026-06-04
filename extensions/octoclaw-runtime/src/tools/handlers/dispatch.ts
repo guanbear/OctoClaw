@@ -94,6 +94,10 @@ import {
   validCachedRouteSeal,
 } from "../dispatch-logic.js";
 import {
+  bindContextToCurrentTurn,
+  resolveCurrentTurnBinding,
+} from "../../hooks/inbound-anchor-state.js";
+import {
   buildMinimalProjection,
   ctxCwd,
   nativeFlowStatusFromSubstrate,
@@ -340,9 +344,22 @@ function isInternalSubagentCompletionEvent(params: UnknownRecord, ctx: UnknownRe
 }
 
 export async function executeOctoclawDispatch(params: Record<string, unknown>, _rawCtx: Record<string, unknown>, options: ToolRegistrationOptions = {}): Promise<Record<string, unknown>> {
-        const ctx = _rawCtx ?? {};
+        let ctx: UnknownRecord = asRecord(_rawCtx);
         const dispatchToolStartedAt = Date.now();
-        let { key: stateKey, state } = resolveDispatchPolicyContext(ctx, asString(params.task));
+        const dispatchTaskText = asString(params.task);
+        const dispatchTurnBinding = resolveCurrentTurnBinding({
+          prompt: dispatchTaskText,
+          ctx,
+        });
+        if (dispatchTurnBinding) {
+          ctx = bindContextToCurrentTurn(ctx, dispatchTurnBinding);
+        }
+        let { key: stateKey, state } = resolveDispatchPolicyContext(ctx, dispatchTaskText);
+        if (dispatchTurnBinding?.stateKey) {
+          const boundState = asRecord(policyState.get(dispatchTurnBinding.stateKey));
+          stateKey = dispatchTurnBinding.stateKey;
+          state = Object.keys(boundState).length > 0 ? boundState : state;
+        }
         if (isInternalSubagentCompletionEvent(asRecord(params), asRecord(ctx))) {
           const managedSessionKey = resolveDispatchSessionKey(ctx, buildPolicyMetadata(ctx, { stateKey }), { stateKey, state })
             || asString(params.sessionKey || ctx.sessionKey || ctx.canonicalSessionKey || stateKey);

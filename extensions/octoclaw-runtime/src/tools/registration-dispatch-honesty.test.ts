@@ -8,6 +8,7 @@ import type { NativeHelperInvoker } from "../adapter/native-helper.js";
 import { envOverrides } from "../resolve/env.js";
 import { buildExecutionCoverageLayer } from "../resolve/execution-coverage-precheck.js";
 import { buildMemoryCoverageLayer } from "../resolve/memory-coverage-precheck.js";
+import { resolveCurrentTurnBinding } from "../hooks/inbound-anchor-state.js";
 import { policyState } from "../state/policy-state.js";
 import { dispatchReplyToMessageId, getToolRegistrations, selectLatestSealedDelegateWorkContract } from "./registration.js";
 import { formatAbsoluteShort, formatTimeAgo } from "./registration-helpers.js";
@@ -1121,6 +1122,156 @@ describe("octoclaw_dispatch honesty", () => {
     expect(result.work_contract_id).not.toBe(replyContract.workContractId);
     const delegatedContract = loadWorkContract(String(result.work_contract_id));
     expect(delegatedContract?.sessionKey).toBe(stateKey);
+  });
+
+  it("binds dispatch to the task-matched Slack turn when one main run contains later messages", async () => {
+    useTempWorkContractLedger();
+    const rootSessionKey = "agent:main:slack:default:direct:u0al9t5u89z";
+    const firstReplyTo = "1780563225.345909";
+    const auditReplyTo = "1780563238.379359";
+    const firstThreadKey = `${rootSessionKey}:thread:${firstReplyTo}`;
+    const auditThreadKey = `${rootSessionKey}:thread:${auditReplyTo}`;
+    const mergedRunSessionId = "1b6715d9-4f6a-4758-8bf0-16126a42b906";
+    const stalePrompt = "帮我同时分析 OctoClaw 当前工作区的三件事：运行时路由风险、Slack thread 投递风险、npm 发布还缺什么";
+    const auditPrompt = "帮我审计 Macmini 上 OpenClaw/OctoClaw 的后台任务、launchd、cron、gateway 进程和最近一小时 token 调用日志，列出异常项。";
+    const dispatchTask = `[OctoClaw delegated work]\nExpected deliverable:\n${auditPrompt}\n\n检查项：launchd、cron、gateway 进程、最近一小时 token 调用日志。`;
+    const now = Date.now();
+    const staleDeliveryTarget = {
+      sessionKey: rootSessionKey,
+      replyToMessageId: firstReplyTo,
+      threadTs: firstReplyTo,
+      immutable: true,
+    };
+    const auditDeliveryTarget = {
+      sessionKey: rootSessionKey,
+      replyToMessageId: auditReplyTo,
+      threadTs: auditReplyTo,
+      immutable: true,
+    };
+
+    policyState.set(firstThreadKey, {
+      prompt: stalePrompt,
+      canonicalSessionKey: firstThreadKey,
+      canonical_session_key: firstThreadKey,
+      ackGuardKey: rootSessionKey,
+      ack_guard_key: rootSessionKey,
+      inboundMessageTs: firstReplyTo,
+      replyToMessageId: firstReplyTo,
+      deliveryTarget: staleDeliveryTarget,
+      delivery_target: staleDeliveryTarget,
+      createdAt: now - 2_000,
+      updatedAt: now - 2_000,
+    });
+    policyState.set(mergedRunSessionId, {
+      prompt: dispatchTask,
+      canonicalSessionKey: firstThreadKey,
+      canonical_session_key: firstThreadKey,
+      ackGuardKey: rootSessionKey,
+      ack_guard_key: rootSessionKey,
+      inboundMessageTs: firstReplyTo,
+      replyToMessageId: firstReplyTo,
+      deliveryTarget: staleDeliveryTarget,
+      delivery_target: staleDeliveryTarget,
+      createdAt: now - 1_000,
+      updatedAt: now - 1_000,
+    });
+    policyState.set(auditThreadKey, {
+      prompt: auditPrompt,
+      canonicalSessionKey: auditThreadKey,
+      canonical_session_key: auditThreadKey,
+      ackGuardKey: rootSessionKey,
+      ack_guard_key: rootSessionKey,
+      inboundMessageTs: auditReplyTo,
+      replyToMessageId: auditReplyTo,
+      deliveryTarget: auditDeliveryTarget,
+      delivery_target: auditDeliveryTarget,
+      createdAt: now,
+      updatedAt: now,
+    });
+    policyState.set(rootSessionKey, {
+      prompt: auditPrompt,
+      canonicalSessionKey: auditThreadKey,
+      canonical_session_key: auditThreadKey,
+      latestTurnStateKey: auditThreadKey,
+      latest_turn_state_key: auditThreadKey,
+      ackGuardKey: rootSessionKey,
+      ack_guard_key: rootSessionKey,
+      inboundMessageTs: auditReplyTo,
+      replyToMessageId: auditReplyTo,
+      deliveryTarget: auditDeliveryTarget,
+      delivery_target: auditDeliveryTarget,
+      createdAt: now,
+      updatedAt: now,
+    });
+    const contract = seedWorkContract({
+      sessionKey: auditThreadKey,
+      userAsk: auditPrompt,
+    });
+
+    expect(resolveCurrentTurnBinding({
+      prompt: dispatchTask,
+      ctx: {
+        sessionKey: firstThreadKey,
+        canonicalSessionKey: firstThreadKey,
+        sessionId: mergedRunSessionId,
+        agentId: "main",
+        channelId: "slack",
+      },
+    })).toMatchObject({
+      stateKey: auditThreadKey,
+      replyToMessageId: auditReplyTo,
+    });
+
+    const result = await executeDispatch({
+      task: dispatchTask,
+      workContractId: contract.workContractId,
+      policyJson: JSON.stringify({
+        ...delegateDecision(),
+        request: { session_key: firstThreadKey },
+        workContractId: contract.workContractId,
+        work_contract_id: contract.workContractId,
+        work_contract: {
+          workContractId: contract.workContractId,
+          route: contract.route,
+          sessionKey: contract.sessionKey,
+        },
+      }),
+    }, {
+      sessionKey: firstThreadKey,
+      canonicalSessionKey: firstThreadKey,
+      sessionId: mergedRunSessionId,
+      agentId: "main",
+      channelId: "slack",
+      helperInvoker: spawnedHelper(),
+    });
+
+    expect(result.ok, JSON.stringify(result)).toBe(true);
+    const updatedAuditState = policyState.getState(auditThreadKey);
+    expect(updatedAuditState).toMatchObject({
+      dispatchExecuted: true,
+      spawnExecuted: true,
+      workContractId: contract.workContractId,
+      deliveryTarget: expect.objectContaining({
+        replyToMessageId: auditReplyTo,
+        threadTs: auditReplyTo,
+      }),
+    });
+    const updatedMergedAlias = policyState.getState(mergedRunSessionId);
+    expect(updatedMergedAlias).toMatchObject({
+      canonicalSessionKey: auditThreadKey,
+      inboundMessageTs: auditReplyTo,
+      deliveryTarget: expect.objectContaining({
+        replyToMessageId: auditReplyTo,
+      }),
+    });
+    expect(result.work_contract_id).toBe(contract.workContractId);
+    const delegatedContract = loadWorkContract(contract.workContractId);
+    expect(delegatedContract?.sessionKey).toBe(auditThreadKey);
+    expect(delegatedContract as unknown as Record<string, unknown>).toMatchObject({
+      deliveryTarget: expect.objectContaining({
+        replyToMessageId: auditReplyTo,
+      }),
+    });
   });
 
   it("promotes budgeted-main dispatch when the delegated WorkContract is stored on state", async () => {
