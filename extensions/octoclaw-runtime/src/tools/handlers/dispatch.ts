@@ -463,6 +463,12 @@ export async function executeOctoclawDispatch(params: Record<string, unknown>, _
         }).route;
         const isDelegatedRoute = resolvedRoute === "delegate";
         if (!dispatchWorkContract && isDelegatedRoute) {
+          const currentDeliveryTarget = asRecord(
+            initialMetadata.deliveryTarget
+            || initialMetadata.delivery_target
+            || state?.deliveryTarget
+            || state?.delivery_target,
+          );
           const fallbackContract = selectLatestSealedDelegateWorkContract({
             sessionKeys: [
               managedSessionKey,
@@ -475,6 +481,9 @@ export async function executeOctoclawDispatch(params: Record<string, unknown>, _
             ],
             newerThanMs: policyStateTimeMs(state, cachedDecision),
             excludedWorkContractIds: [requestedWorkContractId, ignoredImplicitWorkContractId],
+            stateKey,
+            deliveryTarget: currentDeliveryTarget,
+            threadBindingKey: asString(initialMetadata.threadBindingKey || initialMetadata.thread_binding_key),
           });
           if (fallbackContract) {
             dispatchWorkContract = fallbackContract;

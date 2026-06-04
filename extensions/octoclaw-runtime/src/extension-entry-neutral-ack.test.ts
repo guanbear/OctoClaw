@@ -794,9 +794,11 @@ describe("neutral Slack ACK hook dedupe", () => {
       "1780475276.906359",
     ]));
     const observedEvents = readReplayEvents().filter((entry) => entry.event === "before_prompt_build_observed");
+    const expectedThreadStateKey = `${sessionKey}:thread:1780475270.583089`;
     expect(observedEvents).toContainEqual(expect.objectContaining({
       sessionKey,
       sessionId: sessionA,
+      stateKey: expectedThreadStateKey,
       inboundMessageTs: "1780475270.583089",
     }));
     expect(observedEvents).not.toContainEqual(expect.objectContaining({
@@ -805,6 +807,10 @@ describe("neutral Slack ACK hook dedupe", () => {
       inboundMessageTs: "1780475276.906359",
     }));
     expect(policyState.getState(sessionA)).toMatchObject({
+      inboundMessageTs: "1780475270.583089",
+      replyToMessageId: "1780475270.583089",
+    });
+    expect(policyState.getState(expectedThreadStateKey)).toMatchObject({
       inboundMessageTs: "1780475270.583089",
       replyToMessageId: "1780475270.583089",
     });
@@ -895,13 +901,87 @@ describe("neutral Slack ACK hook dedupe", () => {
     await waitForFireAndForget();
 
     const observedEvents = readReplayEvents().filter((entry) => entry.event === "before_dispatch_observed");
+    const expectedThreadStateKey = `${sessionKey}:thread:1780462551.461489`;
     expect(observedEvents).toContainEqual(expect.objectContaining({
       sessionKey,
+      stateKey: expectedThreadStateKey,
       inboundMessageTs: "1780462551.461489",
     }));
     expect(observedEvents).not.toContainEqual(expect.objectContaining({
       sessionKey,
       inboundMessageTs: "1780462512.581489",
+    }));
+  });
+
+  it("claims identical Slack DM prompts FIFO instead of falling back to the latest root alias", async () => {
+    const handlers = new Map<string, Function>();
+    const adapter: IMAdapter = {
+      channel: "slack",
+      capabilityLevel: "L2",
+      canHandle: (sessionKey) => sessionKey.includes("u0sameprompt"),
+      resolveTarget: () => ({ channel: "slack", target: "user:u0sameprompt" }),
+      send: async () => ({ sent: true, delivered: true, messageId: "1780463000.000001" }),
+      react: async () => ({ ok: true }),
+    };
+    registerIMAdapter(adapter);
+    plugin.register({
+      pluginConfig: { ackReactionEmoji: "eyes" },
+      on: (event, handler) => handlers.set(event, handler),
+      registerTool: () => {},
+      registerCommand: () => {},
+      logger: {},
+    });
+
+    const messageReceived = handlers.get("message_received");
+    const beforeDispatch = handlers.get("before_dispatch");
+    expect(messageReceived).toBeTruthy();
+    expect(beforeDispatch).toBeTruthy();
+
+    const sessionKey = "agent:main:slack:default:direct:u0sameprompt";
+    const prompt = "帮我 review 当前 OctoClaw 工作区改动，重点看运行时路由和子任务委派有没有回归风险";
+    messageReceived!(
+      {
+        content: prompt,
+        metadata: {
+          messageId: "1780462991.111111",
+          originatingChannel: "slack",
+          originatingTo: "user:U0SAMEPROMPT",
+        },
+      },
+      { sessionKey, channelId: "slack", conversationId: "user:U0SAMEPROMPT" },
+    );
+    messageReceived!(
+      {
+        content: prompt,
+        metadata: {
+          messageId: "1780462995.222222",
+          originatingChannel: "slack",
+          originatingTo: "user:U0SAMEPROMPT",
+        },
+      },
+      { sessionKey, channelId: "slack", conversationId: "user:U0SAMEPROMPT" },
+    );
+
+    beforeDispatch!(
+      { prompt },
+      { sessionKey, sessionId: "same-prompt-session-a", agentId: "main", channelId: "slack", cwd: tempWorkspace },
+    );
+    beforeDispatch!(
+      { prompt },
+      { sessionKey, sessionId: "same-prompt-session-b", agentId: "main", channelId: "slack", cwd: tempWorkspace },
+    );
+    await waitForFireAndForget();
+
+    const observedEvents = readReplayEvents().filter((entry) => entry.event === "before_dispatch_observed");
+    expect(observedEvents).toContainEqual(expect.objectContaining({
+      sessionId: "same-prompt-session-a",
+      stateKey: `${sessionKey}:thread:1780462991.111111`,
+      inboundMessageTs: "1780462991.111111",
+    }));
+    expect(observedEvents).toContainEqual(expect.objectContaining({
+      sessionId: "same-prompt-session-b",
+      stateKey: `${sessionKey}:thread:1780462995.222222`,
+      inboundMessageTs: "1780462995.222222",
     }));
   });
 

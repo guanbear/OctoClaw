@@ -67,7 +67,9 @@ import {
 } from "../extension-entry.js";
 import { maybeInjectSpeculativePreload } from "./speculative-preload-handler.js";
 import {
+  bindContextToCurrentTurn,
   promptMatchedInboundAnchor,
+  resolveCurrentTurnBinding,
   usableExistingInboundAnchor,
 } from "./inbound-anchor-state.js";
 
@@ -97,12 +99,27 @@ export interface BeforePromptBuildDeps {
 }
 
 export function makeBeforePromptBuildHook(deps: BeforePromptBuildDeps) {
-  return async (event: UnknownRecord, ctx: UnknownRecord) => {
-    if (!isManagedAgentContext(ctx)) return;
+  return async (event: UnknownRecord, rawCtx: UnknownRecord) => {
+    if (!isManagedAgentContext(rawCtx)) return;
     const hookStartedAt = Date.now();
     const prompt = extractPromptText(event);
+    const explicitInboundAnchor = extractInboundMessageTimestampWithSource(
+      rawCtx,
+      event,
+      [prompt, extractPromptText(asRecord(event))].filter(Boolean).join("\n"),
+    );
+    const initialStateKey = resolvePolicyStateKey(rawCtx);
+    const initialStateInfo = getPolicyStateForContext(rawCtx);
+    const currentTurnBinding = resolveCurrentTurnBinding({
+      prompt,
+      ctx: rawCtx,
+      event,
+      fallbackStateKey: initialStateInfo.key || initialStateKey,
+      fallbackState: initialStateInfo.state,
+    });
+    const ctx = currentTurnBinding ? bindContextToCurrentTurn(rawCtx, currentTurnBinding) : rawCtx;
 
-    const preStateKey = resolvePolicyStateKey(ctx);
+    const preStateKey = currentTurnBinding?.stateKey || resolvePolicyStateKey(ctx);
     const nativeAnnounceHandled = await handleNativeAnnounceCompletion({
       event,
       ctx,
@@ -136,20 +153,25 @@ export function makeBeforePromptBuildHook(deps: BeforePromptBuildDeps) {
     });
     preMetadata._judgeFastConfig = deps.judgeFastRaw;
     preMetadata._delegationEnabled = deps.delegationEnabled;
-    const preSessionKey = resolveAckDeliverySessionKey(preMetadata, preStateKey, asRecord(getPolicyStateForContext(ctx).state), ctx);
+    const preSessionKey = currentTurnBinding?.sessionKey
+      || resolveAckDeliverySessionKey(preMetadata, preStateKey, asRecord(getPolicyStateForContext(ctx).state), ctx);
 
     if (preSessionKey) {
       notifyUserMessage(preSessionKey, preStateKey);
     }
 
-    const inboundAnchor = extractInboundMessageTimestampWithSource(
-      ctx,
-      event,
-      [prompt, extractPromptText(asRecord(event))].filter(Boolean).join("\n"),
-    );
-    let inboundMessageTs = inboundAnchor.ts;
-    let inboundMessageTsSource: InboundMessageTimestampSource = inboundAnchor.source;
-    let inboundAnchorSessionKey = "";
+    const inboundAnchor = explicitInboundAnchor.ts
+      ? explicitInboundAnchor
+      : extractInboundMessageTimestampWithSource(
+          ctx,
+          event,
+          [prompt, extractPromptText(asRecord(event))].filter(Boolean).join("\n"),
+        );
+    let inboundMessageTs = currentTurnBinding?.replyToMessageId || inboundAnchor.ts;
+    let inboundMessageTsSource: InboundMessageTimestampSource = currentTurnBinding
+      ? (inboundAnchor.ts ? inboundAnchor.source : "ctx")
+      : inboundAnchor.source;
+    let inboundAnchorSessionKey = currentTurnBinding?.sessionKey || "";
     if (!inboundMessageTs) {
       const promptMatch = promptMatchedInboundAnchor(prompt);
       if (promptMatch) {
@@ -186,7 +208,10 @@ export function makeBeforePromptBuildHook(deps: BeforePromptBuildDeps) {
       deps.pi.logger,
       null,
     ).catch(() => {});
-    const immutableDeliveryTarget = buildImmutableDeliveryTarget(inboundAnchorSessionKey || preSessionKey || stringValue(ctx.sessionKey), inboundMessageTs);
+    const bindingDeliveryTarget = asRecord(currentTurnBinding?.deliveryTarget);
+    const immutableDeliveryTarget = asRecord(bindingDeliveryTarget).immutable
+      ? bindingDeliveryTarget
+      : buildImmutableDeliveryTarget(inboundAnchorSessionKey || preSessionKey || stringValue(ctx.sessionKey), inboundMessageTs);
     void deps.maybeSendNeutralInboundAckForContext("before_prompt_build", event, ctx, prompt, {
       stateKey: preStateKey,
       sessionKey: inboundAnchorSessionKey || preSessionKey,

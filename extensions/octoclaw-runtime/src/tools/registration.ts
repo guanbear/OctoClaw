@@ -346,10 +346,59 @@ function workContractHasNativeDispatchEvidence(contract: WorkContract): boolean 
     || Boolean(asString(nativeBinding.runId || nativeBinding.childRunId || nativeBinding.childSessionKey || nativeBinding.nativeTaskId));
 }
 
+function workContractDeliveryTarget(contract: WorkContract): UnknownRecord {
+  const record = asRecord(contract as unknown as UnknownRecord);
+  return asRecord(record.deliveryTarget || record.delivery_target);
+}
+
+function workContractDeliveryReplyTo(contract: WorkContract): string {
+  const target = workContractDeliveryTarget(contract);
+  return asString(
+    target.replyToMessageId
+    || target.reply_to_message_id
+    || target.threadTs
+    || target.thread_ts,
+  );
+}
+
+function workContractContinuityThreadBinding(contract: WorkContract): string {
+  const continuity = asRecord(contract.continuity as unknown as UnknownRecord);
+  return asString(
+    continuity.threadBindingKey
+    || continuity.thread_binding_key
+    || continuity.parentSessionKey
+    || continuity.parent_session_key,
+  );
+}
+
+function sealedDelegateContractMatchesCurrentTurn(input: {
+  stateKey?: string;
+  deliveryTarget?: UnknownRecord;
+  threadBindingKey?: string;
+}, contract: WorkContract): boolean {
+  const stateKey = asString(input.stateKey);
+  const deliveryTarget = asRecord(input.deliveryTarget);
+  const replyToMessageId = asString(
+    deliveryTarget.replyToMessageId
+    || deliveryTarget.reply_to_message_id
+    || deliveryTarget.threadTs
+    || deliveryTarget.thread_ts,
+  );
+  const threadBindingKey = asString(input.threadBindingKey);
+  if (!stateKey && !replyToMessageId && !threadBindingKey) return true;
+  if (stateKey && contract.sessionKey === stateKey) return true;
+  if (replyToMessageId && workContractDeliveryReplyTo(contract) === replyToMessageId) return true;
+  if (threadBindingKey && workContractContinuityThreadBinding(contract) === threadBindingKey) return true;
+  return false;
+}
+
 export function selectLatestSealedDelegateWorkContract(input: {
   sessionKeys: string[];
   newerThanMs: number;
   excludedWorkContractIds?: string[];
+  stateKey?: string;
+  deliveryTarget?: UnknownRecord;
+  threadBindingKey?: string;
 }): WorkContract | null {
   const excluded = new Set((input.excludedWorkContractIds ?? []).map((value) => asString(value)).filter(Boolean));
   const candidates: WorkContract[] = [];
@@ -361,6 +410,7 @@ export function selectLatestSealedDelegateWorkContract(input: {
       if (excluded.has(contract.workContractId)) continue;
       if (contract.route !== "delegate" || contract.status !== "sealed") continue;
       if (workContractHasNativeDispatchEvidence(contract)) continue;
+      if (!sealedDelegateContractMatchesCurrentTurn(input, contract)) continue;
       const contractTime = workContractTimeMs(contract);
       if (input.newerThanMs > 0 && contractTime > 0 && contractTime <= input.newerThanMs) continue;
       candidates.push(contract);

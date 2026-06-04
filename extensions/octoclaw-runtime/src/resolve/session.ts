@@ -774,6 +774,11 @@ export function buildPolicyMetadata(ctx: UnknownRecord, options: { stateKey?: st
   if (safe.sessionId) metadata.session_id = safe.sessionId;
   if (safe.messageProvider) metadata.message_provider = safe.messageProvider;
   metadata.message_id = stringValue(safe.messageId || safe.messageTs || safe.eventId || safe.ts || "");
+  const deliveryTarget = recordValue(safe.deliveryTarget || safe.delivery_target || recordValue(safe.metadata).deliveryTarget || recordValue(safe.metadata).delivery_target);
+  if (Object.keys(deliveryTarget).length > 0) {
+    metadata.deliveryTarget = deliveryTarget;
+    metadata.delivery_target = deliveryTarget;
+  }
   metadata.agent_namespace = "octoclaw";
   metadata.managed_by_octoclaw = true;
   metadata.session_boundary_status = boundary.status;

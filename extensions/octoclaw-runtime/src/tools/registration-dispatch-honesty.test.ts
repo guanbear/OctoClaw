@@ -9,7 +9,7 @@ import { envOverrides } from "../resolve/env.js";
 import { buildExecutionCoverageLayer } from "../resolve/execution-coverage-precheck.js";
 import { buildMemoryCoverageLayer } from "../resolve/memory-coverage-precheck.js";
 import { policyState } from "../state/policy-state.js";
-import { dispatchReplyToMessageId, getToolRegistrations } from "./registration.js";
+import { dispatchReplyToMessageId, getToolRegistrations, selectLatestSealedDelegateWorkContract } from "./registration.js";
 import { formatAbsoluteShort, formatTimeAgo } from "./registration-helpers.js";
 import { buildWorkContractFromPolicy, buildWorkDecisionSeal } from "../work-contract/builders.js";
 import { loadWorkContract, saveWorkContract } from "../work-contract/store.js";
@@ -1672,6 +1672,46 @@ describe("octoclaw_dispatch honesty", () => {
     expect(result.ok, JSON.stringify(result)).toBe(true);
     expect(result.work_contract_id).toBe(currentContract.workContractId);
     expect(String(result.work_contract_id)).not.toBe(staleContract.workContractId);
+  });
+
+  it("does not select a latest sealed delegate WorkContract from another Slack thread binding", async () => {
+    useTempWorkContractLedger();
+    const rootSessionKey = "agent:main:slack:default:direct:u0contractburst";
+    const currentThreadKey = `${rootSessionKey}:thread:1780556883.322899`;
+    const currentTarget = { sessionKey: rootSessionKey, replyToMessageId: "1780556883.322899", immutable: true };
+    const otherTarget = { sessionKey: rootSessionKey, replyToMessageId: "1780556903.940769", immutable: true };
+
+    const currentContract = seedWorkContract({
+      route: "delegate",
+      sessionKey: currentThreadKey,
+      userAsk: "帮我同时分析 OctoClaw 当前工作区的三件事",
+    });
+    saveWorkContract({
+      ...currentContract,
+      deliveryTarget: currentTarget,
+      delivery_target: currentTarget,
+    } as WorkContract);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    const otherContract = seedWorkContract({
+      route: "delegate",
+      sessionKey: rootSessionKey,
+      userAsk: "北京今天的天气怎样",
+    });
+    saveWorkContract({
+      ...otherContract,
+      deliveryTarget: otherTarget,
+      delivery_target: otherTarget,
+    } as WorkContract);
+
+    const selected = selectLatestSealedDelegateWorkContract({
+      sessionKeys: [rootSessionKey, currentThreadKey],
+      newerThanMs: 0,
+      stateKey: currentThreadKey,
+      deliveryTarget: currentTarget,
+    });
+
+    expect(selected?.workContractId).toBe(currentContract.workContractId);
+    expect(selected?.workContractId).not.toBe(otherContract.workContractId);
   });
 
   it("keeps legacy policyJson compatibility without a WorkContract id", async () => {

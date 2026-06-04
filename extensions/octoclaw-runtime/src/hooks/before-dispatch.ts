@@ -10,7 +10,9 @@ import {
   handleOctoClawControlPlaneFastPath,
 } from "../extension-entry.js";
 import {
+  bindContextToCurrentTurn,
   promptMatchedInboundAnchor,
+  resolveCurrentTurnBinding,
   usableExistingInboundAnchor,
 } from "./inbound-anchor-state.js";
 
@@ -31,11 +33,22 @@ export function makeBeforeDispatchHook(deps: BeforeDispatchDeps) {
     const eventRecord = asRecord(event);
     const ctxRecord = asRecord(ctx);
     const mergedCtx = { ...eventRecord, ...ctxRecord };
-    const stateKey = resolvePolicyStateKey(mergedCtx);
-    const extractedAnchor = extractInboundMessageTimestampWithSource(ctxRecord, eventRecord, prompt);
-    const existingStateInfo = getPolicyStateForContext(mergedCtx);
+    const initialStateKey = resolvePolicyStateKey(mergedCtx);
+    const initialStateInfo = getPolicyStateForContext(mergedCtx);
+    const explicitAnchor = extractInboundMessageTimestampWithSource(ctxRecord, eventRecord, prompt);
+    const currentTurnBinding = resolveCurrentTurnBinding({
+      prompt,
+      ctx: ctxRecord,
+      event: eventRecord,
+      fallbackStateKey: initialStateInfo.key || initialStateKey,
+      fallbackState: initialStateInfo.state,
+    });
+    const boundCtx = currentTurnBinding ? bindContextToCurrentTurn(mergedCtx, currentTurnBinding) : mergedCtx;
+    const stateKey = currentTurnBinding?.stateKey || initialStateKey;
+    const extractedAnchor = explicitAnchor.ts ? explicitAnchor : extractInboundMessageTimestampWithSource(boundCtx, eventRecord, prompt);
+    const existingStateInfo = getPolicyStateForContext(boundCtx);
     const existingState = asRecord(existingStateInfo.state);
-    const promptAnchor = promptMatchedInboundAnchor(prompt);
+    const promptAnchor = currentTurnBinding || promptMatchedInboundAnchor(prompt);
     const existingAnchor = usableExistingInboundAnchor({
       prompt,
       currentStateKey: stateKey,
@@ -52,7 +65,7 @@ export function makeBeforeDispatchHook(deps: BeforeDispatchDeps) {
     void recordPolicyReplay(
       "before_dispatch_observed",
       {
-        sessionKey: stringValue(mergedCtx.sessionKey || event.sessionKey),
+        sessionKey: stringValue(currentTurnBinding?.sessionKey || mergedCtx.sessionKey || event.sessionKey),
         sessionId: stringValue(mergedCtx.sessionId || event.sessionId),
         stateKey,
         inboundMessageTs: anchor.ts,
@@ -63,15 +76,16 @@ export function makeBeforeDispatchHook(deps: BeforeDispatchDeps) {
     ).catch(() => {});
     const controlPlaneResult = await handleOctoClawControlPlaneFastPath({
       prompt,
-      mergedCtx,
+      mergedCtx: boundCtx,
       eventRecord,
       ctxRecord,
       stateKey,
       logger: deps.pi.logger,
     });
     if (controlPlaneResult) return controlPlaneResult;
-    void deps.maybeSendNeutralInboundAckForContext("before_dispatch", event, ctx, prompt, {
+    void deps.maybeSendNeutralInboundAckForContext("before_dispatch", event, boundCtx, prompt, {
       stateKey,
+      sessionKey: currentTurnBinding?.sessionKey,
       inboundMessageTs: anchor.ts,
       inboundMessageTsSource: anchor.source,
     }).catch((error) => {

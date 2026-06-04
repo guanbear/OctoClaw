@@ -440,6 +440,25 @@ describe("execution coverage override intent guard", () => {
     });
   });
 
+  it("preserves immutable delivery target metadata for WorkContract materialization", () => {
+    const threadKey = "agent:main:slack:default:direct:u0struct:thread:1779481605.469169";
+    const deliveryTarget = {
+      sessionKey: "agent:main:slack:default:direct:u0struct",
+      replyToMessageId: "1779481605.469169",
+      immutable: true,
+    };
+    const metadata = buildPolicyMetadata({
+      agentId: "main",
+      sessionKey: threadKey,
+      sessionId: "thread-followup-session",
+      trigger: "user",
+      deliveryTarget,
+    }, { stateKey: threadKey });
+
+    expect(metadata.deliveryTarget).toEqual(deliveryTarget);
+    expect(metadata.delivery_target).toEqual(deliveryTarget);
+  });
+
 
 
   it("forces reply for normalized provenance follow-up with execution coverage", async () => {

@@ -1,13 +1,20 @@
-import { policyState } from "../state/policy-state.js";
+import { policyState, type PolicyStateEntry } from "../state/policy-state.js";
 import { asRecord, type UnknownRecord } from "../util/type-coercion.js";
 import { stringValue } from "../extension-entry-shared.js";
-import { deliveryTargetReplyTo } from "./footer-mode.js";
+import { extractInboundMessageTimestampWithSource } from "../inbound-timestamps.js";
+import { resolvePolicyStateKey, resolvePolicyStateKeys } from "../resolve/session.js";
+import { buildImmutableDeliveryTarget, deliveryTargetReplyTo } from "./footer-mode.js";
 
 export interface InboundAnchorStateMatch {
   stateKey: string;
   sessionKey: string;
   replyToMessageId: string;
+  deliveryTarget: UnknownRecord;
   state: UnknownRecord;
+}
+
+function deliveryTargetFromState(state: UnknownRecord): UnknownRecord {
+  return asRecord(state.deliveryTarget || state.delivery_target);
 }
 
 function deliveryTargetSessionKey(state: UnknownRecord): string {
@@ -35,6 +42,99 @@ function promptsEquivalent(left: string, right: string): boolean {
   return shorter.length >= 12 && longer.includes(shorter);
 }
 
+function canonicalInboundAnchorMatch(key: string, state: UnknownRecord, fallbackReplyToMessageId = ""): InboundAnchorStateMatch | null {
+  const initialReplyToMessageId = inboundAnchorFromState(state) || stringValue(fallbackReplyToMessageId);
+  if (!initialReplyToMessageId) return null;
+  const canonicalKey = stringValue(state.canonicalSessionKey || state.canonical_session_key);
+  const canonicalState = canonicalKey && canonicalKey !== key
+    ? asRecord(policyState.get(canonicalKey))
+    : {};
+  const canonicalReplyToMessageId = inboundAnchorFromState(canonicalState);
+  const selectedKey = canonicalKey && canonicalReplyToMessageId === initialReplyToMessageId
+    ? canonicalKey
+    : key;
+  const selectedState = selectedKey === canonicalKey && canonicalReplyToMessageId === initialReplyToMessageId
+    ? canonicalState
+    : state;
+  const selectedDeliveryTarget = deliveryTargetFromState(selectedState);
+  const fallbackDeliveryTarget = deliveryTargetFromState(state);
+  const sessionKey = deliveryTargetSessionKey(selectedState)
+    || deliveryTargetSessionKey(state)
+    || selectedKey;
+  return {
+    stateKey: selectedKey,
+    sessionKey,
+    replyToMessageId: initialReplyToMessageId,
+    deliveryTarget: Object.keys(selectedDeliveryTarget).length > 0 ? selectedDeliveryTarget : fallbackDeliveryTarget,
+    state: selectedState,
+  };
+}
+
+function exactPolicyStateForContext(ctx: UnknownRecord): { key: string; state: UnknownRecord } | null {
+  const keys = resolvePolicyStateKeys(ctx);
+  for (const key of keys) {
+    const state = asRecord(policyState.get(key));
+    if (!Object.keys(state).length) continue;
+    const canonicalKey = stringValue(state.canonicalSessionKey || state.canonical_session_key);
+    if (canonicalKey && canonicalKey !== key) {
+      const canonicalState = asRecord(policyState.get(canonicalKey));
+      if (Object.keys(canonicalState).length > 0) {
+        return { key: canonicalKey, state: canonicalState };
+      }
+    }
+    return { key, state };
+  }
+  return null;
+}
+
+function rootSessionKey(value: unknown): string {
+  return stringValue(value).replace(/:thread:\d{10}\.\d{6}$/u, "");
+}
+
+function stateTimestamp(state: UnknownRecord): number {
+  return Number(state.inboundObservedAt || state.inbound_observed_at || state.createdAt || state.updatedAt || 0) || 0;
+}
+
+function claimPromptMatchedInboundAnchor(prompt: string, ctx: UnknownRecord): InboundAnchorStateMatch | null {
+  const sessionId = stringValue(ctx.sessionId || ctx.session_id);
+  const sessionKey = rootSessionKey(ctx.sessionKey || ctx.session_key);
+  if (!sessionId || !sessionKey || !prompt) return null;
+  const candidates = policyState.entries()
+    .map((entry) => ({ key: stringValue(entry.key), state: asRecord(entry.state) }))
+    .filter((entry) => {
+      if (!entry.key || !promptsEquivalent(prompt, stringValue(entry.state.prompt))) return false;
+      const canonicalKey = stringValue(entry.state.canonicalSessionKey || entry.state.canonical_session_key);
+      if (canonicalKey && canonicalKey !== entry.key) return false;
+      if (!inboundAnchorFromState(entry.state)) return false;
+      const candidateSessionKey = rootSessionKey(deliveryTargetSessionKey(entry.state));
+      if (candidateSessionKey && candidateSessionKey !== sessionKey) return false;
+      const claimSessionId = stringValue(entry.state.currentTurnClaimSessionId || entry.state.current_turn_claim_session_id);
+      return !claimSessionId || claimSessionId === sessionId;
+    })
+    .sort((left, right) => {
+      const leftClaimedByCurrent = stringValue(left.state.currentTurnClaimSessionId || left.state.current_turn_claim_session_id) === sessionId;
+      const rightClaimedByCurrent = stringValue(right.state.currentTurnClaimSessionId || right.state.current_turn_claim_session_id) === sessionId;
+      if (leftClaimedByCurrent !== rightClaimedByCurrent) return leftClaimedByCurrent ? -1 : 1;
+      return stateTimestamp(left.state) - stateTimestamp(right.state);
+    });
+  const selected = candidates[0];
+  if (!selected) return null;
+  const selectedState = {
+    ...selected.state,
+    currentTurnClaimSessionId: sessionId,
+    current_turn_claim_session_id: sessionId,
+    currentTurnClaimedAt: Date.now(),
+    current_turn_claimed_at: Date.now(),
+  };
+  policyState.set(selected.key, selectedState as PolicyStateEntry);
+  policyState.set(sessionId, {
+    ...selectedState,
+    canonicalSessionKey: selected.key,
+    canonical_session_key: selected.key,
+  } as PolicyStateEntry);
+  return canonicalInboundAnchorMatch(selected.key, selectedState);
+}
+
 export function inboundAnchorFromState(state: unknown): string {
   const record = asRecord(state);
   return deliveryTargetReplyTo(record)
@@ -44,14 +144,8 @@ export function inboundAnchorFromState(state: unknown): string {
 export function promptMatchedInboundAnchor(prompt: string): InboundAnchorStateMatch | null {
   const match = policyState.findByPrompt(prompt);
   const state = asRecord(match.state);
-  const replyToMessageId = inboundAnchorFromState(state);
-  if (!match.key || !replyToMessageId) return null;
-  return {
-    stateKey: match.key,
-    sessionKey: deliveryTargetSessionKey(state),
-    replyToMessageId,
-    state,
-  };
+  if (!match.key) return null;
+  return canonicalInboundAnchorMatch(match.key, state);
 }
 
 export function usableExistingInboundAnchor(input: {
@@ -64,24 +158,99 @@ export function usableExistingInboundAnchor(input: {
   const replyToMessageId = inboundAnchorFromState(state);
   if (!replyToMessageId) return null;
   if (input.currentStateKey && input.resolvedStateKey === input.currentStateKey) {
-    return {
-      stateKey: input.resolvedStateKey,
-      sessionKey: deliveryTargetSessionKey(state),
-      replyToMessageId,
-      state,
-    };
+    return canonicalInboundAnchorMatch(input.resolvedStateKey, state, replyToMessageId);
   }
   if (promptsEquivalent(input.prompt, stringValue(state.prompt))) {
-    return {
-      stateKey: input.resolvedStateKey,
-      sessionKey: deliveryTargetSessionKey(state),
-      replyToMessageId,
-      state,
-    };
+    return canonicalInboundAnchorMatch(input.resolvedStateKey, state, replyToMessageId);
   }
   const promptMatch = promptMatchedInboundAnchor(input.prompt);
   if (promptMatch?.replyToMessageId === replyToMessageId) {
     return promptMatch;
   }
   return null;
+}
+
+export function resolveCurrentTurnBinding(input: {
+  prompt: string;
+  ctx?: UnknownRecord;
+  event?: UnknownRecord;
+  fallbackStateKey?: string;
+  fallbackState?: unknown;
+}): InboundAnchorStateMatch | null {
+  const ctx = asRecord(input.ctx);
+  const event = asRecord(input.event);
+  const prompt = stringValue(input.prompt);
+  const mergedCtx = { ...event, ...ctx };
+  const explicitAnchor = extractInboundMessageTimestampWithSource(ctx, event, prompt);
+  if (explicitAnchor.ts) {
+    const stateKey = resolvePolicyStateKey({
+      ...mergedCtx,
+      inboundMessageTs: explicitAnchor.ts,
+      messageId: explicitAnchor.ts,
+      message_id: explicitAnchor.ts,
+      replyToMessageId: explicitAnchor.ts,
+    });
+    const state = asRecord(policyState.get(stateKey));
+    const exact = Object.keys(state).length > 0
+      ? canonicalInboundAnchorMatch(stateKey, state, explicitAnchor.ts)
+      : null;
+    if (exact) return exact;
+    const sessionKey = stringValue(ctx.sessionKey || ctx.session_key || event.sessionKey || event.session_key || stateKey);
+    return {
+      stateKey,
+      sessionKey,
+      replyToMessageId: explicitAnchor.ts,
+      deliveryTarget: buildImmutableDeliveryTarget(sessionKey, explicitAnchor.ts),
+      state: {},
+    };
+  }
+
+  const claimedPromptMatch = claimPromptMatchedInboundAnchor(prompt, mergedCtx);
+  if (claimedPromptMatch) return claimedPromptMatch;
+
+  const promptMatch = promptMatchedInboundAnchor(prompt);
+  if (promptMatch) return promptMatch;
+
+  const fallbackKey = stringValue(input.fallbackStateKey);
+  const fallbackState = asRecord(input.fallbackState);
+  if (fallbackKey && Object.keys(fallbackState).length > 0) {
+    const match = usableExistingInboundAnchor({
+      prompt,
+      currentStateKey: resolvePolicyStateKey(mergedCtx),
+      resolvedStateKey: fallbackKey,
+      state: fallbackState,
+    });
+    if (match) return match;
+  }
+
+  const exact = exactPolicyStateForContext(mergedCtx);
+  if (exact) {
+    return usableExistingInboundAnchor({
+      prompt,
+      currentStateKey: resolvePolicyStateKey(mergedCtx),
+      resolvedStateKey: exact.key,
+      state: exact.state,
+    });
+  }
+
+  return null;
+}
+
+export function bindContextToCurrentTurn(ctx: UnknownRecord, binding: InboundAnchorStateMatch): UnknownRecord {
+  const sessionKey = stringValue(binding.sessionKey || ctx.sessionKey || ctx.session_key);
+  const deliveryTarget = asRecord(binding.deliveryTarget);
+  return {
+    ...ctx,
+    sessionKey,
+    session_key: sessionKey,
+    canonicalSessionKey: binding.stateKey,
+    canonical_session_key: binding.stateKey,
+    inboundMessageTs: binding.replyToMessageId,
+    inbound_message_ts: binding.replyToMessageId,
+    replyToMessageId: binding.replyToMessageId,
+    reply_to_message_id: binding.replyToMessageId,
+    messageId: binding.replyToMessageId,
+    message_id: binding.replyToMessageId,
+    ...(Object.keys(deliveryTarget).length > 0 ? { deliveryTarget, delivery_target: deliveryTarget } : {}),
+  };
 }
