@@ -186,11 +186,76 @@ export function nativeAnnounceDeliveredAtMs(state: UnknownRecord): number {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
-export function shouldCancelNativeAnnounceDeliveredOutbound(match: { anchored: boolean; state: PolicyStateEntry }, state: UnknownRecord, now: number): boolean {
+function nativeAnnounceWorkContractId(state: UnknownRecord): string {
+  const decision = asRecord(state.decision);
+  const workContract = asRecord(decision.work_contract);
+  return stringValue(state.workContractId || state.work_contract_id)
+    || stringValue(workContract.workContractId || workContract.work_contract_id)
+    || stringValue(decision.workContractId || decision.work_contract_id);
+}
+
+function stateDeliveryTarget(state: UnknownRecord): UnknownRecord {
+  return asRecord(state.deliveryTarget || state.delivery_target);
+}
+
+function rootSlackSessionKey(value: unknown): string {
+  return stringValue(value)
+    .toLowerCase()
+    .replace(/:thread:\d{10}\.\d{6}$/u, "");
+}
+
+function stateSessionRoots(key: string, state: UnknownRecord): string[] {
+  const deliveryTarget = stateDeliveryTarget(state);
+  return Array.from(new Set([
+    key,
+    state.canonicalSessionKey,
+    state.canonical_session_key,
+    state.ackGuardKey,
+    state.ack_guard_key,
+    state.sessionKey,
+    state.session_key,
+    deliveryTarget.sessionKey,
+    deliveryTarget.session_key,
+  ].map(rootSlackSessionKey).filter(Boolean)));
+}
+
+function stateInboundAnchor(state: UnknownRecord): string {
+  return stringValue(state.inboundMessageTs || state.inbound_message_ts)
+    || stringValue(state.message_id || state.messageId)
+    || stringValue(state.replyToMessageId || state.reply_to_id || state.reply_to_message_id);
+}
+
+function stateObservedAtMs(state: UnknownRecord): number {
+  return Math.max(
+    Number(state.updatedAt || state.updated_at || 0) || 0,
+    Number(state.inboundObservedAt || state.inbound_observed_at || 0) || 0,
+    Number(state.createdAt || state.created_at || 0) || 0,
+  );
+}
+
+function hasNewerInboundTurnAfterNativeDelivery(match: { key?: string; state: PolicyStateEntry }, state: UnknownRecord, deliveredAt: number): boolean {
+  const matchKey = stringValue(match.key);
+  const deliveredRoots = stateSessionRoots(matchKey, state);
+  if (deliveredRoots.length === 0) return false;
+  const deliveredWorkContractId = nativeAnnounceWorkContractId(state);
+  for (const entry of policyState.entries()) {
+    const entryState = asRecord(entry.state);
+    if (!stateInboundAnchor(entryState)) continue;
+    if (stateObservedAtMs(entryState) <= deliveredAt) continue;
+    const entryWorkContractId = nativeAnnounceWorkContractId(entryState);
+    if (deliveredWorkContractId && entryWorkContractId === deliveredWorkContractId) continue;
+    const entryRoots = stateSessionRoots(entry.key, entryState);
+    if (entryRoots.some((root) => deliveredRoots.includes(root))) return true;
+  }
+  return false;
+}
+
+export function shouldCancelNativeAnnounceDeliveredOutbound(match: { key?: string; anchored: boolean; state: PolicyStateEntry }, state: UnknownRecord, now: number): boolean {
   if (!isNativeAnnounceAlreadyDelivered(state)) return false;
   if (match.anchored) return true;
   const deliveredAt = nativeAnnounceDeliveredAtMs(state);
-  return deliveredAt > 0 && now - deliveredAt <= 60 * 1000;
+  if (deliveredAt <= 0 || now - deliveredAt > 60 * 1000) return false;
+  return !hasNewerInboundTurnAfterNativeDelivery(match, state, deliveredAt);
 }
 
 export function applyNativeAnnounceCompletionState(input: {

@@ -547,6 +547,63 @@ describe("guardOutboundMessageForPolicyState", () => {
     policyState.clearState(key);
   });
 
+  it("does not cancel an unanchored Slack follow-up reply after a newer inbound turn", () => {
+    const now = Date.now();
+    const threadKey = "agent:main:slack:default:direct:u0al9t5u89z:thread:1780622996.292229";
+    const staleAliasKey = "4f1ff0fd-79a7-4c5d-b5eb-1f05c8b0c3eb";
+    policyState.setState(staleAliasKey, {
+      canonicalSessionKey: threadKey,
+      canonical_session_key: threadKey,
+      ackGuardKey: threadKey,
+      ack_guard_key: threadKey,
+      decision: {
+        route_decision: { route: "delegate", route_source: "native_announce" },
+        work_contract: { workContractId: "wc-native-delivered-followup", route: "delegate" },
+      },
+      deliveryTarget: { sessionKey: threadKey, replyToMessageId: "1780622996.292229", immutable: true },
+      delivery_target: { sessionKey: threadKey, replyToMessageId: "1780622996.292229", immutable: true },
+      delegated: true,
+      dispatchExecuted: true,
+      spawnExecuted: true,
+      resultMaterialized: true,
+      nativeAnnounceDelivered: true,
+      nativeAnnounceDeliveredAt: now,
+      nativeAnnounceResultHash: "result-hash",
+      deliveryStatus: "delivered",
+      workContractId: "wc-native-delivered-followup",
+      createdAt: now - 30_000,
+      updatedAt: now,
+    });
+    policyState.setState(threadKey, {
+      prompt: "这两个PR被合进去了吗",
+      canonicalSessionKey: threadKey,
+      canonical_session_key: threadKey,
+      ackGuardKey: threadKey,
+      ack_guard_key: threadKey,
+      inboundMessageTs: "1780623203.417389",
+      replyToMessageId: "1780623203.417389",
+      message_id: "1780623203.417389",
+      deliveryTarget: { sessionKey: threadKey, replyToMessageId: "1780623203.417389", immutable: true },
+      delivery_target: { sessionKey: threadKey, replyToMessageId: "1780623203.417389", immutable: true },
+      createdAt: now + 16_000,
+      updatedAt: now + 16_000,
+    });
+
+    const guarded = guardOutboundMessageForPolicyState(
+      { to: "user:U0AL9T5U89Z", content: "是的，两个都已经合进了 main 分支。" },
+      { channelId: "slack", conversationId: "user:U0AL9T5U89Z" },
+      now + 27_000,
+    );
+
+    expect(guarded?.cancel).not.toBe(true);
+    expect(guarded?.content).toContain("是的，两个都已经合进了 main 分支。");
+    expect(policyState.getState(staleAliasKey)).not.toMatchObject({
+      outbound_guard_cancelled: true,
+    });
+    policyState.clearState(staleAliasKey);
+    policyState.clearState(threadKey);
+  });
+
   it("does not cancel unanchored Slack reply when a newer reply state exists after native announce delivery", () => {
     const now = Date.now();
     const deliveredKey = "agent:main:slack:default:direct:u0al9t5u89z";
