@@ -140,27 +140,37 @@ Prerequisites:
 - At least one IM channel: Slack or Feishu for production use
 - A judge model: local Qwen3 0.6B through Ollama, or a remote OpenAI-compatible model such as `gpt-5.4-mini`
 
-From source:
+From source (the supported full-feature install):
 
 ```bash
-pnpm install
+git clone https://github.com/guanbear/OctoClaw.git
+cd OctoClaw
+git checkout v0.6.0
+
+pnpm install --frozen-lockfile
 pnpm build
 
 # Install into your OpenClaw environment
-node tools/octoclawctl/dist/cli.js install
-node tools/octoclawctl/dist/cli.js deploy
+node tools/octoclawctl/dist/cli.js init      # first-run wizard (secrets / channel / judge only)
+node tools/octoclawctl/dist/cli.js deploy --restart
 node tools/octoclawctl/dist/cli.js enable
+node tools/octoclawctl/dist/cli.js doctor    # release readiness
 node tools/octoclawctl/dist/cli.js status
 ```
 
-When using a released CLI package:
+> **Installing with an AI agent?** Hand it [`docs/octoclaw-ai-install-runbook.md`](./docs/octoclaw-ai-install-runbook.md).
+> It walks the agent through prerequisite checks, install, deploy, and
+> verification with an explicit success check at every step.
+
+> The published `@octoclaw/cli` npm package currently supports **read-only
+> operator commands only** (`doctor`, `status`, `details`, `queue`,
+> `timeline`). It cannot yet deploy the runtime into OpenClaw — use the source
+> install above for a full setup.
 
 ```bash
 npm install -g @octoclaw/cli
-octoclawctl init
-octoclawctl install
-octoclawctl deploy
 octoclawctl doctor
+octoclawctl status
 ```
 
 Migrating to a new machine, running without a local judge, or installing into a Feishu-only environment: follow [`docs/octoclaw-migration-onboarding-feishu-guide.md`](./docs/octoclaw-migration-onboarding-feishu-guide.md). The intended flow is AI-runbook first, thin wizard only for secrets and explicit config choices.

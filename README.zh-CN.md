@@ -115,16 +115,37 @@ OctoClaw 的 judge 是独立一层：
 
 ## 快速开始
 
+环境要求：
+
+- OpenClaw `>= 2026.5.12`
+- Node.js `>= 22`
+- 源码安装需要 `pnpm`（部署还会用到 `git` / `rsync` / `ln`，Windows 请用 WSL）
+- 至少一个 IM 渠道：生产用 Slack 或飞书
+- 一个 judge 模型：本地 Ollama 上的 Qwen3 0.6B，或远端 OpenAI 兼容的小模型（如 `gpt-5.4-mini`）
+
+从源码安装（当前唯一完整支持的方式）：
+
 ```bash
-pnpm install
+git clone https://github.com/guanbear/OctoClaw.git
+cd OctoClaw
+git checkout v0.6.0
+
+pnpm install --frozen-lockfile
 pnpm build
 
 # 装到已有的 OpenClaw 环境
-node tools/octoclawctl/dist/cli.js install
-node tools/octoclawctl/dist/cli.js deploy
+node tools/octoclawctl/dist/cli.js init      # 首次配置向导（只问 secrets / 渠道 / judge）
+node tools/octoclawctl/dist/cli.js deploy --restart
 node tools/octoclawctl/dist/cli.js enable
+node tools/octoclawctl/dist/cli.js doctor    # 发布就绪自检
 node tools/octoclawctl/dist/cli.js status
 ```
+
+> **让 AI 帮你装**：把 [`docs/octoclaw-ai-install-runbook.md`](./docs/octoclaw-ai-install-runbook.md)
+> 整个发给你的 AI agent，它会按步骤检查前置条件、安装、部署、验证，每一步都有明确的成功判据。
+
+> npm 包 `@octoclaw/cli` 当前**只支持只读运维命令**（`doctor` / `status` / `details` /
+> `queue` / `timeline`），还不能通过 npm 直接把运行时部署进 OpenClaw。完整安装请用上面的源码方式。
 
 `octoclawctl` 进 PATH 后常用命令：
 

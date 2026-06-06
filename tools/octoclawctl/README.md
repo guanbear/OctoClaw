@@ -4,11 +4,26 @@ Command line tools for installing, deploying, diagnosing, and smoke-testing Octo
 
 ## Install
 
+> The published npm package currently provides **read-only operator commands**
+> (`doctor`, `status`, `details`, `queue`, `timeline`). It cannot deploy the
+> runtime into OpenClaw on its own yet. For a full install, use the source
+> method in the repo README or `docs/octoclaw-ai-install-runbook.md`.
+
 ```bash
 npm install -g @octoclaw/cli
-octoclawctl init
-octoclawctl deploy
-octoclawctl doctor
+octoclawctl doctor          # environment checks
+octoclawctl status          # projection (after the runtime is deployed from source)
+```
+
+Full source install (deploys the runtime):
+
+```bash
+git clone https://github.com/guanbear/OctoClaw.git && cd OctoClaw
+git checkout v0.6.0
+pnpm install --frozen-lockfile && pnpm build
+node tools/octoclawctl/dist/cli.js init
+node tools/octoclawctl/dist/cli.js deploy --restart
+node tools/octoclawctl/dist/cli.js doctor
 ```
 
 ## Migration And Feishu

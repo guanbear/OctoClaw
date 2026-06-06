@@ -240,7 +240,7 @@ describe("emitRouterLiteShadowEvent", () => {
     const opened = openSqliteCostEventStore({ openclawHome });
     expect(opened.status).toBe("ok");
     opened.store?.record({
-      ts: "2026-05-14T00:00:00.000Z",
+      ts: FRESH_TEST_TIMESTAMP,
       model: "openai/gpt-5.5",
       costUsd: 102,
     });

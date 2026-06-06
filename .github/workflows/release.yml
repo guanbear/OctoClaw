@@ -1,0 +1,138 @@
+name: Release
+
+# Publishes @octoclaw/* packages to npm when a version tag is pushed.
+# Trigger: push a tag like v0.6.0
+#
+# Required repo secret:
+#   NPM_TOKEN — an npm automation token with publish access to the @octoclaw scope
+#
+# This workflow does NOT auto-bump versions. Bump versions in a PR first
+# (see docs/octoclaw-release-checklist.md), merge, then tag.
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write   # for creating the GitHub Release
+  id-token: write   # for npm provenance
+
+jobs:
+  verify:
+    name: Verify
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.12.1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "pnpm"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build + typecheck
+        run: pnpm check
+
+      - name: Run tests
+        run: pnpm test
+        env:
+          OCTOCLAW_POLICY_JUDGE_DISABLE_NETWORK: "1"
+
+      - name: Verify tag matches package versions
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          echo "Tag version: $TAG"
+          FAIL=0
+          for pkg in \
+            packages/octoclaw-contracts \
+            packages/octoclaw-errors \
+            packages/octoclaw-policy \
+            packages/octoclaw-router \
+            extensions/octoclaw-runtime \
+            extensions/octoclaw-status-surface \
+            tools/octoclawctl; do
+            V=$(node -p "require('./$pkg/package.json').version")
+            if [ "$V" != "$TAG" ]; then
+              echo "::error::$pkg version $V != tag $TAG"
+              FAIL=1
+            fi
+          done
+          VT=$(cat version.txt | tr -d '[:space:]')
+          if [ "$VT" != "$TAG" ]; then
+            echo "::error::version.txt ($VT) != tag $TAG"
+            FAIL=1
+          fi
+          exit $FAIL
+
+  publish:
+    name: Publish to npm
+    needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.12.1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "pnpm"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm build
+
+      # Publish in dependency order. Each package is public via its own
+      # publishConfig. --no-git-checks because the tag is the source of truth.
+      - name: Publish packages
+        run: |
+          set -e
+          for pkg in \
+            packages/octoclaw-contracts \
+            packages/octoclaw-errors \
+            packages/octoclaw-policy \
+            packages/octoclaw-router \
+            extensions/octoclaw-runtime \
+            extensions/octoclaw-status-surface \
+            tools/octoclawctl; do
+            echo "Publishing $pkg"
+            (cd "$pkg" && pnpm publish --no-git-checks --access public) || {
+              echo "::warning::$pkg publish skipped or failed (may be private or already published)";
+            }
+          done
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  github-release:
+    name: GitHub Release
+    needs: publish
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          body_path: ${{ github.workspace }}/docs/release-notes-${{ github.ref_name }}.md
+          fail_on_unmatched_files: false

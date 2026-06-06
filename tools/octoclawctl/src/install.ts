@@ -7,7 +7,7 @@ import { atomicWriteText } from "./atomic-write.js";
 declare const process: { env: Record<string, string | undefined> };
 
 export const DEFAULT_REPO_URL = "https://github.com/guanbear/OctoClaw.git";
-export const DEFAULT_REF = "v0.5.0";
+export const DEFAULT_REF = "v0.6.0";
 
 interface DeployUnit {
   name: string;

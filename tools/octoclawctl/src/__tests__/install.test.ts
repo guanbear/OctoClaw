@@ -147,7 +147,7 @@ describe("install readiness", () => {
       );
 
       expect(exitCode).toBe(0);
-      expect(mockedCloneOrUpdate).toHaveBeenCalledWith(octoclawRoot, expect.any(String), "v0.5.0");
+      expect(mockedCloneOrUpdate).toHaveBeenCalledWith(octoclawRoot, expect.any(String), "v0.6.0");
     } finally {
       await fs.rm(tmpDir, { recursive: true, force: true });
     }
