@@ -103,6 +103,7 @@ function normalizeSessionsSpawnArgs(args: SessionsSpawnArgs): Record<string, unk
 
   for (const key of ["agentId", "sessionKey", "resumeSessionId", "model", "thinking", "cwd", "streamTo"] as const) {
     const value = asNonEmptyString(record[key]);
+    if (key === "thinking" && value === "medium") continue;
     if (value) normalized[key] = value;
   }
 
@@ -138,7 +139,7 @@ function normalizeSessionsSpawnArgs(args: SessionsSpawnArgs): Record<string, unk
   }
 
   const attachMountPath = asNonEmptyString(asRecord(record.attachAs).mountPath);
-  if (attachMountPath) normalized.attachAs = { mountPath: attachMountPath };
+  if (attachMountPath && attachMountPath !== ".") normalized.attachAs = { mountPath: attachMountPath };
 
   return normalized;
 }

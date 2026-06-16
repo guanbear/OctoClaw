@@ -207,8 +207,8 @@ describe("canonical args hash", () => {
     );
   });
 
-  it("handles extra keys", () => {
-    expect(computePlanHash({ task: "a", model: "b", thinking: "medium" })).not.toBe(
+  it("distinguishes explicit non-default thinking", () => {
+    expect(computePlanHash({ task: "a", model: "b", thinking: "high" })).not.toBe(
       computePlanHash({ task: "a", model: "b" }),
     );
   });
@@ -263,7 +263,14 @@ describe("canonical args hash", () => {
   });
 
   it("ignores OpenClaw default/enrichment fields that do not change the plan", () => {
-    expect(computePlanHash({ task: "a", runtime: "subagent", timeoutSeconds: 0, attachments: [] })).toBe(
+    expect(computePlanHash({
+      task: "a",
+      runtime: "subagent",
+      timeoutSeconds: 0,
+      attachments: [],
+      thinking: "medium",
+      attachAs: { mountPath: "." },
+    })).toBe(
       computePlanHash({ task: "a" }),
     );
   });
