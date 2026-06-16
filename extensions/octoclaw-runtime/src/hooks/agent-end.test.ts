@@ -127,6 +127,157 @@ describe("agent_end delivery target retention", () => {
       deliveryTargetSource: "inbound_anchor",
     });
     expect(sent[0]?.dedupeKey).toContain(replyToMessageId);
+    expect(policyState.get(sessionKey)?.replyFinalDeliveryIntent).toMatchObject({
+      deliveryStatus: "delivered",
+    });
+  });
+
+  it("sends final backstop from latest thread state when agent_end resolves the root DM state", async () => {
+    const rootSessionKey = "agent:main:slack:default:direct:u0rootfinalbackstop";
+    const replyToMessageId = "1781595070.974269";
+    const turnStateKey = `${rootSessionKey}:thread:${replyToMessageId}`;
+    const sent: SendIMParams[] = [];
+    policyState.setState(turnStateKey, seededReplyFinalState(turnStateKey, replyToMessageId, "Root resolved final"));
+    policyState.setState(rootSessionKey, {
+      decision: {
+        route_decision: {
+          route: "reply",
+          system_preferred_route: "reply",
+          worker_pool: "octoclaw-main",
+          task_class: "main_direct",
+        },
+      },
+      latestTurnStateKey: turnStateKey,
+      latest_turn_state_key: turnStateKey,
+      ackGuardKey: rootSessionKey,
+      ack_guard_key: rootSessionKey,
+      deliveryTarget: {
+        surface: "slack",
+        sessionKey: rootSessionKey,
+        replyToMessageId,
+        immutable: true,
+      },
+      inboundMessageTs: replyToMessageId,
+      replyToMessageId,
+      createdAt: Date.now() - 1000,
+      updatedAt: Date.now() - 500,
+    });
+    const hook = makeAgentEndHook({
+      pi: { logger: {} },
+      sendFinalReply: async (params: SendIMParams): Promise<SendIMResult> => {
+        sent.push(params);
+        return { sent: true, messageId: "1781595071.000001", threadTs: params.replyToMessageId, transport: "slack_api" };
+      },
+    });
+
+    await hook(
+      { outcome: "completed", didSendViaMessagingTool: false, sourceReplyDeliveryMode: "message_tool_only" },
+      { sessionKey: rootSessionKey, sessionId: "session-root-final-backstop", agentId: "main" },
+    );
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({
+      sessionKey: turnStateKey,
+      replyToMessageId,
+      message: "Root resolved final",
+      deliveryKind: "reply_final_backstop",
+    });
+    expect(policyState.get(turnStateKey)?.replyFinalDeliveryIntent).toMatchObject({
+      deliveryStatus: "delivered",
+    });
+    expect(policyState.get(rootSessionKey)?.replyFinalDeliveryIntent).toMatchObject({
+      deliveryStatus: "delivered",
+    });
+  });
+
+  it("uses agent_end final prompt metadata when the root latest turn has moved to a newer message", async () => {
+    const rootSessionKey = "agent:main:slack:default:direct:u0rootfinalprompt";
+    const replyToMessageId = "1781595070.974269";
+    const newerReplyToMessageId = "1781595076.052729";
+    const turnStateKey = `${rootSessionKey}:thread:${replyToMessageId}`;
+    const newerTurnStateKey = `${rootSessionKey}:thread:${newerReplyToMessageId}`;
+    const sent: SendIMParams[] = [];
+    policyState.setState(turnStateKey, createReplyFinalDeliveryIntentForState({
+      stateKey: turnStateKey,
+      state: {
+        prompt: "现在本机的openclaw版本是啥",
+        decision: { route_decision: { route: "reply" } },
+        deliveryTarget: {
+          surface: "slack",
+          sessionKey: turnStateKey,
+          replyToMessageId,
+          immutable: true,
+        },
+        inboundMessageTs: replyToMessageId,
+        replyToMessageId,
+        createdAt: Date.now() - 1000,
+        updatedAt: Date.now() - 500,
+      },
+      now: 1781595070000,
+    }));
+    policyState.setState(rootSessionKey, recordReplyFinalTextForState({
+      state: createReplyFinalDeliveryIntentForState({
+        stateKey: newerTurnStateKey,
+        state: {
+          decision: { route_decision: { route: "reply" } },
+          latestTurnStateKey: newerTurnStateKey,
+          latest_turn_state_key: newerTurnStateKey,
+          ackGuardKey: rootSessionKey,
+          ack_guard_key: rootSessionKey,
+          deliveryTarget: {
+            surface: "slack",
+            sessionKey: rootSessionKey,
+            replyToMessageId: newerReplyToMessageId,
+            immutable: true,
+          },
+          inboundMessageTs: newerReplyToMessageId,
+          replyToMessageId: newerReplyToMessageId,
+          createdAt: Date.now() - 1000,
+          updatedAt: Date.now() - 500,
+        },
+        now: 1781595076000,
+      }),
+      finalText: "Newer answer must not receive the older run",
+    }));
+    const hook = makeAgentEndHook({
+      pi: { logger: {} },
+      sendFinalReply: async (params: SendIMParams): Promise<SendIMResult> => {
+        sent.push(params);
+        return { sent: true, messageId: "1781595071.000002", threadTs: params.replyToMessageId, transport: "slack_api" };
+      },
+    });
+
+    await hook(
+      {
+        outcome: "completed",
+        didSendViaMessagingTool: false,
+        sourceReplyDeliveryMode: "message_tool_only",
+        assistantTexts: ["OpenClaw 2026.6.6（8c802aa）"],
+        finalPromptText: [
+          "Conversation info (untrusted metadata):",
+          "```json",
+          "{",
+          `  "message_id": "${replyToMessageId}",`,
+          `  "reply_to_id": "${replyToMessageId}"`,
+          "}",
+          "```",
+          "",
+          "现在本机的openclaw版本是啥",
+        ].join("\n"),
+      },
+      { sessionKey: rootSessionKey, sessionId: "session-root-final-prompt", agentId: "main" },
+    );
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({
+      sessionKey: turnStateKey,
+      replyToMessageId,
+      message: "OpenClaw 2026.6.6（8c802aa）",
+      deliveryKind: "reply_final_backstop",
+    });
+    expect(policyState.get(turnStateKey)?.replyFinalDeliveryIntent).toMatchObject({
+      deliveryStatus: "delivered",
+    });
   });
 
   it("skips final backstop when OpenClaw reports message-tool delivery", async () => {
