@@ -2,6 +2,7 @@ export type MessageDeliveryKind =
   | "neutral_ack"
   | "accepted_ack"
   | "native_child_final"
+  | "reply_final_backstop"
   | "router_wizard_onboarding"
   | "status_reply"
   | "legacy_fallback";

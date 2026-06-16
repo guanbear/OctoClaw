@@ -1,0 +1,4 @@
+schema: spec-driven
+created: 2026-06-16
+goal: Make Slack/OpenClaw final replies reliably deliver to the frozen inbound
+  turn target exactly once.

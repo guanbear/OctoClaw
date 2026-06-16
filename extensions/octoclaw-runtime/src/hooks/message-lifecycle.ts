@@ -26,6 +26,10 @@ import {
   completeBudgetedMainIfActive,
 } from "../budgeted-main.js";
 import {
+  createReplyFinalDeliveryIntentForState,
+  recordReplyFinalTextForState,
+} from "../resolve/reply-final-delivery-intent.js";
+import {
   getPolicyStateForContext,
   hydrateOutboundStateWithNativeRefs,
   isNativeAnnounceAlreadyDelivered,
@@ -152,8 +156,9 @@ export function makeMessageReceivedHook(deps: Pick<MessageLifecycleDeps, "pi" | 
       const now = Date.now();
       type PolicyStateMutator = Parameters<typeof updatePolicyState>[1];
       type PolicyStateCurrent = Parameters<PolicyStateMutator>[0];
-      const nextTurnState = (current: PolicyStateCurrent) => ({
-        ...(() => {
+      const nextTurnState = (current: PolicyStateCurrent) => {
+        const baseState = {
+          ...(() => {
           const currentRecord = asRecord(current);
           const previousAnchor = stringValue(
             currentRecord.inboundMessageTs
@@ -172,28 +177,31 @@ export function makeMessageReceivedHook(deps: Pick<MessageLifecycleDeps, "pi" | 
             channel_tone: stringValue(currentRecord.channelTone || currentRecord.channel_tone),
           };
         })(),
-        prompt,
-        canonicalSessionKey: stateKey,
-        ackGuardKey: sessionKey,
-        inboundMessageTs: anchor.ts,
-        inboundObservedAt: Number(current?.inboundObservedAt || current?.inbound_observed_at || 0) || now,
-        inbound_observed_at: Number(current?.inboundObservedAt || current?.inbound_observed_at || 0) || now,
-        replyToMessageId: anchor.ts,
-        message_id: anchor.ts,
-        deliveryTarget: buildImmutableDeliveryTarget(sessionKey, anchor.ts),
-        delivery_target: buildImmutableDeliveryTarget(sessionKey, anchor.ts),
-        channelTone: stringValue(asRecord(current).channelTone || asRecord(current).channel_tone) || "chat",
-        createdAt: Number(current?.createdAt || 0) || now,
-        updatedAt: now,
-      });
+          prompt,
+          canonicalSessionKey: stateKey,
+          ackGuardKey: sessionKey,
+          inboundMessageTs: anchor.ts,
+          inboundObservedAt: Number(current?.inboundObservedAt || current?.inbound_observed_at || 0) || now,
+          inbound_observed_at: Number(current?.inboundObservedAt || current?.inbound_observed_at || 0) || now,
+          replyToMessageId: anchor.ts,
+          message_id: anchor.ts,
+          deliveryTarget: buildImmutableDeliveryTarget(sessionKey, anchor.ts),
+          delivery_target: buildImmutableDeliveryTarget(sessionKey, anchor.ts),
+          channelTone: stringValue(asRecord(current).channelTone || asRecord(current).channel_tone) || "chat",
+          createdAt: Number(current?.createdAt || 0) || now,
+          updatedAt: now,
+        };
+        return createReplyFinalDeliveryIntentForState({ stateKey, state: baseState, now });
+      };
       updatePolicyState(stateKey, nextTurnState);
       const sessionAliasKey = stringValue(ctxRecord.sessionId || eventRecord.sessionId);
       if (sessionAliasKey && sessionAliasKey !== stateKey) {
         updatePolicyState(sessionAliasKey, nextTurnState);
       }
       if (rootStateKey && rootStateKey !== stateKey) {
-        updatePolicyState(rootStateKey, (current) => ({
-          ...(() => {
+        updatePolicyState(rootStateKey, (current) => {
+          const baseState = {
+            ...(() => {
             const currentRecord = asRecord(current);
             return {
               canonicalSessionKey: stateKey,
@@ -204,17 +212,19 @@ export function makeMessageReceivedHook(deps: Pick<MessageLifecycleDeps, "pi" | 
               channel_tone: stringValue(currentRecord.channelTone || currentRecord.channel_tone) || "chat",
             };
           })(),
-          latestTurnStateKey: stateKey,
-          latest_turn_state_key: stateKey,
-          prompt,
-          inboundMessageTs: anchor.ts,
-          replyToMessageId: anchor.ts,
-          message_id: anchor.ts,
-          deliveryTarget: buildImmutableDeliveryTarget(sessionKey, anchor.ts),
-          delivery_target: buildImmutableDeliveryTarget(sessionKey, anchor.ts),
-          createdAt: Number(current?.createdAt || 0) || now,
-          updatedAt: now,
-        }));
+            latestTurnStateKey: stateKey,
+            latest_turn_state_key: stateKey,
+            prompt,
+            inboundMessageTs: anchor.ts,
+            replyToMessageId: anchor.ts,
+            message_id: anchor.ts,
+            deliveryTarget: buildImmutableDeliveryTarget(sessionKey, anchor.ts),
+            delivery_target: buildImmutableDeliveryTarget(sessionKey, anchor.ts),
+            createdAt: Number(current?.createdAt || 0) || now,
+            updatedAt: now,
+          };
+          return createReplyFinalDeliveryIntentForState({ stateKey, state: baseState, now });
+        });
       }
     }
     void recordPolicyReplay("message_received_observed", {
@@ -312,10 +322,15 @@ export function makeBeforeMessageWriteHook(deps: Pick<MessageLifecycleDeps, "pi"
       ].filter(Boolean)));
       for (const updateKey of stateUpdateKeys) {
         updatePolicyState(updateKey, (current) => ({
-          ...(current ?? {}),
-          formal_reply_visible: true,
-          outbound_projection_footer_appended: projectedText !== contentText || current?.outbound_projection_footer_appended === true,
-          outbound_projection_footer_appended_at: projectedText !== contentText ? new Date().toISOString() : current?.outbound_projection_footer_appended_at,
+          ...recordReplyFinalTextForState({
+            state: {
+              ...(current ?? {}),
+              formal_reply_visible: true,
+              outbound_projection_footer_appended: projectedText !== contentText || current?.outbound_projection_footer_appended === true,
+              outbound_projection_footer_appended_at: projectedText !== contentText ? new Date().toISOString() : current?.outbound_projection_footer_appended_at,
+            },
+            finalText: assistantMessageText(asRecord(outputMessage)),
+          }),
         }));
       }
     }

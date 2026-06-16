@@ -8,7 +8,7 @@ import { resolveWorkspaceRoot } from "../resolve/env.js";
 import { isManagedAgentContext } from "../resolve/session.js";
 import { shouldRetainPolicyStateOnAgentEnd } from "../replay/policy-utils.js";
 import { recordPolicyReplay } from "../replay/replay.js";
-import { policyState } from "../state/policy-state.js";
+import { policyState, type PolicyStateEntry } from "../state/policy-state.js";
 import { buildTurnExecutionReceipt } from "../receipt.js";
 import { recordRuntimeCostEventAndBudget } from "../router-cost-runtime.js";
 import { recordRuntimeHealthCall } from "../router-lite/health-recorder.js";
@@ -16,6 +16,12 @@ import { type UnknownRecord, asRecord } from "../util/type-coercion.js";
 import type { PluginInterface } from "../extension-entry-shared.js";
 import { stringValue } from "../extension-entry-shared.js";
 import { clearBudgetedMainTimer } from "../budgeted-main.js";
+import { sendIMMessage, type SendIMParams, type SendIMResult } from "../im/send.js";
+import {
+  recordReplyFinalDeliveryResultForState,
+  recordReplyFinalDeliverySkipForState,
+  shouldBackstopReplyFinalDelivery,
+} from "../resolve/reply-final-delivery-intent.js";
 import {
   buildImmutableDeliveryTarget,
   deliveryTargetReplyTo,
@@ -33,6 +39,7 @@ import {
 
 export interface AgentEndDeps {
   pi: PluginInterface;
+  sendFinalReply?: (params: SendIMParams) => Promise<SendIMResult>;
 }
 
 function currentInboundReplyToMessageId(ctx: UnknownRecord): string {
@@ -72,6 +79,92 @@ export function makeSubagentEndedHook(deps: AgentEndDeps) {
       sendMessage: nativeAnnounceSendOverride(deps.pi.pluginConfig),
     });
   };
+}
+
+async function maybeSendReplyFinalBackstop(input: {
+  deps: AgentEndDeps;
+  event: UnknownRecord;
+  ctx: UnknownRecord;
+  stateKey: string;
+  state: PolicyStateEntry | null | undefined;
+  displayModel: string;
+}): Promise<PolicyStateEntry | null | undefined> {
+  const decision = shouldBackstopReplyFinalDelivery({
+    state: input.state,
+    event: input.event,
+    ctx: input.ctx,
+  });
+  if (!decision.shouldSend || !decision.intent) {
+    if (decision.intent) {
+      const skipReason = decision.reason === "missing_message_tool_delivery"
+        ? "no_missing_delivery_evidence"
+        : decision.reason;
+      updatePolicyState(input.stateKey, (current) => recordReplyFinalDeliverySkipForState({
+        state: current,
+        reason: skipReason,
+      }));
+    }
+    void recordPolicyReplay("reply_final_delivery_backstop_skipped", {
+      sessionKey: input.stateKey,
+      sessionId: stringValue(input.ctx.sessionId),
+      reason: decision.reason,
+      intentId: stringValue(decision.intent?.intentId),
+      replyToMessageId: stringValue(decision.intent?.replyToMessageId),
+    }, input.deps.pi.logger, asRecord(input.state?.decision)).catch(() => {});
+    return policyState.get(input.stateKey) ?? input.state;
+  }
+
+  const intent = decision.intent;
+  const send = input.deps.sendFinalReply ?? sendIMMessage;
+  try {
+    const result = await send({
+      sessionKey: intent.sessionKey,
+      message: intent.finalText ?? "",
+      replyToMessageId: intent.replyToMessageId,
+      cwd: resolveWorkspaceRoot(),
+      suppressProjectionFooter: true,
+      footerMode: "off",
+      deliveryKind: "reply_final_backstop",
+      deliveryTargetSource: "inbound_anchor",
+      deliveryProvenance: {
+        route: "reply",
+        model: input.displayModel,
+        via: resolveRouteSource(asRecord(input.state)),
+        runId: stringValue(input.event.runId || input.ctx.runId),
+      },
+      dedupeKey: intent.dedupeKey,
+    });
+    updatePolicyState(input.stateKey, (current) => recordReplyFinalDeliveryResultForState({
+      state: current,
+      result,
+    }));
+    void recordPolicyReplay(result.sent ? "reply_final_delivery_backstop_sent" : "reply_final_delivery_backstop_failed", {
+      sessionKey: input.stateKey,
+      sessionId: stringValue(input.ctx.sessionId),
+      reason: decision.reason,
+      intentId: intent.intentId,
+      replyToMessageId: intent.replyToMessageId,
+      messageId: stringValue(result.messageId),
+      threadTs: stringValue(result.threadTs),
+      transport: stringValue(result.transport),
+      error: stringValue(result.error),
+    }, input.deps.pi.logger, asRecord(input.state?.decision)).catch(() => {});
+  } catch (err) {
+    updatePolicyState(input.stateKey, (current) => recordReplyFinalDeliveryResultForState({
+      state: current,
+      result: { sent: false, error: String(err) },
+    }));
+    void recordPolicyReplay("reply_final_delivery_backstop_failed", {
+      sessionKey: input.stateKey,
+      sessionId: stringValue(input.ctx.sessionId),
+      reason: decision.reason,
+      intentId: intent.intentId,
+      replyToMessageId: intent.replyToMessageId,
+      error: String(err),
+    }, input.deps.pi.logger, asRecord(input.state?.decision)).catch(() => {});
+    input.deps.pi.logger?.warn?.(`reply_final_delivery_backstop failed: ${String(err)}`);
+  }
+  return policyState.get(input.stateKey) ?? input.state;
 }
 
 export function makeAgentEndHook(deps: AgentEndDeps) {
@@ -114,6 +207,9 @@ export function makeAgentEndHook(deps: AgentEndDeps) {
       success: finalReceipt.outcome === "completed",
       logger: deps.pi.logger,
     });
+    const postBackstopState = finalReceipt.route === "reply"
+      ? await maybeSendReplyFinalBackstop({ deps, event, ctx, stateKey, state, displayModel })
+      : state;
     void recordPolicyReplay("agent_end", {
       sessionKey: stateKey,
       sessionId: stringValue(ctx.sessionId),
@@ -153,10 +249,11 @@ export function makeAgentEndHook(deps: AgentEndDeps) {
       || asRecord(state?.latestAnomalyNotice).kind,
     );
 
-    if (finalReceipt.route === "delegate" && shouldRetainPolicyStateOnAgentEnd(asRecord(state))) {
-      const formalReplyVisible = Boolean(state?.formal_reply_visible);
+    if (finalReceipt.route === "delegate" && shouldRetainPolicyStateOnAgentEnd(asRecord(postBackstopState))) {
+      const stateRecord = asRecord(postBackstopState);
+      const formalReplyVisible = Boolean(stateRecord.formal_reply_visible);
       let noticeDeliveryState = "not_attempted";
-      const deliverySessionKey = stringValue(state?.ackGuardKey || state?.ack_guard_key || ctx.sessionKey || stateKey);
+      const deliverySessionKey = stringValue(stateRecord.ackGuardKey || stateRecord.ack_guard_key || ctx.sessionKey || stateKey);
       updateAckTrackingState(stateKey, { delegate_without_dispatch: true });
       updatePolicyState(stateKey, (current) => ({ ...current, delegate_without_dispatch: true, dispatchExecuted: false, spawnExecuted: false }));
       if (!formalReplyVisible) {
@@ -164,9 +261,9 @@ export function makeAgentEndHook(deps: AgentEndDeps) {
           const noticeResult = await sendDelegateWithoutDispatchNotice({
             sessionKey: deliverySessionKey,
             stateKey,
-            decision: asRecord(state?.decision),
-            state: asRecord(state),
-            replyToMessageId: agentEndReplyToMessageId(asRecord(state), ctx),
+            decision: asRecord(stateRecord.decision),
+            state: stateRecord,
+            replyToMessageId: agentEndReplyToMessageId(stateRecord, ctx),
             cwd: resolveWorkspaceRoot(),
             logger: deps.pi.logger,
           });
@@ -179,15 +276,15 @@ export function makeAgentEndHook(deps: AgentEndDeps) {
         noticeDeliveryState = "suppressed_reply_visible";
       }
 
-      const workContract = asRecord(asRecord(state?.decision).work_contract);
-      const routeSeal = asRecord(asRecord(state?.decision).routeSeal);
+      const workContract = asRecord(asRecord(stateRecord.decision).work_contract);
+      const routeSeal = asRecord(asRecord(stateRecord.decision).routeSeal);
       void recordPolicyReplay("delegate_without_dispatch", {
         sessionKey: stateKey,
         sessionId: stringValue(ctx.sessionId),
-        route: stringValue(asRecord(state?.decision).route_decision && asRecord(asRecord(state?.decision).route_decision).route),
-        systemPreferredRoute: stringValue(asRecord(asRecord(state?.decision).route_decision).system_preferred_route),
-        workerPool: stringValue(asRecord(asRecord(state?.decision).route_decision).worker_pool),
-        taskClass: stringValue(asRecord(asRecord(state?.decision).route_decision).task_class),
+        route: stringValue(asRecord(stateRecord.decision).route_decision && asRecord(asRecord(stateRecord.decision).route_decision).route),
+        systemPreferredRoute: stringValue(asRecord(asRecord(stateRecord.decision).route_decision).system_preferred_route),
+        workerPool: stringValue(asRecord(asRecord(stateRecord.decision).route_decision).worker_pool),
+        taskClass: stringValue(asRecord(asRecord(stateRecord.decision).route_decision).task_class),
         delegated: false,
         delegationTool: "",
         dispatchExecuted: false,
@@ -196,18 +293,22 @@ export function makeAgentEndHook(deps: AgentEndDeps) {
         notificationDeliveryState: noticeDeliveryState,
         routeCommitId: stringValue(workContract.workContractId),
         routeSealId: stringValue(routeSeal.routeSealId || routeSeal.requestId),
-      }, deps.pi.logger, state?.decision as Record<string, unknown> | null).catch(() => {});
+      }, deps.pi.logger, stateRecord.decision as Record<string, unknown> | null).catch(() => {});
       return;
     }
     if (shouldRetainCompactReceipt) {
-      const decision = asRecord(state?.decision);
+      const latestState = policyState.get(stateKey) ?? postBackstopState ?? state;
+      const latestRecord = asRecord(latestState);
+      const decision = asRecord(latestRecord.decision);
       const routeDecision = asRecord(decision.route_decision);
       const workContract = asRecord(decision.work_contract);
-      const replyToMessageId = agentEndReplyToMessageId(asRecord(state), ctx);
+      const replyToMessageId = agentEndReplyToMessageId(latestRecord, ctx);
+      const replyFinalDeliveryIntent = latestRecord.replyFinalDeliveryIntent || latestRecord.reply_final_delivery_intent;
+      const latestAnomalyNotice = asRecord(latestRecord.latestAnomalyNotice);
       const outboundProjection = {
         route: finalReceipt.route,
-        model: resolveDisplayModel(asRecord(state), {}, asRecord(ctx)),
-        via: resolveRouteSource(asRecord(state)),
+        model: resolveDisplayModel(latestRecord, {}, asRecord(ctx)),
+        via: resolveRouteSource(latestRecord),
         thread: Boolean(replyToMessageId || slackThreadFromSessionKey(stringValue(ctx.sessionKey || stateKey))),
         workerPool: stringValue(routeDecision.worker_pool),
         workContractId: stringValue(workContract.workContractId || decision.workContractId || finalReceipt.workContractId),
@@ -218,18 +319,22 @@ export function makeAgentEndHook(deps: AgentEndDeps) {
         workContractId: finalReceipt.workContractId ?? undefined,
         outboundProjection,
         outbound_projection: outboundProjection,
-        ackGuardKey: stringValue(state?.ackGuardKey || state?.ack_guard_key || ctx.sessionKey),
+        ackGuardKey: stringValue(latestRecord.ackGuardKey || latestRecord.ack_guard_key || ctx.sessionKey),
         inboundMessageTs: replyToMessageId || undefined,
         replyToMessageId: replyToMessageId || undefined,
         message_id: replyToMessageId || undefined,
-        deliveryTarget: buildImmutableDeliveryTarget(stringValue(state?.ackGuardKey || state?.ack_guard_key || ctx.sessionKey || stateKey), replyToMessageId),
-        delivery_target: buildImmutableDeliveryTarget(stringValue(state?.ackGuardKey || state?.ack_guard_key || ctx.sessionKey || stateKey), replyToMessageId),
+        deliveryTarget: buildImmutableDeliveryTarget(stringValue(latestRecord.ackGuardKey || latestRecord.ack_guard_key || ctx.sessionKey || stateKey), replyToMessageId),
+        delivery_target: buildImmutableDeliveryTarget(stringValue(latestRecord.ackGuardKey || latestRecord.ack_guard_key || ctx.sessionKey || stateKey), replyToMessageId),
+        ...(replyFinalDeliveryIntent ? {
+          replyFinalDeliveryIntent: asRecord(replyFinalDeliveryIntent),
+          reply_final_delivery_intent: asRecord(replyFinalDeliveryIntent),
+        } : {}),
         directToolsSeen: finalReceipt.toolsUsed,
         toolsUsed: finalReceipt.toolsUsed,
         dispatchExecuted: finalReceipt.dispatchExecuted,
         spawnExecuted: finalReceipt.spawnExecuted,
         resultMaterialized: finalReceipt.resultMaterialized,
-        latestAnomalyNotice: state?.latestAnomalyNotice,
+        ...(latestAnomalyNotice.kind ? { latestAnomalyNotice } : {}),
         createdAt: finalNow,
         updatedAt: finalNow,
       }));
