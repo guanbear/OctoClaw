@@ -239,4 +239,87 @@ describe("after_tool_call native sessions_spawn auto-confirm", () => {
       replyToMessageId: anchorA,
     }));
   });
+
+  it("marks a planner native spawn intent failed when the native sessions_spawn call is rejected", async () => {
+    const sessionKey = "agent:main:slack:channel:c0as4dappu3:thread:1781600118.653359";
+    const spawnArgs = {
+      task: "Review OctoClaw routing changes for delegate regressions.",
+      label: "route-review",
+      runtime: "subagent" as const,
+      mode: "run" as const,
+    };
+    const contract = buildWorkContractFromPolicy(
+      sessionKey,
+      spawnArgs.task,
+      "delegated_work",
+      {
+        precheckOrder: [
+          "conversation_grounding",
+          "continuation_route_reuse",
+          "execution_coverage",
+          "memory_coverage",
+          "build_judge_context_packet",
+          "local_judge",
+          "validator_or_remote",
+          "route_seal_commit",
+        ],
+        execution: { coverage: "none" },
+        memory: { coverage: "none", freshness_risk: "low" },
+        conflict: false,
+        authority: "none",
+      },
+      buildWorkDecisionSeal("local_judge", "delegate", ["native_spawn_rejected"]),
+      { status: "sealed" },
+    );
+    saveWorkContract(contract);
+    const intent = nativeSpawnIntentStore.create({
+      workContractId: contract.workContractId,
+      delegateTaskId: `delegate-task:${contract.workContractId}`,
+      attemptId: `delegate-task:${contract.workContractId}:attempt:1`,
+      sessionKey,
+      sessionsSpawnArgs: spawnArgs,
+      dispatchMode: "new_spawn",
+      ttlMs: 60_000,
+    });
+    nativeSpawnIntentStore.transitionToSpawnCallStarted({
+      spawnIntentId: intent.spawnIntentId,
+      sessionKey,
+      sessionsSpawnArgs: spawnArgs,
+      now: new Date("2026-06-16T01:10:00.000Z"),
+    });
+    policyState.setState(sessionKey, {
+      decision: {
+        route_decision: { route: "delegate" },
+        request: { session_key: sessionKey },
+      },
+      spawnIntentId: intent.spawnIntentId,
+      workContractId: contract.workContractId,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    });
+
+    const hook = makeAfterToolCallHook({
+      pi: { logger: {} },
+      currentPluginConfig: () => ({}),
+    });
+
+    await hook(
+      {
+        toolName: "sessions_spawn",
+        params: spawnArgs,
+        result: {
+          status: "error",
+          tool: "sessions_spawn",
+          error: "sessions_spawn does not support per-call \"runTimeoutSeconds\". Configure agents.defaults.subagents.runTimeoutSeconds instead.",
+        },
+      },
+      { sessionKey, sessionId: "session-native-spawn-rejected", agentId: "main", cwd: tempWorkspace },
+    );
+
+    expect(mockConfirmNativeSpawn).not.toHaveBeenCalled();
+    expect(nativeSpawnIntentStore.get(intent.spawnIntentId)).toMatchObject({
+      status: "failed",
+      error: expect.stringContaining("runTimeoutSeconds"),
+    });
+  });
 });

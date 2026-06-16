@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { speculativePreloadStateForHint } from "../delegate/speculative-preload.js";
+import { buildSpeculativePreloadSpawnArgs, speculativePreloadStateForHint } from "../delegate/speculative-preload.js";
 import { evaluateSpeculativePreloadDispatchGate, evaluateSpeculativePreloadSpawnGate } from "./speculative-preload-gate.js";
 
 describe("SpeculativePreloadGate", () => {
@@ -15,8 +15,17 @@ describe("SpeculativePreloadGate", () => {
     context: "isolated",
     lightContext: true,
     expectsCompletionMessage: false,
-    runTimeoutSeconds: 300,
   };
+
+  it("does not emit native per-call timeout fields for standby sessions_spawn args", () => {
+    const args = buildSpeculativePreloadSpawnArgs({
+      label: "octoclaw-speculative-test",
+      runTimeoutSeconds: 300,
+    });
+
+    expect(args.runTimeoutSeconds).toBeUndefined();
+    expect(args.timeoutSeconds).toBeUndefined();
+  });
 
   it("blocks octoclaw_dispatch with exact standby spawn instructions when a matching hint is active", () => {
     const result = evaluateSpeculativePreloadDispatchGate({

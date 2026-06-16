@@ -76,7 +76,6 @@ export function buildSpeculativePreloadSpawnArgs(input: {
     expectsCompletionMessage: false,
     ...(input.model ? { model: input.model } : {}),
     ...(input.cwd ? { cwd: input.cwd } : {}),
-    runTimeoutSeconds: input.runTimeoutSeconds || 300,
   };
 }
 

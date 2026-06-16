@@ -119,6 +119,54 @@ async function autoConfirmPlannerSpawn(input: {
   }, input.logger, decision).catch(() => {});
 }
 
+async function markFailedPlannerSpawn(input: {
+  ctx: UnknownRecord;
+  state: UnknownRecord;
+  stateKey: string;
+  toolParams: UnknownRecord;
+  resultRecord: UnknownRecord;
+  eventError?: unknown;
+  logger: PluginInterface["logger"];
+}): Promise<void> {
+  const decision = asRecord(input.state.decision);
+  const sessionKey = firstNonEmptyString(
+    asRecord(decision.request).session_key,
+    input.ctx.sessionKey,
+    input.ctx.canonicalSessionKey,
+    input.stateKey,
+  );
+  const argsHash = firstNonEmptyString(input.toolParams.task)
+    ? hashSessionsSpawnArgs(input.toolParams as SessionsSpawnArgs)
+    : "";
+  const matchedIntent = argsHash
+    ? nativeSpawnIntentStore.findInFlightMatchingForSession(sessionKey, { dispatchMode: "new_spawn", argsHash })
+    : null;
+  if (!matchedIntent) return;
+
+  const error = firstNonEmptyString(
+    input.resultRecord.error,
+    input.resultRecord.message,
+    input.eventError,
+    "native_sessions_spawn_not_accepted",
+  );
+  const failed = nativeSpawnIntentStore.markFailed({
+    spawnIntentId: matchedIntent.spawnIntentId,
+    workContractId: matchedIntent.workContractId,
+    sessionKey,
+    error,
+  });
+  await recordPolicyReplay("sessions_spawn_auto_confirm_failed", {
+    sessionKey,
+    stateKey: input.stateKey,
+    sessionId: stringValue(input.ctx.sessionId),
+    spawn_intent_id: matchedIntent.spawnIntentId,
+    work_contract_id: matchedIntent.workContractId,
+    ok: failed.ok,
+    error,
+    mark_failed_error: failed.ok ? "" : stringValue(failed.error),
+  }, input.logger, decision).catch(() => {});
+}
+
 export function makeAfterToolCallHook(deps: AfterToolCallDeps) {
   return async (event: UnknownRecord, ctx: UnknownRecord) => {
     if (!isManagedAgentContext(ctx)) return;
@@ -154,6 +202,23 @@ export function makeAfterToolCallHook(deps: AfterToolCallDeps) {
         error: error instanceof Error ? error.message : String(error),
       }, deps.pi.logger, asRecord(resolvedState?.decision)).catch(() => {});
     });
+    if (!accepted) {
+      await markFailedPlannerSpawn({
+        ctx,
+        state: asRecord(resolvedState),
+        stateKey: resolvedStateKey,
+        toolParams,
+        resultRecord,
+        eventError: event.error,
+        logger: deps.pi.logger,
+      }).catch((error) => {
+        void recordPolicyReplay("sessions_spawn_auto_confirm_failed", {
+          sessionKey: resolvedStateKey,
+          sessionId: stringValue(ctx.sessionId),
+          error: error instanceof Error ? error.message : String(error),
+        }, deps.pi.logger, asRecord(resolvedState?.decision)).catch(() => {});
+      });
+    }
     if (!resolveSpeculativePreloadEnabled(deps.currentPluginConfig())) return;
     const candidateKeys = Array.from(new Set([
       resolvedStateKey,

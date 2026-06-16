@@ -217,8 +217,9 @@ describe("octoclaw_dispatch planner backend", () => {
       cleanup: "keep",
       context: "isolated",
       lightContext: true,
-      runTimeoutSeconds: 900,
     });
+    expect(body.sessionsSpawnArgs.runTimeoutSeconds).toBeUndefined();
+    expect(body.sessionsSpawnArgs.timeoutSeconds).toBeUndefined();
     expect(body.sessionsSpawnArgs.label).toContain(`[${contract.workContractId}]`);
     expect(String(body.sessionsSpawnArgs.label).length).toBeLessThanOrEqual(80);
     expect(body.sessionsSpawnArgs.task).toContain(contract.workContractId);
@@ -1351,7 +1352,8 @@ describe("octoclaw_dispatch planner backend", () => {
     expect(body.sessionsSpawnArgs.task).toContain("Expected deliverable:");
     expect(body.sessionsSpawnArgs.task).toContain(task);
     expect(body.sessionsSpawnArgs.task).toContain("deliver partial findings with caveats");
-    expect(body.sessionsSpawnArgs.runTimeoutSeconds).toBe(300);
+    expect(body.sessionsSpawnArgs.runTimeoutSeconds).toBeUndefined();
+    expect(body.sessionsSpawnArgs.timeoutSeconds).toBeUndefined();
     expect(nativeSpawnIntentStore.get(body.spawnIntentId)?.status).toBe("planned");
   });
 

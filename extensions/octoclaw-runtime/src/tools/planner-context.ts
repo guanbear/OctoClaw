@@ -5,7 +5,6 @@ import type { WorkContract } from "@octoclaw/contracts/work-contract";
 import { asRecord, asString, type UnknownRecord } from "../util/type-coercion.js";
 import { optionalString } from "./registration-helpers.js";
 
-const PLANNER_NATIVE_RUN_TIMEOUT_FLOOR_SECONDS = 300;
 const PLANNER_CONTEXT_PACKET_MAX_ITEMS = 8;
 
 function plannerStringArray(...values: unknown[]): string[] {
@@ -395,14 +394,6 @@ export function buildPlannerSessionsSpawnArgs(params: {
   workContract?: WorkContract | null;
 }): Record<string, unknown> {
   const cwd = resolvePlannerNativeCwd(params.cwd);
-  const requestedTimeout = Number.isFinite(params.timeoutSeconds)
-    ? Math.max(0, Math.floor(params.timeoutSeconds ?? 0))
-    : undefined;
-  const timeout = requestedTimeout === undefined
-    ? undefined
-    : requestedTimeout > 0
-      ? Math.max(PLANNER_NATIVE_RUN_TIMEOUT_FLOOR_SECONDS, requestedTimeout)
-      : PLANNER_NATIVE_RUN_TIMEOUT_FLOOR_SECONDS;
   return {
     task: buildPlannerSpawnTask({
       task: params.task,
@@ -426,7 +417,6 @@ export function buildPlannerSessionsSpawnArgs(params: {
     runtime: "subagent",
     ...(params.selectedModel ? { model: params.selectedModel } : {}),
     ...(cwd ? { cwd } : {}),
-    ...(timeout !== undefined ? { runTimeoutSeconds: timeout } : {}),
     mode: "run",
     cleanup: "keep",
     sandbox: "inherit",
