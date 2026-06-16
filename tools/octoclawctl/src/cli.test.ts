@@ -1,5 +1,6 @@
-import { describe, expect, it, beforeEach, afterEach } from "vitest";
+import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
 import fs from "node:fs/promises";
+import fsSync from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
@@ -14,6 +15,7 @@ import {
   isCliEntrypoint,
   resolveRuntimeStateSurfaceRecord,
   runOctoClawCtl,
+  spawnDaemon,
 } from "./cli.js";
 
 
@@ -438,6 +440,64 @@ describe("octoclawctl cli", () => {
       expect(review.alerts).toEqual(expect.arrayContaining([
         expect.objectContaining({ model: "openai/gpt-5-mini", reason: "consecutive_failures_or_failure_rate" }),
       ]));
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("router promotion nightly-review drops shadow events without a ts", async () => {
+    const tmpDir = path.join(os.homedir(), ".octoclawctl-test-tmp", `router-nightly-review-no-ts-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    const openclawHome = path.join(tmpDir, ".openclaw");
+    const routerLiteDir = path.join(openclawHome, "workspace", "tmp", "octopus", "router-lite");
+    const shadowPath = path.join(routerLiteDir, "shadow.jsonl");
+    try {
+      await fs.mkdir(routerLiteDir, { recursive: true });
+      // Three rows: two valid (explicit ts, both success) and one missing ts
+      // (a failure). The missing-ts row must be dropped, so the model's failure
+      // rate is 0/2 — not 1/3.
+      const validTs = new Date(Date.UTC(2026, 4, 14, 0, 0)).toISOString();
+      const lines = [
+        JSON.stringify({
+          ts: validTs,
+          actualModel: "openai/gpt-5.5",
+          recommendation: { recommendedModel: "openai/gpt-5-mini", expectedSuccess: true, expectedCostUsd: 0.8 },
+          judge: { complexity: "normal" },
+          outcome: { success: true, costUsd: 1 },
+        }),
+        JSON.stringify({
+          // no ts — must be dropped so it never pollutes the --since window
+          actualModel: "openai/gpt-5.5",
+          recommendation: { recommendedModel: "openai/gpt-5-mini", expectedSuccess: true, expectedCostUsd: 0.8 },
+          judge: { complexity: "normal" },
+          outcome: { success: false, costUsd: 1 },
+        }),
+        JSON.stringify({
+          ts: validTs,
+          actualModel: "openai/gpt-5.5",
+          recommendation: { recommendedModel: "openai/gpt-5-mini", expectedSuccess: true, expectedCostUsd: 0.8 },
+          judge: { complexity: "normal" },
+          outcome: { success: true, costUsd: 1 },
+        }),
+      ].join("\n");
+      await fs.writeFile(shadowPath, lines, "utf8");
+
+      const capture = createIo();
+      const exitCode = await main([
+        "router",
+        "promotion",
+        "nightly-review",
+        "--openclaw-home",
+        openclawHome,
+        "--input",
+        shadowPath,
+        "--format",
+        "json",
+      ], {}, capture.io);
+
+      expect(exitCode).toBe(0);
+      const review = JSON.parse(capture.stdout[0] ?? "{}");
+      // Both surviving rows succeeded, so the failure rate must be 0 (not 1/3).
+      expect(review.failureRates["openai/gpt-5-mini"] ?? 0).toBe(0);
     } finally {
       await fs.rm(tmpDir, { recursive: true, force: true });
     }
@@ -2858,5 +2918,47 @@ describe("octoclawctl nightly integration", () => {
     it("requires --output-dir for run subcommands", () => {
       expect(() => parseCliArgs(["stability", "post-deploy"])).toThrow("requires --output-dir");
     });
+  });
+});
+
+describe("spawnDaemon fd cleanup", () => {
+  it("closes the parent's copy of the log file descriptor after spawning", async () => {
+    const tmpDir = path.join(os.homedir(), ".octoclawctl-test-tmp", `spawndaemon-fd-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    const logFile = path.join(tmpDir, "daemon.log");
+    const pidFile = path.join(tmpDir, "daemon.pid");
+    // Capture the real implementations BEFORE spying replaces them.
+    const realOpenSync = fsSync.openSync.bind(fsSync);
+    const realCloseSync = fsSync.closeSync.bind(fsSync);
+    const opened: number[] = [];
+    const closed: number[] = [];
+    const openSpy = vi.spyOn(fsSync, "openSync").mockImplementation(((file: string, flags: string) => {
+      const fd = realOpenSync(file, flags);
+      opened.push(fd);
+      return fd;
+    }) as typeof fsSync.openSync);
+    const closeSpy = vi.spyOn(fsSync, "closeSync").mockImplementation(((fd: number) => {
+      closed.push(fd);
+      return realCloseSync(fd);
+    }) as typeof fsSync.closeSync);
+    try {
+      // Spawn `/bin/sh -c true` (a guaranteed-present, immediately-exiting
+      // child) so we exercise spawnDaemon without depending on process.execPath.
+      await spawnDaemon(
+        "/bin/sh",
+        ["-c", "true"],
+        logFile,
+        pidFile,
+        {},
+      );
+
+      // Every fd the parent opened for the log must be closed by the parent
+      // before spawnDaemon returns (the child keeps its own inherited copy).
+      const stillOpen = opened.filter((fd) => !closed.includes(fd));
+      expect(stillOpen).toHaveLength(0);
+    } finally {
+      openSpy.mockRestore();
+      closeSpy.mockRestore();
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
   });
 });

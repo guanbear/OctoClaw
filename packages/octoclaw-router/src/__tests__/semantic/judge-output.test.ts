@@ -178,6 +178,44 @@ describe("Auto Router v3 judge BDD", () => {
     expect(cache.get("key-0")).toBeNull();
   });
 
+  it("RT-J-015b evicts the entry with the smallest expiresAt (not insertion order)", () => {
+    // Use a mutable clock so each set records a distinct expiresAt.
+    let clock = 0;
+    const cache = new JudgeCache({ maxEntries: 3, ttlMs: 1_000_000, now: () => clock });
+    // Distinct expiresAt: key-a < key-b < key-c.
+    clock = 1000; cache.set("key-a", { route: "reply", confidence: 0.7, complexity: "simple" });
+    clock = 2000; cache.set("key-b", { route: "reply", confidence: 0.7, complexity: "simple" });
+    clock = 3000; cache.set("key-c", { route: "reply", confidence: 0.7, complexity: "simple" });
+    // Capacity reached (3). The next set must evict the soonest-expiring entry
+    // (key-a), not the most-recently-inserted.
+    clock = 4000; cache.set("key-d", { route: "reply", confidence: 0.7, complexity: "simple" });
+    // Freeze the clock below all expiresAt so get() does not treat entries as stale.
+    clock = 0;
+
+    expect(cache.size).toBe(3);
+    expect(cache.get("key-a")).toBeNull();
+    expect(cache.get("key-b")).not.toBeNull();
+    expect(cache.get("key-c")).not.toBeNull();
+    expect(cache.get("key-d")).not.toBeNull();
+  });
+
+  it("RT-J-015c breaks expiresAt ties by insertion order (LRU: first inserted evicted)", () => {
+    // All entries share expiresAt=0, so the tie-break is insertion order — the
+    // min scan iterates the Map in insertion order and keeps the first minimum,
+    // so the earliest-inserted entry is evicted.
+    const cache = new JudgeCache({ maxEntries: 3, ttlMs: 120_000, now: () => 0 });
+    cache.set("key-0", { route: "reply", confidence: 0.7, complexity: "simple" });
+    cache.set("key-1", { route: "reply", confidence: 0.7, complexity: "simple" });
+    cache.set("key-2", { route: "reply", confidence: 0.7, complexity: "simple" });
+    cache.set("key-3", { route: "reply", confidence: 0.7, complexity: "simple" });
+
+    expect(cache.size).toBe(3);
+    expect(cache.get("key-0")).toBeNull(); // earliest-inserted evicted on tie
+    expect(cache.get("key-1")).not.toBeNull();
+    expect(cache.get("key-2")).not.toBeNull();
+    expect(cache.get("key-3")).not.toBeNull();
+  });
+
   it("computes cache key from prompt, session, recent execution, model, and snapshot", () => {
     const one = computeJudgeCacheKey({
       prompt: "Hello!!!",
