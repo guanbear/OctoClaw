@@ -132,7 +132,24 @@ export async function initNativeHelperBridge(): Promise<void> {
   if (!_bridgeInitPromise) {
     _bridgeInitPromise = createTaskFlowBridge();
   }
-  _cachedBridge = await _bridgeInitPromise;
+  try {
+    _cachedBridge = await _bridgeInitPromise;
+  } catch (error) {
+    // Clear the rejected promise so a later call can retry initialization
+    // instead of re-throwing the original failure forever.
+    _bridgeInitPromise = null;
+    throw error;
+  }
+}
+
+/**
+ * Reset the cached bridge state. Intended ONLY for tests that need to drive
+ * initNativeHelperBridge through the reject/retry path; production code must
+ * never call this.
+ */
+export function __resetNativeHelperBridgeForTests(): void {
+  _cachedBridge = null;
+  _bridgeInitPromise = null;
 }
 
 function failClosed(message: string): never {

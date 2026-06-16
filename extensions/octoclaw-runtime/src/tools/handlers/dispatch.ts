@@ -125,6 +125,21 @@ function normalizeDispatchComplexityBand(value: unknown): string {
     : "";
 }
 
+/**
+ * Fire-and-forget wrapper for execution-transition notifications.
+ *
+ * `void promise` detaches the promise from the caller, so a surrounding
+ * `try/catch` cannot observe its rejection — an unhandled rejection would
+ * surface only at the process level. This wrapper attaches a `.catch()` so the
+ * rejection is swallowed deterministically (these notifications are best-effort
+ * telemetry and must never fail the dispatch path).
+ */
+function notifyTransitionFireAndForget(
+  params: Parameters<typeof emitExecutionTransitionNotification>[0],
+): void {
+  void emitExecutionTransitionNotification(params).catch(() => undefined);
+}
+
 function resolveDispatchComplexityBand(input: {
   params: UnknownRecord;
   cachedDecision: UnknownRecord;
@@ -1546,22 +1561,20 @@ export async function executeOctoclawDispatch(params: Record<string, unknown>, _
               nativeBinding: dispatchWorkContract.delegate?.nativeBinding ?? undefined,
             });
           }
-          try {
-            void emitExecutionTransitionNotification({
-              transitionKind: "spawn_failed",
-              projection: buildMinimalProjection({
-                taskId: asString(payload.delegateTaskId || payload.task_id || dispatchWorkContract?.workContractId || ""),
-                status: "failed",
-                dispatchExecuted: true,
-                spawnExecuted: false,
-                resultMaterialized: false,
-              }),
-              attemptId: asString(payload.attemptId || ""),
-              workContractId: dispatchWorkContract?.workContractId ?? "",
-              sessionKey: stateKey,
-              stateKey,
-            });
-          } catch (_) { }
+          notifyTransitionFireAndForget({
+            transitionKind: "spawn_failed",
+            projection: buildMinimalProjection({
+              taskId: asString(payload.delegateTaskId || payload.task_id || dispatchWorkContract?.workContractId || ""),
+              status: "failed",
+              dispatchExecuted: true,
+              spawnExecuted: false,
+              resultMaterialized: false,
+            }),
+            attemptId: asString(payload.attemptId || ""),
+            workContractId: dispatchWorkContract?.workContractId ?? "",
+            sessionKey: stateKey,
+            stateKey,
+          });
           return dispatchHonestyFailure({
             route: asString(payload.route, resolvedRoute),
             error: errorMessage,
@@ -1847,17 +1860,17 @@ export async function executeOctoclawDispatch(params: Record<string, unknown>, _
             occurredAt: materializedAt,
           };
           if (materialized) {
-            void emitExecutionTransitionNotification({
+            notifyTransitionFireAndForget({
               ...notifyParams,
               transitionKind: "dispatch_materialized",
             });
             if (spawnEvidence.spawnExecuted) {
-              void emitExecutionTransitionNotification({
+              notifyTransitionFireAndForget({
                 ...notifyParams,
                 transitionKind: "spawn_started",
               });
             } else {
-              void emitExecutionTransitionNotification({
+              notifyTransitionFireAndForget({
                 ...notifyParams,
                 transitionKind: "materialized_no_spawn",
               });

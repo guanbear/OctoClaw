@@ -51,8 +51,18 @@ export class JudgeCache {
 
   set(key: string, result: JudgeOutput): void {
     if (this.entries.size >= this.maxEntries()) {
-      const oldest = [...this.entries.entries()].sort((a, b) => a[1].expiresAt - b[1].expiresAt)[0];
-      if (oldest) this.entries.delete(oldest[0]);
+      // Evict the single entry with the smallest expiresAt. A full sort is
+      // O(n log n) on every capacity write; a single-pass min scan is O(n) and
+      // sufficient since we only need the oldest one.
+      let oldestKey: string | null = null;
+      let oldestExpiresAt = Number.POSITIVE_INFINITY;
+      for (const [entryKey, entry] of this.entries) {
+        if (entry.expiresAt < oldestExpiresAt) {
+          oldestExpiresAt = entry.expiresAt;
+          oldestKey = entryKey;
+        }
+      }
+      if (oldestKey !== null) this.entries.delete(oldestKey);
     }
     this.entries.set(key, { result, expiresAt: this.now() + this.ttlMs() });
   }

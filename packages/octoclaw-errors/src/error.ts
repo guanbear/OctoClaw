@@ -3,7 +3,9 @@ export class OctoClawError extends Error {
   readonly userMessageZh: string;
   readonly userMessageEn: string;
   readonly actionableHint?: string;
-  readonly cause?: unknown;
+  // `cause` is intentionally NOT redeclared as a class field: a field declaration
+  // would re-initialize the own property to `undefined` after super() and clobber
+  // the native ES2022 Error.cause slot. The type is surfaced via Error.prototype.cause.
 
   constructor(opts: {
     code: string;
@@ -12,13 +14,14 @@ export class OctoClawError extends Error {
     actionableHint?: string;
     cause?: unknown;
   }) {
-    super(opts.userMessageEn);
+    // Pass cause through the native ES2022 Error options so standard tooling,
+    // stack traces, and Error.prototype.cause consumers see it.
+    super(opts.userMessageEn, opts.cause !== undefined ? { cause: opts.cause } : undefined);
     this.name = "OctoClawError";
     this.code = opts.code;
     this.userMessageZh = opts.userMessageZh;
     this.userMessageEn = opts.userMessageEn;
     this.actionableHint = opts.actionableHint;
-    this.cause = opts.cause;
   }
 
   toUserString(lang: "zh" | "en" = "zh"): string {

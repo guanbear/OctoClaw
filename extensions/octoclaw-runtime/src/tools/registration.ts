@@ -633,20 +633,7 @@ function handoffText(payload: Record<string, unknown>, fallback: string): string
   return fallback;
 }
 
-async function readReportExcerpt(reportPath: string, cwd?: string): Promise<Record<string, unknown>> {
-  const resolvedPath = reportPath.startsWith("/")
-    ? reportPath
-    : `${asString(cwd, process.cwd()).replace(/\/$/u, "")}/${reportPath}`;
-  return {
-    exists: false,
-    excerpt: "",
-    path: resolvedPath,
-    source: "native_runtime",
-    note: "report excerpt preview is surfaced by native runtime consumers rather than this tool shim",
-  };
-}
-
-export async function userFacingHandoff(payload: Record<string, unknown>, fallback: string, cwd?: string): Promise<string> {
+export async function userFacingHandoff(payload: Record<string, unknown>, fallback: string, _cwd?: string): Promise<string> {
   const base = handoffText(payload, fallback);
   const handoff = asRecord(payload.handoff);
   const reportPath = asString(handoff.report_path ?? payload.report_path);
@@ -656,14 +643,9 @@ export async function userFacingHandoff(payload: Record<string, unknown>, fallba
     return base;
   }
   const artifactsCmd = taskId ? `octoclaw_task_action artifacts ${taskId}` : "octoclaw_task_action artifacts";
-  try {
-    const preview = await readReportExcerpt(reportPath, cwd);
-    if (preview.exists === true && asString(preview.excerpt)) {
-      return `${base}\n\n报告摘录：\n${asString(preview.excerpt)}\n\n结果已写入：\`${reportPath}\`\n（用 \`${artifactsCmd}\` 读取完整内容）`;
-    }
-  } catch {
-    // Fall back to base handoff text.
-  }
+  // Report-excerpt preview is surfaced by native runtime consumers rather than
+  // this tool shim; we only point at the written report path here. `cwd` is
+  // kept in the signature for callers and future preview implementations.
   return `${base}\n\n结果已写入：\`${reportPath}\`\n（用 \`${artifactsCmd}\` 读取完整内容）`;
 }
 

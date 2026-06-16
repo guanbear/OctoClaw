@@ -3,7 +3,7 @@ export const POLICY_LABELS = {
   reply_mode: ["answer", "clarify"] as const,
   delegate_role: ["observer", "default", "code", "research", "review"] as const,
   coordination_mode_hint: ["solo_worker", "advisor_assisted", "multi_agent_controlled"] as const,
-  complexity: ["simple", "normal", "deep"] as const,
+  complexity: ["simple", "normal", "complex", "deep"] as const,
   scope: ["local", "remote", "both", "unknown"] as const,
   tool_need_hint: ["none", "maybe", "required"] as const,
   duration_hint: ["short", "medium", "long"] as const,

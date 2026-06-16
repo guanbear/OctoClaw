@@ -1033,6 +1033,17 @@ function parseEnumValue<T extends string>(value: string | undefined, valid: read
   return value as T;
 }
 
+/**
+ * Read the token after the current one for `--flag value` style options.
+ * Returns `undefined` when the flag is the last token, so callers can decide
+ * how to handle a missing value instead of silently skipping an index and
+ * landing on the next positional. Equivalent to `argv[index + 1]` when in
+ * bounds, but explicit about the out-of-bounds case.
+ */
+function peekNext(argv: string[], index: number): string | undefined {
+  return index + 1 < argv.length ? argv[index + 1] : undefined;
+}
+
 export function parseCliArgs(argv: string[]): ParsedCliArgs {
   let command: CliCommand | undefined;
   let format: StatusFormat | undefined;
@@ -1094,7 +1105,7 @@ export function parseCliArgs(argv: string[]): ParsedCliArgs {
       continue;
     }
     if (argument === "--format") {
-      rawFormat = argv[index + 1];
+      rawFormat = peekNext(argv, index);
       index += 1;
       continue;
     }
@@ -1107,7 +1118,7 @@ export function parseCliArgs(argv: string[]): ParsedCliArgs {
       continue;
     }
     if (argument === "--task-id") {
-      taskId = argv[index + 1];
+      taskId = peekNext(argv, index);
       index += 1;
       continue;
     }
@@ -1170,7 +1181,7 @@ export function parseCliArgs(argv: string[]): ParsedCliArgs {
       continue;
     }
     if (argument === "--input") {
-      input = argv[index + 1];
+      input = peekNext(argv, index);
       index += 1;
       continue;
     }
@@ -1179,7 +1190,7 @@ export function parseCliArgs(argv: string[]): ParsedCliArgs {
       continue;
     }
     if (argument === "--baseline") {
-      baseline = argv[index + 1];
+      baseline = peekNext(argv, index);
       index += 1;
       continue;
     }
@@ -1188,7 +1199,7 @@ export function parseCliArgs(argv: string[]): ParsedCliArgs {
       continue;
     }
     if (argument === "--candidate") {
-      candidate = argv[index + 1];
+      candidate = peekNext(argv, index);
       index += 1;
       continue;
     }
@@ -1197,7 +1208,7 @@ export function parseCliArgs(argv: string[]): ParsedCliArgs {
       continue;
     }
     if (argument === "--output-dir") {
-      outputDir = argv[index + 1];
+      outputDir = peekNext(argv, index);
       index += 1;
       continue;
     }
@@ -1206,7 +1217,7 @@ export function parseCliArgs(argv: string[]): ParsedCliArgs {
       continue;
     }
     if (argument === "--since") {
-      since = argv[index + 1];
+      since = peekNext(argv, index);
       index += 1;
       continue;
     }
@@ -1225,7 +1236,7 @@ export function parseCliArgs(argv: string[]): ParsedCliArgs {
       continue;
     }
     if (argument === "--monthly") {
-      monthly = Number(argv[index + 1]);
+      monthly = Number(peekNext(argv, index) ?? "");
       index += 1;
       continue;
     }
@@ -1235,7 +1246,7 @@ export function parseCliArgs(argv: string[]): ParsedCliArgs {
       continue;
     }
     if (argument === "--for") {
-      forTier = argv[index + 1];
+      forTier = peekNext(argv, index);
       index += 1;
       continue;
     }
@@ -1244,7 +1255,7 @@ export function parseCliArgs(argv: string[]): ParsedCliArgs {
       continue;
     }
     if (argument === "--dispreferred-for") {
-      dispreferredFor = argv[index + 1];
+      dispreferredFor = peekNext(argv, index);
       index += 1;
       continue;
     }
@@ -1253,7 +1264,7 @@ export function parseCliArgs(argv: string[]): ParsedCliArgs {
       continue;
     }
     if (argument === "--reason") {
-      reason = argv[index + 1];
+      reason = peekNext(argv, index);
       index += 1;
       continue;
     }
@@ -1262,7 +1273,7 @@ export function parseCliArgs(argv: string[]): ParsedCliArgs {
       continue;
     }
     if (argument === "--config") {
-      config = argv[index + 1];
+      config = peekNext(argv, index);
       index += 1;
       continue;
     }
@@ -1271,7 +1282,7 @@ export function parseCliArgs(argv: string[]): ParsedCliArgs {
       continue;
     }
     if (argument === "--repo-url") {
-      repoUrl = argv[index + 1];
+      repoUrl = peekNext(argv, index);
       index += 1;
       continue;
     }
@@ -1280,7 +1291,7 @@ export function parseCliArgs(argv: string[]): ParsedCliArgs {
       continue;
     }
     if (argument === "--branch" || argument === "--ref") {
-      branch = argv[index + 1];
+      branch = peekNext(argv, index);
       index += 1;
       continue;
     }
@@ -1289,7 +1300,7 @@ export function parseCliArgs(argv: string[]): ParsedCliArgs {
       continue;
     }
     if (argument === "--openclaw-home") {
-      openclawHome = argv[index + 1];
+      openclawHome = peekNext(argv, index);
       index += 1;
       continue;
     }
@@ -1298,7 +1309,7 @@ export function parseCliArgs(argv: string[]): ParsedCliArgs {
       continue;
     }
     if (argument === "--octoclaw-root") {
-      octoclawRoot = argv[index + 1];
+      octoclawRoot = peekNext(argv, index);
       index += 1;
       continue;
     }
@@ -1325,7 +1336,7 @@ export function parseCliArgs(argv: string[]): ParsedCliArgs {
       continue;
     }
     if (argument === "--log-dir") {
-      logDir = argv[index + 1];
+      logDir = peekNext(argv, index);
       index += 1;
       continue;
     }
@@ -1360,7 +1371,7 @@ export function parseCliArgs(argv: string[]): ParsedCliArgs {
       continue;
     }
     if (argument === "--cadence") {
-      cadence = argv[index + 1];
+      cadence = peekNext(argv, index);
       index += 1;
       continue;
     }
@@ -1735,7 +1746,7 @@ function tryParseJsonRecord(text: string): JsonRecord | undefined {
   }
 }
 
-async function spawnDaemon(command: string, args: string[], logFilePath: string, pidFilePath: string, env: Record<string, string | undefined>): Promise<number> {
+export async function spawnDaemon(command: string, args: string[], logFilePath: string, pidFilePath: string, env: Record<string, string | undefined>): Promise<number> {
   await ensureDir(path.dirname(logFilePath));
   const out = fsSync.openSync(logFilePath, "a");
   const child: ChildProcess = spawn(command, args, {
@@ -1743,6 +1754,9 @@ async function spawnDaemon(command: string, args: string[], logFilePath: string,
     detached: true,
     stdio: ["ignore", out, out],
   });
+  // The child has already inherited its own copy of the fd via stdio; close
+  // the parent's copy so it doesn't leak across repeated up/restart calls.
+  fsSync.closeSync(out);
   child.unref();
   if (!child.pid) {
     throw new Error(`Failed to start daemon: ${command}`);
@@ -2812,12 +2826,17 @@ function normalizeRouterShadowEvent(raw: JsonRecord): RouterShadowEvent | null {
   const recommendation = asRecord(raw.recommendation);
   const recommendedModel = asString(raw.recommendedModel) || asString(recommendation.recommendedModel);
   if (!recommendedModel) return null;
+  // Drop events without a real timestamp: the downstream --since filter relies
+  // on `ts` to bound the review window. Fabricating "now" would let malformed
+  // or legacy rows slip past the cutoff and pollute promotion review.
+  const ts = asString(raw.ts);
+  if (!ts) return null;
   const outcome = asRecord(raw.outcome);
   const recommendationOutcome = asRecord(raw.recommendation);
   const estimatedCostDeltaUsd = asNumber(raw.estimatedCostDeltaUsd);
   const actualCost = asNumber(outcome.costUsd);
   return {
-    ts: asString(raw.ts) || new Date().toISOString(),
+    ts,
     sessionKey: asString(raw.sessionKey) || undefined,
     turnId: asString(raw.turnId) || undefined,
     actualModel: asString(raw.actualModel) || undefined,
