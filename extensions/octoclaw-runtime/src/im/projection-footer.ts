@@ -15,3 +15,4 @@ export function renderIMProjectionFooter(params: RenderIMProjectionFooterParams)
   if (!adapter?.renderProjectionFooter) return content;
   return adapter.renderProjectionFooter(content, params.projection);
 }
+

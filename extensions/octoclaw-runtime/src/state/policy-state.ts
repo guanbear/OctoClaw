@@ -112,6 +112,11 @@ export interface PolicyStateEntry {
   budgeted_main?: Record<string, unknown>;
   speculativePreload?: Record<string, unknown>;
   speculative_preload?: Record<string, unknown>;
+  // Per-turn usage snapshot from openclaw 6.8 `reply_payload_sending` hook.
+  // Carries the authoritative post-fallback model/duration/fallbackUsed values
+  // so the footer reflects what actually ran, not a static config guess.
+  replyUsageState?: Record<string, unknown>;
+  reply_usage_state?: Record<string, unknown>;
   updatedAt?: number;
   createdAt?: number;
   extraState?: Record<string, unknown>;

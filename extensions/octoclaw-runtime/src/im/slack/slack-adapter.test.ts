@@ -112,6 +112,56 @@ describe("SlackAdapter", () => {
     })).toContain("health=downgraded: rate_limit_429 on zhipu/glm-5.1");
   });
 
+  it("appends ⚡ to the model when fallbackUsed is true", () => {
+    const rendered = renderSlackProjectionFooter("done", {
+      route: "reply",
+      model: "cliproxyapi/gpt-5.5",
+      fallbackUsed: true,
+      durationMs: 3200,
+    });
+    expect(rendered).toContain("model=cliproxyapi/gpt-5.5⚡");
+    expect(rendered).not.toContain("model=cliproxyapi/gpt-5.5 |");
+  });
+
+  it("does not append ⚡ when fallbackUsed is false", () => {
+    const rendered = renderSlackProjectionFooter("done", {
+      route: "reply",
+      model: "cliproxyapi/gpt-5.5",
+      fallbackUsed: false,
+      durationMs: 3200,
+    });
+    expect(rendered).toContain("model=cliproxyapi/gpt-5.5 |");
+    expect(rendered).not.toContain("⚡");
+  });
+
+  it("renders time= token in the primary footer when durationMs is present", () => {
+    const rendered = renderSlackProjectionFooter("done", {
+      route: "reply",
+      model: "zhipu/GLM-5.2",
+      durationMs: 5430,
+    });
+    expect(rendered).toContain("time=5.4s");
+  });
+
+  it("omits time= token when durationMs is absent (degraded path)", () => {
+    const rendered = renderSlackProjectionFooter("done", {
+      route: "reply",
+      model: "zhipu/GLM-5.2",
+    });
+    expect(rendered).not.toContain("time=");
+  });
+
+  it("surfaces health=no-usage in debug mode when usageSource is degraded", () => {
+    const rendered = renderSlackProjectionFooter("done", {
+      route: "reply",
+      model: "zhipu/GLM-5.2",
+      mode: "debug",
+      healthNote: "no-usage",
+      usageSource: "degraded",
+    });
+    expect(rendered).toContain("health=no-usage");
+  });
+
   it("NFSV2-FOOTER-001B: compact footer does not include debug-only IDs", () => {
     const rendered = renderSlackProjectionFooter("done", {
       route: "reply",

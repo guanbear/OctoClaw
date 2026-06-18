@@ -5,6 +5,7 @@ import path from "node:path";
 import { ERROR_CODES } from "@octoclaw/errors";
 import { firstDisplayModel } from "../../model-display.js";
 import { hasProjectionFooter, OCTOCLAW_PROJECTION_FOOTER_PREFIX } from "../../projection-footer-sanitizer.js";
+import { formatFooterModelToken, formatFooterTimeToken } from "../footer-tokens.js";
 import type { IMAdapter, IMMessageTurnAnchorParams, IMProjectionFooter, IMSendParams } from "../adapter.js";
 import type { MessageDeliveryEnvelope, MessageDeliveryResult } from "../delivery-port.js";
 
@@ -250,12 +251,14 @@ export function renderSlackProjectionFooter(message: string, projection: IMProje
   const content = stringValue(message);
   if (!content || hasProjectionFooter(content)) return message;
   const route = projection.route === "delegate" ? "delegate" : "reply";
-  const model = firstDisplayModel(projection.model, "direct_main");
+  const model = formatFooterModelToken(projection);
   const difficulty = stringValue(projection.complexityBand);
+  const timeToken = formatFooterTimeToken(projection);
   const primaryFooter = [
     `route=${route}`,
     `model=${model}`,
     difficulty && `difficulty=${difficulty}`,
+    timeToken,
   ].filter(Boolean).join(" | ") + (projection.thread ? " · thread" : "");
   const debugParts = projection.mode === "debug" ? [
     stringValue(projection.workerPool) && `worker=${stringValue(projection.workerPool)}`,

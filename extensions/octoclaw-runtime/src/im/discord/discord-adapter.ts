@@ -1,6 +1,7 @@
 import { ERROR_CODES } from "@octoclaw/errors";
 import { runCommand, resolveWorkspaceRoot } from "../../resolve/env.js";
 import type { IMAdapter, IMDeliveryTarget, IMProjectionFooter, IMReactParams, IMReactResult, IMSendParams, IMSendResult } from "../adapter.js";
+import { formatFooterModelToken, formatFooterTimeToken } from "../footer-tokens.js";
 import { splitIMText } from "../text-split.js";
 
 export const DISCORD_CAPABILITIES = {
@@ -121,7 +122,9 @@ function parseSendResult(code: number, stdout: string, stderr: string): IMSendRe
 
 function renderDiscordProjectionFooter(message: string, projection: IMProjectionFooter): string {
   const route = projection.route === "delegate" ? "delegate" : "reply";
-  const parts = [`route=${route}`, `model=${projection.model}`];
+  const parts = [`route=${route}`, `model=${formatFooterModelToken(projection)}`];
+  const timeToken = formatFooterTimeToken(projection);
+  if (timeToken) parts.push(timeToken);
   if (projection.thread) parts.push("thread");
   if (projection.workContractId) parts.push(`wc=${projection.workContractId.slice(0, 8)}`);
   return `${message}\n\n🤖 ${parts.join(" | ")}`;

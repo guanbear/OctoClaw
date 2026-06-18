@@ -896,18 +896,22 @@ describe("guardOutboundMessageForPolicyState", () => {
         model_policy: { selected_model: "zhipu/GLM-5.1" },
         work_contract: { route: "reply", workContractId: "wc-display-target" },
       },
+      // Live usage snapshot from reply_payload_sending: the model that actually
+      // ran this turn (here: a fallback target), which must override the
+      // policy-selected model in the footer.
+      replyUsageState: { model: "cliproxyapi/gpt-5.5", fallbackUsed: true, requested: "zhipu/GLM-5.1", durationMs: 3200 },
       createdAt: now,
       updatedAt: now,
     });
 
     const guarded = guardOutboundMessageForPolicyState(
       { to: "guanbear", content: "你好，guan。我在。" },
-      { channelId: "slack", conversationId: "user:U0AL9T5U89Z", model: "cliproxyapi/gpt-5.5" },
+      { channelId: "slack", conversationId: "user:U0AL9T5U89Z" },
       now,
     );
 
     expect(guarded?.content).toContain("你好，guan。我在。");
-    expect(guarded?.content).toContain("route=reply | model=cliproxyapi/gpt-5.5 · thread");
+    expect(guarded?.content).toContain("route=reply | model=cliproxyapi/gpt-5.5⚡ | time=3.2s · thread");
     policyState.clearState(key);
   });
 
@@ -939,11 +943,6 @@ describe("guardOutboundMessageForPolicyState", () => {
   });
 
   it("appends footer for visible Slack delivery hooks even when OpenClaw omits message anchors", () => {
-    const previousOpenClawHome = process.env.OPENCLAW_HOME;
-    process.env.OPENCLAW_HOME = tempWorkspace;
-    fsSync.writeFileSync(path.join(tempWorkspace, "openclaw.json"), JSON.stringify({
-      agents: { defaults: { model: { primary: "cliproxyapi/gpt-5.5" } } },
-    }));
     const now = Date.now();
     const key = "agent:main:slack:default:direct:u0al9t5u89z";
     policyState.setState(key, {
@@ -951,6 +950,9 @@ describe("guardOutboundMessageForPolicyState", () => {
         route_decision: { route: "reply" },
         model_policy: { selected_model: "GLM-5.1" },
       },
+      // Live usage snapshot supplies the model that actually ran; the footer
+      // must reflect it rather than the policy-selected candidate.
+      replyUsageState: { model: "cliproxyapi/gpt-5.5", durationMs: 1500 },
       createdAt: now,
       updatedAt: now,
     });
@@ -963,10 +965,8 @@ describe("guardOutboundMessageForPolicyState", () => {
       );
 
       expect(guarded?.content).toContain("这是最终回复。");
-      expect(guarded?.content).toContain("route=reply | model=cliproxyapi/gpt-5.5 · thread");
+      expect(guarded?.content).toContain("route=reply | model=cliproxyapi/gpt-5.5 | time=1.5s · thread");
     } finally {
-      if (previousOpenClawHome === undefined) delete process.env.OPENCLAW_HOME;
-      else process.env.OPENCLAW_HOME = previousOpenClawHome;
       policyState.clearState(key);
     }
   });
@@ -1070,6 +1070,9 @@ describe("guardOutboundMessageForPolicyState", () => {
         model_policy: { selected_model: "zhipu/GLM-5.1" },
         request: { metadata: { message_id: "1777380001.000001" } },
       },
+      // Live usage snapshot: the actual runtime model (a fallback target)
+      // must win over the policy-selected candidate in the footer.
+      replyUsageState: { model: "cliproxyapi/gpt-5.5", fallbackUsed: true, requested: "zhipu/GLM-5.1", durationMs: 4100 },
       inboundMessageTs: "1777380001.000001",
       createdAt: now,
       updatedAt: now,
@@ -1077,11 +1080,12 @@ describe("guardOutboundMessageForPolicyState", () => {
 
     const guarded = guardOutboundMessageForPolicyState(
       { to: "C0SHIMMODEL", content: "测试。", metadata: { channelId: "C0SHIMMODEL", threadTs: "1777380001.000001" } },
-      { channelId: "slack", model: "cliproxyapi/gpt-5.5" },
+      { channelId: "slack" },
       now,
     );
 
-    expect(guarded?.content).toContain("model=cliproxyapi/gpt-5.5");
+    expect(guarded?.content).toContain("model=cliproxyapi/gpt-5.5⚡");
+    expect(guarded?.content).toContain("time=4.1s");
     expect(guarded?.content).not.toContain("model=zhipu/GLM-5.1");
     policyState.clearState(key);
   });
@@ -1095,6 +1099,7 @@ describe("guardOutboundMessageForPolicyState", () => {
         model_policy: { selected_model: "zhipu/GLM-5.1" },
         request: { metadata: { message_id: "1777380005.000001" } },
       },
+      replyUsageState: { model: "cliproxyapi/gpt-5.5", durationMs: 2200 },
       inboundMessageTs: "1777380005.000001",
       createdAt: now,
       updatedAt: now,
@@ -1102,29 +1107,18 @@ describe("guardOutboundMessageForPolicyState", () => {
 
     const guarded = guardOutboundMessageForPolicyState(
       { to: "C0BUDGETEDMAIN", content: "测试。", metadata: { channelId: "C0BUDGETEDMAIN", threadTs: "1777380005.000001" } },
-      { channelId: "slack", model: "cliproxyapi/gpt-5.5" },
+      { channelId: "slack" },
       now,
     );
 
     expect(guarded?.content).toContain("via=budgeted_main_escalation");
     expect(guarded?.content).toContain("model=cliproxyapi/gpt-5.5");
+    expect(guarded?.content).toContain("time=2.2s");
     expect(guarded?.content).not.toContain("model=zhipu/GLM-5.1");
     policyState.clearState(key);
   });
 
-  it("uses configured main primary model for reply footer when runtime event omits model", () => {
-    const previousOpenClawHome = process.env.OPENCLAW_HOME;
-    process.env.OPENCLAW_HOME = tempWorkspace;
-    fsSync.writeFileSync(path.join(tempWorkspace, "openclaw.json"), JSON.stringify({
-      agents: {
-        defaults: {
-          model: {
-            primary: "cliproxyapi/gpt-5.5",
-            fallbacks: ["zhipu/GLM-5.1"],
-          },
-        },
-      },
-    }));
+  it("uses live usage model for reply footer when runtime event omits model", () => {
     const now = Date.now();
     const key = "agent:main:slack:channel:c0statusmodel";
     policyState.setState(key, {
@@ -1133,6 +1127,9 @@ describe("guardOutboundMessageForPolicyState", () => {
         model_policy: { selected_model: "zhipu/GLM-5.1" },
         request: { metadata: { message_id: "1777380006.000001" } },
       },
+      // With no static config read and no event model, the live usage snapshot
+      // is the source of truth for the footer model.
+      replyUsageState: { model: "cliproxyapi/gpt-5.5", durationMs: 900 },
       inboundMessageTs: "1777380006.000001",
       createdAt: now,
       updatedAt: now,
@@ -1146,10 +1143,9 @@ describe("guardOutboundMessageForPolicyState", () => {
       );
 
       expect(guarded?.content).toContain("model=cliproxyapi/gpt-5.5");
+      expect(guarded?.content).toContain("time=0.9s");
       expect(guarded?.content).not.toContain("model=zhipu/GLM-5.1");
     } finally {
-      if (previousOpenClawHome === undefined) delete process.env.OPENCLAW_HOME;
-      else process.env.OPENCLAW_HOME = previousOpenClawHome;
       policyState.clearState(key);
     }
   });

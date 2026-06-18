@@ -1,10 +1,7 @@
-import fsSync from "node:fs";
-import path from "node:path";
 import { type WorkContract } from "@octoclaw/contracts/work-contract";
 import { cancelNeutralAckTimersByCandidates, type CanceledNeutralAckTimer } from "../ack/ack-scheduler.js";
 import { nativeSpawnIntentStore } from "../delegate/native-spawn-intent-store.js";
 import { stringValue } from "../extension-entry-shared.js";
-import { resolveOpenClawConfigDir } from "../resolve/env.js";
 import {
   contractNativeIds,
   findRecentOutboundPolicyState,
@@ -52,73 +49,78 @@ export function outboundProjectionSnapshot(state: UnknownRecord): UnknownRecord 
   return asRecord(state.outboundProjection || state.outbound_projection);
 }
 
-/** Resolve a model profile (e.g. "direct_main") or raw model string to a short display name. */
+/**
+ * Resolve the model to display in the footer.
+ *
+ * Priority (authoritative first):
+ *   1. `state.replyUsageState.model` / `resolvedRef` — the model that actually
+ *      ran this turn (post-fallback), surfaced by openclaw 6.8's
+ *      `reply_payload_sending` hook. This is the single source of truth.
+ *   2. `spawnModel` — the model pinned to a delegated/native child session,
+ *      which legitimately differs from the parent's runtime model.
+ *   3. A minimal degraded fallback chain (snapshot → policy selected) used
+ *      only when no live usage snapshot is available (e.g. agent turn failed,
+ *      durable/replay delivery, or openclaw < 6.8).
+ *
+ * The previous implementation read `agents.defaults.model.primary` from
+ * `openclaw.json` on disk (synchronous IO, every reply) which silently showed
+ * a stale static value after a model fallback. That path is removed.
+ */
 export function resolveDisplayModel(state: UnknownRecord, event: UnknownRecord, ctx: UnknownRecord): string {
-  const snapshot = outboundProjectionSnapshot(state);
+  const usageState = asRecord(state.replyUsageState || state.reply_usage_state);
+  return resolveUsageAwareDisplayModel(usageState, state, event, ctx);
+}
+
+/**
+ * Unified model resolver shared by the runtime footer path and the envelope
+ * (provenance) footer path so both render the same model for a given turn.
+ */
+export function resolveUsageAwareDisplayModel(
+  usageState: UnknownRecord | null | undefined,
+  state: UnknownRecord,
+  event: UnknownRecord,
+  ctx: UnknownRecord,
+): string {
+  // 1. Authoritative: the model that actually ran (post-fallback).
+  const liveModel = displayModelOrEmpty(
+    usageState && asRecord(usageState).resolvedRef,
+    usageState && asRecord(usageState).model,
+  );
+  if (liveModel) return liveModel;
+
   const decision = asRecord(state.decision);
-  const routeDecision = asRecord(decision.route_decision);
   const modelPolicy = asRecord(decision.model_policy);
-  const runtimeTruth = asRecord(decision.runtime_truth);
   const workContract = asRecord(decision.work_contract);
   const delegate = asRecord(workContract.delegate);
+  const snapshot = outboundProjectionSnapshot(state);
 
-  // Priority: spawn intent model > WorkContract delegate model > policy model > fallback
+  // 2. Delegated/native child sessions carry their own pinned model.
   const spawnModel = displayModelOrEmpty(
     delegate.modelProfile,
     delegate.model,
     delegate.model_profile,
   );
-  const mainRuntimeModel = displayModelOrEmpty(
-    event.model,
-    event.modelId,
-    event.model_id,
-    ctx.model,
-    ctx.modelId,
-    ctx.model_id,
+  if (spawnModel) return spawnModel;
+
+  // 3. Degraded: no live snapshot. Fall back to the most stable persisted
+  //    fields only — never read static config, which diverges from reality.
+  const runtimeModel = displayModelOrEmpty(
+    asRecord(event).model,
+    asRecord(event).modelId,
+    asRecord(event).model_id,
+    asRecord(ctx).model,
+    asRecord(ctx).modelId,
+    asRecord(ctx).model_id,
   );
-
-  const routeSource = stringValue(routeDecision.route_source || routeDecision.final_judge_source || snapshot.via || snapshot.source);
-  const route = stringValue(workContract.route || routeDecision.route || state.route || snapshot.route || "reply");
-  if (route === "reply" || routeSource === "budgeted_main_escalation") {
-    const mainModel = mainRuntimeModel || configuredMainRuntimeModel();
-    if (mainModel) return mainModel;
-  }
-
   return firstDisplayModel(
-    spawnModel || undefined,
     snapshot.model,
     snapshot.modelId,
     snapshot.model_id,
     modelPolicy.selected_model,
     modelPolicy.model,
-    runtimeTruth.model,
-    decision.model,
-    event.model,
-    event.modelId,
-    event.model_id,
-    ctx.model,
-    ctx.modelId,
-    ctx.model_id,
-    state.modelProfile,
-    state.model_profile,
+    runtimeModel || undefined,
     "direct_main",
   );
-}
-
-function configuredMainRuntimeModel(): string {
-  try {
-    const config = asRecord(JSON.parse(fsSync.readFileSync(path.join(resolveOpenClawConfigDir(), "openclaw.json"), "utf8")));
-    const agents = asRecord(config.agents);
-    const defaults = asRecord(agents.defaults);
-    const defaultModel = asRecord(defaults.model);
-    const primary = displayModelOrEmpty(defaultModel.primary, defaults.model);
-    if (primary) return primary;
-    const list = Array.isArray(agents.list) ? agents.list : [];
-    const main = list.map((entry) => asRecord(entry)).find((entry) => stringValue(entry.id) === "main");
-    return displayModelOrEmpty(main?.model);
-  } catch {
-    return "";
-  }
 }
 
 export function displayModelOrEmpty(...values: unknown[]): string {
@@ -313,6 +315,20 @@ export function appendReplyProjectionFooter(content: string, state: UnknownRecor
 
   const debug = footerDebugEnabled();
 
+  // Usage snapshot from openclaw 6.8 `reply_payload_sending`. Present on the
+  // live dispatcher path (normal replies); absent on durable/replay paths,
+  // agent-turn failures, or openclaw < 6.8 — in those cases the footer
+  // degrades and surfaces a `health=no-usage` note.
+  const usageState = asRecord(state.replyUsageState || state.reply_usage_state);
+  const hasLiveUsage = usageState && Object.keys(usageState).length > 0;
+  const fallbackUsed = hasLiveUsage && usageState.fallbackUsed === true;
+  const requestedModel = fallbackUsed
+    ? stringValue(usageState.requested)
+    : "";
+  const durationMs = hasLiveUsage && typeof usageState.durationMs === "number"
+    ? Number(usageState.durationMs)
+    : undefined;
+
   // Runtime owns the channel-neutral projection facts; IM adapters own
   // surface-specific rendering and legacy transport compatibility.
   const projection: IMProjectionFooter = {
@@ -322,7 +338,10 @@ export function appendReplyProjectionFooter(content: string, state: UnknownRecor
     complexityBand: resolveFooterComplexityBand(state),
     via: resolveRouteSource(state),
     thread: hasThreadProjection(event, ctx),
-    healthNote: resolveHealthFooterNote(state),
+    healthNote: hasLiveUsage ? resolveHealthFooterNote(state) : (resolveHealthFooterNote(state) || "no-usage"),
+    ...(durationMs !== undefined ? { durationMs } : {}),
+    ...(fallbackUsed ? { fallbackUsed: true, requestedModel } : {}),
+    usageSource: hasLiveUsage ? "live" : "degraded",
     ...(debug ? {
       workerPool: stringValue(routeDecision.worker_pool || snapshot.workerPool || snapshot.worker_pool),
       workContractId: stringValue(workContract.workContractId || decision.workContractId || snapshot.workContractId || snapshot.work_contract_id),

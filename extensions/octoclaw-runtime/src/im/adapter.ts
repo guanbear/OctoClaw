@@ -12,6 +12,14 @@ export interface IMProjectionFooter {
   complexityBand?: string;
   thread?: boolean;
   healthNote?: string;
+  /** Wall-clock turn duration in ms, from openclaw `reply_payload_sending.usageState`. */
+  durationMs?: number;
+  /** True when the model fallback chain fired for this turn. */
+  fallbackUsed?: boolean;
+  /** The route-selected model, shown alongside the actual model when fallbackUsed. */
+  requestedModel?: string;
+  /** Whether `model` came from a live usage snapshot or a degraded guess. */
+  usageSource?: "live" | "degraded";
 }
 
 export interface IMMessageTurnAnchorParams {

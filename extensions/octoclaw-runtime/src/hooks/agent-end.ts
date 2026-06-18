@@ -444,9 +444,13 @@ export function makeAgentEndHook(deps: AgentEndDeps) {
       ...(Array.isArray(state?.toolsUsed) ? state.toolsUsed : []),
       ...directToolsSeen,
     ].map((value) => stringValue(value)).filter(Boolean)));
+    const liveDurationMs = Number(asRecord(state?.replyUsageState || state?.reply_usage_state).durationMs);
+    const durationMs = Number.isFinite(liveDurationMs) && liveDurationMs > 0
+      ? liveDurationMs
+      : Math.max(0, finalNow - Number(state?.createdAt || state?.updatedAt || finalNow));
     const finalReceipt = buildTurnExecutionReceipt(
       { ...(state ?? {}), canonicalSessionKey: stateKey, toolsUsed } as Parameters<typeof buildTurnExecutionReceipt>[0],
-      Math.max(0, finalNow - Number(state?.createdAt || state?.updatedAt || finalNow)),
+      durationMs,
       finalNow,
     );
     const displayModel = resolveDisplayModel(asRecord(state), event, asRecord(ctx));

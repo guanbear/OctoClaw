@@ -61,6 +61,7 @@ import {
   makeBeforeCompactionHook,
   makeBeforeMessageWriteHook,
 } from "./hooks/message-lifecycle.js";
+import { makeReplyPayloadSendingHook } from "./hooks/reply-usage-hook.js";
 import { makeBeforeDispatchHook } from "./hooks/before-dispatch.js";
 import {
   promptMatchedInboundAnchor,
@@ -894,6 +895,7 @@ export const plugin = {
       return false;
     };
 
+    registerLifecycleHook("reply_payload_sending", makeReplyPayloadSendingHook({ pi }), 230);
     registerLifecycleHook("message_sending", makeMessageSendingHook({ pi, recordNeutralAckCancellations }), 220);
     registerLifecycleHook("reply_dispatch", makeReplyDispatchHook({ pi }), 220);
     registerLifecycleHook("message_received", makeMessageReceivedHook({ pi, maybeSendNeutralInboundAckForContext }), 280);
