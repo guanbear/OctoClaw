@@ -1653,7 +1653,7 @@ describe("budgeted_main_then_delegate runtime budget", () => {
     expect(thirdReadResult?.blockReason).toContain("multi_step_tool_chain");
     expect(thirdReadResult?.blockReason).toContain("did not execute");
     expect(fourthReadResult?.block).toBe(true);
-    expect(fourthReadResult?.blockReason).toContain("Use octoclaw_dispatch");
+    expect(fourthReadResult?.blockReason).toContain("Call octoclaw_dispatch");
     await waitForFireAndForget();
     const events = readReplayEvents();
     expect(events).toContainEqual(expect.objectContaining({

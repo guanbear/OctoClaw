@@ -1,8 +1,17 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createReplyFinalDeliveryIntentForState, recordReplyFinalTextForState, recordReplyFinalDeliveryResultForState } from "../resolve/reply-final-delivery-intent.js";
 import type { SendIMParams, SendIMResult } from "../im/send.js";
 import { policyState } from "../state/policy-state.js";
 import { makeAgentEndHook } from "./agent-end.js";
+
+// Collect all IM messages sent via sendIMMessage (used by delegate-without-dispatch notice).
+const imSent: SendIMParams[] = [];
+vi.mock("../im/send.js", () => ({
+  sendIMMessage: async (params: SendIMParams): Promise<SendIMResult> => {
+    imSent.push(params);
+    return { sent: true, messageId: "im-mock-001", threadTs: params.replyToMessageId, transport: "slack_api" };
+  },
+}));
 
 function seededReplyFinalState(sessionKey: string, replyToMessageId: string, finalText = "Final answer"): Record<string, unknown> {
   return recordReplyFinalTextForState({
@@ -374,5 +383,128 @@ describe("agent_end delivery target retention", () => {
     );
 
     expect(sent).toHaveLength(0);
+  });
+});
+
+describe("agent_end delegate_without_dispatch notice suppression", () => {
+  afterEach(() => {
+    for (const { key } of policyState.entries()) {
+      policyState.clear(key);
+    }
+    imSent.length = 0;
+  });
+
+  it("suppresses the delegate-without-dispatch notice when the model completed the task via ordinary tools", async () => {
+    const sessionKey = "agent:main:slack:default:direct:u0delegatesuppress";
+    const replyToMessageId = "1781000300.000001";
+
+    policyState.setState(sessionKey, {
+      prompt: "check the javdb script",
+      decision: {
+        route_decision: {
+          route: "delegate",
+          system_preferred_route: "delegate",
+          worker_pool: "octoclaw-main",
+          task_class: "multi_step_tool_chain",
+        },
+        work_contract: {
+          route: "delegate",
+          workContractId: "wc-delegatesuppress",
+        },
+        routeSeal: {
+          routeSealId: "rs-delegatesuppress",
+          turnId: "turn-1",
+          route: "delegate",
+        },
+      },
+      deliveryTarget: {
+        surface: "slack",
+        sessionKey,
+        replyToMessageId,
+        immutable: true,
+      },
+      inboundMessageTs: replyToMessageId,
+      replyToMessageId,
+      formal_reply_visible: true,
+      toolsUsed: ["read_file", "replace_in_file"],
+      directToolsSeen: [],
+      createdAt: Date.now() - 5000,
+      updatedAt: Date.now() - 1000,
+    });
+
+    const hook = makeAgentEndHook({
+      pi: { logger: {} },
+      sendFinalReply: async (params: SendIMParams): Promise<SendIMResult> => {
+        return { sent: true, messageId: "1781000301.000001", threadTs: params.replyToMessageId, transport: "slack_api" };
+      },
+    });
+
+    await hook(
+      { outcome: "completed", didSendViaMessagingTool: true, sourceReplyDeliveryMode: "message_tool_only" },
+      { sessionKey, sessionId: "session-delegate-suppress", agentId: "main" },
+    );
+
+    // No "暂时不能启动后台任务" status_reply should be sent — the model
+    // already completed the task via ordinary tools and the formal reply is visible.
+    const statusReplies = imSent.filter((m) => m.deliveryKind === "status_reply");
+    expect(statusReplies).toHaveLength(0);
+    // The state should still record delegate_without_dispatch for telemetry.
+    expect(policyState.get(sessionKey)?.delegate_without_dispatch).toBe(true);
+  });
+
+  it("sends the delegate-without-dispatch notice when the model did not complete the task", async () => {
+    const sessionKey = "agent:main:slack:default:direct:u0delegatenotice";
+    const replyToMessageId = "1781000400.000001";
+    imSent.length = 0;
+
+    policyState.setState(sessionKey, {
+      prompt: "do something complex",
+      decision: {
+        route_decision: {
+          route: "delegate",
+          system_preferred_route: "delegate",
+          worker_pool: "octoclaw-main",
+          task_class: "multi_step_tool_chain",
+        },
+        work_contract: {
+          route: "delegate",
+          workContractId: "wc-delegatenotice",
+        },
+        routeSeal: {
+          routeSealId: "rs-delegatenotice",
+          turnId: "turn-2",
+          route: "delegate",
+        },
+      },
+      deliveryTarget: {
+        surface: "slack",
+        sessionKey,
+        replyToMessageId,
+        immutable: true,
+      },
+      inboundMessageTs: replyToMessageId,
+      replyToMessageId,
+      formal_reply_visible: false,
+      toolsUsed: [],
+      directToolsSeen: [],
+      createdAt: Date.now() - 5000,
+      updatedAt: Date.now() - 1000,
+    });
+
+    const hook = makeAgentEndHook({
+      pi: { logger: {} },
+      sendFinalReply: async (params: SendIMParams): Promise<SendIMResult> => {
+        return { sent: true, messageId: "1781000401.000001", threadTs: params.replyToMessageId, transport: "slack_api" };
+      },
+    });
+
+    await hook(
+      { outcome: "completed", didSendViaMessagingTool: false, sourceReplyDeliveryMode: "message_tool_only" },
+      { sessionKey, sessionId: "session-delegate-notice", agentId: "main" },
+    );
+
+    // The "暂时不能启动后台任务" notice should be sent via sendIMMessage as a status_reply.
+    const statusReplies = imSent.filter((m) => m.deliveryKind === "status_reply");
+    expect(statusReplies.length).toBeGreaterThanOrEqual(1);
   });
 });

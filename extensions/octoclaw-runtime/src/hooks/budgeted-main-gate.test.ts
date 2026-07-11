@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { buildBudgetedMainState } from "../budgeted-main.js";
 import {
   evaluateActiveBudgetedMainGate,
+  evaluateEscalatedBudgetGate,
   evaluateReplyToolBudgetGate,
 } from "./budgeted-main-gate.js";
 
@@ -101,5 +102,87 @@ describe("BudgetedMainGate", () => {
         }),
       })],
     });
+  });
+});
+
+describe("evaluateEscalatedBudgetGate", () => {
+  function escalatedState() {
+    const bs = buildBudgetedMainState({
+      now: 1000,
+      decision: { route_decision: { decision_bucket: "budgeted_main_then_delegate" } },
+      visibleStartAt: 1000,
+      budgetStartSource: "test",
+    });
+    return { ...bs, active: false, escalatedAt: 2000, reason: "multi_step_tool_chain" };
+  }
+
+  it("blocks ordinary tools after escalation when dispatch has not executed", () => {
+    const result = evaluateEscalatedBudgetGate({
+      toolName: "read",
+      budgetState: escalatedState(),
+      dispatchExecuted: false,
+      spawnExecuted: false,
+    });
+    expect(result).not.toBeNull();
+    expect(result?.kind).toBe("block");
+    expect(result?.blockReason).toContain("octoclaw_dispatch");
+  });
+
+  it("allows control tools (octoclaw_dispatch, sessions_spawn, etc.) after escalation", () => {
+    for (const toolName of ["octoclaw_dispatch", "sessions_spawn", "sessions_send", "sessions_yield", "session_status"]) {
+      const result = evaluateEscalatedBudgetGate({
+        toolName,
+        budgetState: escalatedState(),
+        dispatchExecuted: false,
+        spawnExecuted: false,
+      });
+      expect(result).toBeNull();
+    }
+  });
+
+  it("stops blocking once dispatch has executed", () => {
+    const result = evaluateEscalatedBudgetGate({
+      toolName: "read",
+      budgetState: escalatedState(),
+      dispatchExecuted: true,
+      spawnExecuted: false,
+    });
+    expect(result).toBeNull();
+  });
+
+  it("stops blocking once spawn has executed", () => {
+    const result = evaluateEscalatedBudgetGate({
+      toolName: "exec",
+      budgetState: escalatedState(),
+      dispatchExecuted: false,
+      spawnExecuted: true,
+    });
+    expect(result).toBeNull();
+  });
+
+  it("does not block when budget has not escalated", () => {
+    const bs = buildBudgetedMainState({
+      now: 1000,
+      decision: { route_decision: { decision_bucket: "budgeted_main_then_delegate" } },
+      visibleStartAt: 1000,
+      budgetStartSource: "test",
+    });
+    const result = evaluateEscalatedBudgetGate({
+      toolName: "read",
+      budgetState: bs,
+      dispatchExecuted: false,
+      spawnExecuted: false,
+    });
+    expect(result).toBeNull();
+  });
+
+  it("does not block when budget is completed", () => {
+    const result = evaluateEscalatedBudgetGate({
+      toolName: "read",
+      budgetState: { ...escalatedState(), completedAt: 3000 },
+      dispatchExecuted: false,
+      spawnExecuted: false,
+    });
+    expect(result).toBeNull();
   });
 });

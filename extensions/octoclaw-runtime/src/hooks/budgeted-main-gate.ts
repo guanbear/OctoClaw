@@ -106,6 +106,36 @@ export function evaluateActiveBudgetedMainGate(input: {
   };
 }
 
+/**
+ * After the active-budget gate escalates (first over-budget tool is blocked),
+ * the budget state is set to `active=false, escalatedAt=now`. Without this
+ * guard the model simply switches tools and continues — defeating escalation.
+ *
+ * This checks whether the budget has escalated but dispatch hasn't happened
+ * yet, and if so blocks every non-control tool until the model calls
+ * `octoclaw_dispatch` (or the turn ends).
+ */
+export function evaluateEscalatedBudgetGate(input: {
+  toolName: string;
+  budgetState: BudgetedMainState | null | undefined;
+  dispatchExecuted: boolean;
+  spawnExecuted: boolean;
+}): ToolGateBlockResult | null {
+  const bs = input.budgetState;
+  if (!bs?.escalatedAt || bs.completedAt) return null;
+  if (input.dispatchExecuted || input.spawnExecuted) return null;
+  const isControlTool = input.toolName.startsWith("octoclaw_")
+    || input.toolName === "sessions_spawn"
+    || input.toolName === "sessions_send"
+    || input.toolName === "sessions_yield"
+    || input.toolName === "session_status";
+  if (isControlTool) return null;
+  return gateBlock(
+    "OctoClaw budgeted main escalated. This tool call did not execute. Call octoclaw_dispatch with the original task before using any other tools.",
+    { statePatch: { blockedTools: [input.toolName].filter(Boolean) } },
+  );
+}
+
 export function evaluateReplyToolBudgetGate(input: {
   toolName: string;
   toolParams: UnknownRecord;

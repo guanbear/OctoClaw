@@ -527,7 +527,14 @@ export function makeAgentEndHook(deps: AgentEndDeps) {
       const deliverySessionKey = stringValue(stateRecord.ackGuardKey || stateRecord.ack_guard_key || ctx.sessionKey || stateKey);
       updateAckTrackingState(stateKey, { delegate_without_dispatch: true });
       updatePolicyState(stateKey, (current) => ({ ...current, delegate_without_dispatch: true, dispatchExecuted: false, spawnExecuted: false }));
-      if (!formalReplyVisible) {
+      // When the model completed the task in the main session via ordinary
+      // tools (ignoring the dispatch directive), the "暂时不能启动后台任务"
+      // notice is misleading — the work was actually done. Suppress the notice
+      // in that case and record the suppression reason for telemetry.
+      const taskCompletedInMain = finalReceipt.toolsUsed.length > 0 && finalReceipt.outcome === "completed" && formalReplyVisible;
+      if (taskCompletedInMain) {
+        noticeDeliveryState = "suppressed_task_completed_in_main";
+      } else if (!formalReplyVisible) {
         try {
           const noticeResult = await sendDelegateWithoutDispatchNotice({
             sessionKey: deliverySessionKey,

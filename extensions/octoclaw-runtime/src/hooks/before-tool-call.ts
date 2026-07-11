@@ -26,7 +26,7 @@ import {
   updateBudgetedMainForContext,
 } from "../budgeted-main.js";
 import { explicitDelegateDispatchRequest } from "../dispatch-admission.js";
-import { evaluateActiveBudgetedMainGate } from "./budgeted-main-gate.js";
+import { evaluateActiveBudgetedMainGate, evaluateEscalatedBudgetGate } from "./budgeted-main-gate.js";
 import { runNativeSessionToolGate } from "./native-session-tool-runner.js";
 import { evaluateRouteHintGate, shouldBindRouteHintPrompt } from "./route-hint-gate.js";
 import { runReplyDirectToolGate } from "./reply-direct-tool-runner.js";
@@ -180,6 +180,27 @@ export function makeBeforeToolCallHook(deps: BeforeToolCallDeps) {
           budgetState: activeBudgetGate.budgetState,
         }) as PolicyStateEntry | null;
       }
+    }
+    // After the budgeted-main gate escalates (first tool over budget is blocked),
+    // the gate sets active=false + escalatedAt. Without this guard the model
+    // simply switches to a different tool and continues — defeating the
+    // escalation. Keep blocking every non-control tool until the model calls
+    // octoclaw_dispatch (or the turn ends).
+    const refreshedBudgetState = budgetedMainHandledTool ? readBudgetedMainState(asRecord(state)) : budgetState;
+    const escalatedBlock = evaluateEscalatedBudgetGate({
+      toolName,
+      budgetState: refreshedBudgetState,
+      dispatchExecuted: Boolean(asRecord(state).dispatchExecuted),
+      spawnExecuted: Boolean(asRecord(state).spawnExecuted),
+    });
+    if (escalatedBlock) {
+      applyToolGateResult({
+        result: escalatedBlock,
+        stateKey,
+        logger: deps.pi.logger,
+        decision: budgetDecision,
+      });
+      return toolGateHookReturn(escalatedBlock);
     }
     if (toolName === "octoclaw_dispatch") {
       const taskPolicyContext = policyState.getDispatchPolicyContext(ctx, stringValue(toolParams.task));
